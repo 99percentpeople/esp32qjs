@@ -91,6 +91,18 @@ def load_defaults() -> dict[str, str | int]:
         or dotenv.get("ESPPORT")
         or ""
     )
+    esp_idf_path = (
+        os.environ.get("ESP_IDF_PATH")
+        or dotenv.get("ESP_IDF_PATH")
+        or os.environ.get("IDF_PATH")
+        or dotenv.get("IDF_PATH")
+    )
+    if not esp_idf_path:
+        legacy_export = os.environ.get("ESP_IDF_EXPORT_SH") or dotenv.get("ESP_IDF_EXPORT_SH")
+        if legacy_export:
+            esp_idf_path = str(Path(legacy_export).expanduser().parent)
+    if not esp_idf_path:
+        esp_idf_path = str(Path.home() / "esp" / "esp-idf")
 
     return {
         "com_port": env_value(dotenv, "COM_PORT", "COM3"),
@@ -100,10 +112,7 @@ def load_defaults() -> dict[str, str | int]:
         "remote_port": remote_port,
         "remote_url": remote_url_override,
         "esptool_bin": env_value(dotenv, "ESPTOOL_BIN", "auto"),
-        "idf_py_bin": env_value(dotenv, "IDF_PY_BIN", "idf.py"),
-        "esp_idf_export_sh": env_value(
-            dotenv, "ESP_IDF_EXPORT_SH", str(Path.home() / "esp" / "esp-idf" / "export.sh")
-        ),
+        "esp_idf_path": str(Path(esp_idf_path).expanduser()),
         "monitor_baud": env_int(dotenv, "MONITOR_BAUD", env_int(dotenv, "ESPBAUD", 115200)),
     }
 
@@ -303,38 +312,48 @@ def start_server(python_exe: str, listen_port: int, com_port: str, force_restart
     return 0
 
 
-def idf_py_cmd(args: list[str], idf_py_bin: str, export_script: str) -> list[str]:
-    """Return a command that can run `idf.py`, exporting ESP-IDF on Unix when needed."""
-    export_script_path = Path(export_script).expanduser()
+def idf_py_cmd(args: list[str], esp_idf_path: str) -> list[str]:
+    """Return a command that can run `idf.py`, derived from `ESP_IDF_PATH`."""
+    esp_idf_root = Path(esp_idf_path).expanduser()
+    idf_py_script = esp_idf_root / "tools" / "idf.py"
+    export_script_path = esp_idf_root / "export.sh"
     idf_env_ready = bool(os.environ.get("IDF_PATH") and os.environ.get("ESP_IDF_VERSION"))
+
+    if not idf_py_script.exists():
+        raise SystemExit(
+            f"idf.py not found under {esp_idf_root}. Set ESP_IDF_PATH in /.env to the ESP-IDF install directory."
+        )
 
     if platform.system() != "Windows" and export_script_path.exists() and not idf_env_ready:
         joined = shlex.join(args)
         command = (
             f"source {shlex.quote(str(export_script_path))} >/dev/null 2>&1 "
-            f"&& exec {shlex.quote(idf_py_bin)} {joined}"
+            f"&& exec {shlex.quote(str(idf_py_script))} {joined}"
         )
         return ["bash", "-lc", command]
 
-    if Path(idf_py_bin).exists() or which(idf_py_bin):
-        return [idf_py_bin, *args]
+    if idf_env_ready:
+        return [str(idf_py_script), *args]
 
     if platform.system() != "Windows" and export_script_path.exists():
         joined = shlex.join(args)
         command = (
             f"source {shlex.quote(str(export_script_path))} >/dev/null 2>&1 "
-            f"&& exec {shlex.quote(idf_py_bin)} {joined}"
+            f"&& exec {shlex.quote(str(idf_py_script))} {joined}"
         )
         return ["bash", "-lc", command]
 
+    if which("idf.py"):
+        return ["idf.py", *args]
+
     raise SystemExit(
-        f"{idf_py_bin} not found. Set IDF_PY_BIN/ESP_IDF_EXPORT_SH in /.env or export ESP-IDF first."
+        f"ESP-IDF tooling is not ready. Set ESP_IDF_PATH in /.env to the ESP-IDF install directory."
     )
 
 
-def build(idf_py_bin: str, export_script: str) -> None:
+def build(esp_idf_path: str) -> None:
     """Build firmware."""
-    run(idf_py_cmd(["build"], idf_py_bin, export_script), cwd=ROOT_DIR, interactive=True)
+    run(idf_py_cmd(["build"], esp_idf_path), cwd=ROOT_DIR, interactive=True)
 
 
 def default_remote_url(host: str, port: int) -> str:
@@ -391,14 +410,13 @@ def flash(
     host: str,
     port: int,
     build_first: bool,
-    idf_py_bin: str,
-    export_script: str,
+    esp_idf_path: str,
 ) -> None:
     """Flash the standard ESP-IDF build outputs over RFC2217."""
     write_esptool_config()
 
     if build_first:
-        build(idf_py_bin, export_script)
+        build(esp_idf_path)
 
     subprocess.run(
         [
@@ -428,14 +446,13 @@ def flash(
     )
 
 
-def monitor(remote_url_override: str, host: str, port: int, baud: int, idf_py_bin: str, export_script: str) -> None:
+def monitor(remote_url_override: str, host: str, port: int, baud: int, esp_idf_path: str) -> None:
     """Open ESP-IDF monitor over RFC2217."""
     write_monitor_config()
     run(
         idf_py_cmd(
             ["-p", remote_url(remote_url_override, host, port), "-b", str(baud), "monitor"],
-            idf_py_bin,
-            export_script,
+            esp_idf_path,
         ),
         cwd=ROOT_DIR,
         interactive=True,
@@ -449,8 +466,7 @@ def flash_monitor(
     port: int,
     build_first: bool,
     baud: int,
-    idf_py_bin: str,
-    export_script: str,
+    esp_idf_path: str,
 ) -> None:
     """Build/flash, then open monitor over RFC2217."""
     flash(
@@ -459,10 +475,9 @@ def flash_monitor(
         host,
         port,
         build_first=build_first,
-        idf_py_bin=idf_py_bin,
-        export_script=export_script,
+        esp_idf_path=esp_idf_path,
     )
-    monitor(remote_url_override, host, port, baud, idf_py_bin, export_script)
+    monitor(remote_url_override, host, port, baud, esp_idf_path)
 
 
 def parse_args() -> argparse.Namespace:
@@ -508,10 +523,7 @@ def parse_args() -> argparse.Namespace:
     fm.add_argument("--baud", type=int, default=defaults["monitor_baud"])
     fm.add_argument("--no-build", action="store_true")
 
-    parser.set_defaults(
-        idf_py_bin=defaults["idf_py_bin"],
-        esp_idf_export_sh=defaults["esp_idf_export_sh"],
-    )
+    parser.set_defaults(esp_idf_path=defaults["esp_idf_path"])
 
     return parser.parse_args()
 
@@ -523,7 +535,7 @@ def main() -> int:
         return start_server(args.python_exe, args.listen_port, args.com_port, args.force_restart)
 
     if args.command == "build":
-        build(args.idf_py_bin, args.esp_idf_export_sh)
+        build(args.esp_idf_path)
         return 0
 
     if args.command == "chip-id":
@@ -537,8 +549,7 @@ def main() -> int:
             args.remote_host,
             args.remote_port,
             build_first=not args.no_build,
-            idf_py_bin=args.idf_py_bin,
-            export_script=args.esp_idf_export_sh,
+            esp_idf_path=args.esp_idf_path,
         )
         return 0
 
@@ -548,8 +559,7 @@ def main() -> int:
             args.remote_host,
             args.remote_port,
             args.baud,
-            args.idf_py_bin,
-            args.esp_idf_export_sh,
+            args.esp_idf_path,
         )
         return 0
 
@@ -561,8 +571,7 @@ def main() -> int:
             args.remote_port,
             build_first=not args.no_build,
             baud=args.baud,
-            idf_py_bin=args.idf_py_bin,
-            export_script=args.esp_idf_export_sh,
+            esp_idf_path=args.esp_idf_path,
         )
         return 0
 
