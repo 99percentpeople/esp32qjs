@@ -1,10 +1,7 @@
 #include "repl.h"
 
 #include <stdio.h>
-#include <string.h>
 
-#include "esp_heap_caps.h"
-#include "esp_system.h"
 #include "repl_input.h"
 
 static void print_banner(void)
@@ -12,28 +9,7 @@ static void print_banner(void)
     printf("\n");
     printf("mquickjs REPL on ESP32-S3\n");
     printf("Type JavaScript and press Enter.\n");
-    printf("Special commands: .help .gc .mem\n");
-    printf("Examples: 1 + 2, print('hello'), esp32.info(), esp32.led(true)\n");
-    printf("Timers: setTimeout(function() { print('tick'); }, 1000), setInterval(function() { esp32.led(true); }, 500)\n");
-    printf("GPIO: esp32.pinMode(21, esp32.OUTPUT), esp32.digitalWrite(21, 1)\n");
-}
-
-static void handle_meta_command(JSContext *ctx, const char *line)
-{
-    if (strcmp(line, ".help") == 0) {
-        print_banner();
-        return;
-    }
-    if (strcmp(line, ".gc") == 0) {
-        JS_GC(ctx);
-        printf("GC complete\n");
-        return;
-    }
-    if (strcmp(line, ".mem") == 0) {
-        printf("free_heap=%u\n", (unsigned)esp_get_free_heap_size());
-        return;
-    }
-    printf("Unknown command: %s\n", line);
+    printf("Run help() for usage.\n");
 }
 
 void esp32qjs_repl_run(JSContext *ctx,
@@ -59,12 +35,6 @@ void esp32qjs_repl_run(JSContext *ctx,
         }
 
         esp32qjs_repl_history_push(line);
-
-        if (line[0] == '.') {
-            handle_meta_command(ctx, line);
-            esp32qjs_repl_print_prompt();
-            continue;
-        }
 
         JSValue result = esp32_mquickjs_eval(ctx,
                                              runtime,
