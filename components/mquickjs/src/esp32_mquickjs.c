@@ -159,11 +159,41 @@ static const char ESP32_BOOTSTRAP_SOURCE[] =
     "__attachHelp(esp32.digitalRead, 'esp32.digitalRead(pin)\\nRead a GPIO level and return true or false.');\n"
     "__attachHelp(esp32.led, 'esp32.led(value)\\nControl the XIAO ESP32-S3 user LED. true turns the LED on.');\n";
 
+static void note_console_output(void)
+{
+    if (s_active_runtime != NULL) {
+        s_active_runtime->output_generation++;
+    }
+}
+
+static void prepare_console_output(void)
+{
+    if (s_active_runtime != NULL && s_active_runtime->before_output != NULL) {
+        s_active_runtime->prompt_needs_redraw = true;
+        s_active_runtime->before_output(s_active_runtime->before_output_opaque);
+    }
+}
+
+static void begin_async_console_output(uint32_t lines)
+{
+    if (s_active_runtime != NULL && s_active_runtime->before_async_output != NULL) {
+        s_active_runtime->before_async_output(s_active_runtime->before_async_output_opaque, lines);
+    }
+}
+
+static void end_async_console_output(void)
+{
+    if (s_active_runtime != NULL && s_active_runtime->after_async_output != NULL) {
+        s_active_runtime->after_async_output(s_active_runtime->after_async_output_opaque);
+    }
+}
+
 static void js_log_write(void *opaque, const void *buf, size_t buf_len)
 {
     (void)opaque;
     fwrite(buf, 1, buf_len, stdout);
     fflush(stdout);
+    note_console_output();
 }
 
 static int js_interrupt_handler(JSContext *ctx, void *opaque)
@@ -258,6 +288,14 @@ JSContext *esp32_mquickjs_create(void *mem_start,
 
     runtime->deadline_us = 0;
     runtime->eval_timeout_ms = eval_timeout_ms;
+    runtime->output_generation = 0;
+    runtime->prompt_needs_redraw = false;
+    runtime->before_output = NULL;
+    runtime->before_output_opaque = NULL;
+    runtime->before_async_output = NULL;
+    runtime->before_async_output_opaque = NULL;
+    runtime->after_async_output = NULL;
+    runtime->after_async_output_opaque = NULL;
     if (!esp32_mquickjs_init_timer_state(runtime)) {
         return NULL;
     }
@@ -309,9 +347,11 @@ void esp32_mquickjs_print_exception(JSContext *ctx)
 {
     JSValue exception = JS_GetException(ctx);
 
+    prepare_console_output();
     JS_PrintValueF(ctx, exception, JS_DUMP_LONG);
     fputc('\n', stdout);
     fflush(stdout);
+    note_console_output();
 }
 
 static int js_value_to_bool(JSContext *ctx, JSValue value, bool *out_value)
@@ -668,6 +708,7 @@ bool esp32_mquickjs_poll(JSContext *ctx,
 {
     esp32_mquickjs_timer_state_t *state = esp32_mquickjs_timer_state(runtime);
     esp32_mquickjs_timer_event_t event;
+    bool needs_redraw;
     bool handled = false;
 
     if (ctx == NULL || state == NULL || state->queue == NULL || state->slots == NULL) {
@@ -690,8 +731,10 @@ bool esp32_mquickjs_poll(JSContext *ctx,
         slot->pending = false;
 
         if (JS_StackCheck(ctx, 2)) {
+            prepare_console_output();
             fputs("Timer callback skipped: JS stack overflow\n", stdout);
             fflush(stdout);
+            note_console_output();
             continue;
         }
 
@@ -709,7 +752,30 @@ bool esp32_mquickjs_poll(JSContext *ctx,
         }
     }
 
-    return handled;
+    needs_redraw = handled && runtime->prompt_needs_redraw;
+    runtime->prompt_needs_redraw = false;
+    return needs_redraw;
+}
+
+static uint32_t js_print_output_lines(JSContext *ctx, int argc, JSValue *argv)
+{
+    uint32_t lines = 1;
+    int i;
+
+    for (i = 0; i < argc; i++) {
+        if (JS_IsString(ctx, argv[i])) {
+            JSCStringBuf buf;
+            size_t len = 0;
+            const char *str = JS_ToCStringLen(ctx, &len, argv[i], &buf);
+
+            for (size_t j = 0; j < len; ++j) {
+                if (str[j] == '\n') {
+                    lines++;
+                }
+            }
+        }
+    }
+    return lines;
 }
 
 JSValue js_print(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -717,6 +783,7 @@ JSValue js_print(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     int i;
 
     (void)this_val;
+    begin_async_console_output(js_print_output_lines(ctx, argc, argv));
     for (i = 0; i < argc; i++) {
         if (i != 0) {
             fputc(' ', stdout);
@@ -735,6 +802,8 @@ JSValue js_print(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 
     fputc('\n', stdout);
     fflush(stdout);
+    end_async_console_output();
+    note_console_output();
     return JS_UNDEFINED;
 }
 

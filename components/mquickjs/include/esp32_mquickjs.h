@@ -10,7 +10,15 @@
 
 typedef struct {
     uint32_t eval_timeout_ms;
+    uint32_t output_generation;
+    bool prompt_needs_redraw;
     uint64_t deadline_us;
+    void (*before_output)(void *opaque);
+    void *before_output_opaque;
+    void (*before_async_output)(void *opaque, uint32_t lines);
+    void *before_async_output_opaque;
+    void (*after_async_output)(void *opaque);
+    void *after_async_output_opaque;
     void *timer_state;
 } esp32_mquickjs_runtime_t;
 

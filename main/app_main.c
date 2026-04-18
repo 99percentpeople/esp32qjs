@@ -42,6 +42,13 @@ void app_main(void)
         return;
     }
 
+    js_runtime.before_output = esp32qjs_repl_prepare_async_output;
+    js_runtime.before_output_opaque = NULL;
+    js_runtime.before_async_output = esp32qjs_repl_begin_async_output;
+    js_runtime.before_async_output_opaque = NULL;
+    js_runtime.after_async_output = esp32qjs_repl_end_async_output;
+    js_runtime.after_async_output_opaque = NULL;
+
     ESP_LOGI(TAG, "mquickjs runtime ready");
     ESP_LOGI(TAG, "js_heap=%u bytes, free_heap=%u bytes",
              (unsigned)JS_HEAP_SIZE,
