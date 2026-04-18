@@ -24,7 +24,7 @@ Remote flashing setup is documented in [docs/remote-rfc2217.md](/home/zach/esp32
 Use 4-space indentation and standard ESP-IDF C style. Prefer `snake_case` for functions and locals, `UPPER_SNAKE_CASE` for macros, and keep ESP32-specific code in the adapter layer instead of editing the submodule directly. Match existing logging and error-handling patterns with `ESP_LOG*`, `ESP_ERROR_CHECK`, and thin adapter helpers around third-party code.
 
 ## Testing
-Every code change should pass `idf.py build`. JS REPL changes should also be verified interactively over serial, for example `1+2`, `print("hello")`, and `.mem`. When adding more features, introduce component-level tests or a `test/` directory rather than mixing test code into `app_main()`.
+Every code change should pass `idf.py build`. JS REPL changes should also be verified interactively over serial, for example `1+2`, `print("hello")`, `.mem`, `esp32.info()`, and `esp32.led(true)`. When adding more features, introduce component-level tests or a `test/` directory rather than mixing test code into `app_main()`.
 
 ## Commits and Pull Requests
 Use short imperative commit messages, for example `Add remote RFC2217 flash helper` or `Split LED init from app_main`. Keep pull requests narrowly scoped, describe the hardware used for validation, include the exact flash or monitor commands you ran, and attach boot logs for behavior changes.

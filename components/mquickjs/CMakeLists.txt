@@ -14,6 +14,7 @@ idf_component_register(
         "${MQUICKJS_GENERATED_DIR}"
         "${MQUICKJS_DIR}"
     REQUIRES
+        esp_driver_gpio
         esp_timer
 )
 

@@ -31,7 +31,8 @@ static void print_banner(void)
     printf("mquickjs REPL on ESP32-S3\n");
     printf("Type JavaScript and press Enter.\n");
     printf("Special commands: .help .gc .mem\n");
-    printf("Examples: 1 + 2, print('hello'), Date.now(), Math.sin(0.5)\n");
+    printf("Examples: 1 + 2, print('hello'), esp32.info(), esp32.led(true)\n");
+    printf("GPIO: esp32.pinMode(21, esp32.OUTPUT), esp32.digitalWrite(21, 1)\n");
 }
 
 static void print_prompt(void)
@@ -524,6 +525,13 @@ void app_main(void)
     if (ctx == NULL)
     {
         ESP_LOGE(TAG, "Failed to initialize mquickjs");
+        heap_caps_free(js_heap);
+        return;
+    }
+
+    if (!esp32_mquickjs_install_globals(ctx, &js_runtime))
+    {
+        ESP_LOGE(TAG, "Failed to install ESP32 host globals");
         heap_caps_free(js_heap);
         return;
     }

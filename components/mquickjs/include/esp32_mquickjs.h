@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -27,3 +28,6 @@ JSValue esp32_mquickjs_eval(JSContext *ctx,
                             int eval_flags);
 
 void esp32_mquickjs_print_exception(JSContext *ctx);
+
+bool esp32_mquickjs_install_globals(JSContext *ctx,
+                                    esp32_mquickjs_runtime_t *runtime);

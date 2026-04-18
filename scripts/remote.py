@@ -98,10 +98,6 @@ def load_defaults() -> dict[str, str | int]:
         or dotenv.get("IDF_PATH")
     )
     if not esp_idf_path:
-        legacy_export = os.environ.get("ESP_IDF_EXPORT_SH") or dotenv.get("ESP_IDF_EXPORT_SH")
-        if legacy_export:
-            esp_idf_path = str(Path(legacy_export).expanduser().parent)
-    if not esp_idf_path:
         esp_idf_path = str(Path.home() / "esp" / "esp-idf")
 
     return {
