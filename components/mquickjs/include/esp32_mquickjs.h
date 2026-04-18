@@ -11,6 +11,7 @@
 typedef struct {
     uint32_t eval_timeout_ms;
     uint64_t deadline_us;
+    void *timer_state;
 } esp32_mquickjs_runtime_t;
 
 JSContext *esp32_mquickjs_create(void *mem_start,
@@ -31,3 +32,6 @@ void esp32_mquickjs_print_exception(JSContext *ctx);
 
 bool esp32_mquickjs_install_globals(JSContext *ctx,
                                     esp32_mquickjs_runtime_t *runtime);
+
+bool esp32_mquickjs_poll(JSContext *ctx,
+                         esp32_mquickjs_runtime_t *runtime);
