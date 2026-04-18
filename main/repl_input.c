@@ -14,12 +14,21 @@
 #define REPL_PROMPT "js> "
 #define REPL_CONT_PROMPT "... "
 #define HISTORY_SIZE 16
+#define REPL_IDLE_POLL_TICKS 1
+/* Match the common esp-idf-monitor width so the device controls wrapping. */
+#define REPL_DISPLAY_COLUMNS 80
 
 typedef enum {
     ASYNC_PROMPT_NONE = 0,
     ASYNC_PROMPT_RESTORE_BLOCK,
     ASYNC_PROMPT_RESTORE_SINGLE_LINE,
 } async_prompt_mode_t;
+
+typedef struct {
+    size_t rows;
+    size_t cursor_row;
+    size_t cursor_col;
+} repl_layout_t;
 
 static char s_history[HISTORY_SIZE][ESP32QJS_REPL_LINE_SIZE];
 static size_t s_history_len;
@@ -34,6 +43,7 @@ static int s_csi_num;
 static int s_history_index = -1;
 static size_t s_rendered_rows = 1;
 static size_t s_rendered_cursor_line;
+static size_t s_rendered_cursor_col;
 static bool s_prompt_visible;
 static bool s_cursor_hidden;
 static async_prompt_mode_t s_async_prompt_mode;
@@ -58,34 +68,86 @@ static size_t prompt_len_for_line(size_t line)
     return line == 0 ? sizeof(REPL_PROMPT) - 1 : sizeof(REPL_CONT_PROMPT) - 1;
 }
 
-static size_t count_render_rows(const char *buf, size_t len)
+static void compute_repl_layout(const char *buf,
+                                size_t len,
+                                size_t cursor,
+                                repl_layout_t *layout)
 {
-    size_t rows = 1;
+    size_t logical_line = 0;
+    size_t physical_row = 0;
+    size_t physical_col = prompt_len_for_line(0);
+    bool cursor_set = false;
+
+    if (cursor == 0) {
+        layout->cursor_row = physical_row;
+        layout->cursor_col = physical_col;
+        cursor_set = true;
+    }
 
     for (size_t i = 0; i < len; ++i) {
         if (buf[i] == '\n') {
-            rows++;
+            logical_line++;
+            physical_row++;
+            physical_col = prompt_len_for_line(logical_line);
+            if (cursor == i + 1) {
+                layout->cursor_row = physical_row;
+                layout->cursor_col = physical_col;
+                cursor_set = true;
+            }
+            continue;
+        }
+
+        if (physical_col >= REPL_DISPLAY_COLUMNS) {
+            physical_row++;
+            physical_col = 0;
+        }
+
+        if (!cursor_set && cursor == i) {
+            layout->cursor_row = physical_row;
+            layout->cursor_col = physical_col;
+            cursor_set = true;
+        }
+
+        physical_col++;
+
+        if (cursor == i + 1) {
+            layout->cursor_row = physical_row;
+            layout->cursor_col = physical_col;
+            cursor_set = true;
         }
     }
-    return rows;
+
+    if (!cursor_set) {
+        layout->cursor_row = physical_row;
+        layout->cursor_col = physical_col;
+    }
+
+    layout->rows = physical_row + 1;
 }
 
-static void cursor_line_col(const char *buf, size_t cursor, size_t *line, size_t *col)
+static void emit_repl_buffer(const char *buf, size_t len)
 {
-    size_t current_line = 0;
-    size_t current_col = 0;
+    size_t logical_line = 0;
+    size_t physical_col = prompt_len_for_line(0);
 
-    for (size_t i = 0; i < cursor; ++i) {
+    fputs(prompt_for_line(0), stdout);
+    for (size_t i = 0; i < len; ++i) {
         if (buf[i] == '\n') {
-            current_line++;
-            current_col = 0;
-        } else {
-            current_col++;
+            logical_line++;
+            fputc('\n', stdout);
+            fputs(prompt_for_line(logical_line), stdout);
+            physical_col = prompt_len_for_line(logical_line);
+            continue;
         }
-    }
 
-    *line = current_line;
-    *col = current_col;
+        if (physical_col >= REPL_DISPLAY_COLUMNS) {
+            fputc('\n', stdout);
+            physical_col = 0;
+        }
+
+        fputc(buf[i], stdout);
+        physical_col++;
+    }
 }
 
 static void move_to_render_top(void)
@@ -258,36 +320,27 @@ static bool needs_multiline_continuation(const char *buf, size_t len)
 
 static void redraw_repl_line(const char *buf, size_t len, size_t cursor)
 {
-    size_t rows = count_render_rows(buf, len);
-    size_t cursor_line;
-    size_t cursor_col;
+    repl_layout_t layout;
 
     hide_cursor();
     clear_rendered_block();
-    fputs(prompt_for_line(0), stdout);
-    for (size_t i = 0, line = 0; i < len; ++i) {
-        if (buf[i] == '\n') {
-            line++;
-            printf("\n%s", prompt_for_line(line));
-            continue;
-        }
-        fputc(buf[i], stdout);
-    }
+    compute_repl_layout(buf, len, cursor, &layout);
+    emit_repl_buffer(buf, len);
 
-    s_rendered_rows = rows;
+    s_rendered_rows = layout.rows;
     s_prompt_visible = true;
-    cursor_line_col(buf, cursor, &cursor_line, &cursor_col);
-    s_rendered_cursor_line = cursor_line;
-    if (rows > 1) {
-        printf("\r\x1b[%uA", (unsigned)(rows - 1));
+    s_rendered_cursor_line = layout.cursor_row;
+    s_rendered_cursor_col = layout.cursor_col;
+    if (layout.rows > 1) {
+        printf("\r\x1b[%uA", (unsigned)(layout.rows - 1));
     } else {
         printf("\r");
     }
-    if (cursor_line > 0) {
-        printf("\x1b[%uB", (unsigned)cursor_line);
+    if (layout.cursor_row > 0) {
+        printf("\x1b[%uB", (unsigned)layout.cursor_row);
     }
-    if (prompt_len_for_line(cursor_line) + cursor_col > 0) {
-        printf("\x1b[%uC", (unsigned)(prompt_len_for_line(cursor_line) + cursor_col));
+    if (layout.cursor_col > 0) {
+        printf("\x1b[%uC", (unsigned)layout.cursor_col);
     }
     show_cursor();
     fflush(stdout);
@@ -295,18 +348,22 @@ static void redraw_repl_line(const char *buf, size_t len, size_t cursor)
 
 static void redraw_single_line_prompt(const char *buf, size_t len, size_t cursor)
 {
-    hide_cursor();
-    fputs(REPL_PROMPT, stdout);
-    if (len > 0) {
-        fwrite(buf, 1, len, stdout);
-    }
+    repl_layout_t layout;
 
-    s_rendered_rows = 1;
-    s_rendered_cursor_line = 0;
+    hide_cursor();
+    compute_repl_layout(buf, len, cursor, &layout);
+    emit_repl_buffer(buf, len);
+
+    s_rendered_rows = layout.rows;
+    s_rendered_cursor_line = layout.cursor_row;
+    s_rendered_cursor_col = layout.cursor_col;
     s_prompt_visible = true;
     printf("\r");
-    if (prompt_len_for_line(0) + cursor > 0) {
-        printf("\x1b[%uC", (unsigned)(prompt_len_for_line(0) + cursor));
+    if (layout.cursor_row > 0) {
+        printf("\x1b[%uB", (unsigned)layout.cursor_row);
+    }
+    if (layout.cursor_col > 0) {
+        printf("\x1b[%uC", (unsigned)layout.cursor_col);
     }
     show_cursor();
     fflush(stdout);
@@ -318,11 +375,48 @@ static void append_char_direct(char ch)
     fflush(stdout);
 }
 
+static bool move_cursor_direct(size_t old_cursor, size_t new_cursor)
+{
+    repl_layout_t old_layout;
+    repl_layout_t new_layout;
+
+    if (!s_prompt_visible) {
+        return false;
+    }
+
+    compute_repl_layout(s_edit_buf, s_edit_len, old_cursor, &old_layout);
+    if (old_layout.rows != s_rendered_rows ||
+        old_layout.cursor_row != s_rendered_cursor_line ||
+        old_layout.cursor_col != s_rendered_cursor_col) {
+        return false;
+    }
+
+    compute_repl_layout(s_edit_buf, s_edit_len, new_cursor, &new_layout);
+    hide_cursor();
+    move_to_render_top();
+    if (new_layout.cursor_row > 0) {
+        printf("\x1b[%uB", (unsigned)new_layout.cursor_row);
+    }
+    if (new_layout.cursor_col > 0) {
+        printf("\x1b[%uC", (unsigned)new_layout.cursor_col);
+    }
+    show_cursor();
+    fflush(stdout);
+
+    s_rendered_rows = new_layout.rows;
+    s_rendered_cursor_line = new_layout.cursor_row;
+    s_rendered_cursor_col = new_layout.cursor_col;
+    return true;
+}
+
 static void delete_char_before_cursor(char *buf, size_t *len, size_t *cursor);
 
 static bool delete_char_direct(void)
 {
     if (!s_prompt_visible || s_cursor == 0 || s_cursor != s_edit_len) {
+        return false;
+    }
+    if (s_rendered_rows != 1 || s_rendered_cursor_line != 0) {
         return false;
     }
     if (s_edit_len == 0 || s_edit_buf[s_edit_len - 1] == '\n') {
@@ -331,6 +425,7 @@ static bool delete_char_direct(void)
 
     delete_char_before_cursor(s_edit_buf, &s_edit_len, &s_cursor);
     printf("\b\x1b[K");
+    s_rendered_cursor_col = prompt_len_for_line(0) + s_cursor;
     fflush(stdout);
     return true;
 }
@@ -416,6 +511,7 @@ static void editor_clear_line(void)
     s_edit_len = 0;
     s_cursor = 0;
     s_rendered_cursor_line = 0;
+    s_rendered_cursor_col = prompt_len_for_line(0);
 }
 
 static void history_restore(bool up)
@@ -558,7 +654,7 @@ bool esp32qjs_repl_read_line(char *out_buf, size_t out_buf_size)
     int ch = read_console_char();
 
     if (ch == EOF) {
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(REPL_IDLE_POLL_TICKS);
         return false;
     }
 
@@ -597,18 +693,28 @@ bool esp32qjs_repl_read_line(char *out_buf, size_t out_buf_size)
             switch (s_csi_num) {
                 case 1:
                 case 7:
+                {
+                    size_t old_cursor = s_cursor;
                     s_cursor = 0;
-                    redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                    if (!move_cursor_direct(old_cursor, s_cursor)) {
+                        redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                    }
                     break;
+                }
                 case 3:
                     delete_char_at_cursor(s_edit_buf, &s_edit_len, s_cursor);
                     redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
                     break;
                 case 4:
                 case 8:
+                {
+                    size_t old_cursor = s_cursor;
                     s_cursor = s_edit_len;
-                    redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                    if (!move_cursor_direct(old_cursor, s_cursor)) {
+                        redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                    }
                     break;
+                }
                 default:
                     break;
             }
@@ -626,24 +732,40 @@ bool esp32qjs_repl_read_line(char *out_buf, size_t out_buf_size)
                 break;
             case 'C':
                 if (s_cursor < s_edit_len) {
+                    size_t old_cursor = s_cursor;
                     s_cursor++;
-                    redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                    if (!move_cursor_direct(old_cursor, s_cursor)) {
+                        redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                    }
                 }
                 break;
             case 'D':
                 if (s_cursor > 0) {
+                    size_t old_cursor = s_cursor;
                     s_cursor--;
-                    redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                    if (!move_cursor_direct(old_cursor, s_cursor)) {
+                        redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                    }
                 }
                 break;
             case 'H':
+            {
+                size_t old_cursor = s_cursor;
                 s_cursor = 0;
-                redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                if (!move_cursor_direct(old_cursor, s_cursor)) {
+                    redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                }
                 break;
+            }
             case 'F':
+            {
+                size_t old_cursor = s_cursor;
                 s_cursor = s_edit_len;
-                redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                if (!move_cursor_direct(old_cursor, s_cursor)) {
+                    redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                }
                 break;
+            }
             default:
                 break;
         }
@@ -663,24 +785,40 @@ bool esp32qjs_repl_read_line(char *out_buf, size_t out_buf_size)
                 break;
             case 'C':
                 if (s_cursor < s_edit_len) {
+                    size_t old_cursor = s_cursor;
                     s_cursor++;
-                    redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                    if (!move_cursor_direct(old_cursor, s_cursor)) {
+                        redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                    }
                 }
                 break;
             case 'D':
                 if (s_cursor > 0) {
+                    size_t old_cursor = s_cursor;
                     s_cursor--;
-                    redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                    if (!move_cursor_direct(old_cursor, s_cursor)) {
+                        redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                    }
                 }
                 break;
             case 'H':
+            {
+                size_t old_cursor = s_cursor;
                 s_cursor = 0;
-                redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                if (!move_cursor_direct(old_cursor, s_cursor)) {
+                    redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                }
                 break;
+            }
             case 'F':
+            {
+                size_t old_cursor = s_cursor;
                 s_cursor = s_edit_len;
-                redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                if (!move_cursor_direct(old_cursor, s_cursor)) {
+                    redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                }
                 break;
+            }
             default:
                 break;
         }
@@ -690,14 +828,20 @@ bool esp32qjs_repl_read_line(char *out_buf, size_t out_buf_size)
     }
 
     if (ch == 0x01) {
+        size_t old_cursor = s_cursor;
         s_cursor = 0;
-        redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+        if (!move_cursor_direct(old_cursor, s_cursor)) {
+            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+        }
         return false;
     }
 
     if (ch == 0x05) {
+        size_t old_cursor = s_cursor;
         s_cursor = s_edit_len;
-        redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+        if (!move_cursor_direct(old_cursor, s_cursor)) {
+            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+        }
         return false;
     }
 
@@ -789,7 +933,15 @@ bool esp32qjs_repl_read_line(char *out_buf, size_t out_buf_size)
 
     insert_char_at_cursor(s_edit_buf, sizeof(s_edit_buf), &s_edit_len, &s_cursor, (char)ch);
     if (s_cursor == s_edit_len) {
-        append_char_direct((char)ch);
+        repl_layout_t layout;
+
+        compute_repl_layout(s_edit_buf, s_edit_len, s_cursor, &layout);
+        if (layout.rows == s_rendered_rows && layout.cursor_row == s_rendered_cursor_line) {
+            append_char_direct((char)ch);
+            s_rendered_cursor_col = layout.cursor_col;
+        } else {
+            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+        }
     } else {
         redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
     }

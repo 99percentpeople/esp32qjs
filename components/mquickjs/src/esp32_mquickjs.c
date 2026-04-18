@@ -709,7 +709,6 @@ bool esp32_mquickjs_poll(JSContext *ctx,
     esp32_mquickjs_timer_state_t *state = esp32_mquickjs_timer_state(runtime);
     esp32_mquickjs_timer_event_t event;
     bool needs_redraw;
-    bool handled = false;
 
     if (ctx == NULL || state == NULL || state->queue == NULL || state->slots == NULL) {
         return false;
@@ -746,13 +745,12 @@ bool esp32_mquickjs_poll(JSContext *ctx,
         }
 
         ret = JS_Call(ctx, 0);
-        handled = true;
         if (JS_IsException(ret)) {
             esp32_mquickjs_print_exception(ctx);
         }
     }
 
-    needs_redraw = handled && runtime->prompt_needs_redraw;
+    needs_redraw = runtime->prompt_needs_redraw;
     runtime->prompt_needs_redraw = false;
     return needs_redraw;
 }
