@@ -19,6 +19,9 @@ void app_main(void)
     JSContext *ctx;
 
     esp32qjs_console_init();
+    if (!esp32_mquickjs_mount_littlefs(true)) {
+        ESP_LOGW(TAG, "Continuing without LittleFS-backed script loading");
+    }
 
     js_heap = heap_caps_malloc(JS_HEAP_SIZE, MALLOC_CAP_8BIT);
     if (js_heap == NULL) {

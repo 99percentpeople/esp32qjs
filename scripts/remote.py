@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import platform
 import shlex
@@ -408,34 +409,50 @@ def flash(
     build_first: bool,
     esp_idf_path: str,
 ) -> None:
-    """Flash the standard ESP-IDF build outputs over RFC2217."""
+    """Flash all ESP-IDF build outputs listed in flasher_args.json over RFC2217."""
+    build_dir = ROOT_DIR / "build"
+    flasher_args_path = build_dir / "flasher_args.json"
+    flasher_args: dict[str, object]
+    extra_esptool_args: dict[str, object]
+    write_flash_args: list[str]
+    flash_files: dict[str, str]
+    flash_pairs: list[str] = []
+
     write_esptool_config()
 
     if build_first:
         build(esp_idf_path)
 
+    if not flasher_args_path.exists():
+        raise SystemExit(
+            f"{flasher_args_path} not found. Run `python scripts/remote.py build` first."
+        )
+
+    flasher_args = json.loads(flasher_args_path.read_text(encoding="utf-8"))
+    extra_esptool_args = dict(flasher_args.get("extra_esptool_args", {}))
+    write_flash_args = [str(arg) for arg in flasher_args.get("write_flash_args", [])]
+    flash_files = dict(flasher_args.get("flash_files", {}))
+
+    for offset, file_name in sorted(flash_files.items(), key=lambda item: int(item[0], 0)):
+        file_path = Path(file_name)
+        if not file_path.is_absolute():
+            file_path = build_dir / file_path
+        flash_pairs.extend([offset, str(file_path)])
+
     subprocess.run(
         [
             *resolve_esptool_cmd(esptool_bin),
             "--chip",
-            "esp32s3",
+            str(extra_esptool_args.get("chip", "esp32s3")),
+            "--before",
+            str(extra_esptool_args.get("before", "default-reset")),
             "--after",
-            "hard-reset",
+            str(extra_esptool_args.get("after", "hard-reset")),
             "--port",
             remote_url(remote_url_override, host, port),
             "write-flash",
-            "--flash-mode",
-            "dio",
-            "--flash-size",
-            "2MB",
-            "--flash-freq",
-            "80m",
-            "0x0",
-            "build/bootloader/bootloader.bin",
-            "0x8000",
-            "build/partition_table/partition-table.bin",
-            "0x10000",
-            "build/esp32qjs.bin",
+            *write_flash_args,
+            *flash_pairs,
         ],
         cwd=ROOT_DIR,
         check=True,

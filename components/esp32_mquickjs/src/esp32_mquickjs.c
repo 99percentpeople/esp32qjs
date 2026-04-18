@@ -5,7 +5,10 @@
 #include <string.h>
 
 #include "driver/gpio.h"
+#include "esp_err.h"
 #include "esp_heap_caps.h"
+#include "esp_littlefs.h"
+#include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -20,9 +23,12 @@ extern const JSSTDLibraryDef js_stdlib;
 #define XIAO_ESP32S3_USER_LED_PIN 21
 /* Seeed documents the XIAO ESP32-S3 user LED on GPIO21 as active-low. */
 #define XIAO_ESP32S3_USER_LED_ACTIVE_LOW 1
+#define ESP32_MQUICKJS_MAX_SCRIPT_PATH 256
 
 static uint64_t s_output_gpio_mask;
 static esp32_mquickjs_runtime_t *s_active_runtime;
+static bool s_littlefs_mounted;
+static const char *TAG = "esp32qjs";
 
 typedef struct esp32_mquickjs_timer_slot esp32_mquickjs_timer_slot_t;
 
@@ -84,7 +90,7 @@ static const char ESP32_BOOTSTRAP_SOURCE[] =
     "  var doc;\n"
     "  if (arguments.length === 0) {\n"
     "    print('Use help(nameOrValue) to inspect a function or module.');\n"
-    "    print('Try: help(help), help(print), help(gc), help(setTimeout), help(setInterval), help(esp32), help(esp32.led)');\n"
+    "    print('Try: help(help), help(load), help(print), help(gc), help(setTimeout), help(setInterval), help(esp32), help(esp32.led)');\n"
     "    return undefined;\n"
     "  }\n"
     "  if (typeof lookup === 'string') {\n"
@@ -118,6 +124,7 @@ static const char ESP32_BOOTSTRAP_SOURCE[] =
     "  return 'GC complete';\n"
     "};\n"
     "globalThis.LED_BUILTIN = 21;\n"
+    "globalThis.SCRIPTS_DIR = '/littlefs';\n"
     "globalThis.setInterval = function(fn, ms) { return load('__esp32__', 'setInterval', fn, ms); };\n"
     "globalThis.clearInterval = function(id) { return clearTimeout(id); };\n"
     "globalThis.esp32 = {\n"
@@ -125,6 +132,7 @@ static const char ESP32_BOOTSTRAP_SOURCE[] =
     "  OUTPUT: 'output',\n"
     "  USER_LED_PIN: 21,\n"
     "  USER_LED_ACTIVE_LOW: true,\n"
+    "  SCRIPTS_DIR: '/littlefs',\n"
     "  info() { return load('__esp32__', 'info'); },\n"
     "  millis() { return load('__esp32__', 'millis'); },\n"
     "  micros() { return load('__esp32__', 'micros'); },\n"
@@ -139,6 +147,7 @@ static const char ESP32_BOOTSTRAP_SOURCE[] =
     "  led(value) { return load('__esp32__', 'led', value); },\n"
     "};\n"
     "__attachHelp(help, 'help([topic])\\nPrint built-in help for a function or module.\\nExamples: help(), help(setTimeout), help(esp32), help(\"esp32.led\")');\n"
+    "__attachHelp(load, 'load(path)\\nEvaluate a script from LittleFS. Relative paths resolve under /littlefs. Example: load(\"demo.js\") or load(\"/littlefs/demo.js\")');\n"
     "__attachHelp(print, 'print(...values)\\nWrite values to the REPL console.');\n"
     "__attachHelp(gc, 'gc()\\nRun the JavaScript garbage collector and return a confirmation string.');\n"
     "__attachHelp(setTimeout, 'setTimeout(fn, ms)\\nRun fn once after ms milliseconds using esp_timer. Returns a timer id.');\n"
@@ -146,7 +155,7 @@ static const char ESP32_BOOTSTRAP_SOURCE[] =
     "__attachHelp(setInterval, 'setInterval(fn, ms)\\nRun fn repeatedly every ms milliseconds using esp_timer. Returns a timer id.');\n"
     "__attachHelp(clearInterval, 'clearInterval(id)\\nCancel a timer created by setInterval().');\n"
     "__attachHelp(esp32, 'esp32\\nBoard helper module for time, memory, GPIO, and the user LED.\\nMembers: info, millis, micros, freeHeap, sleep, delay, setInterval, clearInterval, pinMode, digitalWrite, digitalRead, led');\n"
-    "__attachHelp(esp32.info, 'esp32.info()\\nReturn board, chip, LED pin, active-low flag, free heap, and current JS time.');\n"
+    "__attachHelp(esp32.info, 'esp32.info()\\nReturn board, chip, LED pin, active-low flag, scriptsDir, free heap, and current JS time.');\n"
     "__attachHelp(esp32.millis, 'esp32.millis()\\nReturn monotonic time in milliseconds from esp_timer.');\n"
     "__attachHelp(esp32.micros, 'esp32.micros()\\nReturn monotonic time in microseconds from esp_timer.');\n"
     "__attachHelp(esp32.freeHeap, 'esp32.freeHeap()\\nReturn current free heap in bytes.');\n"
@@ -158,6 +167,117 @@ static const char ESP32_BOOTSTRAP_SOURCE[] =
     "__attachHelp(esp32.digitalWrite, 'esp32.digitalWrite(pin, value)\\nSet a GPIO output level. Non-zero values map to high.');\n"
     "__attachHelp(esp32.digitalRead, 'esp32.digitalRead(pin)\\nRead a GPIO level and return true or false.');\n"
     "__attachHelp(esp32.led, 'esp32.led(value)\\nControl the XIAO ESP32-S3 user LED. true turns the LED on.');\n";
+
+static bool resolve_littlefs_path(const char *input_path, char *out_path, size_t out_path_size)
+{
+    int needed;
+
+    if (input_path == NULL || input_path[0] == '\0' || out_path == NULL || out_path_size == 0) {
+        return false;
+    }
+
+    if (input_path[0] == '/') {
+        needed = snprintf(out_path, out_path_size, "%s", input_path);
+    } else {
+        needed = snprintf(out_path,
+                          out_path_size,
+                          "%s/%s",
+                          ESP32_MQUICKJS_LITTLEFS_BASE_PATH,
+                          input_path);
+    }
+
+    return needed > 0 && (size_t)needed < out_path_size;
+}
+
+static uint8_t *load_script_file(const char *path, size_t *out_len)
+{
+    FILE *file;
+    long file_size;
+    size_t read_len;
+    uint8_t *buf;
+
+    if (out_len == NULL) {
+        return NULL;
+    }
+    *out_len = 0;
+
+    file = fopen(path, "rb");
+    if (file == NULL) {
+        return NULL;
+    }
+
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return NULL;
+    }
+
+    file_size = ftell(file);
+    if (file_size < 0 || fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return NULL;
+    }
+
+    buf = heap_caps_malloc((size_t)file_size + 1, MALLOC_CAP_8BIT);
+    if (buf == NULL) {
+        fclose(file);
+        return NULL;
+    }
+
+    read_len = fread(buf, 1, (size_t)file_size, file);
+    fclose(file);
+    if (read_len != (size_t)file_size) {
+        heap_caps_free(buf);
+        return NULL;
+    }
+
+    buf[read_len] = '\0';
+    *out_len = read_len;
+    return buf;
+}
+
+bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed)
+{
+    esp_vfs_littlefs_conf_t conf = {
+        .base_path = ESP32_MQUICKJS_LITTLEFS_BASE_PATH,
+        .partition_label = ESP32_MQUICKJS_LITTLEFS_PARTITION_LABEL,
+        .format_if_mount_failed = format_if_mount_failed,
+        .dont_mount = false,
+    };
+    esp_err_t ret;
+    size_t total = 0;
+    size_t used = 0;
+
+    if (s_littlefs_mounted) {
+        return true;
+    }
+
+    ret = esp_vfs_littlefs_register(&conf);
+    if (ret != ESP_OK) {
+        if (ret == ESP_FAIL) {
+            ESP_LOGE(TAG, "Failed to mount or format LittleFS");
+        } else if (ret == ESP_ERR_NOT_FOUND) {
+            ESP_LOGE(TAG, "LittleFS partition '%s' was not found",
+                     ESP32_MQUICKJS_LITTLEFS_PARTITION_LABEL);
+        } else {
+            ESP_LOGE(TAG, "Failed to initialize LittleFS (%s)", esp_err_to_name(ret));
+        }
+        return false;
+    }
+
+    ret = esp_littlefs_info(ESP32_MQUICKJS_LITTLEFS_PARTITION_LABEL, &total, &used);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG,
+                 "LittleFS mounted at %s: total=%u used=%u",
+                 ESP32_MQUICKJS_LITTLEFS_BASE_PATH,
+                 (unsigned)total,
+                 (unsigned)used);
+    } else {
+        ESP_LOGW(TAG, "LittleFS mounted but size query failed (%s)", esp_err_to_name(ret));
+    }
+
+    s_littlefs_mounted = true;
+    return true;
+}
 
 static void note_console_output(void)
 {
@@ -518,6 +638,10 @@ static JSValue esp32_make_info_object(JSContext *ctx)
                                          JS_NewBool(XIAO_ESP32S3_USER_LED_ACTIVE_LOW)))) {
         goto fail;
     }
+    if (JS_IsException(JS_SetPropertyStr(ctx, *info, "scriptsDir",
+                                         JS_NewString(ctx, ESP32_MQUICKJS_LITTLEFS_BASE_PATH)))) {
+        goto fail;
+    }
     if (JS_IsException(JS_SetPropertyStr(ctx, *info, "freeHeap",
                                          JS_NewUint32(ctx, esp_get_free_heap_size())))) {
         goto fail;
@@ -814,20 +938,54 @@ JSValue js_gc(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     return JS_UNDEFINED;
 }
 
-JSValue js_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+static JSValue js_load_from_littlefs(JSContext *ctx, const char *script_path)
 {
-    (void)this_val;
+    char resolved_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+    size_t source_len = 0;
+    uint8_t *source;
+    JSValue result;
 
-    if (argc >= 1 && JS_IsString(ctx, argv[0])) {
-        JSCStringBuf command_buf;
-        const char *command = JS_ToCString(ctx, argv[0], &command_buf);
-
-        if (strcmp(command, ESP32_BRIDGE_NAMESPACE) == 0) {
-            return js_esp32_bridge(ctx, argc - 1, argv + 1);
-        }
+    if (!s_littlefs_mounted) {
+        return JS_ThrowInternalError(ctx,
+                                     "LittleFS is not mounted at %s",
+                                     ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
+    }
+    if (!resolve_littlefs_path(script_path, resolved_path, sizeof(resolved_path))) {
+        return JS_ThrowTypeError(ctx, "load(path) expects a non-empty path under %s",
+                                 ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
     }
 
-    return JS_ThrowInternalError(ctx, "load() is not supported on ESP32");
+    source = load_script_file(resolved_path, &source_len);
+    if (source == NULL) {
+        return JS_ThrowReferenceError(ctx, "failed to read script: %s", resolved_path);
+    }
+
+    result = esp32_mquickjs_eval(ctx,
+                                 s_active_runtime,
+                                 (const char *)source,
+                                 resolved_path,
+                                 0);
+    heap_caps_free(source);
+    return result;
+}
+
+JSValue js_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    JSCStringBuf command_buf;
+    const char *command;
+
+    (void)this_val;
+    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "load(path) expects a script path");
+    }
+
+    command = JS_ToCString(ctx, argv[0], &command_buf);
+
+    if (strcmp(command, ESP32_BRIDGE_NAMESPACE) == 0) {
+        return js_esp32_bridge(ctx, argc - 1, argv + 1);
+    }
+
+    return js_load_from_littlefs(ctx, command);
 }
 
 JSValue js_setTimeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

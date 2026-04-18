@@ -1,0 +1,12 @@
+idf_component_register(
+    SRCS
+        "src/esp32_mquickjs.c"
+        "src/js_stdlib.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        mquickjs
+        esp_driver_gpio
+        esp_timer
+        joltwallet__littlefs
+)

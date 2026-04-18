@@ -7,6 +7,8 @@
 #include "mquickjs.h"
 
 #define ESP32_MQUICKJS_DEFAULT_EVAL_TIMEOUT_MS 250U
+#define ESP32_MQUICKJS_LITTLEFS_BASE_PATH "/littlefs"
+#define ESP32_MQUICKJS_LITTLEFS_PARTITION_LABEL "storage"
 
 typedef struct {
     uint32_t eval_timeout_ms;
@@ -26,6 +28,8 @@ JSContext *esp32_mquickjs_create(void *mem_start,
                                  size_t mem_size,
                                  esp32_mquickjs_runtime_t *runtime,
                                  uint32_t eval_timeout_ms);
+
+bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed);
 
 void esp32_mquickjs_set_eval_timeout(esp32_mquickjs_runtime_t *runtime,
                                      uint32_t eval_timeout_ms);

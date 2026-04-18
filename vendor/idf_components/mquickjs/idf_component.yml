@@ -1,0 +1,3 @@
+## IDF Component Manager Manifest
+dependencies:
+  idf: ">=5.0"

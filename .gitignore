@@ -1,10 +1,13 @@
 build/
+build-*/
+build_*/
 sdkconfig.old
 setup.cfg
 
 .env
 .codex
 .vscode/
+managed_components/
 
 __pycache__/
 *.pyc

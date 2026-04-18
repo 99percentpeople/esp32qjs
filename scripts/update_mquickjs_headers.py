@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate the mquickjs generated headers used by the ESP32 component."""
+"""Regenerate the mquickjs generated headers used by the ESP32 adapter."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from pathlib import Path
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-MQUICKJS_DIR = ROOT_DIR / "vender" / "mquickjs"
-OUTPUT_DIR = ROOT_DIR / "components" / "mquickjs" / "generated"
+MQUICKJS_DIR = ROOT_DIR / "vendor" / "mquickjs"
+OUTPUT_DIR = ROOT_DIR / "vendor" / "idf_components" / "mquickjs" / "generated"
 
 
 def run(cmd: list[str], cwd: Path) -> None:
