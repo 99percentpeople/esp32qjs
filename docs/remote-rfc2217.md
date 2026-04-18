@@ -3,7 +3,7 @@
 This project supports direct flashing to a remote `XIAO ESP32-S3` through `esp_rfc2217_server`, but the Windows server must override the default reset sequence. Without this override, the server uses `ClassicReset`, which does not reliably put the board into download mode over `USB-Serial/JTAG`.
 
 ## Server Setup on Windows
-Copy [.env.example](/home/zach/esp32qjs/.env.example) to `/.env` and set the local tool paths plus the remote board address once. `REMOTE_URL` is preferred; the script also accepts the legacy `ESPPORT` variable. Then run [scripts/remote.py](/home/zach/esp32qjs/scripts/remote.py) on the machine that owns `COM3`:
+Copy [.env.example](/home/zach/esp32qjs/.env.example) to `/.env` and set the local tool paths plus the remote board address once. `REMOTE_URL` is preferred; the script also accepts the legacy `ESPPORT` variable. For `rfc2217://...` URLs, the helper auto-adds `ign_set_control` and `timeout=10` when they are missing. Then run [scripts/remote.py](/home/zach/esp32qjs/scripts/remote.py) on the machine that owns `COM3`:
 
 ```bash
 python scripts/remote.py server --force-restart

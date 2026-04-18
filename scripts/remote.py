@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -249,10 +250,20 @@ def start_server(python_exe: str, listen_port: int, com_port: str, force_restart
 
 def idf_py_cmd(args: list[str], idf_py_bin: str, export_script: str) -> list[str]:
     """Return a command that can run `idf.py`, exporting ESP-IDF on Unix when needed."""
+    export_script_path = Path(export_script).expanduser()
+    idf_env_ready = bool(os.environ.get("IDF_PATH") and os.environ.get("ESP_IDF_VERSION"))
+
+    if platform.system() != "Windows" and export_script_path.exists() and not idf_env_ready:
+        joined = shlex.join(args)
+        command = (
+            f"source {shlex.quote(str(export_script_path))} >/dev/null 2>&1 "
+            f"&& exec {shlex.quote(idf_py_bin)} {joined}"
+        )
+        return ["bash", "-lc", command]
+
     if Path(idf_py_bin).exists() or which(idf_py_bin):
         return [idf_py_bin, *args]
 
-    export_script_path = Path(export_script).expanduser()
     if platform.system() != "Windows" and export_script_path.exists():
         joined = shlex.join(args)
         command = (
@@ -276,9 +287,37 @@ def default_remote_url(host: str, port: int) -> str:
     return f"rfc2217://{host}:{port}?ign_set_control&timeout=10"
 
 
+def encode_query_items(items: list[tuple[str, str]]) -> str:
+    """Encode RFC2217 query items while preserving flag-style parameters."""
+    return "&".join(
+        name if value == "" else f"{quote(name, safe='')}={quote(value, safe='')}"
+        for name, value in items
+    )
+
+
+def normalize_remote_url(raw_url: str) -> str:
+    """Normalize legacy RFC2217 URLs so old `.env` values keep working."""
+    if not raw_url:
+        return raw_url
+
+    parts = urlsplit(raw_url)
+    if parts.scheme != "rfc2217":
+        return raw_url
+
+    query_items = parse_qsl(parts.query, keep_blank_values=True)
+    keys = {name for name, _ in query_items}
+
+    if "ign_set_control" not in keys:
+        query_items.append(("ign_set_control", ""))
+    if "timeout" not in keys:
+        query_items.append(("timeout", "10"))
+
+    return urlunsplit(parts._replace(query=encode_query_items(query_items)))
+
+
 def remote_url(remote_url_override: str, host: str, port: int) -> str:
     """Return the RFC2217 URL, preferring an explicit override from CLI or `/.env`."""
-    return remote_url_override or default_remote_url(host, port)
+    return normalize_remote_url(remote_url_override or default_remote_url(host, port))
 
 
 def chip_id(esptool_bin: str, remote_url_override: str, host: str, port: int) -> None:
