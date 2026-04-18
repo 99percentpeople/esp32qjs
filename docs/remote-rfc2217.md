@@ -3,10 +3,10 @@
 This project supports direct flashing to a remote `XIAO ESP32-S3` through `esp_rfc2217_server`, but the Windows server must override the default reset sequence. Without this override, the server uses `ClassicReset`, which does not reliably put the board into download mode over `USB-Serial/JTAG`.
 
 ## Server Setup on Windows
-Run [scripts/remote_flash.py](/home/zach/esp32qjs/scripts/remote_flash.py) on the machine that owns `COM3`:
+Copy [.env.example](/home/zach/esp32qjs/.env.example) to `/.env` and set the local tool paths plus the remote board address once. `REMOTE_URL` is preferred; the script also accepts the legacy `ESPPORT` variable. Then run [scripts/remote.py](/home/zach/esp32qjs/scripts/remote.py) on the machine that owns `COM3`:
 
 ```bash
-python scripts/remote_flash.py server --com-port COM3 --listen-port 4000 --force-restart
+python scripts/remote.py server --force-restart
 ```
 
 The script writes `~/esptool.cfg` with the required reset overrides:
@@ -18,17 +18,19 @@ custom_hard_reset_sequence = R1|W0.2|R0
 ```
 
 ## Client Usage
-From the development machine, use the same [scripts/remote_flash.py](/home/zach/esp32qjs/scripts/remote_flash.py) entrypoint:
+From the development machine, use the same [scripts/remote.py](/home/zach/esp32qjs/scripts/remote.py) entrypoint:
 
 ```bash
-python scripts/remote_flash.py chip-id
-python scripts/remote_flash.py flash
+python scripts/remote.py chip-id
+python scripts/remote.py flash
+python scripts/remote.py monitor
 ```
 
-Override the target when needed:
+When a one-off override is needed, pass either `--remote-host/--remote-port` or a full `--remote-url`:
 
 ```bash
-python scripts/remote_flash.py flash --remote-host 192.168.68.54 --remote-port 4000
+python scripts/remote.py flash --remote-host 192.168.68.54 --remote-port 4000
+python scripts/remote.py monitor --remote-url "rfc2217://192.168.68.54:4000?ign_set_control&timeout=10"
 ```
 
 The script flashes:

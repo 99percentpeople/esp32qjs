@@ -11,8 +11,10 @@ Run from the repository root after exporting ESP-IDF:
 - `idf.py flash monitor` is the standard local edit-build-run loop.
 - `idf.py -p COM3 flash` flashes a directly attached device.
 - `idf.py -p COM3 monitor` opens the `USB Serial/JTAG` REPL locally at `115200`.
-- `python scripts/remote_flash.py chip-id` verifies the remote RFC2217 link.
-- `python scripts/remote_flash.py flash` builds and flashes the remote `XIAO ESP32-S3`.
+- `cp .env.example .env` seeds the per-repo remote tooling defaults.
+- `python scripts/remote.py chip-id` verifies the remote RFC2217 link.
+- `python scripts/remote.py flash` builds and flashes the remote `XIAO ESP32-S3`.
+- `python scripts/remote.py monitor` opens the remote serial monitor without retyping host and tool paths.
 - `python scripts/update_mquickjs_headers.py` regenerates `mquickjs_atom.h` and `mqjs_stdlib.h` after updating the submodule.
 
 Remote flashing setup is documented in [docs/remote-rfc2217.md](/home/zach/esp32qjs/docs/remote-rfc2217.md).
