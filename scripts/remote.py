@@ -8,6 +8,7 @@ common commands stay short during day-to-day use.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import platform
 import shlex
@@ -94,11 +95,11 @@ def load_defaults() -> dict[str, str | int]:
     return {
         "com_port": env_value(dotenv, "COM_PORT", "COM3"),
         "listen_port": env_int(dotenv, "LISTEN_PORT", remote_port),
-        "server_python_exe": env_value(dotenv, "SERVER_PYTHON_EXE", sys.executable),
+        "server_python_exe": env_value(dotenv, "SERVER_PYTHON_EXE", "auto"),
         "remote_host": env_value(dotenv, "REMOTE_HOST", "192.168.68.54"),
         "remote_port": remote_port,
         "remote_url": remote_url_override,
-        "esptool_bin": env_value(dotenv, "ESPTOOL_BIN", "esptool"),
+        "esptool_bin": env_value(dotenv, "ESPTOOL_BIN", "auto"),
         "idf_py_bin": env_value(dotenv, "IDF_PY_BIN", "idf.py"),
         "esp_idf_export_sh": env_value(
             dotenv, "ESP_IDF_EXPORT_SH", str(Path.home() / "esp" / "esp-idf" / "export.sh")
@@ -122,6 +123,60 @@ def which(name: str) -> str | None:
     from shutil import which as _which
 
     return _which(name)
+
+
+def split_command(command: str) -> list[str]:
+    """Split a configured command string into subprocess arguments."""
+    parts = shlex.split(command)
+    if not parts:
+        raise SystemExit("Configured command is empty.")
+    return parts
+
+
+def has_repo_uv_tooling() -> bool:
+    """Report whether the repository has a uv-managed Python tool environment."""
+    return which("uv") is not None and (ROOT_DIR / "pyproject.toml").exists()
+
+
+def module_available(module_name: str) -> bool:
+    """Check whether a Python module is importable in the current interpreter."""
+    return importlib.util.find_spec(module_name) is not None
+
+
+def resolve_esptool_cmd(esptool_bin: str) -> list[str]:
+    """Resolve the esptool command, preferring the repository-local uv environment."""
+    if esptool_bin != "auto":
+        return split_command(esptool_bin)
+
+    if has_repo_uv_tooling():
+        return ["uv", "run", "python", "-m", "esptool"]
+
+    if which("esptool"):
+        return ["esptool"]
+
+    if module_available("esptool"):
+        return [sys.executable, "-m", "esptool"]
+
+    raise SystemExit(
+        "esptool is not available. Run `uv sync` in the repo root or set ESPTOOL_BIN in /.env."
+    )
+
+
+def resolve_server_cmd(python_exe: str) -> list[str]:
+    """Resolve the RFC2217 server command, preferring uv-managed esptool."""
+    if python_exe != "auto":
+        return [*split_command(python_exe), "-m", "esp_rfc2217_server"]
+
+    if has_repo_uv_tooling():
+        return ["uv", "run", "python", "-m", "esp_rfc2217_server"]
+
+    if module_available("esp_rfc2217_server"):
+        return [sys.executable, "-m", "esp_rfc2217_server"]
+
+    raise SystemExit(
+        "esp_rfc2217_server is not available. Run `uv sync` in the repo root or set "
+        "SERVER_PYTHON_EXE in /.env."
+    )
 
 
 def esptool_config_path() -> Path:
@@ -221,7 +276,7 @@ def start_server(python_exe: str, listen_port: int, com_port: str, force_restart
         print(f"Using monitor config: {setup_cfg}")
         return 0
 
-    cmd = [python_exe, "-m", "esp_rfc2217_server", "-v", "-p", str(listen_port), com_port]
+    cmd = [*resolve_server_cmd(python_exe), "-v", "-p", str(listen_port), com_port]
     kwargs: dict[str, object] = {
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
@@ -324,7 +379,7 @@ def chip_id(esptool_bin: str, remote_url_override: str, host: str, port: int) ->
     """Probe the remote device without writing flash."""
     write_esptool_config()
     subprocess.run(
-        [esptool_bin, "--port", remote_url(remote_url_override, host, port), "chip-id"],
+        [*resolve_esptool_cmd(esptool_bin), "--port", remote_url(remote_url_override, host, port), "chip-id"],
         cwd=ROOT_DIR,
         check=True,
     )
@@ -347,7 +402,7 @@ def flash(
 
     subprocess.run(
         [
-            esptool_bin,
+            *resolve_esptool_cmd(esptool_bin),
             "--chip",
             "esp32s3",
             "--after",

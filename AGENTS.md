@@ -11,6 +11,7 @@ Run from the repository root after exporting ESP-IDF:
 - `idf.py flash monitor` is the standard local edit-build-run loop.
 - `idf.py -p COM3 flash` flashes a directly attached device.
 - `idf.py -p COM3 monitor` opens the `USB Serial/JTAG` REPL locally at `115200`.
+- `uv sync` provisions the repo-local Python tooling, including `esptool`.
 - `cp .env.example .env` seeds the per-repo remote tooling defaults.
 - `python scripts/remote.py chip-id` verifies the remote RFC2217 link.
 - `python scripts/remote.py flash` builds and flashes the remote `XIAO ESP32-S3`.

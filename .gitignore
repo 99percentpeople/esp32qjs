@@ -8,3 +8,4 @@ setup.cfg
 
 __pycache__/
 *.pyc
+.venv/

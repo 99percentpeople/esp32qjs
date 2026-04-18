@@ -3,7 +3,7 @@
 This project supports direct flashing to a remote `XIAO ESP32-S3` through `esp_rfc2217_server`, but the Windows server must override the default reset sequence. Without this override, the server uses `ClassicReset`, which does not reliably put the board into download mode over `USB-Serial/JTAG`.
 
 ## Server Setup on Windows
-Copy [.env.example](/home/zach/esp32qjs/.env.example) to `/.env` and set the local tool paths plus the remote board address once. `REMOTE_URL` is preferred; the script also accepts the legacy `ESPPORT` variable. For `rfc2217://...` URLs, the helper auto-adds `ign_set_control` and `timeout=10` when they are missing. Then run [scripts/remote.py](/home/zach/esp32qjs/scripts/remote.py) on the machine that owns `COM3`:
+Run `uv sync` once in the repository root to provision the repo-local Python tools. Then copy [.env.example](/home/zach/esp32qjs/.env.example) to `/.env` and set the local tool paths plus the remote board address once. `REMOTE_URL` is preferred; the script also accepts the legacy `ESPPORT` variable. For `rfc2217://...` URLs, the helper auto-adds `ign_set_control` and `timeout=10` when they are missing. With `ESPTOOL_BIN=auto` and `SERVER_PYTHON_EXE=auto`, the helper prefers the uv-managed `esptool` install automatically. Then run [scripts/remote.py](/home/zach/esp32qjs/scripts/remote.py) on the machine that owns `COM3`:
 
 ```bash
 python scripts/remote.py server --force-restart
@@ -21,6 +21,7 @@ custom_hard_reset_sequence = R1|W0.2|R0
 From the development machine, use the same [scripts/remote.py](/home/zach/esp32qjs/scripts/remote.py) entrypoint:
 
 ```bash
+uv sync
 python scripts/remote.py chip-id
 python scripts/remote.py flash
 python scripts/remote.py monitor

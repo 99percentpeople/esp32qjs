@@ -1,0 +1,8 @@
+[project]
+name = "esp32qjs-tools"
+version = "0.1.0"
+description = "Repository-local Python tooling for remote ESP32 flashing and monitoring."
+requires-python = ">=3.11"
+dependencies = [
+    "esptool>=5,<6",
+]
