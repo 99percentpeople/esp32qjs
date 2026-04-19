@@ -526,6 +526,11 @@ static JSValue js_host_bridge(JSContext *ctx, int argc, JSValue *argv)
         return result;
     }
 
+    if (strncmp(operation, "wifi.", 5) == 0 &&
+        esp32_mquickjs_dispatch_wifi(ctx, operation + 5, argc - 1, argv + 1, &result)) {
+        return result;
+    }
+
     return JS_ThrowReferenceError(ctx, "unknown host bridge operation: %s", operation);
 }
 
@@ -558,7 +563,8 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
         !esp32_mquickjs_set_alias(ctx, *global_obj, *global_obj, "clearInterval", "clearTimeout") ||
         !esp32_mquickjs_install_fs_module(ctx, *global_obj) ||
         !esp32_mquickjs_install_gpio_module(ctx, *global_obj) ||
-        !esp32_mquickjs_install_esp32_module(ctx, *global_obj)) {
+        !esp32_mquickjs_install_esp32_module(ctx, *global_obj) ||
+        !esp32_mquickjs_install_wifi_module(ctx, *global_obj)) {
         JS_PopGCRef(ctx, &global_ref);
         esp32_mquickjs_print_exception(ctx);
         return false;
@@ -573,10 +579,17 @@ bool esp32_mquickjs_poll(JSContext *ctx,
 {
     esp32_mquickjs_timer_state_t *state = esp32_mquickjs_timer_state(runtime);
     esp32_mquickjs_timer_event_t event;
-    bool needs_redraw;
+    bool needs_redraw = false;
+    bool wifi_handled = false;
 
-    if (ctx == NULL || state == NULL || state->queue == NULL || state->slots == NULL) {
+    if (ctx == NULL || runtime == NULL) {
         return false;
+    }
+    if (state == NULL || state->queue == NULL || state->slots == NULL) {
+        wifi_handled = esp32_mquickjs_poll_wifi(ctx, runtime);
+        needs_redraw = runtime->prompt_needs_redraw || wifi_handled;
+        runtime->prompt_needs_redraw = false;
+        return needs_redraw;
     }
 
     while (xQueueReceive(state->queue, &event, 0) == pdTRUE) {
@@ -615,7 +628,8 @@ bool esp32_mquickjs_poll(JSContext *ctx,
         }
     }
 
-    needs_redraw = runtime->prompt_needs_redraw;
+    wifi_handled = esp32_mquickjs_poll_wifi(ctx, runtime);
+    needs_redraw = runtime->prompt_needs_redraw || wifi_handled;
     runtime->prompt_needs_redraw = false;
     return needs_redraw;
 }

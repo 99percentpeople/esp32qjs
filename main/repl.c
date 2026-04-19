@@ -1,8 +1,31 @@
 #include "repl.h"
 
 #include <stdio.h>
+#include <sys/stat.h>
 
 #include "repl_input.h"
+
+#define REPL_STARTUP_SCRIPT_PATH ESP32_MQUICKJS_LITTLEFS_BASE_PATH "/index.js"
+
+static void run_startup_script(JSContext *ctx,
+                               esp32_mquickjs_runtime_t *runtime)
+{
+    struct stat st;
+    JSValue result;
+
+    if (stat(REPL_STARTUP_SCRIPT_PATH, &st) != 0 || !S_ISREG(st.st_mode)) {
+        return;
+    }
+
+    result = esp32_mquickjs_eval(ctx,
+                                 runtime,
+                                 "load('index.js')",
+                                 "<startup>",
+                                 0);
+    if (JS_IsException(result)) {
+        esp32_mquickjs_print_exception(ctx);
+    }
+}
 
 static void print_banner(void)
 {
@@ -18,6 +41,7 @@ void esp32qjs_repl_run(JSContext *ctx,
     char line[ESP32QJS_REPL_LINE_SIZE];
 
     print_banner();
+    run_startup_script(ctx, runtime);
     esp32qjs_repl_print_prompt();
 
     while (true) {

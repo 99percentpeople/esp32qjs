@@ -15,6 +15,11 @@ This project exposes a small JavaScript REPL on the XIAO ESP32-S3. Run `help()` 
 - `sleep(ms)` / `delay(ms)`
   Block the REPL task for `ms` milliseconds.
 
+Startup behavior:
+
+- If `/littlefs/index.js` exists, it is loaded automatically before the first `js>` prompt appears.
+- This is the recommended place for board startup logic such as `wifi.connect(...)`.
+
 Examples:
 
 ```js
@@ -22,6 +27,13 @@ print("hello");
 gc();
 sleep(50);
 load("demo.js");
+```
+
+Example `index.js`:
+
+```js
+print("[startup] boot script running");
+wifi.connect("your-ssid", "your-password");
 ```
 
 ## Timers
@@ -132,4 +144,33 @@ Example:
 print(esp32.info());
 print(esp32.millis());
 print(esp32.freeHeap());
+```
+
+## `wifi` Module
+
+Wi-Fi credentials are kept in RAM. Rebooting the board clears the active station config.
+
+- `wifi.DEFAULT_TIMEOUT_MS`
+  Default station connect timeout in milliseconds, `15000`.
+- `wifi.status()`
+  Return `{ initialized, started, connected, scanning, ssid, hostname, ip, netmask, gateway, lastDisconnectReason }`.
+- `wifi.connect(ssid, password, timeoutMs = wifi.DEFAULT_TIMEOUT_MS)`
+  Start station mode, connect to an AP, and return the updated status object.
+- `wifi.disconnect()`
+  Disconnect the station and return the updated status object.
+- `wifi.scan()`
+  Run a blocking AP scan and return an array of `{ ssid, bssid, rssi, channel, authMode, hidden }`.
+- `wifi.scan(callback)`
+  Start a non-blocking scan and call `callback(results)` after the scan completes.
+
+Example:
+
+```js
+print(JSON.stringify(wifi.status()));
+const aps = wifi.scan();
+print(aps.length);
+wifi.scan(function (results) { print("async scan", results.length); });
+wifi.connect("your-ssid", "your-password");
+print(JSON.stringify(wifi.status()));
+wifi.disconnect();
 ```
