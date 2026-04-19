@@ -10,6 +10,7 @@
 static void run_startup_script(JSContext *ctx,
                                esp32_mquickjs_runtime_t *runtime)
 {
+#ifdef CONFIG_ESP32QJS_AUTORUN_INDEX_JS
     struct stat st;
     JSValue result;
 
@@ -25,6 +26,10 @@ static void run_startup_script(JSContext *ctx,
     if (JS_IsException(result)) {
         esp32_mquickjs_print_exception(ctx);
     }
+#else
+    (void)ctx;
+    (void)runtime;
+#endif
 }
 
 static void print_banner(void)

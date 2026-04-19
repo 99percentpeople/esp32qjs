@@ -14,8 +14,6 @@
 
 extern const JSSTDLibraryDef js_stdlib;
 
-static const char *TAG = "esp32qjs";
-
 static esp32_mquickjs_runtime_t *s_active_runtime;
 
 typedef struct esp32_mquickjs_timer_slot esp32_mquickjs_timer_slot_t;
@@ -531,6 +529,11 @@ static JSValue js_host_bridge(JSContext *ctx, int argc, JSValue *argv)
         return result;
     }
 
+    if (strncmp(operation, "http.", 5) == 0 &&
+        esp32_mquickjs_dispatch_http(ctx, operation + 5, argc - 1, argv + 1, &result)) {
+        return result;
+    }
+
     return JS_ThrowReferenceError(ctx, "unknown host bridge operation: %s", operation);
 }
 
@@ -559,12 +562,14 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
         !esp32_mquickjs_set_bound_bridge_function(ctx, *global_obj, *global_obj, "help", "help") ||
         !esp32_mquickjs_set_bound_bridge_function(ctx, *global_obj, *global_obj, "sleep", "sleep") ||
         !esp32_mquickjs_set_alias(ctx, *global_obj, *global_obj, "delay", "sleep") ||
+        !esp32_mquickjs_set_bound_bridge_function(ctx, *global_obj, *global_obj, "fetch", "http.fetch") ||
         !esp32_mquickjs_set_bound_bridge_function(ctx, *global_obj, *global_obj, "setInterval", "setInterval") ||
         !esp32_mquickjs_set_alias(ctx, *global_obj, *global_obj, "clearInterval", "clearTimeout") ||
         !esp32_mquickjs_install_fs_module(ctx, *global_obj) ||
         !esp32_mquickjs_install_gpio_module(ctx, *global_obj) ||
         !esp32_mquickjs_install_esp32_module(ctx, *global_obj) ||
-        !esp32_mquickjs_install_wifi_module(ctx, *global_obj)) {
+        !esp32_mquickjs_install_wifi_module(ctx, *global_obj) ||
+        !esp32_mquickjs_install_http_module(ctx, *global_obj)) {
         JS_PopGCRef(ctx, &global_ref);
         esp32_mquickjs_print_exception(ctx);
         return false;
@@ -581,13 +586,15 @@ bool esp32_mquickjs_poll(JSContext *ctx,
     esp32_mquickjs_timer_event_t event;
     bool needs_redraw = false;
     bool wifi_handled = false;
+    bool http_handled = false;
 
     if (ctx == NULL || runtime == NULL) {
         return false;
     }
     if (state == NULL || state->queue == NULL || state->slots == NULL) {
         wifi_handled = esp32_mquickjs_poll_wifi(ctx, runtime);
-        needs_redraw = runtime->prompt_needs_redraw || wifi_handled;
+        http_handled = esp32_mquickjs_poll_http(ctx, runtime);
+        needs_redraw = runtime->prompt_needs_redraw || wifi_handled || http_handled;
         runtime->prompt_needs_redraw = false;
         return needs_redraw;
     }
@@ -629,7 +636,8 @@ bool esp32_mquickjs_poll(JSContext *ctx,
     }
 
     wifi_handled = esp32_mquickjs_poll_wifi(ctx, runtime);
-    needs_redraw = runtime->prompt_needs_redraw || wifi_handled;
+    http_handled = esp32_mquickjs_poll_http(ctx, runtime);
+    needs_redraw = runtime->prompt_needs_redraw || wifi_handled || http_handled;
     runtime->prompt_needs_redraw = false;
     return needs_redraw;
 }

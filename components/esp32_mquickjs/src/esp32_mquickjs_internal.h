@@ -3,20 +3,29 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "sdkconfig.h"
 #include "esp_err.h"
 #include "esp32_mquickjs.h"
 
 #define ESP32_MQUICKJS_BRIDGE_NAMESPACE "__esp32__"
-#define ESP32_MQUICKJS_MAX_TIMERS 16
-#define ESP32_MQUICKJS_TIMER_QUEUE_LEN 16
-#define ESP32_MQUICKJS_MAX_SCRIPT_PATH 256
-#define ESP32_MQUICKJS_USER_LED_PIN 21
-#define ESP32_MQUICKJS_USER_LED_ACTIVE_LOW 1
+#define ESP32_MQUICKJS_MAX_TIMERS CONFIG_ESP32_MQUICKJS_MAX_TIMERS
+#define ESP32_MQUICKJS_TIMER_QUEUE_LEN CONFIG_ESP32_MQUICKJS_TIMER_QUEUE_LEN
+#define ESP32_MQUICKJS_MAX_SCRIPT_PATH CONFIG_ESP32_MQUICKJS_MAX_SCRIPT_PATH
+#define ESP32_MQUICKJS_USER_LED_PIN CONFIG_ESP32_MQUICKJS_USER_LED_PIN
 #define ESP32_MQUICKJS_WIFI_SSID_MAX_LEN 32
 #define ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN 64
 #define ESP32_MQUICKJS_WIFI_IPV4_STR_LEN 16
 #define ESP32_MQUICKJS_WIFI_HOSTNAME_MAX_LEN 64
-#define ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS 15000U
+#define ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS ((uint32_t)CONFIG_ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS)
+#define ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS ((uint32_t)CONFIG_ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS)
+#define ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BYTES ((uint32_t)CONFIG_ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BYTES)
+#define ESP32_MQUICKJS_HTTP_TASK_STACK_SIZE CONFIG_ESP32_MQUICKJS_HTTP_TASK_STACK_SIZE
+
+#ifdef CONFIG_ESP32_MQUICKJS_USER_LED_ACTIVE_LOW
+#define ESP32_MQUICKJS_USER_LED_ACTIVE_LOW 1
+#else
+#define ESP32_MQUICKJS_USER_LED_ACTIVE_LOW 0
+#endif
 
 typedef struct {
     bool initialized;
@@ -60,6 +69,7 @@ bool esp32_mquickjs_install_fs_module(JSContext *ctx, JSValue global_obj);
 bool esp32_mquickjs_install_gpio_module(JSContext *ctx, JSValue global_obj);
 bool esp32_mquickjs_install_esp32_module(JSContext *ctx, JSValue global_obj);
 bool esp32_mquickjs_install_wifi_module(JSContext *ctx, JSValue global_obj);
+bool esp32_mquickjs_install_http_module(JSContext *ctx, JSValue global_obj);
 
 bool esp32_mquickjs_dispatch_fs(JSContext *ctx,
                                 const char *operation,
@@ -84,7 +94,14 @@ bool esp32_mquickjs_dispatch_wifi(JSContext *ctx,
                                   int argc,
                                   JSValue *argv,
                                   JSValue *result);
+bool esp32_mquickjs_dispatch_http(JSContext *ctx,
+                                  const char *operation,
+                                  int argc,
+                                  JSValue *argv,
+                                  JSValue *result);
 
 esp_err_t esp32_mquickjs_wifi_get_status(esp32_mquickjs_wifi_status_t *status);
 bool esp32_mquickjs_poll_wifi(JSContext *ctx,
+                              esp32_mquickjs_runtime_t *runtime);
+bool esp32_mquickjs_poll_http(JSContext *ctx,
                               esp32_mquickjs_runtime_t *runtime);

@@ -1,8 +1,10 @@
 #include <stdio.h>
 
+#include "sdkconfig.h"
 #include "esp32_mquickjs.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_memory_utils.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -11,8 +13,8 @@
 
 static const char *TAG = "esp32qjs";
 
-#define JS_HEAP_SIZE (160 * 1024)
-#define JS_REPL_TASK_STACK_SIZE 8192
+#define JS_HEAP_SIZE CONFIG_ESP32QJS_JS_HEAP_SIZE
+#define JS_REPL_TASK_STACK_SIZE CONFIG_ESP32QJS_REPL_TASK_STACK_SIZE
 
 static esp32_mquickjs_runtime_t s_js_runtime;
 static void *s_js_heap;
@@ -28,17 +30,30 @@ static void esp32qjs_repl_task(void *opaque)
 void app_main(void)
 {
     UBaseType_t task_priority;
+    const char *js_heap_region;
+    bool littlefs_mounted;
 
     esp32qjs_console_init();
-    if (!esp32_mquickjs_mount_littlefs(true)) {
+    littlefs_mounted = esp32_mquickjs_mount_littlefs(CONFIG_ESP32QJS_LITTLEFS_FORMAT_ON_MOUNT_FAIL);
+    s_js_runtime.littlefs_mounted = littlefs_mounted;
+    if (!littlefs_mounted) {
         ESP_LOGW(TAG, "Continuing without LittleFS-backed script loading");
     }
 
-    s_js_heap = heap_caps_malloc(JS_HEAP_SIZE, MALLOC_CAP_8BIT);
+#ifdef CONFIG_ESP32QJS_JS_HEAP_PREFER_PSRAM
+    s_js_heap = heap_caps_malloc_prefer(JS_HEAP_SIZE,
+                                        2,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+                                        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#else
+    s_js_heap = heap_caps_malloc(JS_HEAP_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#endif
     if (s_js_heap == NULL) {
         ESP_LOGE(TAG, "Failed to allocate %u bytes for JS heap", (unsigned)JS_HEAP_SIZE);
         return;
     }
+    s_js_runtime.js_heap_size = JS_HEAP_SIZE;
+    s_js_runtime.js_heap_in_psram = esp_ptr_external_ram(s_js_heap);
 
     s_js_ctx = esp32_mquickjs_create(s_js_heap,
                                      JS_HEAP_SIZE,
@@ -66,8 +81,10 @@ void app_main(void)
     s_js_runtime.after_async_output_opaque = NULL;
 
     ESP_LOGI(TAG, "mquickjs runtime ready");
-    ESP_LOGI(TAG, "js_heap=%u bytes, free_heap=%u bytes",
+    js_heap_region = s_js_runtime.js_heap_in_psram ? "psram" : "internal";
+    ESP_LOGI(TAG, "js_heap=%u bytes (%s), free_heap=%u bytes",
              (unsigned)JS_HEAP_SIZE,
+             js_heap_region,
              (unsigned)esp_get_free_heap_size());
 
     task_priority = uxTaskPriorityGet(NULL);

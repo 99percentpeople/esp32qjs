@@ -1,0 +1,46 @@
+menu "ESP32QJS App"
+
+config ESP32QJS_JS_HEAP_SIZE
+    int "JavaScript heap size (bytes)"
+    range 65536 2097152
+    default 163840
+    help
+        Size of the dedicated heap buffer passed to mquickjs.
+        Reduce this on smaller MCUs, or increase it on boards with more RAM.
+
+config ESP32QJS_JS_HEAP_PREFER_PSRAM
+    bool "Prefer PSRAM for the JavaScript heap"
+    default y
+    help
+        When enabled, the runtime first tries to allocate the dedicated
+        JavaScript heap from PSRAM and falls back to internal RAM.
+
+config ESP32QJS_REPL_TASK_STACK_SIZE
+    int "REPL task stack size (bytes)"
+    range 4096 32768
+    default 8192
+    help
+        Stack size for the js_repl FreeRTOS task.
+
+config ESP32QJS_REPL_DISPLAY_COLUMNS
+    int "Serial monitor display columns"
+    range 40 240
+    default 80
+    help
+        Logical display width used by the line editor when restoring wrapped
+        prompts. Match this to the serial monitor width when needed.
+
+config ESP32QJS_LITTLEFS_FORMAT_ON_MOUNT_FAIL
+    bool "Format LittleFS when mount fails"
+    default y
+    help
+        If enabled, the firmware reformats the storage partition when
+        LittleFS mount fails.
+
+config ESP32QJS_AUTORUN_INDEX_JS
+    bool "Auto-run /littlefs/index.js at boot"
+    default y
+    help
+        Load /littlefs/index.js before the first REPL prompt appears.
+
+endmenu

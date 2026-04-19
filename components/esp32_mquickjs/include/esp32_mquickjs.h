@@ -4,16 +4,20 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "sdkconfig.h"
 #include "mquickjs.h"
 
-#define ESP32_MQUICKJS_DEFAULT_EVAL_TIMEOUT_MS 250U
+#define ESP32_MQUICKJS_DEFAULT_EVAL_TIMEOUT_MS ((uint32_t)CONFIG_ESP32_MQUICKJS_DEFAULT_EVAL_TIMEOUT_MS)
 #define ESP32_MQUICKJS_LITTLEFS_BASE_PATH "/littlefs"
 #define ESP32_MQUICKJS_LITTLEFS_PARTITION_LABEL "storage"
 
 typedef struct {
     uint32_t eval_timeout_ms;
     uint32_t output_generation;
+    size_t js_heap_size;
     bool prompt_needs_redraw;
+    bool js_heap_in_psram;
+    bool littlefs_mounted;
     uint64_t deadline_us;
     void (*before_output)(void *opaque);
     void *before_output_opaque;

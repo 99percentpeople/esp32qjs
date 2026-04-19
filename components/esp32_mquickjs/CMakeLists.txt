@@ -4,6 +4,7 @@ idf_component_register(
         "src/esp32_mquickjs_esp32.c"
         "src/esp32_mquickjs_fs.c"
         "src/esp32_mquickjs_gpio.c"
+        "src/esp32_mquickjs_http.c"
         "src/esp32_mquickjs_wifi.c"
         "src/js_stdlib.c"
     INCLUDE_DIRS
@@ -12,9 +13,13 @@ idf_component_register(
         mquickjs
         esp_driver_gpio
         esp_timer
+        spi_flash
+        esp_psram
         joltwallet__littlefs
         esp_event
+        esp_http_client
         esp_netif
         esp_wifi
+        mbedtls
         nvs_flash
 )

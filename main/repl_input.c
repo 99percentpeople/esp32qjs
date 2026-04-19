@@ -8,6 +8,7 @@
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
 #include "esp_err.h"
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -16,7 +17,7 @@
 #define HISTORY_SIZE 16
 #define REPL_IDLE_POLL_TICKS 1
 /* Match the common esp-idf-monitor width so the device controls wrapping. */
-#define REPL_DISPLAY_COLUMNS 80
+#define REPL_DISPLAY_COLUMNS CONFIG_ESP32QJS_REPL_DISPLAY_COLUMNS
 
 typedef enum {
     ASYNC_PROMPT_NONE = 0,

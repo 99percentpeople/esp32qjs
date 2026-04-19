@@ -1,0 +1,72 @@
+menu "ESP32 mquickjs"
+
+config ESP32_MQUICKJS_DEFAULT_EVAL_TIMEOUT_MS
+    int "Default JavaScript eval timeout (ms)"
+    range 50 10000
+    default 250
+    help
+        Default timeout for direct JavaScript evaluation on the REPL thread.
+
+config ESP32_MQUICKJS_MAX_TIMERS
+    int "Maximum active JS timers"
+    range 1 64
+    default 16
+    help
+        Maximum number of active setTimeout/setInterval handles.
+
+config ESP32_MQUICKJS_TIMER_QUEUE_LEN
+    int "Timer event queue length"
+    range 1 64
+    default 16
+    help
+        Queue depth used to deliver timer callbacks back to the REPL thread.
+
+config ESP32_MQUICKJS_MAX_SCRIPT_PATH
+    int "Maximum script path length"
+    range 128 1024
+    default 256
+    help
+        Maximum LittleFS path length accepted by load() and fs APIs.
+
+config ESP32_MQUICKJS_USER_LED_PIN
+    int "User LED GPIO"
+    range 0 48
+    default 21
+    help
+        GPIO used for gpio.led() and LED_BUILTIN.
+
+config ESP32_MQUICKJS_USER_LED_ACTIVE_LOW
+    bool "User LED is active-low"
+    default y
+    help
+        Enable this for boards where writing low turns the LED on.
+
+config ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS
+    int "Default Wi-Fi connect timeout (ms)"
+    range 1000 120000
+    default 15000
+    help
+        Default timeout used by wifi.connect().
+
+config ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS
+    int "Default HTTP request timeout (ms)"
+    range 1000 120000
+    default 15000
+    help
+        Default timeout used by fetch() and http.fetch().
+
+config ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BYTES
+    int "Maximum captured HTTP response bytes"
+    range 1024 131072
+    default 32768
+    help
+        Maximum UTF-8 response body retained in memory per request.
+
+config ESP32_MQUICKJS_HTTP_TASK_STACK_SIZE
+    int "HTTP async worker task stack size (bytes)"
+    range 4096 32768
+    default 8192
+    help
+        Stack size used by the async HTTP worker task.
+
+endmenu
