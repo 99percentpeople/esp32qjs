@@ -1,6 +1,9 @@
 idf_component_register(
     SRCS
         "src/esp32_mquickjs.c"
+        "src/esp32_mquickjs_esp32.c"
+        "src/esp32_mquickjs_fs.c"
+        "src/esp32_mquickjs_gpio.c"
         "src/js_stdlib.c"
     INCLUDE_DIRS
         "include"

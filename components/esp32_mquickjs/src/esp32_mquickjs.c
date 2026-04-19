@@ -1,13 +1,10 @@
-#include "esp32_mquickjs.h"
+#include "esp32_mquickjs_internal.h"
 
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
-#include "driver/gpio.h"
-#include "esp_err.h"
 #include "esp_heap_caps.h"
-#include "esp_littlefs.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -17,18 +14,9 @@
 
 extern const JSSTDLibraryDef js_stdlib;
 
-#define ESP32_BRIDGE_NAMESPACE "__esp32__"
-#define ESP32_MQUICKJS_MAX_TIMERS 16
-#define ESP32_MQUICKJS_TIMER_QUEUE_LEN 16
-#define XIAO_ESP32S3_USER_LED_PIN 21
-/* Seeed documents the XIAO ESP32-S3 user LED on GPIO21 as active-low. */
-#define XIAO_ESP32S3_USER_LED_ACTIVE_LOW 1
-#define ESP32_MQUICKJS_MAX_SCRIPT_PATH 256
-
-static uint64_t s_output_gpio_mask;
-static esp32_mquickjs_runtime_t *s_active_runtime;
-static bool s_littlefs_mounted;
 static const char *TAG = "esp32qjs";
+
+static esp32_mquickjs_runtime_t *s_active_runtime;
 
 typedef struct esp32_mquickjs_timer_slot esp32_mquickjs_timer_slot_t;
 
@@ -52,232 +40,6 @@ struct esp32_mquickjs_timer_slot {
     bool repeating;
     bool pending;
 };
-
-static const char ESP32_BOOTSTRAP_SOURCE[] =
-    "var __helpEntries = [];\n"
-    "function __attachHelp(target, text) {\n"
-    "  if (target && (typeof target === 'function' || typeof target === 'object')) {\n"
-    "    __helpEntries.push([target, text]);\n"
-    "  }\n"
-    "  return target;\n"
-    "}\n"
-    "function __lookupHelp(target) {\n"
-    "  var i;\n"
-    "  for (i = 0; i < __helpEntries.length; i++) {\n"
-    "    if (__helpEntries[i][0] === target) {\n"
-    "      return __helpEntries[i][1];\n"
-    "    }\n"
-    "  }\n"
-    "  return undefined;\n"
-    "}\n"
-    "function __resolveHelpTarget(name) {\n"
-    "  var value = globalThis;\n"
-    "  var parts = name.split('.');\n"
-    "  var i;\n"
-    "  for (i = 0; i < parts.length; i++) {\n"
-    "    if (!parts[i]) {\n"
-    "      return undefined;\n"
-    "    }\n"
-    "    value = value[parts[i]];\n"
-    "    if (value === undefined || value === null) {\n"
-    "      return undefined;\n"
-    "    }\n"
-    "  }\n"
-    "  return value;\n"
-    "}\n"
-    "function help(target) {\n"
-    "  var lookup = target;\n"
-    "  var doc;\n"
-    "  if (arguments.length === 0) {\n"
-    "    print('Use help(nameOrValue) to inspect a function or module.');\n"
-    "    print('Try: help(help), help(load), help(print), help(gc), help(setTimeout), help(setInterval), help(esp32), help(esp32.led)');\n"
-    "    return undefined;\n"
-    "  }\n"
-    "  if (typeof lookup === 'string') {\n"
-    "    lookup = __resolveHelpTarget(lookup);\n"
-    "    if (lookup === undefined) {\n"
-    "      print('No help topic named ' + target);\n"
-    "      return undefined;\n"
-    "    }\n"
-    "  }\n"
-    "  if (lookup && (typeof lookup === 'function' || typeof lookup === 'object')) {\n"
-    "    doc = __lookupHelp(lookup);\n"
-    "    if (typeof doc === 'string') {\n"
-    "      print(doc);\n"
-    "      return undefined;\n"
-    "    }\n"
-    "  }\n"
-    "  if (typeof lookup === 'function') {\n"
-    "    print('No built-in help for function ' + (lookup.name || '<anonymous>') + '.');\n"
-    "    return undefined;\n"
-    "  }\n"
-    "  if (lookup && typeof lookup === 'object') {\n"
-    "    print('No built-in help for this object.');\n"
-    "    return undefined;\n"
-    "  }\n"
-    "  print('help() expects a function, module object, or dotted name string.');\n"
-    "  return undefined;\n"
-    "}\n"
-    "var __nativeGc = gc;\n"
-    "globalThis.gc = function gc() {\n"
-    "  __nativeGc();\n"
-    "  return 'GC complete';\n"
-    "};\n"
-    "globalThis.LED_BUILTIN = 21;\n"
-    "globalThis.SCRIPTS_DIR = '/littlefs';\n"
-    "globalThis.setInterval = function(fn, ms) { return load('__esp32__', 'setInterval', fn, ms); };\n"
-    "globalThis.clearInterval = function(id) { return clearTimeout(id); };\n"
-    "globalThis.esp32 = {\n"
-    "  INPUT: 'input',\n"
-    "  OUTPUT: 'output',\n"
-    "  USER_LED_PIN: 21,\n"
-    "  USER_LED_ACTIVE_LOW: true,\n"
-    "  SCRIPTS_DIR: '/littlefs',\n"
-    "  info() { return load('__esp32__', 'info'); },\n"
-    "  millis() { return load('__esp32__', 'millis'); },\n"
-    "  micros() { return load('__esp32__', 'micros'); },\n"
-    "  freeHeap() { return load('__esp32__', 'freeHeap'); },\n"
-    "  sleep(ms) { return load('__esp32__', 'sleep', ms); },\n"
-    "  delay(ms) { return load('__esp32__', 'sleep', ms); },\n"
-    "  setInterval(fn, ms) { return globalThis.setInterval(fn, ms); },\n"
-    "  clearInterval(id) { return globalThis.clearInterval(id); },\n"
-    "  pinMode(pin, mode) { return load('__esp32__', 'pinMode', pin, mode); },\n"
-    "  digitalWrite(pin, value) { return load('__esp32__', 'digitalWrite', pin, value); },\n"
-    "  digitalRead(pin) { return load('__esp32__', 'digitalRead', pin); },\n"
-    "  led(value) { return load('__esp32__', 'led', value); },\n"
-    "};\n"
-    "__attachHelp(help, 'help([topic])\\nPrint built-in help for a function or module.\\nExamples: help(), help(setTimeout), help(esp32), help(\"esp32.led\")');\n"
-    "__attachHelp(load, 'load(path)\\nEvaluate a script from LittleFS. Relative paths resolve under /littlefs. Example: load(\"demo.js\") or load(\"/littlefs/demo.js\")');\n"
-    "__attachHelp(print, 'print(...values)\\nWrite values to the REPL console.');\n"
-    "__attachHelp(gc, 'gc()\\nRun the JavaScript garbage collector and return a confirmation string.');\n"
-    "__attachHelp(setTimeout, 'setTimeout(fn, ms)\\nRun fn once after ms milliseconds using esp_timer. Returns a timer id.');\n"
-    "__attachHelp(clearTimeout, 'clearTimeout(id)\\nCancel a timer created by setTimeout().');\n"
-    "__attachHelp(setInterval, 'setInterval(fn, ms)\\nRun fn repeatedly every ms milliseconds using esp_timer. Returns a timer id.');\n"
-    "__attachHelp(clearInterval, 'clearInterval(id)\\nCancel a timer created by setInterval().');\n"
-    "__attachHelp(esp32, 'esp32\\nBoard helper module for time, memory, GPIO, and the user LED.\\nMembers: info, millis, micros, freeHeap, sleep, delay, setInterval, clearInterval, pinMode, digitalWrite, digitalRead, led');\n"
-    "__attachHelp(esp32.info, 'esp32.info()\\nReturn board, chip, LED pin, active-low flag, scriptsDir, free heap, and current JS time.');\n"
-    "__attachHelp(esp32.millis, 'esp32.millis()\\nReturn monotonic time in milliseconds from esp_timer.');\n"
-    "__attachHelp(esp32.micros, 'esp32.micros()\\nReturn monotonic time in microseconds from esp_timer.');\n"
-    "__attachHelp(esp32.freeHeap, 'esp32.freeHeap()\\nReturn current free heap in bytes.');\n"
-    "__attachHelp(esp32.sleep, 'esp32.sleep(ms)\\nBlock the REPL task for ms milliseconds.');\n"
-    "__attachHelp(esp32.delay, 'esp32.delay(ms)\\nAlias of esp32.sleep(ms).');\n"
-    "__attachHelp(esp32.setInterval, 'esp32.setInterval(fn, ms)\\nAlias of the global setInterval(fn, ms).');\n"
-    "__attachHelp(esp32.clearInterval, 'esp32.clearInterval(id)\\nAlias of the global clearInterval(id).');\n"
-    "__attachHelp(esp32.pinMode, 'esp32.pinMode(pin, mode)\\nConfigure a GPIO as esp32.INPUT or esp32.OUTPUT.');\n"
-    "__attachHelp(esp32.digitalWrite, 'esp32.digitalWrite(pin, value)\\nSet a GPIO output level. Non-zero values map to high.');\n"
-    "__attachHelp(esp32.digitalRead, 'esp32.digitalRead(pin)\\nRead a GPIO level and return true or false.');\n"
-    "__attachHelp(esp32.led, 'esp32.led(value)\\nControl the XIAO ESP32-S3 user LED. true turns the LED on.');\n";
-
-static bool resolve_littlefs_path(const char *input_path, char *out_path, size_t out_path_size)
-{
-    int needed;
-
-    if (input_path == NULL || input_path[0] == '\0' || out_path == NULL || out_path_size == 0) {
-        return false;
-    }
-
-    if (input_path[0] == '/') {
-        needed = snprintf(out_path, out_path_size, "%s", input_path);
-    } else {
-        needed = snprintf(out_path,
-                          out_path_size,
-                          "%s/%s",
-                          ESP32_MQUICKJS_LITTLEFS_BASE_PATH,
-                          input_path);
-    }
-
-    return needed > 0 && (size_t)needed < out_path_size;
-}
-
-static uint8_t *load_script_file(const char *path, size_t *out_len)
-{
-    FILE *file;
-    long file_size;
-    size_t read_len;
-    uint8_t *buf;
-
-    if (out_len == NULL) {
-        return NULL;
-    }
-    *out_len = 0;
-
-    file = fopen(path, "rb");
-    if (file == NULL) {
-        return NULL;
-    }
-
-    if (fseek(file, 0, SEEK_END) != 0) {
-        fclose(file);
-        return NULL;
-    }
-
-    file_size = ftell(file);
-    if (file_size < 0 || fseek(file, 0, SEEK_SET) != 0) {
-        fclose(file);
-        return NULL;
-    }
-
-    buf = heap_caps_malloc((size_t)file_size + 1, MALLOC_CAP_8BIT);
-    if (buf == NULL) {
-        fclose(file);
-        return NULL;
-    }
-
-    read_len = fread(buf, 1, (size_t)file_size, file);
-    fclose(file);
-    if (read_len != (size_t)file_size) {
-        heap_caps_free(buf);
-        return NULL;
-    }
-
-    buf[read_len] = '\0';
-    *out_len = read_len;
-    return buf;
-}
-
-bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed)
-{
-    esp_vfs_littlefs_conf_t conf = {
-        .base_path = ESP32_MQUICKJS_LITTLEFS_BASE_PATH,
-        .partition_label = ESP32_MQUICKJS_LITTLEFS_PARTITION_LABEL,
-        .format_if_mount_failed = format_if_mount_failed,
-        .dont_mount = false,
-    };
-    esp_err_t ret;
-    size_t total = 0;
-    size_t used = 0;
-
-    if (s_littlefs_mounted) {
-        return true;
-    }
-
-    ret = esp_vfs_littlefs_register(&conf);
-    if (ret != ESP_OK) {
-        if (ret == ESP_FAIL) {
-            ESP_LOGE(TAG, "Failed to mount or format LittleFS");
-        } else if (ret == ESP_ERR_NOT_FOUND) {
-            ESP_LOGE(TAG, "LittleFS partition '%s' was not found",
-                     ESP32_MQUICKJS_LITTLEFS_PARTITION_LABEL);
-        } else {
-            ESP_LOGE(TAG, "Failed to initialize LittleFS (%s)", esp_err_to_name(ret));
-        }
-        return false;
-    }
-
-    ret = esp_littlefs_info(ESP32_MQUICKJS_LITTLEFS_PARTITION_LABEL, &total, &used);
-    if (ret == ESP_OK) {
-        ESP_LOGI(TAG,
-                 "LittleFS mounted at %s: total=%u used=%u",
-                 ESP32_MQUICKJS_LITTLEFS_BASE_PATH,
-                 (unsigned)total,
-                 (unsigned)used);
-    } else {
-        ESP_LOGW(TAG, "LittleFS mounted but size query failed (%s)", esp_err_to_name(ret));
-    }
-
-    s_littlefs_mounted = true;
-    return true;
-}
 
 static void note_console_output(void)
 {
@@ -325,6 +87,132 @@ static int js_interrupt_handler(JSContext *ctx, void *opaque)
         return 0;
     }
     return esp_timer_get_time() > runtime->deadline_us;
+}
+
+static JSValue js_call_function(JSContext *ctx,
+                                JSValue func,
+                                JSValue this_val,
+                                int argc,
+                                JSValue *argv)
+{
+    int i;
+
+    if (JS_StackCheck(ctx, (uint32_t)(argc + 2))) {
+        return JS_EXCEPTION;
+    }
+
+    for (i = argc - 1; i >= 0; --i) {
+        JS_PushArg(ctx, argv[i]);
+    }
+    JS_PushArg(ctx, func);
+    JS_PushArg(ctx, this_val);
+    return JS_Call(ctx, argc);
+}
+
+static JSValue esp32_mquickjs_make_bound_bridge_function(JSContext *ctx,
+                                                         JSValue global_obj,
+                                                         const char *operation)
+{
+    JSGCRef load_ref;
+    JSGCRef bind_ref;
+    JSGCRef namespace_ref;
+    JSGCRef operation_ref;
+    JSValue *load_fn;
+    JSValue *bind_fn;
+    JSValue *bridge_namespace;
+    JSValue *bridge_operation;
+    JSValue bind_args[3];
+    JSValue result = JS_EXCEPTION;
+
+    load_fn = JS_PushGCRef(ctx, &load_ref);
+    bind_fn = JS_PushGCRef(ctx, &bind_ref);
+    bridge_namespace = JS_PushGCRef(ctx, &namespace_ref);
+    bridge_operation = JS_PushGCRef(ctx, &operation_ref);
+
+    *load_fn = JS_GetPropertyStr(ctx, global_obj, "load");
+    *bind_fn = JS_UNDEFINED;
+    *bridge_namespace = JS_UNDEFINED;
+    *bridge_operation = JS_UNDEFINED;
+
+    if (JS_IsException(*load_fn)) {
+        goto done;
+    }
+    if (!JS_IsFunction(ctx, *load_fn)) {
+        JS_ThrowInternalError(ctx, "global load() is not available");
+        goto done;
+    }
+
+    *bind_fn = JS_GetPropertyStr(ctx, *load_fn, "bind");
+    if (JS_IsException(*bind_fn)) {
+        goto done;
+    }
+    if (!JS_IsFunction(ctx, *bind_fn)) {
+        JS_ThrowInternalError(ctx, "Function.bind() is not available");
+        goto done;
+    }
+
+    *bridge_namespace = JS_NewString(ctx, ESP32_MQUICKJS_BRIDGE_NAMESPACE);
+    if (JS_IsException(*bridge_namespace)) {
+        goto done;
+    }
+
+    *bridge_operation = JS_NewString(ctx, operation);
+    if (JS_IsException(*bridge_operation)) {
+        goto done;
+    }
+
+    bind_args[0] = JS_UNDEFINED;
+    bind_args[1] = *bridge_namespace;
+    bind_args[2] = *bridge_operation;
+    result = js_call_function(ctx, *bind_fn, *load_fn, 3, bind_args);
+
+done:
+    JS_PopGCRef(ctx, &operation_ref);
+    JS_PopGCRef(ctx, &namespace_ref);
+    JS_PopGCRef(ctx, &bind_ref);
+    JS_PopGCRef(ctx, &load_ref);
+    return result;
+}
+
+bool esp32_mquickjs_set_property(JSContext *ctx,
+                                 JSValue target_obj,
+                                 const char *name,
+                                 JSValue value)
+{
+    return !JS_IsException(JS_SetPropertyStr(ctx, target_obj, name, value));
+}
+
+bool esp32_mquickjs_set_alias(JSContext *ctx,
+                              JSValue target_obj,
+                              JSValue source_obj,
+                              const char *target_name,
+                              const char *source_name)
+{
+    JSValue value = JS_GetPropertyStr(ctx, source_obj, source_name);
+
+    if (JS_IsException(value)) {
+        return false;
+    }
+    return esp32_mquickjs_set_property(ctx, target_obj, target_name, value);
+}
+
+bool esp32_mquickjs_set_bound_bridge_function(JSContext *ctx,
+                                              JSValue target_obj,
+                                              JSValue global_obj,
+                                              const char *target_name,
+                                              const char *operation)
+{
+    JSValue func = esp32_mquickjs_make_bound_bridge_function(ctx, global_obj, operation);
+
+    if (JS_IsException(func)) {
+        return false;
+    }
+    return esp32_mquickjs_set_property(ctx, target_obj, target_name, func);
+}
+
+esp32_mquickjs_runtime_t *esp32_mquickjs_get_active_runtime(void)
+{
+    return s_active_runtime;
 }
 
 static esp32_mquickjs_timer_state_t *esp32_mquickjs_timer_state(esp32_mquickjs_runtime_t *runtime)
@@ -393,117 +281,6 @@ static void esp32_mquickjs_timer_cb(void *arg)
     if (xQueueSend(state->queue, &event, 0) == pdTRUE) {
         slot->pending = true;
     }
-}
-
-JSContext *esp32_mquickjs_create(void *mem_start,
-                                 size_t mem_size,
-                                 esp32_mquickjs_runtime_t *runtime,
-                                 uint32_t eval_timeout_ms)
-{
-    JSContext *ctx;
-
-    if (runtime == NULL) {
-        return NULL;
-    }
-
-    runtime->deadline_us = 0;
-    runtime->eval_timeout_ms = eval_timeout_ms;
-    runtime->output_generation = 0;
-    runtime->prompt_needs_redraw = false;
-    runtime->before_output = NULL;
-    runtime->before_output_opaque = NULL;
-    runtime->before_async_output = NULL;
-    runtime->before_async_output_opaque = NULL;
-    runtime->after_async_output = NULL;
-    runtime->after_async_output_opaque = NULL;
-    if (!esp32_mquickjs_init_timer_state(runtime)) {
-        return NULL;
-    }
-
-    ctx = JS_NewContext(mem_start, mem_size, &js_stdlib);
-    if (ctx == NULL) {
-        return NULL;
-    }
-
-    JS_SetContextOpaque(ctx, runtime);
-    JS_SetLogFunc(ctx, js_log_write);
-    JS_SetInterruptHandler(ctx, js_interrupt_handler);
-    JS_SetRandomSeed(ctx, (uint64_t)esp_timer_get_time());
-    s_active_runtime = runtime;
-    return ctx;
-}
-
-void esp32_mquickjs_set_eval_timeout(esp32_mquickjs_runtime_t *runtime,
-                                     uint32_t eval_timeout_ms)
-{
-    if (runtime == NULL) {
-        return;
-    }
-    runtime->eval_timeout_ms = eval_timeout_ms;
-}
-
-JSValue esp32_mquickjs_eval(JSContext *ctx,
-                            esp32_mquickjs_runtime_t *runtime,
-                            const char *source,
-                            const char *filename,
-                            int eval_flags)
-{
-    JSValue result;
-
-    if (runtime != NULL && runtime->eval_timeout_ms > 0) {
-        runtime->deadline_us = esp_timer_get_time() +
-                               ((uint64_t)runtime->eval_timeout_ms * 1000ULL);
-    }
-
-    result = JS_Eval(ctx, source, strlen(source), filename, eval_flags);
-
-    if (runtime != NULL) {
-        runtime->deadline_us = 0;
-    }
-    return result;
-}
-
-void esp32_mquickjs_print_exception(JSContext *ctx)
-{
-    JSValue exception = JS_GetException(ctx);
-
-    prepare_console_output();
-    JS_PrintValueF(ctx, exception, JS_DUMP_LONG);
-    fputc('\n', stdout);
-    fflush(stdout);
-    note_console_output();
-}
-
-static int js_value_to_bool(JSContext *ctx, JSValue value, bool *out_value)
-{
-    int int_value;
-
-    if (JS_IsBool(value)) {
-        *out_value = (value == JS_TRUE);
-        return 0;
-    }
-
-    if (JS_ToInt32(ctx, &int_value, value) == 0) {
-        *out_value = (int_value != 0);
-        return 0;
-    }
-
-    return -1;
-}
-
-static int js_value_to_gpio_num(JSContext *ctx, JSValue value, gpio_num_t *out_pin)
-{
-    int pin;
-
-    if (JS_ToInt32(ctx, &pin, value) != 0) {
-        return -1;
-    }
-    if (pin < 0 || pin >= GPIO_NUM_MAX || !GPIO_IS_VALID_GPIO(pin)) {
-        return -1;
-    }
-
-    *out_pin = (gpio_num_t)pin;
-    return 0;
 }
 
 static JSValue js_value_to_delay_ms(JSContext *ctx, int argc, JSValue *argv, int arg_index)
@@ -612,124 +389,116 @@ static JSValue esp32_mquickjs_create_timer(JSContext *ctx,
     return JS_NewInt32(ctx, slot->timer_id);
 }
 
-static JSValue esp32_make_info_object(JSContext *ctx)
+JSContext *esp32_mquickjs_create(void *mem_start,
+                                 size_t mem_size,
+                                 esp32_mquickjs_runtime_t *runtime,
+                                 uint32_t eval_timeout_ms)
 {
-    JSGCRef info_ref;
-    JSValue *info;
+    JSContext *ctx;
 
-    info = JS_PushGCRef(ctx, &info_ref);
-    *info = JS_NewObject(ctx);
-    if (JS_IsException(*info)) {
-        goto fail;
-    }
-    if (JS_IsException(JS_SetPropertyStr(ctx, *info, "board",
-                                         JS_NewString(ctx, "Seeed XIAO ESP32-S3")))) {
-        goto fail;
-    }
-    if (JS_IsException(JS_SetPropertyStr(ctx, *info, "chip",
-                                         JS_NewString(ctx, "ESP32-S3")))) {
-        goto fail;
-    }
-    if (JS_IsException(JS_SetPropertyStr(ctx, *info, "userLedPin",
-                                         JS_NewInt32(ctx, XIAO_ESP32S3_USER_LED_PIN)))) {
-        goto fail;
-    }
-    if (JS_IsException(JS_SetPropertyStr(ctx, *info, "userLedActiveLow",
-                                         JS_NewBool(XIAO_ESP32S3_USER_LED_ACTIVE_LOW)))) {
-        goto fail;
-    }
-    if (JS_IsException(JS_SetPropertyStr(ctx, *info, "scriptsDir",
-                                         JS_NewString(ctx, ESP32_MQUICKJS_LITTLEFS_BASE_PATH)))) {
-        goto fail;
-    }
-    if (JS_IsException(JS_SetPropertyStr(ctx, *info, "freeHeap",
-                                         JS_NewUint32(ctx, esp_get_free_heap_size())))) {
-        goto fail;
-    }
-    if (JS_IsException(JS_SetPropertyStr(ctx, *info, "jsTimeMs",
-                                         JS_NewInt64(ctx, esp_timer_get_time() / 1000)))) {
-        goto fail;
+    if (runtime == NULL) {
+        return NULL;
     }
 
-    return JS_PopGCRef(ctx, &info_ref);
+    runtime->deadline_us = 0;
+    runtime->eval_timeout_ms = eval_timeout_ms;
+    runtime->output_generation = 0;
+    runtime->prompt_needs_redraw = false;
+    runtime->before_output = NULL;
+    runtime->before_output_opaque = NULL;
+    runtime->before_async_output = NULL;
+    runtime->before_async_output_opaque = NULL;
+    runtime->after_async_output = NULL;
+    runtime->after_async_output_opaque = NULL;
+    runtime->timer_state = NULL;
+    if (!esp32_mquickjs_init_timer_state(runtime)) {
+        return NULL;
+    }
 
-fail:
-    JS_PopGCRef(ctx, &info_ref);
-    return JS_EXCEPTION;
+    ctx = JS_NewContext(mem_start, mem_size, &js_stdlib);
+    if (ctx == NULL) {
+        return NULL;
+    }
+
+    JS_SetContextOpaque(ctx, runtime);
+    JS_SetLogFunc(ctx, js_log_write);
+    JS_SetInterruptHandler(ctx, js_interrupt_handler);
+    JS_SetRandomSeed(ctx, (uint64_t)esp_timer_get_time());
+    s_active_runtime = runtime;
+    return ctx;
 }
 
-static JSValue esp32_gpio_set_mode(JSContext *ctx, gpio_num_t pin, const char *mode)
+void esp32_mquickjs_set_eval_timeout(esp32_mquickjs_runtime_t *runtime,
+                                     uint32_t eval_timeout_ms)
 {
-    gpio_config_t io_cfg = {
-        .pin_bit_mask = 1ULL << pin,
-        .mode = GPIO_MODE_DISABLE,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-
-    if (strcmp(mode, "output") == 0) {
-        io_cfg.mode = GPIO_MODE_OUTPUT;
-    } else if (strcmp(mode, "input") == 0) {
-        io_cfg.mode = GPIO_MODE_INPUT;
-    } else {
-        return JS_ThrowTypeError(ctx, "pinMode() expects 'input' or 'output'");
+    if (runtime == NULL) {
+        return;
     }
-
-    if (gpio_config(&io_cfg) != ESP_OK) {
-        return JS_ThrowInternalError(ctx, "gpio_config(%d) failed", (int)pin);
-    }
-
-    if (io_cfg.mode == GPIO_MODE_OUTPUT) {
-        s_output_gpio_mask |= 1ULL << pin;
-    } else {
-        s_output_gpio_mask &= ~(1ULL << pin);
-    }
-
-    return JS_NewInt32(ctx, (int32_t)pin);
+    runtime->eval_timeout_ms = eval_timeout_ms;
 }
 
-static JSValue esp32_gpio_write(JSContext *ctx, gpio_num_t pin, bool level)
+JSValue esp32_mquickjs_eval(JSContext *ctx,
+                            esp32_mquickjs_runtime_t *runtime,
+                            const char *source,
+                            const char *filename,
+                            int eval_flags)
 {
-    if ((s_output_gpio_mask & (1ULL << pin)) == 0) {
-        JSValue mode_result = esp32_gpio_set_mode(ctx, pin, "output");
-        if (JS_IsException(mode_result)) {
-            return mode_result;
-        }
+    JSValue result;
+
+    if (runtime != NULL && runtime->eval_timeout_ms > 0) {
+        runtime->deadline_us = esp_timer_get_time() +
+                               ((uint64_t)runtime->eval_timeout_ms * 1000ULL);
     }
 
-    if (gpio_set_level(pin, level ? 1 : 0) != ESP_OK) {
-        return JS_ThrowInternalError(ctx, "gpio_set_level(%d) failed", (int)pin);
-    }
+    result = JS_Eval(ctx, source, strlen(source), filename, eval_flags);
 
-    return JS_NewBool(level);
+    if (runtime != NULL) {
+        runtime->deadline_us = 0;
+    }
+    return result;
 }
 
-static JSValue js_esp32_bridge(JSContext *ctx, int argc, JSValue *argv)
+void esp32_mquickjs_print_exception(JSContext *ctx)
+{
+    JSValue exception = JS_GetException(ctx);
+
+    prepare_console_output();
+    JS_PrintValueF(ctx, exception, JS_DUMP_LONG);
+    fputc('\n', stdout);
+    fflush(stdout);
+    note_console_output();
+}
+
+static JSValue js_print_help(void)
+{
+    prepare_console_output();
+    fputs("See docs/repl-api.md for the REPL API reference.\n", stdout);
+    fflush(stdout);
+    note_console_output();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_host_bridge(JSContext *ctx, int argc, JSValue *argv)
 {
     JSCStringBuf op_buf;
     const char *operation;
+    JSValue result = JS_EXCEPTION;
 
     if (argc < 1 || !JS_IsString(ctx, argv[0])) {
-        return JS_ThrowTypeError(ctx, "missing ESP32 bridge operation");
+        return JS_ThrowTypeError(ctx, "missing host bridge operation");
     }
 
     operation = JS_ToCString(ctx, argv[0], &op_buf);
 
-    if (strcmp(operation, "info") == 0) {
-        return esp32_make_info_object(ctx);
+    if (strcmp(operation, "help") == 0) {
+        return js_print_help();
     }
 
-    if (strcmp(operation, "millis") == 0) {
-        return JS_NewInt64(ctx, esp_timer_get_time() / 1000);
-    }
-
-    if (strcmp(operation, "micros") == 0) {
-        return JS_NewInt64(ctx, esp_timer_get_time());
-    }
-
-    if (strcmp(operation, "freeHeap") == 0) {
-        return JS_NewUint32(ctx, esp_get_free_heap_size());
+    if (strcmp(operation, "setInterval") == 0) {
+        if (argc < 3) {
+            return JS_ThrowTypeError(ctx, "setInterval(fn, ms) expects a function and delay");
+        }
+        return esp32_mquickjs_create_timer(ctx, s_active_runtime, &argv[1], argv[2], true);
     }
 
     if (strcmp(operation, "sleep") == 0) {
@@ -742,88 +511,60 @@ static JSValue js_esp32_bridge(JSContext *ctx, int argc, JSValue *argv)
         return JS_NewInt32(ctx, delay_ms);
     }
 
-    if (strcmp(operation, "setInterval") == 0) {
-        if (argc < 3) {
-            return JS_ThrowTypeError(ctx, "setInterval(fn, ms) expects a function and delay");
-        }
-        return esp32_mquickjs_create_timer(ctx, s_active_runtime, &argv[1], argv[2], true);
+    if (strncmp(operation, "fs.", 3) == 0 &&
+        esp32_mquickjs_dispatch_fs(ctx, operation + 3, argc - 1, argv + 1, &result)) {
+        return result;
     }
 
-    if (strcmp(operation, "pinMode") == 0) {
-        JSCStringBuf mode_buf;
-        const char *mode;
-        gpio_num_t pin;
-
-        if (argc < 3 || js_value_to_gpio_num(ctx, argv[1], &pin) != 0 || !JS_IsString(ctx, argv[2])) {
-            return JS_ThrowTypeError(ctx, "pinMode(pin, mode) expects a valid GPIO and mode string");
-        }
-
-        mode = JS_ToCString(ctx, argv[2], &mode_buf);
-        return esp32_gpio_set_mode(ctx, pin, mode);
+    if (strncmp(operation, "gpio.", 5) == 0 &&
+        esp32_mquickjs_dispatch_gpio(ctx, operation + 5, argc - 1, argv + 1, &result)) {
+        return result;
     }
 
-    if (strcmp(operation, "digitalWrite") == 0) {
-        gpio_num_t pin;
-        bool level;
-
-        if (argc < 3 || js_value_to_gpio_num(ctx, argv[1], &pin) != 0 ||
-            js_value_to_bool(ctx, argv[2], &level) != 0) {
-            return JS_ThrowTypeError(ctx, "digitalWrite(pin, value) expects a valid GPIO and boolean-like value");
-        }
-
-        return esp32_gpio_write(ctx, pin, level);
+    if (strncmp(operation, "esp32.", 6) == 0 &&
+        esp32_mquickjs_dispatch_esp32(ctx, operation + 6, argc - 1, argv + 1, &result)) {
+        return result;
     }
 
-    if (strcmp(operation, "digitalRead") == 0) {
-        gpio_num_t pin;
-
-        if (argc < 2 || js_value_to_gpio_num(ctx, argv[1], &pin) != 0) {
-            return JS_ThrowTypeError(ctx, "digitalRead(pin) expects a valid GPIO");
-        }
-
-        return JS_NewBool(gpio_get_level(pin) != 0);
-    }
-
-    if (strcmp(operation, "led") == 0) {
-        bool level;
-        bool gpio_level;
-        JSValue result;
-
-        if (argc < 2 || js_value_to_bool(ctx, argv[1], &level) != 0) {
-            return JS_ThrowTypeError(ctx, "led(value) expects a boolean-like value");
-        }
-
-        gpio_level = XIAO_ESP32S3_USER_LED_ACTIVE_LOW ? !level : level;
-        result = esp32_gpio_write(ctx, (gpio_num_t)XIAO_ESP32S3_USER_LED_PIN, gpio_level);
-        if (JS_IsException(result)) {
-            return result;
-        }
-        return JS_NewBool(level);
-    }
-
-    return JS_ThrowReferenceError(ctx, "unknown ESP32 bridge operation: %s", operation);
+    return JS_ThrowReferenceError(ctx, "unknown host bridge operation: %s", operation);
 }
 
 bool esp32_mquickjs_install_globals(JSContext *ctx,
                                     esp32_mquickjs_runtime_t *runtime)
 {
-    JSValue result;
+    JSGCRef global_ref;
+    JSValue *global_obj;
 
     if (ctx == NULL || runtime == NULL) {
         return false;
     }
 
-    result = esp32_mquickjs_eval(ctx,
-                                 runtime,
-                                 ESP32_BOOTSTRAP_SOURCE,
-                                 "<esp32-bootstrap>",
-                                 JS_EVAL_STRIP_COL);
-
-    if (JS_IsException(result)) {
+    global_obj = JS_PushGCRef(ctx, &global_ref);
+    *global_obj = JS_GetGlobalObject(ctx);
+    if (JS_IsException(*global_obj)) {
+        JS_PopGCRef(ctx, &global_ref);
         esp32_mquickjs_print_exception(ctx);
         return false;
     }
 
+    if (!esp32_mquickjs_set_property(ctx, *global_obj, "SCRIPTS_DIR",
+                                     JS_NewString(ctx, ESP32_MQUICKJS_LITTLEFS_BASE_PATH)) ||
+        !esp32_mquickjs_set_property(ctx, *global_obj, "LED_BUILTIN",
+                                     JS_NewInt32(ctx, ESP32_MQUICKJS_USER_LED_PIN)) ||
+        !esp32_mquickjs_set_bound_bridge_function(ctx, *global_obj, *global_obj, "help", "help") ||
+        !esp32_mquickjs_set_bound_bridge_function(ctx, *global_obj, *global_obj, "sleep", "sleep") ||
+        !esp32_mquickjs_set_alias(ctx, *global_obj, *global_obj, "delay", "sleep") ||
+        !esp32_mquickjs_set_bound_bridge_function(ctx, *global_obj, *global_obj, "setInterval", "setInterval") ||
+        !esp32_mquickjs_set_alias(ctx, *global_obj, *global_obj, "clearInterval", "clearTimeout") ||
+        !esp32_mquickjs_install_fs_module(ctx, *global_obj) ||
+        !esp32_mquickjs_install_gpio_module(ctx, *global_obj) ||
+        !esp32_mquickjs_install_esp32_module(ctx, *global_obj)) {
+        JS_PopGCRef(ctx, &global_ref);
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
+
+    JS_PopGCRef(ctx, &global_ref);
     return true;
 }
 
@@ -889,8 +630,9 @@ static uint32_t js_print_output_lines(JSContext *ctx, int argc, JSValue *argv)
             JSCStringBuf buf;
             size_t len = 0;
             const char *str = JS_ToCStringLen(ctx, &len, argv[i], &buf);
+            size_t j;
 
-            for (size_t j = 0; j < len; ++j) {
+            for (j = 0; j < len; ++j) {
                 if (str[j] == '\n') {
                     lines++;
                 }
@@ -938,37 +680,6 @@ JSValue js_gc(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     return JS_UNDEFINED;
 }
 
-static JSValue js_load_from_littlefs(JSContext *ctx, const char *script_path)
-{
-    char resolved_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
-    size_t source_len = 0;
-    uint8_t *source;
-    JSValue result;
-
-    if (!s_littlefs_mounted) {
-        return JS_ThrowInternalError(ctx,
-                                     "LittleFS is not mounted at %s",
-                                     ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
-    }
-    if (!resolve_littlefs_path(script_path, resolved_path, sizeof(resolved_path))) {
-        return JS_ThrowTypeError(ctx, "load(path) expects a non-empty path under %s",
-                                 ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
-    }
-
-    source = load_script_file(resolved_path, &source_len);
-    if (source == NULL) {
-        return JS_ThrowReferenceError(ctx, "failed to read script: %s", resolved_path);
-    }
-
-    result = esp32_mquickjs_eval(ctx,
-                                 s_active_runtime,
-                                 (const char *)source,
-                                 resolved_path,
-                                 0);
-    heap_caps_free(source);
-    return result;
-}
-
 JSValue js_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     JSCStringBuf command_buf;
@@ -981,11 +692,11 @@ JSValue js_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 
     command = JS_ToCString(ctx, argv[0], &command_buf);
 
-    if (strcmp(command, ESP32_BRIDGE_NAMESPACE) == 0) {
-        return js_esp32_bridge(ctx, argc - 1, argv + 1);
+    if (strcmp(command, ESP32_MQUICKJS_BRIDGE_NAMESPACE) == 0) {
+        return js_host_bridge(ctx, argc - 1, argv + 1);
     }
 
-    return js_load_from_littlefs(ctx, command);
+    return esp32_mquickjs_load_from_littlefs(ctx, s_active_runtime, command);
 }
 
 JSValue js_setTimeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
