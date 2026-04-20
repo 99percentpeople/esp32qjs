@@ -41,6 +41,40 @@ config ESP32_MQUICKJS_USER_LED_ACTIVE_LOW
     help
         Enable this for boards where writing low turns the LED on.
 
+config ESP32_MQUICKJS_I2C_DEFAULT_SDA_PIN
+    int "Default I2C SDA GPIO"
+    range 0 48
+    default 5
+    help
+        Default SDA pin used by i2c.open() when no pin override is provided.
+
+config ESP32_MQUICKJS_I2C_DEFAULT_SCL_PIN
+    int "Default I2C SCL GPIO"
+    range 0 48
+    default 6
+    help
+        Default SCL pin used by i2c.open() when no pin override is provided.
+
+config ESP32_MQUICKJS_I2C_DEFAULT_FREQ_HZ
+    int "Default I2C clock frequency (Hz)"
+    range 10000 1000000
+    default 400000
+    help
+        Default I2C bus speed used by i2c.open().
+
+config ESP32_MQUICKJS_I2C_DEFAULT_TIMEOUT_MS
+    int "Default I2C transfer timeout (ms)"
+    range 1 5000
+    default 100
+    help
+        Default timeout used by i2c.scan(), i2c.write(), i2c.read(), and i2c.writeRead().
+
+config ESP32_MQUICKJS_I2C_ENABLE_INTERNAL_PULLUP
+    bool "Enable internal pull-up for I2C"
+    default y
+    help
+        Enable the internal SDA/SCL pull-up resistors when opening the I2C bus.
+
 config ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS
     int "Default Wi-Fi connect timeout (ms)"
     range 1000 120000

@@ -12,6 +12,10 @@
 #define ESP32_MQUICKJS_TIMER_QUEUE_LEN CONFIG_ESP32_MQUICKJS_TIMER_QUEUE_LEN
 #define ESP32_MQUICKJS_MAX_SCRIPT_PATH CONFIG_ESP32_MQUICKJS_MAX_SCRIPT_PATH
 #define ESP32_MQUICKJS_USER_LED_PIN CONFIG_ESP32_MQUICKJS_USER_LED_PIN
+#define ESP32_MQUICKJS_I2C_DEFAULT_SDA_PIN CONFIG_ESP32_MQUICKJS_I2C_DEFAULT_SDA_PIN
+#define ESP32_MQUICKJS_I2C_DEFAULT_SCL_PIN CONFIG_ESP32_MQUICKJS_I2C_DEFAULT_SCL_PIN
+#define ESP32_MQUICKJS_I2C_DEFAULT_FREQ_HZ ((uint32_t)CONFIG_ESP32_MQUICKJS_I2C_DEFAULT_FREQ_HZ)
+#define ESP32_MQUICKJS_I2C_DEFAULT_TIMEOUT_MS ((uint32_t)CONFIG_ESP32_MQUICKJS_I2C_DEFAULT_TIMEOUT_MS)
 #define ESP32_MQUICKJS_WIFI_SSID_MAX_LEN 32
 #define ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN 64
 #define ESP32_MQUICKJS_WIFI_IPV4_STR_LEN 16
@@ -25,6 +29,12 @@
 #define ESP32_MQUICKJS_USER_LED_ACTIVE_LOW 1
 #else
 #define ESP32_MQUICKJS_USER_LED_ACTIVE_LOW 0
+#endif
+
+#ifdef CONFIG_ESP32_MQUICKJS_I2C_ENABLE_INTERNAL_PULLUP
+#define ESP32_MQUICKJS_I2C_ENABLE_INTERNAL_PULLUP 1
+#else
+#define ESP32_MQUICKJS_I2C_ENABLE_INTERNAL_PULLUP 0
 #endif
 
 typedef struct {
@@ -67,6 +77,7 @@ bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed);
 
 bool esp32_mquickjs_install_fs_module(JSContext *ctx, JSValue global_obj);
 bool esp32_mquickjs_install_gpio_module(JSContext *ctx, JSValue global_obj);
+bool esp32_mquickjs_install_i2c_module(JSContext *ctx, JSValue global_obj);
 bool esp32_mquickjs_install_esp32_module(JSContext *ctx, JSValue global_obj);
 bool esp32_mquickjs_install_wifi_module(JSContext *ctx,
                                         JSValue global_obj,
@@ -86,6 +97,11 @@ bool esp32_mquickjs_dispatch_gpio(JSContext *ctx,
                                   int argc,
                                   JSValue *argv,
                                   JSValue *result);
+bool esp32_mquickjs_dispatch_i2c(JSContext *ctx,
+                                 const char *operation,
+                                 int argc,
+                                 JSValue *argv,
+                                 JSValue *result);
 
 bool esp32_mquickjs_dispatch_esp32(JSContext *ctx,
                                    const char *operation,

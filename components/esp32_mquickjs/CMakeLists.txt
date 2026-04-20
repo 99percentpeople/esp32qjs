@@ -4,6 +4,7 @@ idf_component_register(
         "src/esp32_mquickjs_esp32.c"
         "src/esp32_mquickjs_fs.c"
         "src/esp32_mquickjs_gpio.c"
+        "src/esp32_mquickjs_i2c.c"
         "src/esp32_mquickjs_http.c"
         "src/esp32_mquickjs_wifi.c"
         "src/js_stdlib.c"
@@ -12,6 +13,7 @@ idf_component_register(
     REQUIRES
         mquickjs
         esp_driver_gpio
+        esp_driver_i2c
         esp_timer
         spi_flash
         esp_psram

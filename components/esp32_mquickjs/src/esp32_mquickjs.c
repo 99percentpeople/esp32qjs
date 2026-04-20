@@ -1091,6 +1091,11 @@ static JSValue js_host_bridge(JSContext *ctx, int argc, JSValue *argv)
         return result;
     }
 
+    if (strncmp(operation, "i2c.", 4) == 0 &&
+        esp32_mquickjs_dispatch_i2c(ctx, operation + 4, argc - 1, argv + 1, &result)) {
+        return result;
+    }
+
     if (strncmp(operation, "esp32.", 6) == 0 &&
         esp32_mquickjs_dispatch_esp32(ctx, operation + 6, argc - 1, argv + 1, &result)) {
         return result;
@@ -1141,6 +1146,7 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
         !esp32_mquickjs_set_alias(ctx, *global_obj, *global_obj, "clearInterval", "clearTimeout") ||
         !esp32_mquickjs_install_fs_module(ctx, *global_obj) ||
         !esp32_mquickjs_install_gpio_module(ctx, *global_obj) ||
+        !esp32_mquickjs_install_i2c_module(ctx, *global_obj) ||
         !esp32_mquickjs_install_esp32_module(ctx, *global_obj) ||
         !esp32_mquickjs_install_wifi_module(ctx, *global_obj, runtime) ||
         !esp32_mquickjs_install_http_module(ctx, *global_obj, runtime)) {
