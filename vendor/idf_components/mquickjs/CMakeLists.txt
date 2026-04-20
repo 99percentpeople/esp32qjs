@@ -5,10 +5,10 @@ set(MQUICKJS_HOST_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/host_tools")
 set(MQUICKJS_HOST_TOOL "${MQUICKJS_HOST_BUILD_DIR}/mqjs_stdlib")
 set(MQUICKJS_RUN_TOOL_TO_FILE_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/cmake/run_tool_to_file.cmake")
 
-if(DEFINED ENV{CC} AND NOT "$ENV{CC}" STREQUAL "")
-    set(MQUICKJS_HOST_CC "$ENV{CC}")
+if(DEFINED ENV{HOSTCC} AND NOT "$ENV{HOSTCC}" STREQUAL "")
+    set(MQUICKJS_HOST_CC "$ENV{HOSTCC}")
 else()
-    find_program(MQUICKJS_HOST_CC NAMES cc gcc clang REQUIRED)
+    find_program(MQUICKJS_HOST_CC NAMES cc gcc clang REQUIRED NO_CACHE)
 endif()
 
 set(MQUICKJS_HOST_CFLAGS
@@ -65,12 +65,13 @@ if(NOT CMAKE_SCRIPT_MODE_FILE)
         COMMAND ${CMAKE_COMMAND}
                 -DOUTPUT_FILE=${MQUICKJS_ATOM_HEADER}
                 -DTOOL=${MQUICKJS_HOST_TOOL}
-                -DARGS=-a;-m32
+                -DARG0=-a
+                -DARG1=-m32
                 -P "${MQUICKJS_RUN_TOOL_TO_FILE_SCRIPT}"
         COMMAND ${CMAKE_COMMAND}
                 -DOUTPUT_FILE=${MQUICKJS_STDLIB_HEADER}
                 -DTOOL=${MQUICKJS_HOST_TOOL}
-                -DARGS=-m32
+                -DARG0=-m32
                 -P "${MQUICKJS_RUN_TOOL_TO_FILE_SCRIPT}"
         DEPENDS
             "${MQUICKJS_HOST_TOOL}"

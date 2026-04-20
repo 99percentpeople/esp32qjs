@@ -2,12 +2,13 @@
 
 #include <stdio.h>
 
+#include "sdkconfig.h"
 #include "repl_input.h"
 
 void esp32qjs_repl_print_banner(void)
 {
     printf("\n");
-    printf("mquickjs REPL on ESP32-S3\n");
+    printf("mquickjs REPL on %s\n", CONFIG_ESP32_MQUICKJS_BOARD_NAME);
     printf("Type JavaScript and press Enter.\n");
     printf("Run help() for usage.\n");
 }

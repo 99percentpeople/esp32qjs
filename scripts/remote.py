@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Unified helper for starting RFC2217 forwarding, flashing, and monitoring a remote ESP32-S3.
+"""Unified helper for remote ESP32 board development.
 
-The script reads optional defaults from `/.env` in the repository root so the
-common commands stay short during day-to-day use.
+The script reads repository-local `/.env` defaults, then merges them with a
+selected board profile from `configs/boards/*/.env`. That keeps day-to-day
+commands short while still allowing different targets, build directories,
+sdkconfig files, and remote serial bridges per board.
 """
 
 from __future__ import annotations
@@ -16,12 +18,15 @@ import shlex
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 ENV_PATH = ROOT_DIR / ".env"
+CONFIG_DIR = ROOT_DIR / "configs"
+BOARD_DIR = CONFIG_DIR / "boards"
 
 ESPTOOL_CONFIG_TEXT = """[esptool]
 custom_reset_sequence = R0|D0|W0.1|D1|R0|W0.1|R1|D0|R1|W0.1|D0|R0
@@ -38,8 +43,48 @@ custom_hard_reset_sequence = R1|W0.2|R0
 """
 
 
+@dataclass(frozen=True)
+class BoardProfile:
+    reference: str
+    name: str
+    file: Path
+    label: str
+    idf_target: str
+    build_dir: Path
+    sdkconfig_defaults: Path | None
+    esp_idf_path: str
+    remote_host: str
+    remote_port: int
+    remote_url: str
+    monitor_baud: int
+    com_port: str
+    listen_port: int
+    server_python_exe: str
+    esptool_bin: str
+
+
+@dataclass(frozen=True)
+class ProjectConfig:
+    board: str
+    board_file: Path
+    board_label: str
+    build_dir: Path
+    generated_sdkconfig: Path
+    sdkconfig_defaults: Path | None
+    idf_target: str
+    esp_idf_path: str
+    remote_host: str
+    remote_port: int
+    remote_url: str
+    monitor_baud: int
+    com_port: str
+    listen_port: int
+    server_python_exe: str
+    esptool_bin: str
+
+
 def load_dotenv(path: Path) -> dict[str, str]:
-    """Load simple `KEY=VALUE` pairs from the repository-local `.env` file."""
+    """Load simple `KEY=VALUE` pairs from a local `.env`-style file."""
     values: dict[str, str] = {}
     if not path.exists():
         return values
@@ -63,14 +108,24 @@ def load_dotenv(path: Path) -> dict[str, str]:
     return values
 
 
-def env_value(dotenv: dict[str, str], key: str, default: str) -> str:
-    """Resolve a configuration value from process env, then `/.env`, then fallback."""
-    return os.environ.get(key, dotenv.get(key, default))
+def merged_value(
+    repo_env: dict[str, str],
+    board_env: dict[str, str],
+    key: str,
+    default: str,
+) -> str:
+    """Resolve a config value from process env, then `/.env`, then board profile."""
+    return os.environ.get(key, repo_env.get(key, board_env.get(key, default)))
 
 
-def env_int(dotenv: dict[str, str], key: str, default: int) -> int:
-    """Resolve and validate an integer configuration value."""
-    raw_value = os.environ.get(key, dotenv.get(key))
+def merged_int(
+    repo_env: dict[str, str],
+    board_env: dict[str, str],
+    key: str,
+    default: int,
+) -> int:
+    """Resolve and validate an integer config value."""
+    raw_value = os.environ.get(key, repo_env.get(key, board_env.get(key)))
     if raw_value is None:
         return default
 
@@ -80,38 +135,147 @@ def env_int(dotenv: dict[str, str], key: str, default: int) -> int:
         raise SystemExit(f"Invalid integer for {key}: {raw_value!r}") from exc
 
 
-def load_defaults() -> dict[str, str | int]:
-    """Build CLI defaults from environment variables and `/.env`."""
-    dotenv = load_dotenv(ENV_PATH)
+def resolve_repo_path(raw_path: str) -> Path:
+    """Resolve a project-relative path against the repository root."""
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return path
+    return ROOT_DIR / path
 
-    remote_port = env_int(dotenv, "REMOTE_PORT", 4000)
+
+def format_path(path: Path | None) -> str:
+    """Render a path relative to the repository root when possible."""
+    if path is None:
+        return ""
+    try:
+        return str(path.relative_to(ROOT_DIR))
+    except ValueError:
+        return str(path)
+
+
+def board_reference_from_env(repo_env: dict[str, str], override: str | None) -> str:
+    """Choose the board profile reference from CLI or local environment."""
+    if override:
+        return override
+    if os.environ.get("BOARD_FILE"):
+        return os.environ["BOARD_FILE"]
+    if repo_env.get("BOARD_FILE"):
+        return repo_env["BOARD_FILE"]
+    if os.environ.get("BOARD"):
+        return os.environ["BOARD"]
+    if repo_env.get("BOARD"):
+        return repo_env["BOARD"]
+    return "xiao_esp32s3"
+
+
+def board_env_file(board_dir: Path) -> Path:
+    """Return the profile `.env` file for a board directory."""
+    return board_dir / ".env"
+
+
+def board_sdkconfig_defaults_file(board_dir: Path) -> Path:
+    """Return the default sdkconfig defaults file for a board directory."""
+    return board_dir / "sdkconfig.defaults"
+
+
+def resolve_profile_path(raw_path: str, board_dir: Path) -> Path:
+    """Resolve a board-relative or repo-relative path."""
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return path
+    if raw_path.startswith("./") or raw_path.startswith("../") or raw_path.startswith("configs/"):
+        return ROOT_DIR / path
+    return board_dir / path
+
+
+def resolve_board_file(reference: str) -> Path:
+    """Resolve a board profile reference to an on-disk `.env` file."""
+    ref_path = Path(reference).expanduser()
+    if ref_path.is_absolute() or "/" in reference or "\\" in reference or reference.endswith(".env"):
+        candidate = ref_path if ref_path.is_absolute() else ROOT_DIR / ref_path
+    else:
+        candidate = BOARD_DIR / reference
+
+    if candidate.is_dir():
+        board_file = board_env_file(candidate)
+    else:
+        board_file = candidate
+
+    if not board_file.exists():
+        raise SystemExit(
+            f"Board profile {reference!r} not found. Add {board_file} or run "
+            "`python scripts/remote.py boards` to list available profiles."
+        )
+
+    return board_file.resolve()
+
+
+def load_profile(board_override: str | None = None) -> BoardProfile:
+    """Build the effective board profile from `/.env` and `configs/boards/*/.env`."""
+    repo_env = load_dotenv(ENV_PATH)
+    board_reference = board_reference_from_env(repo_env, board_override)
+    board_file = resolve_board_file(board_reference)
+    board_dir = board_file.parent
+    board_env = load_dotenv(board_file)
+
+    esp_idf_path = merged_value(
+        repo_env,
+        board_env,
+        "ESP_IDF_PATH",
+        merged_value(repo_env, board_env, "IDF_PATH", str(Path.home() / "esp" / "esp-idf")),
+    )
+    remote_port = merged_int(repo_env, board_env, "REMOTE_PORT", 4000)
     remote_url_override = (
         os.environ.get("REMOTE_URL")
-        or dotenv.get("REMOTE_URL")
+        or repo_env.get("REMOTE_URL")
         or os.environ.get("ESPPORT")
-        or dotenv.get("ESPPORT")
+        or repo_env.get("ESPPORT")
+        or board_env.get("REMOTE_URL")
+        or board_env.get("ESPPORT")
         or ""
     )
-    esp_idf_path = (
-        os.environ.get("ESP_IDF_PATH")
-        or dotenv.get("ESP_IDF_PATH")
-        or os.environ.get("IDF_PATH")
-        or dotenv.get("IDF_PATH")
-    )
-    if not esp_idf_path:
-        esp_idf_path = str(Path.home() / "esp" / "esp-idf")
+    sdkconfig_defaults_raw = merged_value(repo_env, board_env, "SDKCONFIG_DEFAULTS", "")
+    if not sdkconfig_defaults_raw:
+        sdkconfig_defaults_raw = merged_value(repo_env, board_env, "SDKCONFIG", "")
 
-    return {
-        "com_port": env_value(dotenv, "COM_PORT", "COM3"),
-        "listen_port": env_int(dotenv, "LISTEN_PORT", remote_port),
-        "server_python_exe": env_value(dotenv, "SERVER_PYTHON_EXE", "auto"),
-        "remote_host": env_value(dotenv, "REMOTE_HOST", "192.168.68.54"),
-        "remote_port": remote_port,
-        "remote_url": remote_url_override,
-        "esptool_bin": env_value(dotenv, "ESPTOOL_BIN", "auto"),
-        "esp_idf_path": str(Path(esp_idf_path).expanduser()),
-        "monitor_baud": env_int(dotenv, "MONITOR_BAUD", env_int(dotenv, "ESPBAUD", 115200)),
-    }
+    idf_target = merged_value(repo_env, board_env, "IDF_TARGET", "")
+    if not idf_target:
+        raise SystemExit(f"{board_file} must define IDF_TARGET.")
+
+    return BoardProfile(
+        reference=board_reference,
+        name=board_dir.name,
+        file=board_file,
+        label=merged_value(repo_env, board_env, "BOARD_LABEL", board_dir.name),
+        idf_target=idf_target,
+        build_dir=resolve_repo_path(merged_value(repo_env, board_env, "BUILD_DIR", "build")),
+        sdkconfig_defaults=(
+            resolve_profile_path(sdkconfig_defaults_raw, board_dir)
+            if sdkconfig_defaults_raw
+            else (board_sdkconfig_defaults_file(board_dir) if board_sdkconfig_defaults_file(board_dir).exists() else None)
+        ),
+        esp_idf_path=str(Path(esp_idf_path).expanduser()),
+        remote_host=merged_value(repo_env, board_env, "REMOTE_HOST", "192.168.68.54"),
+        remote_port=remote_port,
+        remote_url=remote_url_override,
+        monitor_baud=merged_int(
+            repo_env,
+            board_env,
+            "MONITOR_BAUD",
+            merged_int(repo_env, board_env, "ESPBAUD", 115200),
+        ),
+        com_port=merged_value(repo_env, board_env, "COM_PORT", "COM3"),
+        listen_port=merged_int(repo_env, board_env, "LISTEN_PORT", remote_port),
+        server_python_exe=merged_value(repo_env, board_env, "SERVER_PYTHON_EXE", "auto"),
+        esptool_bin=merged_value(repo_env, board_env, "ESPTOOL_BIN", "auto"),
+    )
+
+
+def available_board_profiles() -> list[Path]:
+    """Return the board profiles shipped in the repository."""
+    if not BOARD_DIR.exists():
+        return []
+    return sorted(path for path in BOARD_DIR.glob("*/.env") if path.is_file())
 
 
 def run(
@@ -164,7 +328,7 @@ def resolve_esptool_cmd(esptool_bin: str) -> list[str]:
         return [sys.executable, "-m", "esptool"]
 
     raise SystemExit(
-        "esptool is not available. Run `uv sync` in the repo root or set ESPTOOL_BIN in /.env."
+        "esptool is not available. Run `uv sync` in the repo root or set ESPTOOL_BIN."
     )
 
 
@@ -181,7 +345,7 @@ def resolve_server_cmd(python_exe: str) -> list[str]:
 
     raise SystemExit(
         "esp_rfc2217_server is not available. Run `uv sync` in the repo root or set "
-        "SERVER_PYTHON_EXE in /.env."
+        "SERVER_PYTHON_EXE."
     )
 
 
@@ -265,7 +429,7 @@ def stop_server_processes() -> None:
     subprocess.run(["pkill", "-f", "esp_rfc2217_server"], check=False)
 
 
-def start_server(python_exe: str, listen_port: int, com_port: str, force_restart: bool) -> int:
+def start_server(config: ProjectConfig, force_restart: bool) -> int:
     """Start esp_rfc2217_server after ensuring reset overrides exist."""
     esptool_cfg, setup_cfg = write_all_configs()
 
@@ -282,7 +446,7 @@ def start_server(python_exe: str, listen_port: int, com_port: str, force_restart
         print(f"Using monitor config: {setup_cfg}")
         return 0
 
-    cmd = [*resolve_server_cmd(python_exe), "-v", "-p", str(listen_port), com_port]
+    cmd = [*resolve_server_cmd(config.server_python_exe), "-v", "-p", str(config.listen_port), config.com_port]
     kwargs: dict[str, object] = {
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
@@ -301,7 +465,7 @@ def start_server(python_exe: str, listen_port: int, com_port: str, force_restart
         print("Failed to confirm esp_rfc2217_server startup.", file=sys.stderr)
         return 1
 
-    print(f"RFC2217 server ready on {com_port} -> TCP {listen_port}")
+    print(f"RFC2217 server ready on {config.com_port} -> TCP {config.listen_port}")
     print(f"Using esptool config: {esptool_cfg}")
     print(f"Using monitor config: {setup_cfg}")
     for item in existing:
@@ -309,20 +473,31 @@ def start_server(python_exe: str, listen_port: int, com_port: str, force_restart
     return 0
 
 
-def idf_py_cmd(args: list[str], esp_idf_path: str) -> list[str]:
-    """Return a command that can run `idf.py`, derived from `ESP_IDF_PATH`."""
-    esp_idf_root = Path(esp_idf_path).expanduser()
+def idf_py_cmd(project_args: list[str], config: ProjectConfig) -> list[str]:
+    """Return a command that can run `idf.py` for the selected board profile."""
+    esp_idf_root = Path(config.esp_idf_path).expanduser()
     idf_py_script = esp_idf_root / "tools" / "idf.py"
     export_script_path = esp_idf_root / "export.sh"
     idf_env_ready = bool(os.environ.get("IDF_PATH") and os.environ.get("ESP_IDF_VERSION"))
+    cmake_args = [
+        "-B",
+        str(config.build_dir),
+        f"-DIDF_TARGET={config.idf_target}",
+        f"-DSDKCONFIG={config.generated_sdkconfig}",
+    ]
+
+    if config.sdkconfig_defaults is not None:
+        cmake_args.append(f"-DSDKCONFIG_DEFAULTS={config.sdkconfig_defaults}")
+
+    full_args = [*cmake_args, *project_args]
 
     if not idf_py_script.exists():
         raise SystemExit(
-            f"idf.py not found under {esp_idf_root}. Set ESP_IDF_PATH in /.env to the ESP-IDF install directory."
+            f"idf.py not found under {esp_idf_root}. Set ESP_IDF_PATH to the ESP-IDF install directory."
         )
 
     if platform.system() != "Windows" and export_script_path.exists() and not idf_env_ready:
-        joined = shlex.join(args)
+        joined = shlex.join(full_args)
         command = (
             f"source {shlex.quote(str(export_script_path))} >/dev/null 2>&1 "
             f"&& exec {shlex.quote(str(idf_py_script))} {joined}"
@@ -330,10 +505,10 @@ def idf_py_cmd(args: list[str], esp_idf_path: str) -> list[str]:
         return ["bash", "-lc", command]
 
     if idf_env_ready:
-        return [str(idf_py_script), *args]
+        return [str(idf_py_script), *full_args]
 
     if platform.system() != "Windows" and export_script_path.exists():
-        joined = shlex.join(args)
+        joined = shlex.join(full_args)
         command = (
             f"source {shlex.quote(str(export_script_path))} >/dev/null 2>&1 "
             f"&& exec {shlex.quote(str(idf_py_script))} {joined}"
@@ -341,21 +516,21 @@ def idf_py_cmd(args: list[str], esp_idf_path: str) -> list[str]:
         return ["bash", "-lc", command]
 
     if which("idf.py"):
-        return ["idf.py", *args]
+        return ["idf.py", *full_args]
 
-    raise SystemExit(
-        f"ESP-IDF tooling is not ready. Set ESP_IDF_PATH in /.env to the ESP-IDF install directory."
-    )
+    raise SystemExit("ESP-IDF tooling is not ready. Set ESP_IDF_PATH to the ESP-IDF install directory.")
 
 
-def build(esp_idf_path: str) -> None:
-    """Build firmware."""
-    run(idf_py_cmd(["build"], esp_idf_path), cwd=ROOT_DIR, interactive=True)
+def build(config: ProjectConfig) -> None:
+    """Build firmware for the selected board."""
+    refresh_generated_sdkconfig(config)
+    run(idf_py_cmd(["build"], config), cwd=ROOT_DIR, interactive=True)
 
 
-def build_fs_image(esp_idf_path: str) -> None:
+def build_fs_image(config: ProjectConfig) -> None:
     """Build only the LittleFS image used by the storage partition."""
-    run(idf_py_cmd(["littlefs_storage_bin"], esp_idf_path), cwd=ROOT_DIR, interactive=True)
+    refresh_generated_sdkconfig(config)
+    run(idf_py_cmd(["littlefs_storage_bin"], config), cwd=ROOT_DIR, interactive=True)
 
 
 def default_remote_url(host: str, port: int) -> str:
@@ -372,7 +547,7 @@ def encode_query_items(items: list[tuple[str, str]]) -> str:
 
 
 def normalize_remote_url(raw_url: str) -> str:
-    """Normalize legacy RFC2217 URLs so old `.env` values keep working."""
+    """Normalize legacy RFC2217 URLs so old values keep working."""
     if not raw_url:
         return raw_url
 
@@ -392,42 +567,39 @@ def normalize_remote_url(raw_url: str) -> str:
 
 
 def remote_url(remote_url_override: str, host: str, port: int) -> str:
-    """Return the RFC2217 URL, preferring an explicit override from CLI or `/.env`."""
+    """Return the RFC2217 URL, preferring an explicit override from config."""
     return normalize_remote_url(remote_url_override or default_remote_url(host, port))
 
 
-def chip_id(esptool_bin: str, remote_url_override: str, host: str, port: int) -> None:
+def chip_id(config: ProjectConfig) -> None:
     """Probe the remote device without writing flash."""
     write_esptool_config()
     subprocess.run(
-        [*resolve_esptool_cmd(esptool_bin), "--port", remote_url(remote_url_override, host, port), "chip-id"],
+        [*resolve_esptool_cmd(config.esptool_bin), "--port", remote_url(config.remote_url, config.remote_host, config.remote_port), "chip-id"],
         cwd=ROOT_DIR,
         check=True,
     )
 
 
-def load_flasher_args() -> dict[str, object]:
-    """Load the current ESP-IDF flash plan generated in build/flasher_args.json."""
-    flasher_args_path = ROOT_DIR / "build" / "flasher_args.json"
+def load_flasher_args(build_dir: Path) -> dict[str, object]:
+    """Load the current ESP-IDF flash plan generated in flasher_args.json."""
+    flasher_args_path = build_dir / "flasher_args.json"
 
     if not flasher_args_path.exists():
-        raise SystemExit(
-            f"{flasher_args_path} not found. Run `python scripts/remote.py build` first."
-        )
+        raise SystemExit(f"{flasher_args_path} not found. Run `python scripts/remote.py build` first.")
 
     return json.loads(flasher_args_path.read_text(encoding="utf-8"))
 
 
 def resolve_flash_entry(
     flasher_args: dict[str, object],
+    build_dir: Path,
     entry_name: str,
 ) -> tuple[str, Path]:
     """Resolve one named flash entry from flasher_args.json."""
     entry = flasher_args.get(entry_name)
-    build_dir = ROOT_DIR / "build"
-
     if not isinstance(entry, dict):
-        raise SystemExit(f"Flash entry {entry_name!r} not found in build/flasher_args.json.")
+        raise SystemExit(f"Flash entry {entry_name!r} not found in {build_dir / 'flasher_args.json'}.")
 
     offset = str(entry.get("offset", ""))
     file_name = str(entry.get("file", ""))
@@ -447,21 +619,11 @@ def resolve_flash_entry(
     return offset, file_path
 
 
-def write_flash(
-    esptool_bin: str,
-    remote_url_override: str,
-    host: str,
-    port: int,
-    write_flash_args: list[str],
-    flash_pairs: list[str],
-    chip: str = "esp32s3",
-    before: str = "default-reset",
-    after: str = "hard-reset",
-) -> None:
+def write_flash(config: ProjectConfig, write_flash_args: list[str], flash_pairs: list[str], chip: str, before: str, after: str) -> None:
     """Run esptool write-flash with one or more offset/file pairs."""
     subprocess.run(
         [
-            *resolve_esptool_cmd(esptool_bin),
+            *resolve_esptool_cmd(config.esptool_bin),
             "--chip",
             chip,
             "--before",
@@ -469,7 +631,7 @@ def write_flash(
             "--after",
             after,
             "--port",
-            remote_url(remote_url_override, host, port),
+            remote_url(config.remote_url, config.remote_host, config.remote_port),
             "write-flash",
             *write_flash_args,
             *flash_pairs,
@@ -479,241 +641,299 @@ def write_flash(
     )
 
 
-def flash(
-    esptool_bin: str,
-    remote_url_override: str,
-    host: str,
-    port: int,
-    build_first: bool,
-    esp_idf_path: str,
-) -> None:
+def flash(config: ProjectConfig, build_first: bool) -> None:
     """Flash all ESP-IDF build outputs listed in flasher_args.json over RFC2217."""
-    build_dir = ROOT_DIR / "build"
-    flasher_args: dict[str, object]
-    extra_esptool_args: dict[str, object]
-    write_flash_args: list[str]
-    flash_files: dict[str, str]
-    flash_pairs: list[str] = []
-
     write_esptool_config()
 
     if build_first:
-        build(esp_idf_path)
+        build(config)
 
-    flasher_args = load_flasher_args()
+    flasher_args = load_flasher_args(config.build_dir)
     extra_esptool_args = dict(flasher_args.get("extra_esptool_args", {}))
     write_flash_args = [str(arg) for arg in flasher_args.get("write_flash_args", [])]
     flash_files = dict(flasher_args.get("flash_files", {}))
+    flash_pairs: list[str] = []
 
     for offset, file_name in sorted(flash_files.items(), key=lambda item: int(item[0], 0)):
         file_path = Path(file_name)
         if not file_path.is_absolute():
-            file_path = build_dir / file_path
+            file_path = config.build_dir / file_path
         flash_pairs.extend([offset, str(file_path)])
 
     write_flash(
-        esptool_bin,
-        remote_url_override,
-        host,
-        port,
+        config,
         write_flash_args,
         flash_pairs,
-        chip=str(extra_esptool_args.get("chip", "esp32s3")),
+        chip=str(extra_esptool_args.get("chip", config.idf_target)),
         before=str(extra_esptool_args.get("before", "default-reset")),
         after=str(extra_esptool_args.get("after", "hard-reset")),
     )
 
 
-def flash_fs(
-    esptool_bin: str,
-    remote_url_override: str,
-    host: str,
-    port: int,
-    build_first: bool,
-    esp_idf_path: str,
-) -> None:
+def flash_fs(config: ProjectConfig, build_first: bool) -> None:
     """Build and flash only the LittleFS storage partition."""
-    flasher_args: dict[str, object]
-    extra_esptool_args: dict[str, object]
-    write_flash_args: list[str]
-    offset: str
-    file_path: Path
-
     write_esptool_config()
 
     if build_first:
-        build_fs_image(esp_idf_path)
+        build_fs_image(config)
 
-    flasher_args = load_flasher_args()
+    flasher_args = load_flasher_args(config.build_dir)
     extra_esptool_args = dict(flasher_args.get("extra_esptool_args", {}))
     write_flash_args = [str(arg) for arg in flasher_args.get("write_flash_args", [])]
-    offset, file_path = resolve_flash_entry(flasher_args, "storage")
+    offset, file_path = resolve_flash_entry(flasher_args, config.build_dir, "storage")
 
     write_flash(
-        esptool_bin,
-        remote_url_override,
-        host,
-        port,
+        config,
         write_flash_args,
         [offset, str(file_path)],
-        chip=str(extra_esptool_args.get("chip", "esp32s3")),
+        chip=str(extra_esptool_args.get("chip", config.idf_target)),
         before=str(extra_esptool_args.get("before", "default-reset")),
         after=str(extra_esptool_args.get("after", "hard-reset")),
     )
 
 
-def monitor(remote_url_override: str, host: str, port: int, baud: int, esp_idf_path: str) -> None:
+def monitor(config: ProjectConfig) -> None:
     """Open ESP-IDF monitor over RFC2217."""
     write_monitor_config()
     run(
         idf_py_cmd(
-            ["-p", remote_url(remote_url_override, host, port), "-b", str(baud), "monitor"],
-            esp_idf_path,
+            ["-p", remote_url(config.remote_url, config.remote_host, config.remote_port), "-b", str(config.monitor_baud), "monitor"],
+            config,
         ),
         cwd=ROOT_DIR,
         interactive=True,
     )
 
 
-def flash_monitor(
-    esptool_bin: str,
-    remote_url_override: str,
-    host: str,
-    port: int,
-    build_first: bool,
-    baud: int,
-    esp_idf_path: str,
-) -> None:
+def flash_monitor(config: ProjectConfig, build_first: bool) -> None:
     """Build/flash, then open monitor over RFC2217."""
-    flash(
-        esptool_bin,
-        remote_url_override,
-        host,
-        port,
-        build_first=build_first,
-        esp_idf_path=esp_idf_path,
-    )
-    monitor(remote_url_override, host, port, baud, esp_idf_path)
+    flash(config, build_first=build_first)
+    monitor(config)
 
 
-def parse_args() -> argparse.Namespace:
-    defaults = load_defaults()
-    parser = argparse.ArgumentParser(
-        description="Unified helper for remote ESP32-S3 flashing and monitoring."
+def config_default_inputs(config: ProjectConfig) -> list[Path]:
+    """Return the defaults files that define the selected board configuration."""
+    defaults: list[Path] = []
+    if config.sdkconfig_defaults is not None:
+        defaults.append(config.sdkconfig_defaults)
+    return defaults
+
+
+def refresh_generated_sdkconfig(config: ProjectConfig) -> None:
+    """Regenerate the build-local sdkconfig when tracked defaults changed."""
+    if not config.generated_sdkconfig.exists():
+        return
+
+    generated_mtime = config.generated_sdkconfig.stat().st_mtime
+    defaults = [path for path in config_default_inputs(config) if path.exists()]
+    if not defaults:
+        return
+
+    if not any(path.stat().st_mtime > generated_mtime for path in defaults):
+        return
+
+    print(f"Refreshing {format_path(config.generated_sdkconfig)} because board defaults changed.")
+    config.generated_sdkconfig.unlink(missing_ok=True)
+    old_sdkconfig = config.generated_sdkconfig.with_name(f"{config.generated_sdkconfig.name}.old")
+    old_sdkconfig.unlink(missing_ok=True)
+
+
+def list_boards(selected_board: str) -> None:
+    """Print the board profiles bundled with the repository."""
+    profiles = available_board_profiles()
+    if not profiles:
+        print("No board profiles found.")
+        return
+
+    selected = resolve_board_file(selected_board)
+    for board_file in profiles:
+        board_env = load_dotenv(board_file)
+        marker = "*" if board_file.resolve() == selected else " "
+        label = board_env.get("BOARD_LABEL", board_file.parent.name)
+        target = board_env.get("IDF_TARGET", "?")
+        build_dir = board_env.get("BUILD_DIR", "build")
+        sdkconfig_defaults = board_env.get("SDKCONFIG_DEFAULTS", board_env.get("SDKCONFIG", ""))
+        if not sdkconfig_defaults:
+            sdkconfig_defaults = format_path(board_sdkconfig_defaults_file(board_file.parent))
+        detail = f"{target}, {build_dir}"
+        if sdkconfig_defaults:
+            detail = f"{detail}, {sdkconfig_defaults}"
+        print(f"{marker} {board_file.parent.name}: {label} [{detail}]")
+
+
+def show_config(config: ProjectConfig) -> None:
+    """Print the effective merged configuration for the selected board."""
+    print(f"board={config.board}")
+    print(f"board_file={config.board_file}")
+    print(f"board_label={config.board_label}")
+    print(f"idf_target={config.idf_target}")
+    print(f"build_dir={format_path(config.build_dir)}")
+    print(f"generated_sdkconfig={format_path(config.generated_sdkconfig)}")
+    print(f"sdkconfig_defaults={format_path(config.sdkconfig_defaults)}")
+    print(f"esp_idf_path={config.esp_idf_path}")
+    print(f"remote_host={config.remote_host}")
+    print(f"remote_port={config.remote_port}")
+    print(f"remote_url={remote_url(config.remote_url, config.remote_host, config.remote_port)}")
+    print(f"monitor_baud={config.monitor_baud}")
+    print(f"com_port={config.com_port}")
+    print(f"listen_port={config.listen_port}")
+    print(f"server_python_exe={config.server_python_exe}")
+    print(f"esptool_bin={config.esptool_bin}")
+
+
+def build_project_config(args: argparse.Namespace, profile: BoardProfile) -> ProjectConfig:
+    """Convert parsed CLI args to the effective project config."""
+    sdkconfig_defaults = (
+        Path(args.sdkconfig_defaults).expanduser()
+        if getattr(args, "sdkconfig_defaults", "")
+        else None
     )
+    if sdkconfig_defaults is not None and not sdkconfig_defaults.is_absolute():
+        sdkconfig_defaults = ROOT_DIR / sdkconfig_defaults
+
+    build_dir = Path(args.build_dir).expanduser()
+    if not build_dir.is_absolute():
+        build_dir = ROOT_DIR / build_dir
+
+    board_file = Path(args.board_file)
+    return ProjectConfig(
+        board=profile.name,
+        board_file=board_file,
+        board_label=profile.label,
+        build_dir=build_dir,
+        generated_sdkconfig=build_dir / "sdkconfig",
+        sdkconfig_defaults=sdkconfig_defaults,
+        idf_target=args.idf_target,
+        esp_idf_path=args.esp_idf_path,
+        remote_host=getattr(args, "remote_host", profile.remote_host),
+        remote_port=getattr(args, "remote_port", profile.remote_port),
+        remote_url=getattr(args, "remote_url", profile.remote_url),
+        monitor_baud=getattr(args, "baud", profile.monitor_baud),
+        com_port=getattr(args, "com_port", profile.com_port),
+        listen_port=getattr(args, "listen_port", profile.listen_port),
+        server_python_exe=getattr(args, "python_exe", profile.server_python_exe),
+        esptool_bin=getattr(args, "esptool_bin", profile.esptool_bin),
+    )
+
+
+def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, BoardProfile]:
+    """Parse CLI arguments after resolving the selected board profile."""
+    raw_argv = sys.argv[1:] if argv is None else argv
+    bootstrap = argparse.ArgumentParser(add_help=False)
+    bootstrap.add_argument("--board")
+    pre_args, _ = bootstrap.parse_known_args(raw_argv)
+    profile = load_profile(pre_args.board)
+
+    parser = argparse.ArgumentParser(description="Unified helper for remote ESP32 board development.")
+    parser.add_argument(
+        "--board",
+        default=profile.reference,
+        help="Board profile name from configs/boards/*/.env, or a direct path to a board directory/profile file.",
+    )
+    parser.add_argument("--build-dir", default=format_path(profile.build_dir))
+    parser.add_argument("--idf-target", default=profile.idf_target)
+    parser.add_argument("--sdkconfig-defaults", default=format_path(profile.sdkconfig_defaults))
+    parser.add_argument("--esp-idf-path", default=profile.esp_idf_path)
+    parser.set_defaults(board_file=str(profile.file))
+
     sub = parser.add_subparsers(dest="command", required=True)
 
+    boards_parser = sub.add_parser("boards", help="List bundled board profiles.")
+    boards_parser.set_defaults(_noop=True)
+
+    show_parser = sub.add_parser("show-config", help="Print the merged board/tool configuration.")
+    show_parser.set_defaults(_noop=True)
+
     server = sub.add_parser("server", help="Write config and start esp_rfc2217_server.")
-    server.add_argument("--com-port", default=defaults["com_port"])
-    server.add_argument("--listen-port", type=int, default=defaults["listen_port"])
-    server.add_argument("--python-exe", default=defaults["server_python_exe"])
+    server.add_argument("--com-port", default=profile.com_port)
+    server.add_argument("--listen-port", type=int, default=profile.listen_port)
+    server.add_argument("--python-exe", default=profile.server_python_exe)
     server.add_argument("--force-restart", action="store_true")
 
-    build_parser = sub.add_parser("build", help="Run idf.py build.")
+    build_parser = sub.add_parser("build", help="Run idf.py build for the selected board.")
     build_parser.set_defaults(_noop=True)
 
     build_fs_parser = sub.add_parser("build-fs", help="Build only the LittleFS storage image.")
     build_fs_parser.set_defaults(_noop=True)
 
     chip = sub.add_parser("chip-id", help="Check remote RFC2217 connectivity.")
-    chip.add_argument("--remote-url", default=defaults["remote_url"])
-    chip.add_argument("--remote-host", default=defaults["remote_host"])
-    chip.add_argument("--remote-port", type=int, default=defaults["remote_port"])
-    chip.add_argument("--esptool-bin", default=defaults["esptool_bin"])
+    chip.add_argument("--remote-url", default=profile.remote_url)
+    chip.add_argument("--remote-host", default=profile.remote_host)
+    chip.add_argument("--remote-port", type=int, default=profile.remote_port)
+    chip.add_argument("--esptool-bin", default=profile.esptool_bin)
 
     flash_parser = sub.add_parser("flash", help="Build and flash over RFC2217.")
-    flash_parser.add_argument("--remote-url", default=defaults["remote_url"])
-    flash_parser.add_argument("--remote-host", default=defaults["remote_host"])
-    flash_parser.add_argument("--remote-port", type=int, default=defaults["remote_port"])
-    flash_parser.add_argument("--esptool-bin", default=defaults["esptool_bin"])
+    flash_parser.add_argument("--remote-url", default=profile.remote_url)
+    flash_parser.add_argument("--remote-host", default=profile.remote_host)
+    flash_parser.add_argument("--remote-port", type=int, default=profile.remote_port)
+    flash_parser.add_argument("--esptool-bin", default=profile.esptool_bin)
     flash_parser.add_argument("--no-build", action="store_true")
 
     flash_fs_parser = sub.add_parser("flash-fs", help="Build and flash only the LittleFS storage partition.")
-    flash_fs_parser.add_argument("--remote-url", default=defaults["remote_url"])
-    flash_fs_parser.add_argument("--remote-host", default=defaults["remote_host"])
-    flash_fs_parser.add_argument("--remote-port", type=int, default=defaults["remote_port"])
-    flash_fs_parser.add_argument("--esptool-bin", default=defaults["esptool_bin"])
+    flash_fs_parser.add_argument("--remote-url", default=profile.remote_url)
+    flash_fs_parser.add_argument("--remote-host", default=profile.remote_host)
+    flash_fs_parser.add_argument("--remote-port", type=int, default=profile.remote_port)
+    flash_fs_parser.add_argument("--esptool-bin", default=profile.esptool_bin)
     flash_fs_parser.add_argument("--no-build", action="store_true")
 
     mon = sub.add_parser("monitor", help="Open ESP-IDF monitor over RFC2217.")
-    mon.add_argument("--remote-url", default=defaults["remote_url"])
-    mon.add_argument("--remote-host", default=defaults["remote_host"])
-    mon.add_argument("--remote-port", type=int, default=defaults["remote_port"])
-    mon.add_argument("--baud", type=int, default=defaults["monitor_baud"])
+    mon.add_argument("--remote-url", default=profile.remote_url)
+    mon.add_argument("--remote-host", default=profile.remote_host)
+    mon.add_argument("--remote-port", type=int, default=profile.remote_port)
+    mon.add_argument("--baud", type=int, default=profile.monitor_baud)
 
     fm = sub.add_parser("flash-monitor", help="Build/flash, then open monitor over RFC2217.")
-    fm.add_argument("--remote-url", default=defaults["remote_url"])
-    fm.add_argument("--remote-host", default=defaults["remote_host"])
-    fm.add_argument("--remote-port", type=int, default=defaults["remote_port"])
-    fm.add_argument("--esptool-bin", default=defaults["esptool_bin"])
-    fm.add_argument("--baud", type=int, default=defaults["monitor_baud"])
+    fm.add_argument("--remote-url", default=profile.remote_url)
+    fm.add_argument("--remote-host", default=profile.remote_host)
+    fm.add_argument("--remote-port", type=int, default=profile.remote_port)
+    fm.add_argument("--esptool-bin", default=profile.esptool_bin)
+    fm.add_argument("--baud", type=int, default=profile.monitor_baud)
     fm.add_argument("--no-build", action="store_true")
 
-    parser.set_defaults(esp_idf_path=defaults["esp_idf_path"])
-
-    return parser.parse_args()
+    return parser.parse_args(raw_argv), profile
 
 
 def main() -> int:
-    args = parse_args()
+    args, profile = parse_args()
+    config = build_project_config(args, profile)
+
+    if args.command == "boards":
+        list_boards(args.board)
+        return 0
+
+    if args.command == "show-config":
+        show_config(config)
+        return 0
 
     if args.command == "server":
-        return start_server(args.python_exe, args.listen_port, args.com_port, args.force_restart)
+        return start_server(config, args.force_restart)
 
     if args.command == "build":
-        build(args.esp_idf_path)
+        build(config)
         return 0
 
     if args.command == "build-fs":
-        build_fs_image(args.esp_idf_path)
+        build_fs_image(config)
         return 0
 
     if args.command == "chip-id":
-        chip_id(args.esptool_bin, args.remote_url, args.remote_host, args.remote_port)
+        chip_id(config)
         return 0
 
     if args.command == "flash":
-        flash(
-            args.esptool_bin,
-            args.remote_url,
-            args.remote_host,
-            args.remote_port,
-            build_first=not args.no_build,
-            esp_idf_path=args.esp_idf_path,
-        )
+        flash(config, build_first=not args.no_build)
         return 0
 
     if args.command == "flash-fs":
-        flash_fs(
-            args.esptool_bin,
-            args.remote_url,
-            args.remote_host,
-            args.remote_port,
-            build_first=not args.no_build,
-            esp_idf_path=args.esp_idf_path,
-        )
+        flash_fs(config, build_first=not args.no_build)
         return 0
 
     if args.command == "monitor":
-        monitor(
-            args.remote_url,
-            args.remote_host,
-            args.remote_port,
-            args.baud,
-            args.esp_idf_path,
-        )
+        monitor(config)
         return 0
 
     if args.command == "flash-monitor":
-        flash_monitor(
-            args.esptool_bin,
-            args.remote_url,
-            args.remote_host,
-            args.remote_port,
-            build_first=not args.no_build,
-            baud=args.baud,
-            esp_idf_path=args.esp_idf_path,
-        )
+        flash_monitor(config, build_first=not args.no_build)
         return 0
 
     return 2

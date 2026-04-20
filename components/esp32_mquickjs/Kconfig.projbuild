@@ -1,5 +1,12 @@
 menu "ESP32 mquickjs"
 
+config ESP32_MQUICKJS_BOARD_NAME
+    string "Board name"
+    default "Generic ESP32 board"
+    help
+        Human-readable board name returned by esp32.info().board and shown by
+        the REPL banner when serial interaction is enabled.
+
 config ESP32_MQUICKJS_DEFAULT_EVAL_TIMEOUT_MS
     int "Default JavaScript eval timeout (ms)"
     range 50 10000

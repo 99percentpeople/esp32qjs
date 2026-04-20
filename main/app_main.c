@@ -63,12 +63,6 @@ void app_main(void)
 #ifdef CONFIG_ESP32QJS_ENABLE_REPL
     esp32qjs_console_init();
 #endif
-    littlefs_mounted = esp32_mquickjs_mount_littlefs(CONFIG_ESP32QJS_LITTLEFS_FORMAT_ON_MOUNT_FAIL);
-    s_js_runtime.littlefs_mounted = littlefs_mounted;
-    if (!littlefs_mounted) {
-        ESP_LOGW(TAG, "Continuing without LittleFS-backed script loading");
-    }
-
 #ifdef CONFIG_ESP32QJS_JS_HEAP_PREFER_PSRAM
     s_js_heap = heap_caps_malloc_prefer(JS_HEAP_SIZE,
                                         2,
@@ -100,6 +94,12 @@ void app_main(void)
         heap_caps_free(s_js_heap);
         s_js_heap = NULL;
         return;
+    }
+
+    littlefs_mounted = esp32_mquickjs_mount_littlefs(CONFIG_ESP32QJS_LITTLEFS_FORMAT_ON_MOUNT_FAIL);
+    s_js_runtime.littlefs_mounted = littlefs_mounted;
+    if (!littlefs_mounted) {
+        ESP_LOGW(TAG, "Continuing without LittleFS-backed script loading");
     }
 
 #ifdef CONFIG_ESP32QJS_ENABLE_REPL

@@ -46,9 +46,9 @@ static JSValue esp32_make_info_object(JSContext *ctx)
     JSGCRef info_ref;
     JSValue *info;
     uint32_t flash_size = 0;
-    bool psram_enabled = esp_psram_is_initialized();
-    size_t total_psram = psram_enabled ? esp_psram_get_size() : 0;
-    size_t free_psram = psram_enabled ? heap_caps_get_free_size(MALLOC_CAP_SPIRAM) : 0;
+    bool psram_enabled = false;
+    size_t total_psram = 0;
+    size_t free_psram = 0;
     size_t total_internal_heap = heap_caps_get_total_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     size_t free_internal_heap = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     uint32_t js_heap_size = runtime != NULL ? (uint32_t)runtime->js_heap_size : 0;
@@ -67,6 +67,11 @@ static JSValue esp32_make_info_object(JSContext *ctx)
 #ifdef CONFIG_ESP32QJS_ENABLE_REPL
     repl_enabled = true;
 #endif
+#ifdef CONFIG_SPIRAM
+    psram_enabled = esp_psram_is_initialized();
+    total_psram = psram_enabled ? esp_psram_get_size() : 0;
+    free_psram = psram_enabled ? heap_caps_get_free_size(MALLOC_CAP_SPIRAM) : 0;
+#endif
 
     if (esp_flash_get_size(NULL, &flash_size) != ESP_OK) {
         flash_size = 0;
@@ -78,7 +83,7 @@ static JSValue esp32_make_info_object(JSContext *ctx)
         goto fail;
     }
     if (!esp32_mquickjs_set_property(ctx, *info, "board",
-                                     JS_NewString(ctx, "Seeed XIAO ESP32-S3")) ||
+                                     JS_NewString(ctx, ESP32_MQUICKJS_BOARD_NAME)) ||
         !esp32_mquickjs_set_property(ctx, *info, "chip",
                                      JS_NewString(ctx, esp32_chip_model_name())) ||
         !esp32_mquickjs_set_property(ctx, *info, "userLedPin",
