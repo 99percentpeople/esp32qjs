@@ -56,12 +56,16 @@ static JSValue esp32_make_info_object(JSContext *ctx)
     bool littlefs_mounted = runtime != NULL && runtime->littlefs_mounted;
     bool auto_run_index_js = false;
     bool format_littlefs_on_mount_fail = false;
+    bool repl_enabled = false;
 
 #ifdef CONFIG_ESP32QJS_AUTORUN_INDEX_JS
     auto_run_index_js = true;
 #endif
 #ifdef CONFIG_ESP32QJS_LITTLEFS_FORMAT_ON_MOUNT_FAIL
     format_littlefs_on_mount_fail = true;
+#endif
+#ifdef CONFIG_ESP32QJS_ENABLE_REPL
+    repl_enabled = true;
 #endif
 
     if (esp_flash_get_size(NULL, &flash_size) != ESP_OK) {
@@ -101,6 +105,8 @@ static JSValue esp32_make_info_object(JSContext *ctx)
                                      JS_NewString(ctx, js_heap_region)) ||
         !esp32_mquickjs_set_property(ctx, *info, "littlefsMounted",
                                      JS_NewBool(littlefs_mounted)) ||
+        !esp32_mquickjs_set_property(ctx, *info, "replEnabled",
+                                     JS_NewBool(repl_enabled)) ||
         !esp32_mquickjs_set_property(ctx, *info, "autoRunIndexJs",
                                      JS_NewBool(auto_run_index_js)) ||
         !esp32_mquickjs_set_property(ctx, *info, "formatLittlefsOnMountFail",

@@ -10,6 +10,7 @@
 #include "driver/usb_serial_jtag_vfs.h"
 #include "esp32_mquickjs.h"
 #include "esp_err.h"
+#include "esp_timer.h"
 #include "sdkconfig.h"
 
 #define REPL_PROMPT "js> "
@@ -17,6 +18,7 @@
 #define HISTORY_SIZE 16
 /* Match the common esp-idf-monitor width so the device controls wrapping. */
 #define REPL_DISPLAY_COLUMNS CONFIG_ESP32QJS_REPL_DISPLAY_COLUMNS
+#define REPL_EXTERNAL_OUTPUT_SETTLE_US 50000
 
 typedef struct {
     size_t rows;
@@ -40,6 +42,8 @@ static size_t s_rendered_cursor_line;
 static size_t s_rendered_cursor_col;
 static bool s_prompt_visible;
 static bool s_cursor_hidden;
+static bool s_external_output_pending;
+static int64_t s_last_external_output_us;
 
 static void console_select_notif_callback(usj_select_notif_t notif, int *task_woken)
 {
@@ -329,6 +333,7 @@ static void redraw_repl_line(const char *buf, size_t len, size_t cursor)
 
     s_rendered_rows = layout.rows;
     s_prompt_visible = true;
+    s_external_output_pending = false;
     s_rendered_cursor_line = layout.cursor_row;
     s_rendered_cursor_col = layout.cursor_col;
     if (layout.rows > 1) {
@@ -562,6 +567,33 @@ void esp32qjs_repl_prepare_output(void *opaque)
     }
     fflush(stdout);
     s_prompt_visible = false;
+}
+
+void esp32qjs_repl_note_external_output(void)
+{
+    s_external_output_pending = true;
+    s_last_external_output_us = esp_timer_get_time();
+}
+
+bool esp32qjs_repl_external_output_pending(void)
+{
+    return s_external_output_pending;
+}
+
+uint32_t esp32qjs_repl_external_output_wait_ms(void)
+{
+    int64_t elapsed_us;
+
+    if (!s_external_output_pending) {
+        return UINT32_MAX;
+    }
+
+    elapsed_us = esp_timer_get_time() - s_last_external_output_us;
+    if (elapsed_us >= REPL_EXTERNAL_OUTPUT_SETTLE_US) {
+        return 0;
+    }
+
+    return (uint32_t)((REPL_EXTERNAL_OUTPUT_SETTLE_US - elapsed_us + 999) / 1000);
 }
 
 void esp32qjs_repl_history_push(const char *line)

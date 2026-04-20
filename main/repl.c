@@ -1,39 +1,10 @@
 #include "repl.h"
 
 #include <stdio.h>
-#include <stdint.h>
-#include <sys/stat.h>
 
 #include "repl_input.h"
 
-#define REPL_STARTUP_SCRIPT_PATH ESP32_MQUICKJS_LITTLEFS_BASE_PATH "/index.js"
-
-static void run_startup_script(JSContext *ctx,
-                               esp32_mquickjs_runtime_t *runtime)
-{
-#ifdef CONFIG_ESP32QJS_AUTORUN_INDEX_JS
-    struct stat st;
-    JSValue result;
-
-    if (stat(REPL_STARTUP_SCRIPT_PATH, &st) != 0 || !S_ISREG(st.st_mode)) {
-        return;
-    }
-
-    result = esp32_mquickjs_eval(ctx,
-                                 runtime,
-                                 "load('index.js')",
-                                 "<startup>",
-                                 0);
-    if (JS_IsException(result)) {
-        esp32_mquickjs_print_exception(ctx);
-    }
-#else
-    (void)ctx;
-    (void)runtime;
-#endif
-}
-
-static void print_banner(void)
+void esp32qjs_repl_print_banner(void)
 {
     printf("\n");
     printf("mquickjs REPL on ESP32-S3\n");
@@ -41,50 +12,36 @@ static void print_banner(void)
     printf("Run help() for usage.\n");
 }
 
-void esp32qjs_repl_run(JSContext *ctx,
-                       esp32_mquickjs_runtime_t *runtime)
+bool esp32qjs_repl_process_input(JSContext *ctx,
+                                 esp32_mquickjs_runtime_t *runtime)
 {
     char line[ESP32QJS_REPL_LINE_SIZE];
-    esp32_mquickjs_poll_result_t poll_result;
+    JSValue result;
 
-    esp32_mquickjs_attach_current_task(runtime);
-    print_banner();
-    run_startup_script(ctx, runtime);
-    esp32qjs_repl_print_prompt();
-
-    while (true) {
-        poll_result = esp32_mquickjs_poll(ctx, runtime);
-        if ((poll_result & ESP32_MQUICKJS_POLL_OUTPUT) != 0) {
-            esp32qjs_repl_redraw_line();
-        }
-
-        if (!esp32qjs_repl_read_line(line, sizeof(line))) {
-            if (poll_result == ESP32_MQUICKJS_POLL_NONE) {
-                esp32_mquickjs_wait_for_activity(runtime, UINT32_MAX);
-            }
-            continue;
-        }
-
-        if (line[0] == '\0') {
-            esp32qjs_repl_print_prompt();
-            continue;
-        }
-
-        esp32qjs_repl_history_push(line);
-
-        JSValue result = esp32_mquickjs_eval(ctx,
-                                             runtime,
-                                             line,
-                                             "<repl>",
-                                             JS_EVAL_REPL | JS_EVAL_RETVAL);
-
-        if (JS_IsException(result)) {
-            esp32_mquickjs_print_exception(ctx);
-        } else if (!JS_IsUndefined(result)) {
-            JS_PrintValueF(ctx, result, JS_DUMP_LONG);
-            printf("\n");
-        }
-
-        esp32qjs_repl_print_prompt();
+    if (!esp32qjs_repl_read_line(line, sizeof(line))) {
+        return false;
     }
+
+    if (line[0] == '\0') {
+        esp32qjs_repl_print_prompt();
+        return true;
+    }
+
+    esp32qjs_repl_history_push(line);
+
+    result = esp32_mquickjs_eval(ctx,
+                                 runtime,
+                                 line,
+                                 "<repl>",
+                                 JS_EVAL_REPL | JS_EVAL_RETVAL);
+
+    if (JS_IsException(result)) {
+        esp32_mquickjs_print_exception(ctx);
+    } else if (!JS_IsUndefined(result)) {
+        JS_PrintValueF(ctx, result, JS_DUMP_LONG);
+        printf("\n");
+    }
+
+    esp32qjs_repl_print_prompt();
+    return true;
 }
