@@ -18,7 +18,8 @@ Run from the repository root after exporting ESP-IDF:
 - `python scripts/remote.py flash` builds and flashes the remote `XIAO ESP32-S3`.
 - `python scripts/remote.py flash-fs` rebuilds and flashes only the LittleFS `storage` partition for JavaScript-only changes.
 - `python scripts/remote.py monitor` opens the remote serial monitor without retyping host and tool paths.
-- `python scripts/update_mquickjs_headers.py` regenerates `mquickjs_atom.h` and `mqjs_stdlib.h` after updating the submodule.
+- `idf.py build` now regenerates and syncs the `mquickjs` generated headers automatically when upstream sources change or the generated files are missing.
+- `cmake --build build --target update_mquickjs_headers` is still available as an explicit manual refresh target.
 
 Remote flashing setup is documented in [docs/remote-rfc2217.md](/home/zach/esp32qjs/docs/remote-rfc2217.md).
 
