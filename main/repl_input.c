@@ -596,6 +596,11 @@ uint32_t esp32qjs_repl_external_output_wait_ms(void)
     return (uint32_t)((REPL_EXTERNAL_OUTPUT_SETTLE_US - elapsed_us + 999) / 1000);
 }
 
+bool esp32qjs_repl_should_restore_prompt(void)
+{
+    return !s_prompt_visible && s_edit_len > 0;
+}
+
 void esp32qjs_repl_history_push(const char *line)
 {
     if (line[0] == '\0') {
