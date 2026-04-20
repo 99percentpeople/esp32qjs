@@ -24,6 +24,7 @@ From the development machine, use the same [scripts/remote.py](/home/zach/esp32q
 uv sync
 python scripts/remote.py chip-id
 python scripts/remote.py flash
+python scripts/remote.py flash-fs
 python scripts/remote.py monitor
 ```
 
@@ -39,6 +40,14 @@ The script flashes:
 - `build/bootloader/bootloader.bin` at `0x0`
 - `build/partition_table/partition-table.bin` at `0x8000`
 - `build/esp32qjs.bin` at `0x10000`
+- `build/storage.bin` at `0x150000`
+
+For JavaScript-only changes under `flash_data/`, use the faster filesystem-only path:
+
+```bash
+python scripts/remote.py build-fs
+python scripts/remote.py flash-fs
+```
 
 ## Known Behavior
 - `?ign_set_control&timeout=10` is required for this setup.

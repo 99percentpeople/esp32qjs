@@ -353,6 +353,11 @@ def build(esp_idf_path: str) -> None:
     run(idf_py_cmd(["build"], esp_idf_path), cwd=ROOT_DIR, interactive=True)
 
 
+def build_fs_image(esp_idf_path: str) -> None:
+    """Build only the LittleFS image used by the storage partition."""
+    run(idf_py_cmd(["littlefs_storage_bin"], esp_idf_path), cwd=ROOT_DIR, interactive=True)
+
+
 def default_remote_url(host: str, port: int) -> str:
     """Return the project's default RFC2217 URL."""
     return f"rfc2217://{host}:{port}?ign_set_control&timeout=10"
@@ -401,6 +406,79 @@ def chip_id(esptool_bin: str, remote_url_override: str, host: str, port: int) ->
     )
 
 
+def load_flasher_args() -> dict[str, object]:
+    """Load the current ESP-IDF flash plan generated in build/flasher_args.json."""
+    flasher_args_path = ROOT_DIR / "build" / "flasher_args.json"
+
+    if not flasher_args_path.exists():
+        raise SystemExit(
+            f"{flasher_args_path} not found. Run `python scripts/remote.py build` first."
+        )
+
+    return json.loads(flasher_args_path.read_text(encoding="utf-8"))
+
+
+def resolve_flash_entry(
+    flasher_args: dict[str, object],
+    entry_name: str,
+) -> tuple[str, Path]:
+    """Resolve one named flash entry from flasher_args.json."""
+    entry = flasher_args.get(entry_name)
+    build_dir = ROOT_DIR / "build"
+
+    if not isinstance(entry, dict):
+        raise SystemExit(f"Flash entry {entry_name!r} not found in build/flasher_args.json.")
+
+    offset = str(entry.get("offset", ""))
+    file_name = str(entry.get("file", ""))
+    if not offset or not file_name:
+        raise SystemExit(f"Flash entry {entry_name!r} is missing offset/file metadata.")
+
+    file_path = Path(file_name)
+    if not file_path.is_absolute():
+        file_path = build_dir / file_path
+
+    if not file_path.exists():
+        raise SystemExit(
+            f"{file_path} not found. Run `python scripts/remote.py build` or "
+            "`python scripts/remote.py build-fs` first."
+        )
+
+    return offset, file_path
+
+
+def write_flash(
+    esptool_bin: str,
+    remote_url_override: str,
+    host: str,
+    port: int,
+    write_flash_args: list[str],
+    flash_pairs: list[str],
+    chip: str = "esp32s3",
+    before: str = "default-reset",
+    after: str = "hard-reset",
+) -> None:
+    """Run esptool write-flash with one or more offset/file pairs."""
+    subprocess.run(
+        [
+            *resolve_esptool_cmd(esptool_bin),
+            "--chip",
+            chip,
+            "--before",
+            before,
+            "--after",
+            after,
+            "--port",
+            remote_url(remote_url_override, host, port),
+            "write-flash",
+            *write_flash_args,
+            *flash_pairs,
+        ],
+        cwd=ROOT_DIR,
+        check=True,
+    )
+
+
 def flash(
     esptool_bin: str,
     remote_url_override: str,
@@ -411,7 +489,6 @@ def flash(
 ) -> None:
     """Flash all ESP-IDF build outputs listed in flasher_args.json over RFC2217."""
     build_dir = ROOT_DIR / "build"
-    flasher_args_path = build_dir / "flasher_args.json"
     flasher_args: dict[str, object]
     extra_esptool_args: dict[str, object]
     write_flash_args: list[str]
@@ -423,12 +500,7 @@ def flash(
     if build_first:
         build(esp_idf_path)
 
-    if not flasher_args_path.exists():
-        raise SystemExit(
-            f"{flasher_args_path} not found. Run `python scripts/remote.py build` first."
-        )
-
-    flasher_args = json.loads(flasher_args_path.read_text(encoding="utf-8"))
+    flasher_args = load_flasher_args()
     extra_esptool_args = dict(flasher_args.get("extra_esptool_args", {}))
     write_flash_args = [str(arg) for arg in flasher_args.get("write_flash_args", [])]
     flash_files = dict(flasher_args.get("flash_files", {}))
@@ -439,23 +511,54 @@ def flash(
             file_path = build_dir / file_path
         flash_pairs.extend([offset, str(file_path)])
 
-    subprocess.run(
-        [
-            *resolve_esptool_cmd(esptool_bin),
-            "--chip",
-            str(extra_esptool_args.get("chip", "esp32s3")),
-            "--before",
-            str(extra_esptool_args.get("before", "default-reset")),
-            "--after",
-            str(extra_esptool_args.get("after", "hard-reset")),
-            "--port",
-            remote_url(remote_url_override, host, port),
-            "write-flash",
-            *write_flash_args,
-            *flash_pairs,
-        ],
-        cwd=ROOT_DIR,
-        check=True,
+    write_flash(
+        esptool_bin,
+        remote_url_override,
+        host,
+        port,
+        write_flash_args,
+        flash_pairs,
+        chip=str(extra_esptool_args.get("chip", "esp32s3")),
+        before=str(extra_esptool_args.get("before", "default-reset")),
+        after=str(extra_esptool_args.get("after", "hard-reset")),
+    )
+
+
+def flash_fs(
+    esptool_bin: str,
+    remote_url_override: str,
+    host: str,
+    port: int,
+    build_first: bool,
+    esp_idf_path: str,
+) -> None:
+    """Build and flash only the LittleFS storage partition."""
+    flasher_args: dict[str, object]
+    extra_esptool_args: dict[str, object]
+    write_flash_args: list[str]
+    offset: str
+    file_path: Path
+
+    write_esptool_config()
+
+    if build_first:
+        build_fs_image(esp_idf_path)
+
+    flasher_args = load_flasher_args()
+    extra_esptool_args = dict(flasher_args.get("extra_esptool_args", {}))
+    write_flash_args = [str(arg) for arg in flasher_args.get("write_flash_args", [])]
+    offset, file_path = resolve_flash_entry(flasher_args, "storage")
+
+    write_flash(
+        esptool_bin,
+        remote_url_override,
+        host,
+        port,
+        write_flash_args,
+        [offset, str(file_path)],
+        chip=str(extra_esptool_args.get("chip", "esp32s3")),
+        before=str(extra_esptool_args.get("before", "default-reset")),
+        after=str(extra_esptool_args.get("after", "hard-reset")),
     )
 
 
@@ -509,6 +612,9 @@ def parse_args() -> argparse.Namespace:
     build_parser = sub.add_parser("build", help="Run idf.py build.")
     build_parser.set_defaults(_noop=True)
 
+    build_fs_parser = sub.add_parser("build-fs", help="Build only the LittleFS storage image.")
+    build_fs_parser.set_defaults(_noop=True)
+
     chip = sub.add_parser("chip-id", help="Check remote RFC2217 connectivity.")
     chip.add_argument("--remote-url", default=defaults["remote_url"])
     chip.add_argument("--remote-host", default=defaults["remote_host"])
@@ -521,6 +627,13 @@ def parse_args() -> argparse.Namespace:
     flash_parser.add_argument("--remote-port", type=int, default=defaults["remote_port"])
     flash_parser.add_argument("--esptool-bin", default=defaults["esptool_bin"])
     flash_parser.add_argument("--no-build", action="store_true")
+
+    flash_fs_parser = sub.add_parser("flash-fs", help="Build and flash only the LittleFS storage partition.")
+    flash_fs_parser.add_argument("--remote-url", default=defaults["remote_url"])
+    flash_fs_parser.add_argument("--remote-host", default=defaults["remote_host"])
+    flash_fs_parser.add_argument("--remote-port", type=int, default=defaults["remote_port"])
+    flash_fs_parser.add_argument("--esptool-bin", default=defaults["esptool_bin"])
+    flash_fs_parser.add_argument("--no-build", action="store_true")
 
     mon = sub.add_parser("monitor", help="Open ESP-IDF monitor over RFC2217.")
     mon.add_argument("--remote-url", default=defaults["remote_url"])
@@ -551,12 +664,27 @@ def main() -> int:
         build(args.esp_idf_path)
         return 0
 
+    if args.command == "build-fs":
+        build_fs_image(args.esp_idf_path)
+        return 0
+
     if args.command == "chip-id":
         chip_id(args.esptool_bin, args.remote_url, args.remote_host, args.remote_port)
         return 0
 
     if args.command == "flash":
         flash(
+            args.esptool_bin,
+            args.remote_url,
+            args.remote_host,
+            args.remote_port,
+            build_first=not args.no_build,
+            esp_idf_path=args.esp_idf_path,
+        )
+        return 0
+
+    if args.command == "flash-fs":
+        flash_fs(
             args.esptool_bin,
             args.remote_url,
             args.remote_host,

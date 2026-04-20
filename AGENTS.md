@@ -16,6 +16,7 @@ Run from the repository root after exporting ESP-IDF:
 - `cp .env.example .env` seeds the per-repo remote tooling defaults; set `ESP_IDF_PATH` to the local ESP-IDF install root.
 - `python scripts/remote.py chip-id` verifies the remote RFC2217 link.
 - `python scripts/remote.py flash` builds and flashes the remote `XIAO ESP32-S3`.
+- `python scripts/remote.py flash-fs` rebuilds and flashes only the LittleFS `storage` partition for JavaScript-only changes.
 - `python scripts/remote.py monitor` opens the remote serial monitor without retyping host and tool paths.
 - `python scripts/update_mquickjs_headers.py` regenerates `mquickjs_atom.h` and `mqjs_stdlib.h` after updating the submodule.
 
