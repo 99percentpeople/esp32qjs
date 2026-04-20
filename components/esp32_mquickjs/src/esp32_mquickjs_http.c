@@ -89,6 +89,10 @@ typedef struct {
 
 static esp32_mquickjs_http_state_t s_http_state;
 
+static bool http_async_poller(JSContext *ctx,
+                              esp32_mquickjs_runtime_t *runtime,
+                              void *opaque);
+
 static void http_lock(void)
 {
     if (s_http_state.lock != NULL) {
@@ -965,6 +969,7 @@ static void http_worker_task(void *opaque)
 
     heap_caps_free(args);
     xQueueSend(s_http_state.queue, &event, portMAX_DELAY);
+    esp32_mquickjs_notify_activity(esp32_mquickjs_get_active_runtime());
     vTaskDelete(NULL);
 }
 
@@ -1024,7 +1029,9 @@ static JSValue http_fetch_async(JSContext *ctx,
     return JS_UNDEFINED;
 }
 
-bool esp32_mquickjs_install_http_module(JSContext *ctx, JSValue global_obj)
+bool esp32_mquickjs_install_http_module(JSContext *ctx,
+                                        JSValue global_obj,
+                                        esp32_mquickjs_runtime_t *runtime)
 {
     JSGCRef module_ref;
     JSValue *module_obj;
@@ -1040,6 +1047,11 @@ bool esp32_mquickjs_install_http_module(JSContext *ctx, JSValue global_obj)
         !esp32_mquickjs_set_property(ctx, *module_obj, "MAX_RESPONSE_BYTES",
                                      JS_NewUint32(ctx, ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BYTES)) ||
         !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "fetch", "http.fetch")) {
+        goto fail;
+    }
+
+    if (!esp32_mquickjs_register_async_poller(runtime, http_async_poller, NULL)) {
+        JS_ThrowInternalError(ctx, "failed to register http async poller");
         goto fail;
     }
 
@@ -1129,12 +1141,14 @@ bool esp32_mquickjs_dispatch_http(JSContext *ctx,
     return true;
 }
 
-bool esp32_mquickjs_poll_http(JSContext *ctx,
-                              esp32_mquickjs_runtime_t *runtime)
+static bool http_async_poller(JSContext *ctx,
+                              esp32_mquickjs_runtime_t *runtime,
+                              void *opaque)
 {
     esp32_mquickjs_http_async_event_t event;
     bool needs_redraw = false;
 
+    (void)opaque;
     (void)runtime;
     if (ctx == NULL || s_http_state.queue == NULL) {
         return false;

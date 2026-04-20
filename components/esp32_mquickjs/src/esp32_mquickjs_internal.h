@@ -68,8 +68,12 @@ bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed);
 bool esp32_mquickjs_install_fs_module(JSContext *ctx, JSValue global_obj);
 bool esp32_mquickjs_install_gpio_module(JSContext *ctx, JSValue global_obj);
 bool esp32_mquickjs_install_esp32_module(JSContext *ctx, JSValue global_obj);
-bool esp32_mquickjs_install_wifi_module(JSContext *ctx, JSValue global_obj);
-bool esp32_mquickjs_install_http_module(JSContext *ctx, JSValue global_obj);
+bool esp32_mquickjs_install_wifi_module(JSContext *ctx,
+                                        JSValue global_obj,
+                                        esp32_mquickjs_runtime_t *runtime);
+bool esp32_mquickjs_install_http_module(JSContext *ctx,
+                                        JSValue global_obj,
+                                        esp32_mquickjs_runtime_t *runtime);
 
 bool esp32_mquickjs_dispatch_fs(JSContext *ctx,
                                 const char *operation,
@@ -101,7 +105,3 @@ bool esp32_mquickjs_dispatch_http(JSContext *ctx,
                                   JSValue *result);
 
 esp_err_t esp32_mquickjs_wifi_get_status(esp32_mquickjs_wifi_status_t *status);
-bool esp32_mquickjs_poll_wifi(JSContext *ctx,
-                              esp32_mquickjs_runtime_t *runtime);
-bool esp32_mquickjs_poll_http(JSContext *ctx,
-                              esp32_mquickjs_runtime_t *runtime);

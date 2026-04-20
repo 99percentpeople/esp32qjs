@@ -10,6 +10,8 @@ This project exposes a small JavaScript REPL on the XIAO ESP32-S3. Run `help()` 
   Write values to the serial console.
 - `gc()`
   Run the JavaScript garbage collector.
+- `defer()`
+  Create a deferred helper object for callback-style async work.
 - `fetch(url, options?)`
   Run a blocking HTTP request and return a response object.
 - `fetch(url, callback)` / `fetch(url, options, callback)`
@@ -18,6 +20,8 @@ This project exposes a small JavaScript REPL on the XIAO ESP32-S3. Run `help()` 
   Evaluate a script from LittleFS. Relative paths resolve under `/littlefs`, and paths cannot escape that root.
 - `sleep(ms)` / `delay(ms)`
   Block the REPL task for `ms` milliseconds.
+- `waitFor(start, timeoutMs?)`
+  Run `start(resolve, reject, deferred)` and block while the REPL keeps pumping timers, Wi-Fi, and HTTP callbacks. Return the resolved value or throw the rejection.
 
 Startup behavior:
 
@@ -32,6 +36,9 @@ gc();
 sleep(50);
 print(fetch("https://example.com").status);
 load("demo.js");
+print(waitFor(function (resolve) {
+  setTimeout(function () { resolve(123); }, 50);
+}, 1000));
 ```
 
 Example `index.js`:
@@ -39,6 +46,39 @@ Example `index.js`:
 ```js
 print("[startup] boot script running");
 wifi.connect("your-ssid", "your-password");
+```
+
+## Deferred Helpers
+
+- `defer()`
+  Return `{ settled, done, ok, value, error, resolve, reject, callback, nodeCallback, wait }`.
+- `deferred.resolve(value)`
+  Resolve the deferred with `value`.
+- `deferred.reject(error)`
+  Reject the deferred with `error`.
+- `deferred.callback(value)`
+  Convenience callback that resolves with `value`.
+- `deferred.nodeCallback(error, value)`
+  Node-style callback that rejects on `error` and resolves with `value`.
+- `deferred.wait(timeoutMs?)`
+  Block until the deferred settles, while still polling async host events.
+
+Examples:
+
+```js
+var d = defer();
+setTimeout(function () { d.resolve("ok"); }, 50);
+print(d.wait(1000));
+
+var aps = waitFor(function (resolve, reject, deferred) {
+  wifi.scan(deferred.callback);
+}, 10000);
+print(aps.length);
+
+var response = waitFor(function (resolve, reject, deferred) {
+  fetch("https://example.com", deferred.nodeCallback);
+}, 10000);
+print(response.status);
 ```
 
 ## Timers
@@ -159,7 +199,7 @@ Wi-Fi credentials are kept in RAM. Rebooting the board clears the active station
 - `wifi.DEFAULT_TIMEOUT_MS`
   Default station connect timeout in milliseconds, `15000`.
 - `wifi.status()`
-  Return `{ initialized, started, connected, scanning, ssid, hostname, ip, netmask, gateway, lastDisconnectReason }`.
+  Return `{ initialized, started, connected, scanning, ssid, hostname, ip, netmask, gateway, lastDisconnectReason, lastDisconnectReasonName }`.
 - `wifi.connect(ssid, password, timeoutMs = wifi.DEFAULT_TIMEOUT_MS)`
   Start station mode, connect to an AP, and return the updated status object.
 - `wifi.disconnect()`

@@ -1,5 +1,5 @@
-var WIFI_SSID = "be65_IoT";
-var WIFI_PASSWORD = "1145141919810";
+var WIFI_SSID = "Chevalier-gen";
+var WIFI_PASSWORD = "F@wq2zpv";
 
 function connectStartupWifi() {
   var status = wifi.status();

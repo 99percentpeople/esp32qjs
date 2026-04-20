@@ -19,10 +19,16 @@
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAILED_BIT BIT1
+#define WIFI_STARTED_BIT BIT2
 #define WIFI_SCAN_EVENT_QUEUE_LEN 1
 #define WIFI_SCAN_BSSID_STR_LEN 18
+#define WIFI_START_TIMEOUT_MS 5000
 
 static const char *TAG = "esp32qjs_wifi";
+
+static bool wifi_async_poller(JSContext *ctx,
+                              esp32_mquickjs_runtime_t *runtime,
+                              void *opaque);
 
 typedef struct {
     uint32_t generation;
@@ -41,6 +47,7 @@ typedef struct {
     QueueHandle_t scan_queue;
     SemaphoreHandle_t lock;
     esp_netif_t *sta_netif;
+    esp_event_handler_instance_t wifi_start_event_instance;
     esp_event_handler_instance_t wifi_disconnect_event_instance;
     esp_event_handler_instance_t wifi_scan_event_instance;
     esp_event_handler_instance_t ip_event_instance;
@@ -116,6 +123,16 @@ static void wifi_event_handler(void *arg,
 {
     (void)arg;
 
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        wifi_lock();
+        s_wifi_state.started = true;
+        s_wifi_state.status.started = true;
+        wifi_unlock();
+
+        xEventGroupSetBits(s_wifi_state.event_group, WIFI_STARTED_BIT);
+        return;
+    }
+
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *event = event_data;
         bool ignore_disconnect;
@@ -152,6 +169,7 @@ static void wifi_event_handler(void *arg,
 
         if (should_queue_callback && s_wifi_state.scan_queue != NULL) {
             xQueueOverwrite(s_wifi_state.scan_queue, &scan_event);
+            esp32_mquickjs_notify_activity(esp32_mquickjs_get_active_runtime());
         }
         return;
     }
@@ -238,6 +256,13 @@ static esp_err_t wifi_init_once(void)
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "esp_wifi_set_mode() failed");
 
     ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(WIFI_EVENT,
+                                                            WIFI_EVENT_STA_START,
+                                                            wifi_event_handler,
+                                                            NULL,
+                                                            &s_wifi_state.wifi_start_event_instance),
+                        TAG,
+                        "register WIFI_EVENT start handler failed");
+    ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(WIFI_EVENT,
                                                             WIFI_EVENT_STA_DISCONNECTED,
                                                             wifi_event_handler,
                                                             NULL,
@@ -275,16 +300,28 @@ static esp_err_t wifi_init_once(void)
 static esp_err_t wifi_ensure_started(void)
 {
     esp_err_t err;
+    EventBits_t bits;
 
     ESP_RETURN_ON_ERROR(wifi_init_once(), TAG, "wifi_init_once() failed");
     if (s_wifi_state.started) {
         return ESP_OK;
     }
 
+    xEventGroupClearBits(s_wifi_state.event_group, WIFI_STARTED_BIT);
     err = esp_wifi_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_start() failed: %s", esp_err_to_name(err));
         return err;
+    }
+
+    bits = xEventGroupWaitBits(s_wifi_state.event_group,
+                               WIFI_STARTED_BIT,
+                               pdFALSE,
+                               pdFALSE,
+                               pdMS_TO_TICKS(WIFI_START_TIMEOUT_MS));
+    if ((bits & WIFI_STARTED_BIT) == 0) {
+        ESP_LOGE(TAG, "Timed out waiting for WIFI_EVENT_STA_START");
+        return ESP_ERR_TIMEOUT;
     }
 
     wifi_lock();
@@ -319,6 +356,34 @@ static const char *wifi_authmode_to_string(wifi_auth_mode_t authmode)
         return "owe";
     case WIFI_AUTH_WPA3_ENT_192:
         return "wpa3-ent-192";
+    default:
+        return "unknown";
+    }
+}
+
+static const char *wifi_reason_to_string(int32_t reason)
+{
+    switch (reason) {
+    case 0:
+        return "none";
+    case WIFI_REASON_BEACON_TIMEOUT:
+        return "beacon-timeout";
+    case WIFI_REASON_NO_AP_FOUND:
+        return "no-ap-found";
+    case WIFI_REASON_AUTH_FAIL:
+        return "auth-fail";
+    case WIFI_REASON_ASSOC_FAIL:
+        return "assoc-fail";
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+        return "handshake-timeout";
+    case WIFI_REASON_CONNECTION_FAIL:
+        return "connection-fail";
+    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
+        return "no-ap-compatible-security";
+    case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
+        return "no-ap-authmode-threshold";
+    case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD:
+        return "no-ap-rssi-threshold";
     default:
         return "unknown";
     }
@@ -359,7 +424,9 @@ static JSValue wifi_make_status_object(JSContext *ctx)
         !esp32_mquickjs_set_property(ctx, *status_obj, "gateway",
                                      JS_NewString(ctx, status.gateway)) ||
         !esp32_mquickjs_set_property(ctx, *status_obj, "lastDisconnectReason",
-                                     JS_NewInt32(ctx, status.last_disconnect_reason))) {
+                                     JS_NewInt32(ctx, status.last_disconnect_reason)) ||
+        !esp32_mquickjs_set_property(ctx, *status_obj, "lastDisconnectReasonName",
+                                     JS_NewString(ctx, wifi_reason_to_string(status.last_disconnect_reason)))) {
         goto fail;
     }
 
@@ -385,9 +452,10 @@ static JSValue wifi_throw_connect_error(JSContext *ctx, esp_err_t err)
     }
 
     return JS_ThrowInternalError(ctx,
-                                 "wifi.connect() failed for %s (reason=%d, err=%s)",
+                                 "wifi.connect() failed for %s (reason=%d:%s, err=%s)",
                                  status.ssid[0] != '\0' ? status.ssid : "<unknown>",
                                  (int)status.last_disconnect_reason,
+                                 wifi_reason_to_string(status.last_disconnect_reason),
                                  esp_err_to_name(err));
 }
 
@@ -493,6 +561,7 @@ static esp_err_t wifi_apply_config(const char *ssid, const char *password)
 static esp_err_t wifi_connect(const char *ssid, const char *password, uint32_t timeout_ms)
 {
     esp_err_t err;
+    bool needs_disconnect = false;
 
     if (ssid == NULL || password == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -506,9 +575,18 @@ static esp_err_t wifi_connect(const char *ssid, const char *password, uint32_t t
     }
 
     wifi_lock();
-    s_wifi_state.ignore_disconnect_once = true;
+    needs_disconnect = s_wifi_state.status.connected || s_wifi_state.connect_in_progress;
+    s_wifi_state.ignore_disconnect_once = needs_disconnect;
     wifi_unlock();
-    esp_wifi_disconnect();
+
+    if (needs_disconnect) {
+        err = esp_wifi_disconnect();
+        if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_CONNECT) {
+            ESP_LOGE(TAG, "esp_wifi_disconnect() failed: %s", esp_err_to_name(err));
+            return err;
+        }
+    }
+
     xEventGroupClearBits(s_wifi_state.event_group, WIFI_CONNECTED_BIT | WIFI_FAILED_BIT);
 
     wifi_lock();
@@ -711,7 +789,9 @@ static JSValue wifi_scan_async(JSContext *ctx, JSValue callback)
     return JS_UNDEFINED;
 }
 
-bool esp32_mquickjs_install_wifi_module(JSContext *ctx, JSValue global_obj)
+bool esp32_mquickjs_install_wifi_module(JSContext *ctx,
+                                        JSValue global_obj,
+                                        esp32_mquickjs_runtime_t *runtime)
 {
     JSGCRef module_ref;
     JSValue *module_obj;
@@ -728,6 +808,11 @@ bool esp32_mquickjs_install_wifi_module(JSContext *ctx, JSValue global_obj)
         !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "disconnect", "wifi.disconnect") ||
         !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "status", "wifi.status") ||
         !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "scan", "wifi.scan")) {
+        goto fail;
+    }
+
+    if (!esp32_mquickjs_register_async_poller(runtime, wifi_async_poller, NULL)) {
+        JS_ThrowInternalError(ctx, "failed to register wifi async poller");
         goto fail;
     }
 
@@ -813,12 +898,14 @@ bool esp32_mquickjs_dispatch_wifi(JSContext *ctx,
     return false;
 }
 
-bool esp32_mquickjs_poll_wifi(JSContext *ctx,
-                              esp32_mquickjs_runtime_t *runtime)
+static bool wifi_async_poller(JSContext *ctx,
+                              esp32_mquickjs_runtime_t *runtime,
+                              void *opaque)
 {
     esp32_mquickjs_wifi_scan_event_t event;
     bool needs_redraw = false;
 
+    (void)opaque;
     (void)runtime;
     if (ctx == NULL || s_wifi_state.scan_queue == NULL) {
         return false;

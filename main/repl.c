@@ -1,6 +1,7 @@
 #include "repl.h"
 
 #include <stdio.h>
+#include <stdint.h>
 #include <sys/stat.h>
 
 #include "repl_input.h"
@@ -44,17 +45,23 @@ void esp32qjs_repl_run(JSContext *ctx,
                        esp32_mquickjs_runtime_t *runtime)
 {
     char line[ESP32QJS_REPL_LINE_SIZE];
+    esp32_mquickjs_poll_result_t poll_result;
 
+    esp32_mquickjs_attach_current_task(runtime);
     print_banner();
     run_startup_script(ctx, runtime);
     esp32qjs_repl_print_prompt();
 
     while (true) {
-        if (esp32_mquickjs_poll(ctx, runtime)) {
+        poll_result = esp32_mquickjs_poll(ctx, runtime);
+        if ((poll_result & ESP32_MQUICKJS_POLL_OUTPUT) != 0) {
             esp32qjs_repl_redraw_line();
         }
 
         if (!esp32qjs_repl_read_line(line, sizeof(line))) {
+            if (poll_result == ESP32_MQUICKJS_POLL_NONE) {
+                esp32_mquickjs_wait_for_activity(runtime, UINT32_MAX);
+            }
             continue;
         }
 

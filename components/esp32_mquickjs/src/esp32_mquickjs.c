@@ -1,5 +1,6 @@
 #include "esp32_mquickjs_internal.h"
 
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -28,6 +29,17 @@ typedef struct {
     esp32_mquickjs_timer_slot_t *slots;
 } esp32_mquickjs_timer_state_t;
 
+typedef struct {
+    esp32_mquickjs_async_poller_t poller;
+    void *opaque;
+} esp32_mquickjs_async_poller_entry_t;
+
+typedef struct {
+    void *task_handle;
+    size_t poller_count;
+    esp32_mquickjs_async_poller_entry_t *pollers;
+} esp32_mquickjs_async_state_t;
+
 struct esp32_mquickjs_timer_slot {
     esp32_mquickjs_runtime_t *runtime;
     esp_timer_handle_t handle;
@@ -39,6 +51,8 @@ struct esp32_mquickjs_timer_slot {
     bool pending;
 };
 
+#define ESP32_MQUICKJS_MAX_ASYNC_POLLERS 8
+
 static void note_console_output(void)
 {
     if (s_active_runtime != NULL) {
@@ -46,25 +60,152 @@ static void note_console_output(void)
     }
 }
 
+static esp32_mquickjs_async_state_t *esp32_mquickjs_async_state(esp32_mquickjs_runtime_t *runtime)
+{
+    if (runtime == NULL) {
+        return NULL;
+    }
+    return runtime->async_state;
+}
+
+static bool esp32_mquickjs_init_async_state(esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_async_state_t *state;
+
+    if (runtime == NULL) {
+        return false;
+    }
+    if (runtime->async_state != NULL) {
+        return true;
+    }
+
+    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    if (state == NULL) {
+        return false;
+    }
+
+    state->pollers = heap_caps_calloc(ESP32_MQUICKJS_MAX_ASYNC_POLLERS,
+                                      sizeof(*state->pollers),
+                                      MALLOC_CAP_8BIT);
+    if (state->pollers == NULL) {
+        heap_caps_free(state);
+        return false;
+    }
+
+    runtime->async_state = state;
+    return true;
+}
+
+bool esp32_mquickjs_register_async_poller(esp32_mquickjs_runtime_t *runtime,
+                                          esp32_mquickjs_async_poller_t poller,
+                                          void *opaque)
+{
+    esp32_mquickjs_async_state_t *state;
+    size_t i;
+
+    if (runtime == NULL || poller == NULL) {
+        return false;
+    }
+    if (!esp32_mquickjs_init_async_state(runtime)) {
+        return false;
+    }
+
+    state = esp32_mquickjs_async_state(runtime);
+    if (state == NULL || state->pollers == NULL) {
+        return false;
+    }
+
+    for (i = 0; i < state->poller_count; ++i) {
+        if (state->pollers[i].poller == poller && state->pollers[i].opaque == opaque) {
+            return true;
+        }
+    }
+    if (state->poller_count >= ESP32_MQUICKJS_MAX_ASYNC_POLLERS) {
+        return false;
+    }
+
+    state->pollers[state->poller_count].poller = poller;
+    state->pollers[state->poller_count].opaque = opaque;
+    state->poller_count++;
+    return true;
+}
+
+void esp32_mquickjs_attach_current_task(esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_async_state_t *state;
+
+    if (runtime == NULL || !esp32_mquickjs_init_async_state(runtime)) {
+        return;
+    }
+
+    state = esp32_mquickjs_async_state(runtime);
+    if (state != NULL) {
+        state->task_handle = xTaskGetCurrentTaskHandle();
+    }
+}
+
+void esp32_mquickjs_notify_activity(esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+
+    if (state != NULL && state->task_handle != NULL) {
+        xTaskNotifyGive(state->task_handle);
+    }
+}
+
+void esp32_mquickjs_notify_active_runtime_from_isr(int *task_woken)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(s_active_runtime);
+
+    if (state != NULL && state->task_handle != NULL) {
+        vTaskNotifyGiveFromISR(state->task_handle, (BaseType_t *)task_woken);
+    }
+}
+
+bool esp32_mquickjs_wait_for_activity(esp32_mquickjs_runtime_t *runtime,
+                                      uint32_t timeout_ms)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+    TickType_t wait_ticks = timeout_ms == UINT32_MAX ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
+
+    if (timeout_ms != 0 && timeout_ms != UINT32_MAX && wait_ticks == 0) {
+        wait_ticks = 1;
+    }
+
+    if (state == NULL || state->task_handle == NULL) {
+        if (wait_ticks > 0) {
+            vTaskDelay(wait_ticks);
+        }
+        return false;
+    }
+
+    return ulTaskNotifyTake(pdTRUE, wait_ticks) > 0;
+}
+
+static bool esp32_mquickjs_poll_registered(JSContext *ctx,
+                                           esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+    bool handled = false;
+    size_t i;
+
+    if (state == NULL || state->pollers == NULL) {
+        return false;
+    }
+
+    for (i = 0; i < state->poller_count; ++i) {
+        if (state->pollers[i].poller != NULL &&
+            state->pollers[i].poller(ctx, runtime, state->pollers[i].opaque)) {
+            handled = true;
+        }
+    }
+    return handled;
+}
+
 static void prepare_console_output(void)
 {
-    if (s_active_runtime != NULL && s_active_runtime->before_output != NULL) {
-        s_active_runtime->prompt_needs_redraw = true;
-        s_active_runtime->before_output(s_active_runtime->before_output_opaque);
-    }
-}
-
-static void begin_async_console_output(uint32_t lines)
-{
-    if (s_active_runtime != NULL && s_active_runtime->before_async_output != NULL) {
-        s_active_runtime->before_async_output(s_active_runtime->before_async_output_opaque, lines);
-    }
-}
-
-static void end_async_console_output(void)
-{
-    if (s_active_runtime != NULL && s_active_runtime->after_async_output != NULL) {
-        s_active_runtime->after_async_output(s_active_runtime->after_async_output_opaque);
+    if (s_active_runtime != NULL && s_active_runtime->prepare_output != NULL) {
+        s_active_runtime->prepare_output(s_active_runtime->prepare_output_opaque);
     }
 }
 
@@ -172,6 +313,73 @@ done:
     return result;
 }
 
+static JSValue esp32_mquickjs_make_bound_bridge_function_with_arg(JSContext *ctx,
+                                                                  JSValue global_obj,
+                                                                  const char *operation,
+                                                                  JSValue bound_arg)
+{
+    JSGCRef load_ref;
+    JSGCRef bind_ref;
+    JSGCRef namespace_ref;
+    JSGCRef operation_ref;
+    JSValue *load_fn;
+    JSValue *bind_fn;
+    JSValue *bridge_namespace;
+    JSValue *bridge_operation;
+    JSValue bind_args[4];
+    JSValue result = JS_EXCEPTION;
+
+    load_fn = JS_PushGCRef(ctx, &load_ref);
+    bind_fn = JS_PushGCRef(ctx, &bind_ref);
+    bridge_namespace = JS_PushGCRef(ctx, &namespace_ref);
+    bridge_operation = JS_PushGCRef(ctx, &operation_ref);
+
+    *load_fn = JS_GetPropertyStr(ctx, global_obj, "load");
+    *bind_fn = JS_UNDEFINED;
+    *bridge_namespace = JS_UNDEFINED;
+    *bridge_operation = JS_UNDEFINED;
+
+    if (JS_IsException(*load_fn)) {
+        goto done;
+    }
+    if (!JS_IsFunction(ctx, *load_fn)) {
+        JS_ThrowInternalError(ctx, "global load() is not available");
+        goto done;
+    }
+
+    *bind_fn = JS_GetPropertyStr(ctx, *load_fn, "bind");
+    if (JS_IsException(*bind_fn)) {
+        goto done;
+    }
+    if (!JS_IsFunction(ctx, *bind_fn)) {
+        JS_ThrowInternalError(ctx, "Function.bind() is not available");
+        goto done;
+    }
+
+    *bridge_namespace = JS_NewString(ctx, ESP32_MQUICKJS_BRIDGE_NAMESPACE);
+    if (JS_IsException(*bridge_namespace)) {
+        goto done;
+    }
+
+    *bridge_operation = JS_NewString(ctx, operation);
+    if (JS_IsException(*bridge_operation)) {
+        goto done;
+    }
+
+    bind_args[0] = JS_UNDEFINED;
+    bind_args[1] = *bridge_namespace;
+    bind_args[2] = *bridge_operation;
+    bind_args[3] = bound_arg;
+    result = js_call_function(ctx, *bind_fn, *load_fn, 4, bind_args);
+
+done:
+    JS_PopGCRef(ctx, &operation_ref);
+    JS_PopGCRef(ctx, &namespace_ref);
+    JS_PopGCRef(ctx, &bind_ref);
+    JS_PopGCRef(ctx, &load_ref);
+    return result;
+}
+
 bool esp32_mquickjs_set_property(JSContext *ctx,
                                  JSValue target_obj,
                                  const char *name,
@@ -206,6 +414,290 @@ bool esp32_mquickjs_set_bound_bridge_function(JSContext *ctx,
         return false;
     }
     return esp32_mquickjs_set_property(ctx, target_obj, target_name, func);
+}
+
+static int js_timeout_arg(JSContext *ctx,
+                          JSValue value,
+                          uint32_t default_timeout_ms,
+                          uint32_t *timeout_ms)
+{
+    int timeout = 0;
+
+    if (JS_IsUndefined(value)) {
+        *timeout_ms = default_timeout_ms;
+        return 0;
+    }
+    if (JS_ToInt32(ctx, &timeout, value) != 0 || timeout < 0) {
+        return -1;
+    }
+    *timeout_ms = (uint32_t)timeout;
+    return 0;
+}
+
+static bool js_is_object(JSContext *ctx, JSValue value)
+{
+    return JS_GetClassID(ctx, value) >= 0;
+}
+
+static bool js_get_bool_property(JSContext *ctx,
+                                 JSValue obj,
+                                 const char *name,
+                                 bool *value)
+{
+    int int_value = 0;
+    JSValue property = JS_GetPropertyStr(ctx, obj, name);
+
+    if (JS_IsException(property) || JS_ToInt32(ctx, &int_value, property) != 0) {
+        return false;
+    }
+    *value = int_value != 0;
+    return true;
+}
+
+static bool js_settle_deferred(JSContext *ctx,
+                               JSValue deferred_obj,
+                               bool ok,
+                               JSValue payload)
+{
+    bool settled = false;
+
+    if (!js_get_bool_property(ctx, deferred_obj, "settled", &settled)) {
+        return false;
+    }
+    if (settled) {
+        return true;
+    }
+
+    if (!esp32_mquickjs_set_property(ctx, deferred_obj, "settled", JS_NewBool(true)) ||
+        !esp32_mquickjs_set_property(ctx, deferred_obj, "done", JS_NewBool(true)) ||
+        !esp32_mquickjs_set_property(ctx, deferred_obj, "ok", JS_NewBool(ok))) {
+        return false;
+    }
+
+    if (ok) {
+        return esp32_mquickjs_set_property(ctx, deferred_obj, "value", payload) &&
+               esp32_mquickjs_set_property(ctx, deferred_obj, "error", JS_UNDEFINED);
+    }
+
+    return esp32_mquickjs_set_property(ctx, deferred_obj, "error", payload) &&
+           esp32_mquickjs_set_property(ctx, deferred_obj, "value", JS_UNDEFINED);
+}
+
+static void js_call_best_effort(JSContext *ctx, JSValue func)
+{
+    JSValue ret;
+
+    if (!JS_IsFunction(ctx, func) || JS_StackCheck(ctx, 2)) {
+        return;
+    }
+
+    JS_PushArg(ctx, func);
+    JS_PushArg(ctx, JS_NULL);
+    ret = JS_Call(ctx, 0);
+    if (JS_IsException(ret)) {
+        esp32_mquickjs_print_exception(ctx);
+    }
+}
+
+static JSValue js_wait_for_deferred(JSContext *ctx,
+                                    esp32_mquickjs_runtime_t *runtime,
+                                    JSValue deferred_obj,
+                                    JSValue timeout_value,
+                                    const char *api_name)
+{
+    uint32_t timeout_ms = runtime != NULL ? runtime->eval_timeout_ms : ESP32_MQUICKJS_DEFAULT_EVAL_TIMEOUT_MS;
+    uint64_t saved_deadline_us = 0;
+    uint64_t wait_deadline_us = 0;
+
+    if (js_timeout_arg(ctx, timeout_value, timeout_ms, &timeout_ms) != 0) {
+        return JS_ThrowTypeError(ctx, "%s(..., timeoutMs) expects a non-negative integer", api_name);
+    }
+
+    if (runtime != NULL) {
+        saved_deadline_us = runtime->deadline_us;
+        runtime->deadline_us = timeout_ms > 0
+                                   ? esp_timer_get_time() + ((uint64_t)timeout_ms * 1000ULL)
+                                   : 0;
+    }
+    if (timeout_ms > 0) {
+        wait_deadline_us = esp_timer_get_time() + ((uint64_t)timeout_ms * 1000ULL);
+    }
+
+    for (;;) {
+        bool settled = false;
+        bool ok = false;
+
+        if (!js_get_bool_property(ctx, deferred_obj, "settled", &settled)) {
+            goto exception;
+        }
+        if (settled) {
+            JSValue result = JS_UNDEFINED;
+
+            if (!js_get_bool_property(ctx, deferred_obj, "ok", &ok)) {
+                goto exception;
+            }
+            if (runtime != NULL) {
+                runtime->deadline_us = saved_deadline_us;
+            }
+
+            result = JS_GetPropertyStr(ctx, deferred_obj, ok ? "value" : "error");
+            if (JS_IsException(result)) {
+                return result;
+            }
+            if (ok) {
+                return result;
+            }
+            if (JS_IsUndefined(result)) {
+                return JS_ThrowInternalError(ctx, "%s() rejected without an error value", api_name);
+            }
+            return JS_Throw(ctx, result);
+        }
+
+        if (wait_deadline_us > 0 && esp_timer_get_time() >= wait_deadline_us) {
+            JSValue cancel = JS_GetPropertyStr(ctx, deferred_obj, "_cancel");
+
+            if (!JS_IsException(cancel)) {
+                js_call_best_effort(ctx, cancel);
+            }
+            if (runtime != NULL) {
+                runtime->deadline_us = saved_deadline_us;
+            }
+            return JS_ThrowInternalError(ctx, "%s() timed out after %" PRIu32 " ms", api_name, timeout_ms);
+        }
+
+        if (esp32_mquickjs_poll(ctx, runtime) != ESP32_MQUICKJS_POLL_NONE) {
+            continue;
+        }
+
+        {
+            uint32_t wait_ms = UINT32_MAX;
+
+            if (wait_deadline_us > 0) {
+                uint64_t now_us = esp_timer_get_time();
+
+                if (now_us < wait_deadline_us) {
+                    uint64_t remaining_us = wait_deadline_us - now_us;
+                    wait_ms = (uint32_t)((remaining_us + 999ULL) / 1000ULL);
+                    if (wait_ms == 0) {
+                        wait_ms = 1;
+                    }
+                } else {
+                    wait_ms = 0;
+                }
+            }
+
+            esp32_mquickjs_wait_for_activity(runtime, wait_ms);
+        }
+    }
+
+exception:
+    if (runtime != NULL) {
+        runtime->deadline_us = saved_deadline_us;
+    }
+    return JS_EXCEPTION;
+}
+
+static JSValue js_make_deferred(JSContext *ctx)
+{
+    JSGCRef global_ref;
+    JSGCRef deferred_ref;
+    JSValue *global_obj;
+    JSValue *deferred_obj;
+    JSValue resolve_fn;
+    JSValue reject_fn;
+    JSValue callback_fn;
+    JSValue node_callback_fn;
+    JSValue wait_fn;
+
+    global_obj = JS_PushGCRef(ctx, &global_ref);
+    deferred_obj = JS_PushGCRef(ctx, &deferred_ref);
+    *global_obj = JS_GetGlobalObject(ctx);
+    *deferred_obj = JS_NewObject(ctx);
+    if (JS_IsException(*global_obj) || JS_IsException(*deferred_obj)) {
+        goto fail;
+    }
+
+    resolve_fn = esp32_mquickjs_make_bound_bridge_function_with_arg(ctx, *global_obj, "deferred.resolve", *deferred_obj);
+    reject_fn = esp32_mquickjs_make_bound_bridge_function_with_arg(ctx, *global_obj, "deferred.reject", *deferred_obj);
+    callback_fn = esp32_mquickjs_make_bound_bridge_function_with_arg(ctx, *global_obj, "deferred.callback", *deferred_obj);
+    node_callback_fn = esp32_mquickjs_make_bound_bridge_function_with_arg(ctx, *global_obj, "deferred.nodeCallback", *deferred_obj);
+    wait_fn = esp32_mquickjs_make_bound_bridge_function_with_arg(ctx, *global_obj, "deferred.wait", *deferred_obj);
+    if (JS_IsException(resolve_fn) || JS_IsException(reject_fn) || JS_IsException(callback_fn) ||
+        JS_IsException(node_callback_fn) || JS_IsException(wait_fn)) {
+        goto fail;
+    }
+
+    if (!esp32_mquickjs_set_property(ctx, *deferred_obj, "settled", JS_NewBool(false)) ||
+        !esp32_mquickjs_set_property(ctx, *deferred_obj, "done", JS_NewBool(false)) ||
+        !esp32_mquickjs_set_property(ctx, *deferred_obj, "ok", JS_NewBool(false)) ||
+        !esp32_mquickjs_set_property(ctx, *deferred_obj, "value", JS_UNDEFINED) ||
+        !esp32_mquickjs_set_property(ctx, *deferred_obj, "error", JS_UNDEFINED) ||
+        !esp32_mquickjs_set_property(ctx, *deferred_obj, "_cancel", JS_UNDEFINED) ||
+        !esp32_mquickjs_set_property(ctx, *deferred_obj, "resolve", resolve_fn) ||
+        !esp32_mquickjs_set_property(ctx, *deferred_obj, "reject", reject_fn) ||
+        !esp32_mquickjs_set_property(ctx, *deferred_obj, "callback", callback_fn) ||
+        !esp32_mquickjs_set_property(ctx, *deferred_obj, "nodeCallback", node_callback_fn) ||
+        !esp32_mquickjs_set_property(ctx, *deferred_obj, "wait", wait_fn)) {
+        goto fail;
+    }
+
+    JS_PopGCRef(ctx, &global_ref);
+    return JS_PopGCRef(ctx, &deferred_ref);
+
+fail:
+    JS_PopGCRef(ctx, &deferred_ref);
+    JS_PopGCRef(ctx, &global_ref);
+    return JS_EXCEPTION;
+}
+
+static JSValue js_wait_for(JSContext *ctx, int argc, JSValue *argv)
+{
+    JSGCRef deferred_ref;
+    JSValue *deferred_obj;
+    JSValue resolve_fn;
+    JSValue reject_fn;
+    JSValue start_args[3];
+    JSValue start_result;
+
+    if (argc < 1 || !JS_IsFunction(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "waitFor(start, timeoutMs?) expects a function");
+    }
+
+    deferred_obj = JS_PushGCRef(ctx, &deferred_ref);
+    *deferred_obj = js_make_deferred(ctx);
+    if (JS_IsException(*deferred_obj)) {
+        JS_PopGCRef(ctx, &deferred_ref);
+        return JS_EXCEPTION;
+    }
+
+    resolve_fn = JS_GetPropertyStr(ctx, *deferred_obj, "resolve");
+    reject_fn = JS_GetPropertyStr(ctx, *deferred_obj, "reject");
+    if (JS_IsException(resolve_fn) || JS_IsException(reject_fn)) {
+        JS_PopGCRef(ctx, &deferred_ref);
+        return JS_EXCEPTION;
+    }
+
+    start_args[0] = resolve_fn;
+    start_args[1] = reject_fn;
+    start_args[2] = *deferred_obj;
+    start_result = js_call_function(ctx, argv[0], JS_NULL, 3, start_args);
+    if (JS_IsException(start_result)) {
+        JS_PopGCRef(ctx, &deferred_ref);
+        return JS_EXCEPTION;
+    }
+    if (JS_IsFunction(ctx, start_result) &&
+        !esp32_mquickjs_set_property(ctx, *deferred_obj, "_cancel", start_result)) {
+        JS_PopGCRef(ctx, &deferred_ref);
+        return JS_EXCEPTION;
+    }
+
+    start_result = js_wait_for_deferred(ctx,
+                                        s_active_runtime,
+                                        *deferred_obj,
+                                        argc >= 2 ? argv[1] : JS_UNDEFINED,
+                                        "waitFor");
+    JS_PopGCRef(ctx, &deferred_ref);
+    return start_result;
 }
 
 esp32_mquickjs_runtime_t *esp32_mquickjs_get_active_runtime(void)
@@ -278,6 +770,7 @@ static void esp32_mquickjs_timer_cb(void *arg)
     event.generation = slot->generation;
     if (xQueueSend(state->queue, &event, 0) == pdTRUE) {
         slot->pending = true;
+        esp32_mquickjs_notify_activity(slot->runtime);
     }
 }
 
@@ -400,15 +893,15 @@ JSContext *esp32_mquickjs_create(void *mem_start,
 
     runtime->deadline_us = 0;
     runtime->eval_timeout_ms = eval_timeout_ms;
+    runtime->async_generation = 0;
     runtime->output_generation = 0;
-    runtime->prompt_needs_redraw = false;
-    runtime->before_output = NULL;
-    runtime->before_output_opaque = NULL;
-    runtime->before_async_output = NULL;
-    runtime->before_async_output_opaque = NULL;
-    runtime->after_async_output = NULL;
-    runtime->after_async_output_opaque = NULL;
+    runtime->prepare_output = NULL;
+    runtime->prepare_output_opaque = NULL;
     runtime->timer_state = NULL;
+    runtime->async_state = NULL;
+    if (!esp32_mquickjs_init_async_state(runtime)) {
+        return NULL;
+    }
     if (!esp32_mquickjs_init_timer_state(runtime)) {
         return NULL;
     }
@@ -492,6 +985,14 @@ static JSValue js_host_bridge(JSContext *ctx, int argc, JSValue *argv)
         return js_print_help();
     }
 
+    if (strcmp(operation, "defer") == 0) {
+        return js_make_deferred(ctx);
+    }
+
+    if (strcmp(operation, "waitFor") == 0) {
+        return js_wait_for(ctx, argc - 1, argv + 1);
+    }
+
     if (strcmp(operation, "setInterval") == 0) {
         if (argc < 3) {
             return JS_ThrowTypeError(ctx, "setInterval(fn, ms) expects a function and delay");
@@ -507,6 +1008,77 @@ static JSValue js_host_bridge(JSContext *ctx, int argc, JSValue *argv)
         }
         vTaskDelay(pdMS_TO_TICKS((uint32_t)delay_ms));
         return JS_NewInt32(ctx, delay_ms);
+    }
+
+    if (strcmp(operation, "deferred.resolve") == 0) {
+        if (argc < 2 || !js_is_object(ctx, argv[1])) {
+            return JS_ThrowTypeError(ctx, "deferred.resolve(value?) expects a deferred object");
+        }
+        if (!js_settle_deferred(ctx,
+                                argv[1],
+                                true,
+                                argc >= 3 ? argv[2] : JS_UNDEFINED)) {
+            return JS_EXCEPTION;
+        }
+        return argc >= 3 ? argv[2] : JS_UNDEFINED;
+    }
+
+    if (strcmp(operation, "deferred.reject") == 0) {
+        if (argc < 2 || !js_is_object(ctx, argv[1])) {
+            return JS_ThrowTypeError(ctx, "deferred.reject(error?) expects a deferred object");
+        }
+        if (!js_settle_deferred(ctx,
+                                argv[1],
+                                false,
+                                argc >= 3 ? argv[2] : JS_UNDEFINED)) {
+            return JS_EXCEPTION;
+        }
+        return argc >= 3 ? argv[2] : JS_UNDEFINED;
+    }
+
+    if (strcmp(operation, "deferred.callback") == 0) {
+        if (argc < 2 || !js_is_object(ctx, argv[1])) {
+            return JS_ThrowTypeError(ctx, "deferred.callback(value?) expects a deferred object");
+        }
+        if (!js_settle_deferred(ctx,
+                                argv[1],
+                                true,
+                                argc >= 3 ? argv[2] : JS_UNDEFINED)) {
+            return JS_EXCEPTION;
+        }
+        return JS_UNDEFINED;
+    }
+
+    if (strcmp(operation, "deferred.nodeCallback") == 0) {
+        if (argc < 2 || !js_is_object(ctx, argv[1])) {
+            return JS_ThrowTypeError(ctx, "deferred.nodeCallback(error, value?) expects a deferred object");
+        }
+
+        if (argc >= 3 && !JS_IsNull(argv[2]) && !JS_IsUndefined(argv[2])) {
+            if (!js_settle_deferred(ctx, argv[1], false, argv[2])) {
+                return JS_EXCEPTION;
+            }
+            return JS_UNDEFINED;
+        }
+
+        if (!js_settle_deferred(ctx,
+                                argv[1],
+                                true,
+                                argc >= 4 ? argv[3] : JS_UNDEFINED)) {
+            return JS_EXCEPTION;
+        }
+        return JS_UNDEFINED;
+    }
+
+    if (strcmp(operation, "deferred.wait") == 0) {
+        if (argc < 2 || !js_is_object(ctx, argv[1])) {
+            return JS_ThrowTypeError(ctx, "deferred.wait(timeoutMs?) expects a deferred object");
+        }
+        return js_wait_for_deferred(ctx,
+                                    s_active_runtime,
+                                    argv[1],
+                                    argc >= 3 ? argv[2] : JS_UNDEFINED,
+                                    "deferred.wait");
     }
 
     if (strncmp(operation, "fs.", 3) == 0 &&
@@ -560,6 +1132,8 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
         !esp32_mquickjs_set_property(ctx, *global_obj, "LED_BUILTIN",
                                      JS_NewInt32(ctx, ESP32_MQUICKJS_USER_LED_PIN)) ||
         !esp32_mquickjs_set_bound_bridge_function(ctx, *global_obj, *global_obj, "help", "help") ||
+        !esp32_mquickjs_set_bound_bridge_function(ctx, *global_obj, *global_obj, "defer", "defer") ||
+        !esp32_mquickjs_set_bound_bridge_function(ctx, *global_obj, *global_obj, "waitFor", "waitFor") ||
         !esp32_mquickjs_set_bound_bridge_function(ctx, *global_obj, *global_obj, "sleep", "sleep") ||
         !esp32_mquickjs_set_alias(ctx, *global_obj, *global_obj, "delay", "sleep") ||
         !esp32_mquickjs_set_bound_bridge_function(ctx, *global_obj, *global_obj, "fetch", "http.fetch") ||
@@ -568,8 +1142,8 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
         !esp32_mquickjs_install_fs_module(ctx, *global_obj) ||
         !esp32_mquickjs_install_gpio_module(ctx, *global_obj) ||
         !esp32_mquickjs_install_esp32_module(ctx, *global_obj) ||
-        !esp32_mquickjs_install_wifi_module(ctx, *global_obj) ||
-        !esp32_mquickjs_install_http_module(ctx, *global_obj)) {
+        !esp32_mquickjs_install_wifi_module(ctx, *global_obj, runtime) ||
+        !esp32_mquickjs_install_http_module(ctx, *global_obj, runtime)) {
         JS_PopGCRef(ctx, &global_ref);
         esp32_mquickjs_print_exception(ctx);
         return false;
@@ -579,24 +1153,30 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
     return true;
 }
 
-bool esp32_mquickjs_poll(JSContext *ctx,
-                         esp32_mquickjs_runtime_t *runtime)
+esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
+                                                 esp32_mquickjs_runtime_t *runtime)
 {
     esp32_mquickjs_timer_state_t *state = esp32_mquickjs_timer_state(runtime);
     esp32_mquickjs_timer_event_t event;
-    bool needs_redraw = false;
-    bool wifi_handled = false;
-    bool http_handled = false;
+    bool core_async_handled = false;
+    bool async_handled = false;
+    uint32_t output_generation;
+    esp32_mquickjs_poll_result_t result = ESP32_MQUICKJS_POLL_NONE;
 
     if (ctx == NULL || runtime == NULL) {
-        return false;
+        return ESP32_MQUICKJS_POLL_NONE;
     }
+    output_generation = runtime->output_generation;
     if (state == NULL || state->queue == NULL || state->slots == NULL) {
-        wifi_handled = esp32_mquickjs_poll_wifi(ctx, runtime);
-        http_handled = esp32_mquickjs_poll_http(ctx, runtime);
-        needs_redraw = runtime->prompt_needs_redraw || wifi_handled || http_handled;
-        runtime->prompt_needs_redraw = false;
-        return needs_redraw;
+        async_handled = esp32_mquickjs_poll_registered(ctx, runtime);
+        if (async_handled) {
+            runtime->async_generation++;
+            result |= ESP32_MQUICKJS_POLL_ASYNC;
+        }
+        if (runtime->output_generation != output_generation) {
+            result |= ESP32_MQUICKJS_POLL_OUTPUT;
+        }
+        return result;
     }
 
     while (xQueueReceive(state->queue, &event, 0) == pdTRUE) {
@@ -613,6 +1193,7 @@ bool esp32_mquickjs_poll(JSContext *ctx,
         }
 
         slot->pending = false;
+        core_async_handled = true;
 
         if (JS_StackCheck(ctx, 2)) {
             prepare_console_output();
@@ -635,33 +1216,15 @@ bool esp32_mquickjs_poll(JSContext *ctx,
         }
     }
 
-    wifi_handled = esp32_mquickjs_poll_wifi(ctx, runtime);
-    http_handled = esp32_mquickjs_poll_http(ctx, runtime);
-    needs_redraw = runtime->prompt_needs_redraw || wifi_handled || http_handled;
-    runtime->prompt_needs_redraw = false;
-    return needs_redraw;
-}
-
-static uint32_t js_print_output_lines(JSContext *ctx, int argc, JSValue *argv)
-{
-    uint32_t lines = 1;
-    int i;
-
-    for (i = 0; i < argc; i++) {
-        if (JS_IsString(ctx, argv[i])) {
-            JSCStringBuf buf;
-            size_t len = 0;
-            const char *str = JS_ToCStringLen(ctx, &len, argv[i], &buf);
-            size_t j;
-
-            for (j = 0; j < len; ++j) {
-                if (str[j] == '\n') {
-                    lines++;
-                }
-            }
-        }
+    async_handled = esp32_mquickjs_poll_registered(ctx, runtime);
+    if (core_async_handled || async_handled) {
+        runtime->async_generation++;
+        result |= ESP32_MQUICKJS_POLL_ASYNC;
     }
-    return lines;
+    if (runtime->output_generation != output_generation) {
+        result |= ESP32_MQUICKJS_POLL_OUTPUT;
+    }
+    return result;
 }
 
 JSValue js_print(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -669,7 +1232,7 @@ JSValue js_print(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     int i;
 
     (void)this_val;
-    begin_async_console_output(js_print_output_lines(ctx, argc, argv));
+    prepare_console_output();
     for (i = 0; i < argc; i++) {
         if (i != 0) {
             fputc(' ', stdout);
@@ -688,7 +1251,6 @@ JSValue js_print(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 
     fputc('\n', stdout);
     fflush(stdout);
-    end_async_console_output();
     note_console_output();
     return JS_UNDEFINED;
 }

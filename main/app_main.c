@@ -73,12 +73,8 @@ void app_main(void)
         return;
     }
 
-    s_js_runtime.before_output = esp32qjs_repl_prepare_async_output;
-    s_js_runtime.before_output_opaque = NULL;
-    s_js_runtime.before_async_output = esp32qjs_repl_begin_async_output;
-    s_js_runtime.before_async_output_opaque = NULL;
-    s_js_runtime.after_async_output = esp32qjs_repl_end_async_output;
-    s_js_runtime.after_async_output_opaque = NULL;
+    s_js_runtime.prepare_output = esp32qjs_repl_prepare_output;
+    s_js_runtime.prepare_output_opaque = NULL;
 
     ESP_LOGI(TAG, "mquickjs runtime ready");
     js_heap_region = s_js_runtime.js_heap_in_psram ? "psram" : "internal";

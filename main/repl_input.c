@@ -6,24 +6,17 @@
 #include <string.h>
 
 #include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_select.h"
 #include "driver/usb_serial_jtag_vfs.h"
+#include "esp32_mquickjs.h"
 #include "esp_err.h"
 #include "sdkconfig.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 
 #define REPL_PROMPT "js> "
 #define REPL_CONT_PROMPT "... "
 #define HISTORY_SIZE 16
-#define REPL_IDLE_POLL_TICKS 1
 /* Match the common esp-idf-monitor width so the device controls wrapping. */
 #define REPL_DISPLAY_COLUMNS CONFIG_ESP32QJS_REPL_DISPLAY_COLUMNS
-
-typedef enum {
-    ASYNC_PROMPT_NONE = 0,
-    ASYNC_PROMPT_RESTORE_BLOCK,
-    ASYNC_PROMPT_RESTORE_SINGLE_LINE,
-} async_prompt_mode_t;
 
 typedef struct {
     size_t rows;
@@ -47,7 +40,13 @@ static size_t s_rendered_cursor_line;
 static size_t s_rendered_cursor_col;
 static bool s_prompt_visible;
 static bool s_cursor_hidden;
-static async_prompt_mode_t s_async_prompt_mode;
+
+static void console_select_notif_callback(usj_select_notif_t notif, int *task_woken)
+{
+    if (notif == USJ_SELECT_READ_NOTIF) {
+        esp32_mquickjs_notify_active_runtime_from_isr(task_woken);
+    }
+}
 
 static int read_console_char(void)
 {
@@ -347,29 +346,6 @@ static void redraw_repl_line(const char *buf, size_t len, size_t cursor)
     fflush(stdout);
 }
 
-static void redraw_single_line_prompt(const char *buf, size_t len, size_t cursor)
-{
-    repl_layout_t layout;
-
-    hide_cursor();
-    compute_repl_layout(buf, len, cursor, &layout);
-    emit_repl_buffer(buf, len);
-
-    s_rendered_rows = layout.rows;
-    s_rendered_cursor_line = layout.cursor_row;
-    s_rendered_cursor_col = layout.cursor_col;
-    s_prompt_visible = true;
-    printf("\r");
-    if (layout.cursor_row > 0) {
-        printf("\x1b[%uB", (unsigned)layout.cursor_row);
-    }
-    if (layout.cursor_col > 0) {
-        printf("\x1b[%uC", (unsigned)layout.cursor_col);
-    }
-    show_cursor();
-    fflush(stdout);
-}
-
 static void append_char_direct(char ch)
 {
     fputc(ch, stdout);
@@ -557,6 +533,7 @@ void esp32qjs_console_init(void)
 
     ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&cfg));
     usb_serial_jtag_vfs_use_driver();
+    usb_serial_jtag_set_select_notif_callback(console_select_notif_callback);
 }
 
 void esp32qjs_repl_print_prompt(void)
@@ -569,62 +546,22 @@ void esp32qjs_repl_redraw_line(void)
     redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
 }
 
-void esp32qjs_repl_prepare_async_output(void *opaque)
+void esp32qjs_repl_prepare_output(void *opaque)
 {
     (void)opaque;
 
     if (!s_prompt_visible) {
-        return;
-    }
-
-    hide_cursor();
-    clear_rendered_block();
-    s_prompt_visible = false;
-    s_async_prompt_mode = ASYNC_PROMPT_NONE;
-}
-
-void esp32qjs_repl_begin_async_output(void *opaque, uint32_t lines)
-{
-    (void)opaque;
-    (void)lines;
-
-    if (!s_prompt_visible) {
-        s_async_prompt_mode = ASYNC_PROMPT_NONE;
         return;
     }
 
     hide_cursor();
     if (s_rendered_rows == 1) {
         printf("\r\x1b[2K");
-        fflush(stdout);
-        s_prompt_visible = false;
-        s_async_prompt_mode = ASYNC_PROMPT_RESTORE_SINGLE_LINE;
-        return;
+    } else {
+        clear_rendered_block();
     }
-
-    clear_rendered_block();
+    fflush(stdout);
     s_prompt_visible = false;
-    s_async_prompt_mode = ASYNC_PROMPT_RESTORE_BLOCK;
-}
-
-void esp32qjs_repl_end_async_output(void *opaque)
-{
-    (void)opaque;
-
-    switch (s_async_prompt_mode) {
-        case ASYNC_PROMPT_RESTORE_SINGLE_LINE:
-            redraw_single_line_prompt(s_edit_buf, s_edit_len, s_cursor);
-            break;
-        case ASYNC_PROMPT_RESTORE_BLOCK:
-            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
-            break;
-        case ASYNC_PROMPT_NONE:
-        default:
-            show_cursor();
-            break;
-    }
-
-    s_async_prompt_mode = ASYNC_PROMPT_NONE;
 }
 
 void esp32qjs_repl_history_push(const char *line)
@@ -652,48 +589,104 @@ void esp32qjs_repl_history_push(const char *line)
 
 bool esp32qjs_repl_read_line(char *out_buf, size_t out_buf_size)
 {
-    int ch = read_console_char();
+    for (;;) {
+        int ch = read_console_char();
 
-    if (ch == EOF) {
-        vTaskDelay(REPL_IDLE_POLL_TICKS);
-        return false;
-    }
+        if (ch == EOF) {
+            return false;
+        }
 
-    if (s_swallow_lf && ch == '\n') {
+        if (s_swallow_lf && ch == '\n') {
+            s_swallow_lf = false;
+            continue;
+        }
         s_swallow_lf = false;
-        return false;
-    }
-    s_swallow_lf = false;
 
-    if (s_escape_state == 0 && ch == 0x1b) {
-        s_escape_state = 1;
-        return false;
-    }
-
-    if (s_escape_state == 1) {
-        if (ch == '[') {
-            s_escape_state = 2;
-            s_csi_num = 0;
-            return false;
-        }
-        if (ch == 'O') {
-            s_escape_state = 3;
-            return false;
-        }
-        s_escape_state = 0;
-        return false;
-    }
-
-    if (s_escape_state == 2) {
-        if (ch >= '0' && ch <= '9') {
-            s_csi_num = s_csi_num * 10 + (ch - '0');
-            return false;
+        if (s_escape_state == 0 && ch == 0x1b) {
+            s_escape_state = 1;
+            continue;
         }
 
-        if (ch == '~') {
-            switch (s_csi_num) {
-                case 1:
-                case 7:
+        if (s_escape_state == 1) {
+            if (ch == '[') {
+                s_escape_state = 2;
+                s_csi_num = 0;
+                continue;
+            }
+            if (ch == 'O') {
+                s_escape_state = 3;
+                continue;
+            }
+            s_escape_state = 0;
+            continue;
+        }
+
+        if (s_escape_state == 2) {
+            if (ch >= '0' && ch <= '9') {
+                s_csi_num = s_csi_num * 10 + (ch - '0');
+                continue;
+            }
+
+            if (ch == '~') {
+                switch (s_csi_num) {
+                    case 1:
+                    case 7:
+                    {
+                        size_t old_cursor = s_cursor;
+                        s_cursor = 0;
+                        if (!move_cursor_direct(old_cursor, s_cursor)) {
+                            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                        }
+                        break;
+                    }
+                    case 3:
+                        delete_char_at_cursor(s_edit_buf, &s_edit_len, s_cursor);
+                        redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                        break;
+                    case 4:
+                    case 8:
+                    {
+                        size_t old_cursor = s_cursor;
+                        s_cursor = s_edit_len;
+                        if (!move_cursor_direct(old_cursor, s_cursor)) {
+                            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                }
+                s_escape_state = 0;
+                s_csi_num = 0;
+                continue;
+            }
+
+            switch (ch) {
+                case 'A':
+                    history_restore(true);
+                    break;
+                case 'B':
+                    history_restore(false);
+                    break;
+                case 'C':
+                    if (s_cursor < s_edit_len) {
+                        size_t old_cursor = s_cursor;
+                        s_cursor++;
+                        if (!move_cursor_direct(old_cursor, s_cursor)) {
+                            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                        }
+                    }
+                    break;
+                case 'D':
+                    if (s_cursor > 0) {
+                        size_t old_cursor = s_cursor;
+                        s_cursor--;
+                        if (!move_cursor_direct(old_cursor, s_cursor)) {
+                            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                        }
+                    }
+                    break;
+                case 'H':
                 {
                     size_t old_cursor = s_cursor;
                     s_cursor = 0;
@@ -702,12 +695,7 @@ bool esp32qjs_repl_read_line(char *out_buf, size_t out_buf_size)
                     }
                     break;
                 }
-                case 3:
-                    delete_char_at_cursor(s_edit_buf, &s_edit_len, s_cursor);
-                    redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
-                    break;
-                case 4:
-                case 8:
+                case 'F':
                 {
                     size_t old_cursor = s_cursor;
                     s_cursor = s_edit_len;
@@ -719,233 +707,182 @@ bool esp32qjs_repl_read_line(char *out_buf, size_t out_buf_size)
                 default:
                     break;
             }
+
             s_escape_state = 0;
             s_csi_num = 0;
-            return false;
+            continue;
         }
 
-        switch (ch) {
-            case 'A':
-                history_restore(true);
-                break;
-            case 'B':
-                history_restore(false);
-                break;
-            case 'C':
-                if (s_cursor < s_edit_len) {
+        if (s_escape_state == 3) {
+            switch (ch) {
+                case 'A':
+                    history_restore(true);
+                    break;
+                case 'B':
+                    history_restore(false);
+                    break;
+                case 'C':
+                    if (s_cursor < s_edit_len) {
+                        size_t old_cursor = s_cursor;
+                        s_cursor++;
+                        if (!move_cursor_direct(old_cursor, s_cursor)) {
+                            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                        }
+                    }
+                    break;
+                case 'D':
+                    if (s_cursor > 0) {
+                        size_t old_cursor = s_cursor;
+                        s_cursor--;
+                        if (!move_cursor_direct(old_cursor, s_cursor)) {
+                            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                        }
+                    }
+                    break;
+                case 'H':
+                {
                     size_t old_cursor = s_cursor;
-                    s_cursor++;
+                    s_cursor = 0;
                     if (!move_cursor_direct(old_cursor, s_cursor)) {
                         redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
                     }
+                    break;
                 }
-                break;
-            case 'D':
-                if (s_cursor > 0) {
+                case 'F':
+                {
                     size_t old_cursor = s_cursor;
-                    s_cursor--;
+                    s_cursor = s_edit_len;
                     if (!move_cursor_direct(old_cursor, s_cursor)) {
                         redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
                     }
+                    break;
                 }
-                break;
-            case 'H':
-            {
-                size_t old_cursor = s_cursor;
-                s_cursor = 0;
-                if (!move_cursor_direct(old_cursor, s_cursor)) {
-                    redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
-                }
-                break;
+                default:
+                    break;
             }
-            case 'F':
-            {
-                size_t old_cursor = s_cursor;
-                s_cursor = s_edit_len;
-                if (!move_cursor_direct(old_cursor, s_cursor)) {
-                    redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
-                }
-                break;
-            }
-            default:
-                break;
+
+            s_escape_state = 0;
+            continue;
         }
 
-        s_escape_state = 0;
-        s_csi_num = 0;
-        return false;
-    }
-
-    if (s_escape_state == 3) {
-        switch (ch) {
-            case 'A':
-                history_restore(true);
-                break;
-            case 'B':
-                history_restore(false);
-                break;
-            case 'C':
-                if (s_cursor < s_edit_len) {
-                    size_t old_cursor = s_cursor;
-                    s_cursor++;
-                    if (!move_cursor_direct(old_cursor, s_cursor)) {
-                        redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
-                    }
-                }
-                break;
-            case 'D':
-                if (s_cursor > 0) {
-                    size_t old_cursor = s_cursor;
-                    s_cursor--;
-                    if (!move_cursor_direct(old_cursor, s_cursor)) {
-                        redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
-                    }
-                }
-                break;
-            case 'H':
-            {
-                size_t old_cursor = s_cursor;
-                s_cursor = 0;
-                if (!move_cursor_direct(old_cursor, s_cursor)) {
-                    redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
-                }
-                break;
-            }
-            case 'F':
-            {
-                size_t old_cursor = s_cursor;
-                s_cursor = s_edit_len;
-                if (!move_cursor_direct(old_cursor, s_cursor)) {
-                    redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
-                }
-                break;
-            }
-            default:
-                break;
-        }
-
-        s_escape_state = 0;
-        return false;
-    }
-
-    if (ch == 0x01) {
-        size_t old_cursor = s_cursor;
-        s_cursor = 0;
-        if (!move_cursor_direct(old_cursor, s_cursor)) {
-            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
-        }
-        return false;
-    }
-
-    if (ch == 0x05) {
-        size_t old_cursor = s_cursor;
-        s_cursor = s_edit_len;
-        if (!move_cursor_direct(old_cursor, s_cursor)) {
-            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
-        }
-        return false;
-    }
-
-    if (ch == 0x15) {
-        if (s_cursor > 0) {
-            memmove(s_edit_buf, &s_edit_buf[s_cursor], s_edit_len - s_cursor + 1);
-            s_edit_len -= s_cursor;
+        if (ch == 0x01) {
+            size_t old_cursor = s_cursor;
             s_cursor = 0;
-            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
-        }
-        s_history_index = -1;
-        return false;
-    }
-
-    if (ch == 0x0b) {
-        if (s_cursor < s_edit_len) {
-            s_edit_buf[s_cursor] = '\0';
-            s_edit_len = s_cursor;
-            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
-        }
-        s_history_index = -1;
-        return false;
-    }
-
-    if (ch == 0x17) {
-        delete_word_before_cursor(s_edit_buf, &s_edit_len, &s_cursor);
-        redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
-        s_history_index = -1;
-        return false;
-    }
-
-    if (ch == 0x0c) {
-        printf("\x1b[2J\x1b[H");
-        redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
-        return false;
-    }
-
-    if (ch == '\r' || ch == '\n') {
-        size_t copy_len = s_edit_len;
-        bool continue_multiline = needs_multiline_continuation(s_edit_buf, s_cursor);
-
-        if (ch == '\r') {
-            s_swallow_lf = true;
-        }
-
-        if (continue_multiline) {
-            insert_char_at_cursor(s_edit_buf, sizeof(s_edit_buf), &s_edit_len, &s_cursor, '\n');
-            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
-            s_history_index = -1;
-            return false;
-        }
-
-        s_edit_buf[s_edit_len] = '\0';
-        if (copy_len >= out_buf_size) {
-            copy_len = out_buf_size - 1;
-        }
-
-        memcpy(out_buf, s_edit_buf, copy_len);
-        out_buf[copy_len] = '\0';
-
-        redraw_repl_line(s_edit_buf, s_edit_len, s_edit_len);
-        printf("\n");
-        fflush(stdout);
-
-        editor_clear_line();
-        s_draft_buf[0] = '\0';
-        s_history_index = -1;
-        s_escape_state = 0;
-        s_csi_num = 0;
-        s_rendered_rows = 1;
-        s_prompt_visible = false;
-        return true;
-    }
-
-    if (ch == '\b' || ch == 127) {
-        if (s_cursor > 0) {
-            if (!delete_char_direct()) {
-                delete_char_before_cursor(s_edit_buf, &s_edit_len, &s_cursor);
+            if (!move_cursor_direct(old_cursor, s_cursor)) {
                 redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
             }
+            continue;
         }
-        s_history_index = -1;
-        return false;
-    }
 
-    if (!isprint((unsigned char)ch)) {
-        return false;
-    }
+        if (ch == 0x05) {
+            size_t old_cursor = s_cursor;
+            s_cursor = s_edit_len;
+            if (!move_cursor_direct(old_cursor, s_cursor)) {
+                redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+            }
+            continue;
+        }
 
-    insert_char_at_cursor(s_edit_buf, sizeof(s_edit_buf), &s_edit_len, &s_cursor, (char)ch);
-    if (s_cursor == s_edit_len) {
-        repl_layout_t layout;
+        if (ch == 0x15) {
+            if (s_cursor > 0) {
+                memmove(s_edit_buf, &s_edit_buf[s_cursor], s_edit_len - s_cursor + 1);
+                s_edit_len -= s_cursor;
+                s_cursor = 0;
+                redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+            }
+            s_history_index = -1;
+            continue;
+        }
 
-        compute_repl_layout(s_edit_buf, s_edit_len, s_cursor, &layout);
-        if (layout.rows == s_rendered_rows && layout.cursor_row == s_rendered_cursor_line) {
-            append_char_direct((char)ch);
-            s_rendered_cursor_col = layout.cursor_col;
+        if (ch == 0x0b) {
+            if (s_cursor < s_edit_len) {
+                s_edit_buf[s_cursor] = '\0';
+                s_edit_len = s_cursor;
+                redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+            }
+            s_history_index = -1;
+            continue;
+        }
+
+        if (ch == 0x17) {
+            delete_word_before_cursor(s_edit_buf, &s_edit_len, &s_cursor);
+            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+            s_history_index = -1;
+            continue;
+        }
+
+        if (ch == 0x0c) {
+            printf("\x1b[2J\x1b[H");
+            redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+            continue;
+        }
+
+        if (ch == '\r' || ch == '\n') {
+            size_t copy_len = s_edit_len;
+            bool continue_multiline = needs_multiline_continuation(s_edit_buf, s_cursor);
+
+            if (ch == '\r') {
+                s_swallow_lf = true;
+            }
+
+            if (continue_multiline) {
+                insert_char_at_cursor(s_edit_buf, sizeof(s_edit_buf), &s_edit_len, &s_cursor, '\n');
+                redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                s_history_index = -1;
+                continue;
+            }
+
+            s_edit_buf[s_edit_len] = '\0';
+            if (copy_len >= out_buf_size) {
+                copy_len = out_buf_size - 1;
+            }
+
+            memcpy(out_buf, s_edit_buf, copy_len);
+            out_buf[copy_len] = '\0';
+
+            redraw_repl_line(s_edit_buf, s_edit_len, s_edit_len);
+            printf("\n");
+            fflush(stdout);
+
+            editor_clear_line();
+            s_draft_buf[0] = '\0';
+            s_history_index = -1;
+            s_escape_state = 0;
+            s_csi_num = 0;
+            s_rendered_rows = 1;
+            s_prompt_visible = false;
+            return true;
+        }
+
+        if (ch == '\b' || ch == 127) {
+            if (s_cursor > 0) {
+                if (!delete_char_direct()) {
+                    delete_char_before_cursor(s_edit_buf, &s_edit_len, &s_cursor);
+                    redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+                }
+            }
+            s_history_index = -1;
+            continue;
+        }
+
+        if (!isprint((unsigned char)ch)) {
+            continue;
+        }
+
+        insert_char_at_cursor(s_edit_buf, sizeof(s_edit_buf), &s_edit_len, &s_cursor, (char)ch);
+        if (s_cursor == s_edit_len) {
+            repl_layout_t layout;
+
+            compute_repl_layout(s_edit_buf, s_edit_len, s_cursor, &layout);
+            if (layout.rows == s_rendered_rows && layout.cursor_row == s_rendered_cursor_line) {
+                append_char_direct((char)ch);
+                s_rendered_cursor_col = layout.cursor_col;
+            } else {
+                redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+            }
         } else {
             redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
         }
-    } else {
-        redraw_repl_line(s_edit_buf, s_edit_len, s_cursor);
+        s_history_index = -1;
     }
-    s_history_index = -1;
-    return false;
 }
