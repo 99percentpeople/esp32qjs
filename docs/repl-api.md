@@ -432,8 +432,6 @@ Response object shape:
   UTF-8 response body, truncated at `http.MAX_RESPONSE_BYTES`.
 - `headers`
   Plain object of captured response headers.
-- `contentLength`
-  Server-reported content length, or `0`/`-1` when not available.
 - `truncated`
   `true` when the body exceeded the in-memory capture limit or capture switched to a partial response under memory pressure.
 

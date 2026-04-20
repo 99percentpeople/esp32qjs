@@ -40,7 +40,6 @@ typedef struct {
     bool ok;
     bool truncated;
     int32_t status;
-    int64_t content_length;
     char *url;
     char *status_text;
     char *body;
@@ -541,8 +540,6 @@ static esp32_mquickjs_http_response_t *http_perform_request(const esp32_mquickjs
 
     response->status = esp_http_client_get_status_code(client);
     response->ok = response->status >= 200 && response->status < 300;
-    response->content_length = esp_http_client_get_content_length(client);
-
     heap_caps_free(response->status_text);
     response->status_text = http_strdup(http_status_text(response->status));
     if (response->status_text == NULL) {
@@ -638,8 +635,6 @@ static JSValue http_make_response_object(JSContext *ctx,
         !esp32_mquickjs_set_property(ctx, *response_obj, "body",
                                      JS_NewString(ctx, response->body != NULL ? response->body : "")) ||
         !esp32_mquickjs_set_property(ctx, *response_obj, "headers", headers_obj) ||
-        !esp32_mquickjs_set_property(ctx, *response_obj, "contentLength",
-                                     JS_NewInt64(ctx, response->content_length)) ||
         !esp32_mquickjs_set_property(ctx, *response_obj, "truncated",
                                      JS_NewBool(response->truncated))) {
         goto fail;
