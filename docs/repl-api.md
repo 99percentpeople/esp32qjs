@@ -26,7 +26,8 @@ This project exposes a small JavaScript REPL on the XIAO ESP32-S3. Run `help()` 
 Startup behavior:
 
 - If `/littlefs/index.js` exists, it is loaded automatically before the first `js>` prompt appears.
-- This is the recommended place for board startup logic such as `wifi.connect(...)`.
+- `index.js` is the single startup entry point. Use it to `load(...)` other scripts, drivers, and app code.
+- This is the recommended place for board startup logic such as `load("_sys/display.js")`, `load("_sys/ui.js")`, and `wifi.connect(...)`.
 
 Examples:
 
@@ -45,7 +46,11 @@ Example `index.js`:
 
 ```js
 print("[startup] boot script running");
-wifi.connect("your-ssid", "your-password");
+load("_sys/display.js");
+load("_sys/ui.js");
+wifi.connect("your-ssid", "your-password", function (error, status) {
+  print(error === null, status && status.ip);
+});
 ```
 
 ## Deferred Helpers
@@ -367,6 +372,8 @@ Wi-Fi credentials are kept in RAM. Rebooting the board clears the active station
   Return `{ initialized, started, connected, scanning, ssid, hostname, ip, netmask, gateway, lastDisconnectReason, lastDisconnectReasonName }`.
 - `wifi.connect(ssid, password, timeoutMs = wifi.DEFAULT_TIMEOUT_MS)`
   Start station mode, connect to an AP, and return the updated status object.
+- `wifi.connect(ssid, password, callback)` / `wifi.connect(ssid, password, timeoutMs, callback)`
+  Start station mode without blocking the REPL and call `callback(error, status)` on completion.
 - `wifi.disconnect()`
   Disconnect the station and return the updated status object.
 - `wifi.scan()`
@@ -382,6 +389,9 @@ const aps = wifi.scan();
 print(aps.length);
 wifi.scan(function (results) { print("async scan", results.length); });
 wifi.connect("your-ssid", "your-password");
+wifi.connect("your-ssid", "your-password", function (error, status) {
+  print(error === null, status && status.ip);
+});
 print(JSON.stringify(wifi.status()));
 wifi.disconnect();
 ```

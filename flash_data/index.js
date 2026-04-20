@@ -1,36 +1,43 @@
 var WIFI_SSID = "Chevalier-gen";
 var WIFI_PASSWORD = "F@wq2zpv";
+var WIFI_CONNECT_TIMEOUT_MS = 15000;
 
-function connectStartupWifi() {
+load("_sys/display.js");
+load("_sys/ui.js");
+
+function connectStartupWifi(attempt) {
   var status = wifi.status();
-  var attempt;
-  var lastError = null;
+  var currentAttempt = attempt || 1;
 
   if (status.connected && status.ssid === WIFI_SSID) {
+    globalThis.startupWifiStatus = status;
     print("[startup] wifi already connected:", status.ssid, status.ip);
-    return status;
+    return;
   }
 
-  for (attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      print("[startup] connecting wifi:", WIFI_SSID, "attempt", attempt);
-      var nextStatus = wifi.connect(WIFI_SSID, WIFI_PASSWORD);
-      print("[startup] wifi connected:", nextStatus.ssid, nextStatus.ip);
-      return nextStatus;
-    } catch (error) {
-      lastError = error;
+  print("[startup] connecting wifi:", WIFI_SSID, "attempt", currentAttempt);
+  wifi.connect(WIFI_SSID, WIFI_PASSWORD, WIFI_CONNECT_TIMEOUT_MS, function (error, nextStatus) {
+    if (error) {
+      globalThis.startupWifiError = error;
       print("[startup] wifi connect attempt failed:", error);
-      if (attempt < 3) {
-        sleep(1000);
+      if (currentAttempt < 3) {
+        setTimeout(function () {
+          connectStartupWifi(currentAttempt + 1);
+        }, 1000);
       }
+      return;
     }
-  }
 
-  throw lastError;
+    globalThis.startupWifiError = null;
+    globalThis.startupWifiStatus = nextStatus;
+    print("[startup] wifi connected:", nextStatus.ssid, nextStatus.ip);
+  });
 }
 
 try {
-  globalThis.startupWifiStatus = connectStartupWifi();
+  globalThis.startupWifiStatus = null;
+  globalThis.startupWifiError = null;
+  connectStartupWifi(1);
 } catch (error) {
   print("[startup] wifi connect failed:", error);
 }
