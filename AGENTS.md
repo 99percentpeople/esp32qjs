@@ -16,6 +16,7 @@ Run from the repository root after exporting ESP-IDF:
 - `cp .env.example .env` seeds the per-repo remote tooling defaults; set `BOARD` and `ESP_IDF_PATH` for the local setup.
 - `python scripts/remote.py boards` lists bundled board profiles.
 - `python scripts/remote.py show-config` prints the merged board/tool configuration.
+- `python scripts/remote.py --assume y|n build` skips interactive prompts by answering yes/no automatically.
 - `python scripts/remote.py chip-id` verifies the remote RFC2217 link for the selected board profile.
 - `python scripts/remote.py flash` builds and flashes the selected remote board.
 - `python scripts/remote.py flash-fs` rebuilds and flashes only the LittleFS `storage` partition for JavaScript-only changes.

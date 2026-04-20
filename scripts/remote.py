@@ -15,6 +15,7 @@ import json
 import os
 import platform
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -81,6 +82,7 @@ class ProjectConfig:
     listen_port: int
     server_python_exe: str
     esptool_bin: str
+    assume_prompt: str
 
 
 def load_dotenv(path: Path) -> dict[str, str]:
@@ -287,6 +289,26 @@ def run(
     if interactive:
         return subprocess.run(cmd, cwd=cwd, check=check, text=True)
     return subprocess.run(cmd, cwd=cwd, check=check, text=True, capture_output=False)
+
+
+def run_streaming(cmd: list[str], cwd: Path | None = None) -> tuple[int, str]:
+    """Run a command while streaming combined stdout/stderr and capturing it."""
+    process = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=1,
+    )
+    assert process.stdout is not None
+
+    output_chunks: list[str] = []
+    for chunk in process.stdout:
+        print(chunk, end="")
+        output_chunks.append(chunk)
+
+    return process.wait(), "".join(output_chunks)
 
 
 def which(name: str) -> str | None:
@@ -521,16 +543,85 @@ def idf_py_cmd(project_args: list[str], config: ProjectConfig) -> list[str]:
     raise SystemExit("ESP-IDF tooling is not ready. Set ESP_IDF_PATH to the ESP-IDF install directory.")
 
 
+STALE_BUILD_ERROR_PATTERNS = (
+    "Does not match the generator used previously",
+    "Either remove the CMakeCache.txt file and CMakeFiles directory",
+    "does not match the source used to generate cache",
+    "current CMakeCache.txt directory",
+    "The build directory is configured for",
+    "but the project requires",
+    "specified on command line is not consistent with target",
+    "in CMakeCache.txt. Run 'idf.py set-target",
+)
+
+
+def is_stale_build_dir_failure(output: str) -> bool:
+    """Return whether command output looks like a stale build-directory/cache issue."""
+    normalized = output.replace("\r", "")
+    return any(pattern in normalized for pattern in STALE_BUILD_ERROR_PATTERNS)
+
+
+def confirm_action(prompt: str, assume_prompt: str) -> bool:
+    """Resolve a yes/no prompt interactively or from a non-interactive default."""
+    if assume_prompt == "y":
+        print(f"{prompt} y (from --assume y)")
+        return True
+    if assume_prompt == "n":
+        print(f"{prompt} n (from --assume n)")
+        return False
+    try:
+        answer = input(f"{prompt} [y/N]: ")
+    except EOFError:
+        return False
+    return answer.strip().lower() in {"y", "yes"}
+
+
+def confirm_build_dir_reset(build_dir: Path, assume_prompt: str) -> bool:
+    """Ask whether the stale build directory may be deleted and rebuilt."""
+    return confirm_action(
+        f"Build directory {build_dir} looks stale. Delete it and retry?",
+        assume_prompt,
+    )
+
+
+def safe_remove_build_dir(build_dir: Path) -> None:
+    """Remove a generated build directory after explicit confirmation."""
+    resolved_build_dir = build_dir.resolve()
+    resolved_root = ROOT_DIR.resolve()
+    if resolved_build_dir == resolved_root or resolved_root not in resolved_build_dir.parents:
+        raise SystemExit(f"Refusing to delete unsafe build directory: {build_dir}")
+    shutil.rmtree(resolved_build_dir)
+
+
+def run_idf_action_with_stale_build_recovery(project_args: list[str], config: ProjectConfig) -> None:
+    """Run an idf.py action, offering one confirmed clean rebuild on stale-cache failures."""
+    refresh_generated_sdkconfig(config)
+    existing_build_dir = config.build_dir.exists()
+    cmd = idf_py_cmd(project_args, config)
+    return_code, output = run_streaming(cmd, cwd=ROOT_DIR)
+    if return_code == 0:
+        return
+
+    if existing_build_dir and is_stale_build_dir_failure(output):
+        if not confirm_build_dir_reset(config.build_dir, config.assume_prompt):
+            raise SystemExit(return_code)
+        safe_remove_build_dir(config.build_dir)
+        print(f"Retrying with a clean build directory: {config.build_dir}")
+        return_code, _ = run_streaming(idf_py_cmd(project_args, config), cwd=ROOT_DIR)
+        if return_code == 0:
+            return
+
+    raise SystemExit(return_code)
+
+
 def build(config: ProjectConfig) -> None:
     """Build firmware for the selected board."""
-    refresh_generated_sdkconfig(config)
-    run(idf_py_cmd(["build"], config), cwd=ROOT_DIR, interactive=True)
+    run_idf_action_with_stale_build_recovery(["build"], config)
 
 
 def build_fs_image(config: ProjectConfig) -> None:
     """Build only the LittleFS image used by the storage partition."""
-    refresh_generated_sdkconfig(config)
-    run(idf_py_cmd(["littlefs_storage_bin"], config), cwd=ROOT_DIR, interactive=True)
+    run_idf_action_with_stale_build_recovery(["littlefs_storage_bin"], config)
 
 
 def default_remote_url(host: str, port: int) -> str:
@@ -779,6 +870,7 @@ def show_config(config: ProjectConfig) -> None:
     print(f"listen_port={config.listen_port}")
     print(f"server_python_exe={config.server_python_exe}")
     print(f"esptool_bin={config.esptool_bin}")
+    print(f"assume_prompt={config.assume_prompt}")
 
 
 def build_project_config(args: argparse.Namespace, profile: BoardProfile) -> ProjectConfig:
@@ -813,6 +905,7 @@ def build_project_config(args: argparse.Namespace, profile: BoardProfile) -> Pro
         listen_port=getattr(args, "listen_port", profile.listen_port),
         server_python_exe=getattr(args, "python_exe", profile.server_python_exe),
         esptool_bin=getattr(args, "esptool_bin", profile.esptool_bin),
+        assume_prompt=args.assume,
     )
 
 
@@ -834,6 +927,12 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, Board
     parser.add_argument("--idf-target", default=profile.idf_target)
     parser.add_argument("--sdkconfig-defaults", default=format_path(profile.sdkconfig_defaults))
     parser.add_argument("--esp-idf-path", default=profile.esp_idf_path)
+    parser.add_argument(
+        "--assume",
+        choices=("ask", "y", "n"),
+        default="ask",
+        help="Skip manual prompts by answering yes/no automatically. Default: ask.",
+    )
     parser.set_defaults(board_file=str(profile.file))
 
     sub = parser.add_subparsers(dest="command", required=True)

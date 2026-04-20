@@ -28,6 +28,7 @@ python scripts/remote.py chip-id
 python scripts/remote.py flash
 python scripts/remote.py flash-fs
 python scripts/remote.py monitor
+python scripts/remote.py --assume n build
 ```
 
 Board profiles live under [`configs/boards/<board>/`](</home/zach/esp32qjs/configs/boards>). Each board directory carries its own `.env` and `sdkconfig.defaults`. For example:
@@ -44,6 +45,13 @@ When a one-off override is needed, pass either `--remote-host/--remote-port` or 
 python scripts/remote.py flash --remote-host 192.168.68.54 --remote-port 4000
 python scripts/remote.py monitor --remote-url "rfc2217://192.168.68.54:4000?ign_set_control&timeout=10"
 python scripts/remote.py --board esp32c3_supermini --build-dir build-c3 monitor
+```
+
+For non-interactive runs, `--assume y` or `--assume n` answers all future yes/no prompts automatically. That is mainly useful when a stale build directory needs a confirmed delete-and-retry:
+
+```bash
+python scripts/remote.py --assume n build
+python scripts/remote.py --assume y --board esp32c3_supermini build
 ```
 
 The script flashes the files listed in the selected build directory's `flasher_args.json`, typically:
