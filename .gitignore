@@ -4,7 +4,8 @@ build_*/
 sdkconfig.old
 setup.cfg
 
-.env
+/.env
+!configs/boards/*/.env
 .codex
 .vscode/
 managed_components/

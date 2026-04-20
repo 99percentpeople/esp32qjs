@@ -31,7 +31,7 @@ python scripts/remote.py monitor
 python scripts/remote.py --assume n build
 ```
 
-Board profiles live under [`configs/boards/<board>/`](</home/zach/esp32qjs/configs/boards>). Each board directory carries its own `.env` and `sdkconfig.defaults`. For example:
+Board profiles live under [`configs/boards/<board>/`](</home/zach/esp32qjs/configs/boards>). Each board directory carries its own `.env`, `sdkconfig.defaults`, and `partitions.csv`. For example:
 
 ```bash
 python scripts/remote.py --board xiao_esp32s3 flash-monitor

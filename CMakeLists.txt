@@ -10,7 +10,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 
 file(GLOB_RECURSE _esp32qjs_board_config_files CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/configs/boards/*/.env"
-    "${CMAKE_SOURCE_DIR}/configs/boards/*/sdkconfig.defaults")
+    "${CMAKE_SOURCE_DIR}/configs/boards/*/sdkconfig.defaults"
+    "${CMAKE_SOURCE_DIR}/configs/boards/*/partitions.csv")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_esp32qjs_board_config_files})
 
 set(ESP32QJS_BOARD "xiao_esp32s3" CACHE STRING "Default board profile under configs/boards/")
