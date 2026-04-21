@@ -23,8 +23,14 @@
 #define ESP32_MQUICKJS_WIFI_HOSTNAME_MAX_LEN 64
 #define ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS ((uint32_t)CONFIG_ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS)
 #define ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS ((uint32_t)CONFIG_ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS)
-#define ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BYTES ((uint32_t)CONFIG_ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BYTES)
 #define ESP32_MQUICKJS_HTTP_TASK_STACK_SIZE CONFIG_ESP32_MQUICKJS_HTTP_TASK_STACK_SIZE
+#define ESP32_MQUICKJS_FS_STREAM_ID_KEY "__esp32qjsStreamId"
+#define ESP32_MQUICKJS_FS_STREAM_GENERATION_KEY "__esp32qjsStreamGeneration"
+#define ESP32_MQUICKJS_HEADERS_STORE_KEY "__esp32qjsHeadersStore"
+#define JS_CLASS_HEADERS (JS_CLASS_USER + 0)
+#define JS_CLASS_REQUEST (JS_CLASS_USER + 1)
+#define JS_CLASS_RESPONSE (JS_CLASS_USER + 2)
+#define JS_CLASS_COUNT (JS_CLASS_USER + 3)
 
 #ifdef CONFIG_ESP32_MQUICKJS_USER_LED_ACTIVE_LOW
 #define ESP32_MQUICKJS_USER_LED_ACTIVE_LOW 1
@@ -50,6 +56,11 @@ typedef struct {
     char gateway[ESP32_MQUICKJS_WIFI_IPV4_STR_LEN];
     int32_t last_disconnect_reason;
 } esp32_mquickjs_wifi_status_t;
+
+typedef struct {
+    int32_t stream_id;
+    uint32_t generation;
+} esp32_mquickjs_fs_stream_ref_t;
 
 bool esp32_mquickjs_set_property(JSContext *ctx,
                                  JSValue target_obj,
@@ -77,6 +88,7 @@ JSValue esp32_mquickjs_load_from_littlefs(JSContext *ctx,
 bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed);
 
 bool esp32_mquickjs_install_fs_module(JSContext *ctx, JSValue global_obj);
+bool esp32_mquickjs_install_stream_module(JSContext *ctx, JSValue global_obj);
 bool esp32_mquickjs_install_gpio_module(JSContext *ctx, JSValue global_obj);
 bool esp32_mquickjs_install_i2c_module(JSContext *ctx, JSValue global_obj);
 bool esp32_mquickjs_install_esp32_module(JSContext *ctx, JSValue global_obj);
@@ -95,6 +107,11 @@ bool esp32_mquickjs_dispatch_fs(JSContext *ctx,
                                 int argc,
                                 JSValue *argv,
                                 JSValue *result);
+bool esp32_mquickjs_dispatch_stream(JSContext *ctx,
+                                    const char *operation,
+                                    int argc,
+                                    JSValue *argv,
+                                    JSValue *result);
 
 bool esp32_mquickjs_dispatch_gpio(JSContext *ctx,
                                   const char *operation,
@@ -128,5 +145,60 @@ bool esp32_mquickjs_dispatch_http_server(JSContext *ctx,
                                          int argc,
                                          JSValue *argv,
                                          JSValue *result);
+
+bool esp32_mquickjs_fs_parse_stream_ref(JSContext *ctx,
+                                        JSValue stream_value,
+                                        esp32_mquickjs_fs_stream_ref_t *out_ref);
+bool esp32_mquickjs_stream_is_stream(JSContext *ctx, JSValue stream_value);
+JSValue esp32_mquickjs_stream_open_file(JSContext *ctx,
+                                        JSValue global_obj,
+                                        const char *path,
+                                        const char *mode);
+JSValue esp32_mquickjs_stream_open_memory_owned(JSContext *ctx,
+                                                JSValue global_obj,
+                                                char *data,
+                                                size_t data_len);
+JSValue esp32_mquickjs_stream_clone(JSContext *ctx,
+                                    JSValue global_obj,
+                                    JSValue stream_value);
+int esp32_mquickjs_stream_read_all_text(JSContext *ctx,
+                                        JSValue stream_value,
+                                        const char *api_name,
+                                        char **out_text,
+                                        size_t *out_len);
+esp_err_t esp32_mquickjs_stream_close_value(JSContext *ctx, JSValue stream_value);
+esp_err_t esp32_mquickjs_fs_stream_read(const esp32_mquickjs_fs_stream_ref_t *ref,
+                                        void *buf,
+                                        size_t buf_len,
+                                        size_t *out_len);
+esp_err_t esp32_mquickjs_fs_stream_close(const esp32_mquickjs_fs_stream_ref_t *ref);
+
+bool esp32_mquickjs_is_headers_object(JSContext *ctx, JSValue value);
+bool esp32_mquickjs_is_request_object(JSContext *ctx, JSValue value);
+bool esp32_mquickjs_is_response_object(JSContext *ctx, JSValue value);
+JSValue esp32_mquickjs_make_headers_object(JSContext *ctx,
+                                           JSValue global_obj,
+                                           JSValue init_value);
+JSValue esp32_mquickjs_headers_to_plain_object(JSContext *ctx, JSValue headers_value);
+JSValue esp32_mquickjs_make_request_object(JSContext *ctx,
+                                           JSValue global_obj,
+                                           const char *method,
+                                           const char *url,
+                                           const char *path,
+                                           const char *route,
+                                           const char *query_string,
+                                           JSValue query_value,
+                                           JSValue headers_init,
+                                           JSValue body_stream);
+JSValue esp32_mquickjs_make_response_object(JSContext *ctx,
+                                            JSValue global_obj,
+                                            int32_t status,
+                                            const char *status_text,
+                                            const char *url,
+                                            JSValue headers_init,
+                                            JSValue body_stream);
+JSValue esp32_mquickjs_make_text_body_stream(JSContext *ctx,
+                                             JSValue global_obj,
+                                             const char *text);
 
 esp_err_t esp32_mquickjs_wifi_get_status(esp32_mquickjs_wifi_status_t *status);

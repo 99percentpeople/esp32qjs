@@ -18,6 +18,7 @@
 #define ESP32_MQUICKJS_HTTP_SERVER_MAX_BODY_LEN 8192
 #define ESP32_MQUICKJS_HTTP_SERVER_MAX_HEADERS 16
 #define ESP32_MQUICKJS_HTTP_SERVER_ERROR_TEXT_LEN 160
+#define ESP32_MQUICKJS_HTTP_SERVER_STREAM_CHUNK_SIZE 1024
 
 typedef struct {
     char *key;
@@ -42,6 +43,8 @@ typedef struct {
     httpd_method_t method;
     char *uri;
     bool match_with_regex;
+    bool pattern_ref_added;
+    bool callback_ref_added;
     JSGCRef pattern;
     JSGCRef callback;
     bool registered;
@@ -80,7 +83,9 @@ typedef struct {
 
 typedef struct {
     int32_t status;
-    char *body;
+    char *status_text;
+    bool has_body_stream;
+    esp32_mquickjs_fs_stream_ref_t body_stream_ref;
     esp32_mquickjs_http_server_header_t *headers;
     size_t header_count;
 } esp32_mquickjs_http_server_response_t;
@@ -91,6 +96,7 @@ static esp32_mquickjs_http_server_state_t s_http_server_state;
 static bool http_server_async_poller(JSContext *ctx,
                                      esp32_mquickjs_runtime_t *runtime,
                                      void *opaque);
+static bool http_server_glob_match(const char *pattern, const char *text);
 
 static httpd_method_t http_server_method_from_name(const char *method_name)
 {
@@ -198,7 +204,10 @@ static void http_server_free_response(esp32_mquickjs_http_server_response_t *res
     if (response == NULL) {
         return;
     }
-    heap_caps_free(response->body);
+    if (response->has_body_stream) {
+        esp32_mquickjs_fs_stream_close(&response->body_stream_ref);
+    }
+    heap_caps_free(response->status_text);
     http_server_free_headers(response->headers, response->header_count);
     memset(response, 0, sizeof(*response));
 }
@@ -228,8 +237,12 @@ static void http_server_cleanup_route(JSContext *ctx, esp32_mquickjs_http_server
     }
 
     if (ctx != NULL) {
-        JS_DeleteGCRef(ctx, &route->pattern);
-        JS_DeleteGCRef(ctx, &route->callback);
+        if (route->pattern_ref_added) {
+            JS_DeleteGCRef(ctx, &route->pattern);
+        }
+        if (route->callback_ref_added) {
+            JS_DeleteGCRef(ctx, &route->callback);
+        }
     }
     heap_caps_free(route->uri);
     memset(route, 0, sizeof(*route));
@@ -528,78 +541,6 @@ static bool http_server_capture_headers(httpd_req_t *req,
     return true;
 }
 
-static char *http_server_glob_to_regex(const char *pattern)
-{
-    static const char *specials = ".+?^${}()|[]\\";
-    size_t len;
-    size_t i;
-    size_t out_len = 2;
-    char *out;
-
-    if (pattern == NULL) {
-        return NULL;
-    }
-    len = strlen(pattern);
-    out = heap_caps_malloc(len * 3 + 3, MALLOC_CAP_8BIT);
-    if (out == NULL) {
-        return NULL;
-    }
-    out[0] = '^';
-    for (i = 0; i < len; ++i) {
-        if (pattern[i] == '*') {
-            out[out_len++] = '.';
-            out[out_len++] = '*';
-            continue;
-        }
-        if (strchr(specials, pattern[i]) != NULL) {
-            out[out_len++] = '\\';
-        }
-        out[out_len++] = pattern[i];
-    }
-    out[out_len++] = '$';
-    out[out_len] = '\0';
-    return out;
-}
-
-static JSValue http_server_compile_regex(JSContext *ctx, const char *pattern)
-{
-    JSGCRef global_ref;
-    JSGCRef ctor_ref;
-    JSGCRef pattern_ref;
-    JSValue *global_obj;
-    JSValue *regex_ctor;
-    JSValue *pattern_value;
-    JSValue argv[1];
-    JSValue result = JS_EXCEPTION;
-
-    global_obj = JS_PushGCRef(ctx, &global_ref);
-    regex_ctor = JS_PushGCRef(ctx, &ctor_ref);
-    pattern_value = JS_PushGCRef(ctx, &pattern_ref);
-    *global_obj = JS_GetGlobalObject(ctx);
-    *regex_ctor = JS_UNDEFINED;
-    *pattern_value = JS_UNDEFINED;
-
-    if (JS_IsException(*global_obj)) {
-        goto done;
-    }
-    *regex_ctor = JS_GetPropertyStr(ctx, *global_obj, "RegExp");
-    if (JS_IsException(*regex_ctor) || !JS_IsFunction(ctx, *regex_ctor)) {
-        goto done;
-    }
-    *pattern_value = JS_NewString(ctx, pattern);
-    if (JS_IsException(*pattern_value)) {
-        goto done;
-    }
-    argv[0] = *pattern_value;
-    result = http_server_call_function(ctx, *regex_ctor, JS_UNDEFINED, 1, argv);
-
-done:
-    JS_PopGCRef(ctx, &pattern_ref);
-    JS_PopGCRef(ctx, &ctor_ref);
-    JS_PopGCRef(ctx, &global_ref);
-    return result;
-}
-
 static bool http_server_compile_route_pattern(JSContext *ctx,
                                               JSValue pattern_value,
                                               esp32_mquickjs_http_server_route_t *route)
@@ -612,8 +553,6 @@ static bool http_server_compile_route_pattern(JSContext *ctx,
     }
 
     if (JS_IsString(ctx, pattern_value)) {
-        char *regex_source = NULL;
-
         uri = JS_ToCString(ctx, pattern_value, &uri_buf);
         if (uri == NULL) {
             return false;
@@ -626,14 +565,8 @@ static bool http_server_compile_route_pattern(JSContext *ctx,
             route->match_with_regex = false;
             return true;
         }
-        regex_source = http_server_glob_to_regex(uri);
-        if (regex_source == NULL) {
-            return false;
-        }
-        *JS_AddGCRef(ctx, &route->pattern) = http_server_compile_regex(ctx, regex_source);
-        heap_caps_free(regex_source);
-        route->match_with_regex = !JS_IsException(route->pattern.val);
-        return route->match_with_regex;
+        route->match_with_regex = true;
+        return true;
     }
 
     if (http_server_is_object(ctx, pattern_value)) {
@@ -683,6 +616,7 @@ static bool http_server_compile_route_pattern(JSContext *ctx,
         JS_PopGCRef(ctx, &flags_ref);
         JS_PopGCRef(ctx, &source_ref);
         *JS_AddGCRef(ctx, &route->pattern) = pattern_value;
+        route->pattern_ref_added = true;
         route->match_with_regex = true;
         return route->uri != NULL;
     }
@@ -728,6 +662,40 @@ static bool http_server_regex_test(JSContext *ctx, JSValue pattern, const char *
     JS_PopGCRef(ctx, &path_ref);
     JS_PopGCRef(ctx, &test_ref);
     return false;
+}
+
+static bool http_server_glob_match(const char *pattern, const char *text)
+{
+    const char *star = NULL;
+    const char *retry = NULL;
+
+    if (pattern == NULL || text == NULL) {
+        return false;
+    }
+
+    while (*text != '\0') {
+        if (*pattern == '*') {
+            star = pattern++;
+            retry = text;
+            continue;
+        }
+        if (*pattern == *text) {
+            pattern++;
+            text++;
+            continue;
+        }
+        if (star != NULL) {
+            pattern = star + 1;
+            text = ++retry;
+            continue;
+        }
+        return false;
+    }
+
+    while (*pattern == '*') {
+        pattern++;
+    }
+    return *pattern == '\0';
 }
 
 static char *http_server_recv_body(httpd_req_t *req, size_t max_len, esp_err_t *out_err)
@@ -797,7 +765,8 @@ static esp32_mquickjs_http_server_route_t *http_server_find_route(JSContext *ctx
             continue;
         }
         if (route->match_with_regex) {
-            if (http_server_regex_test(ctx, route->pattern.val, path)) {
+            if ((route->pattern_ref_added && http_server_regex_test(ctx, route->pattern.val, path)) ||
+                (!route->pattern_ref_added && http_server_glob_match(route->uri, path != NULL ? path : ""))) {
                 return route;
             }
         } else if (strcmp(route->uri, path) == 0) {
@@ -857,13 +826,13 @@ static esp_err_t http_server_dispatch_handler(httpd_req_t *req)
         http_server_cleanup_request(request);
         return ESP_OK;
     }
-    if (!http_server_capture_headers(req, &request->headers, &request->header_count)) {
+    if (!http_server_capture_headers(async_req, &request->headers, &request->header_count)) {
         http_server_send_error(async_req, 500, "failed to capture request headers");
         http_server_cleanup_request(request);
         return ESP_OK;
     }
 
-    request->body = http_server_recv_body(req, ESP32_MQUICKJS_HTTP_SERVER_MAX_BODY_LEN, &err);
+    request->body = http_server_recv_body(async_req, ESP32_MQUICKJS_HTTP_SERVER_MAX_BODY_LEN, &err);
     if (request->body == NULL) {
         if (err == ESP_ERR_HTTPD_RESP_SEND) {
             http_server_send_error(async_req, 413, "request body too large");
@@ -893,41 +862,36 @@ static bool http_server_make_request_object(JSContext *ctx,
                                             const esp32_mquickjs_http_server_route_t *route,
                                             JSValue *out_obj)
 {
-    JSGCRef headers_ref;
+    JSGCRef global_ref;
     JSGCRef query_ref;
-    JSValue *headers_obj;
+    JSGCRef headers_ref;
+    JSValue *global_obj;
     JSValue *query_obj;
+    JSValue *headers_plain;
+    JSValue headers_value = JS_UNDEFINED;
+    char *url = NULL;
     size_t i;
 
     if (request == NULL || out_obj == NULL) {
         return false;
     }
 
-    *out_obj = JS_NewObject(ctx);
-    if (JS_IsException(*out_obj)) {
-        return false;
-    }
-
-    headers_obj = JS_PushGCRef(ctx, &headers_ref);
+    global_obj = JS_PushGCRef(ctx, &global_ref);
     query_obj = JS_PushGCRef(ctx, &query_ref);
-    *headers_obj = JS_NewObject(ctx);
+    headers_plain = JS_PushGCRef(ctx, &headers_ref);
+    *global_obj = JS_GetGlobalObject(ctx);
     *query_obj = JS_NewObject(ctx);
-    if (JS_IsException(*headers_obj) || JS_IsException(*query_obj)) {
-        JS_PopGCRef(ctx, &query_ref);
-        JS_PopGCRef(ctx, &headers_ref);
-        *out_obj = JS_EXCEPTION;
-        return false;
+    *headers_plain = JS_NewObject(ctx);
+    if (JS_IsException(*global_obj) || JS_IsException(*query_obj) || JS_IsException(*headers_plain)) {
+        goto fail;
     }
 
     for (i = 0; i < request->header_count; ++i) {
         if (!esp32_mquickjs_set_property(ctx,
-                                         *headers_obj,
+                                         *headers_plain,
                                          request->headers[i].key,
                                          JS_NewString(ctx, request->headers[i].value))) {
-            JS_PopGCRef(ctx, &query_ref);
-            JS_PopGCRef(ctx, &headers_ref);
-            *out_obj = JS_EXCEPTION;
-            return false;
+            goto fail;
         }
     }
 
@@ -962,10 +926,7 @@ static bool http_server_make_request_object(JSContext *ctx,
             if (key_raw == NULL || value_raw == NULL) {
                 heap_caps_free(key_raw);
                 heap_caps_free(value_raw);
-                JS_PopGCRef(ctx, &query_ref);
-                JS_PopGCRef(ctx, &headers_ref);
-                *out_obj = JS_EXCEPTION;
-                return false;
+                goto fail;
             }
             memcpy(key_raw, segment_start, key_len);
             key_raw[key_len] = '\0';
@@ -978,46 +939,73 @@ static bool http_server_make_request_object(JSContext *ctx,
             if (key == NULL || value == NULL) {
                 heap_caps_free(key);
                 heap_caps_free(value);
-                JS_PopGCRef(ctx, &query_ref);
-                JS_PopGCRef(ctx, &headers_ref);
-                *out_obj = JS_EXCEPTION;
-                return false;
+                goto fail;
             }
             if (key[0] != '\0' &&
                 !esp32_mquickjs_set_property(ctx, *query_obj, key, JS_NewString(ctx, value))) {
                 heap_caps_free(key);
                 heap_caps_free(value);
-                JS_PopGCRef(ctx, &query_ref);
-                JS_PopGCRef(ctx, &headers_ref);
-                *out_obj = JS_EXCEPTION;
-                return false;
+                goto fail;
             }
             heap_caps_free(key);
             heap_caps_free(value);
         }
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *out_obj, "method",
-                                     JS_NewString(ctx, request->method != NULL ? request->method : "")) ||
-        !esp32_mquickjs_set_property(ctx, *out_obj, "path",
-                                     JS_NewString(ctx, request->path != NULL ? request->path : "")) ||
-        !esp32_mquickjs_set_property(ctx, *out_obj, "route",
-                                     JS_NewString(ctx, route != NULL && route->uri != NULL ? route->uri : "")) ||
-        !esp32_mquickjs_set_property(ctx, *out_obj, "queryString",
-                                     JS_NewString(ctx, request->query_string != NULL ? request->query_string : "")) ||
-        !esp32_mquickjs_set_property(ctx, *out_obj, "query", *query_obj) ||
-        !esp32_mquickjs_set_property(ctx, *out_obj, "body",
-                                     JS_NewString(ctx, request->body != NULL ? request->body : "")) ||
-        !esp32_mquickjs_set_property(ctx, *out_obj, "headers", *headers_obj)) {
-        JS_PopGCRef(ctx, &query_ref);
-        JS_PopGCRef(ctx, &headers_ref);
-        *out_obj = JS_EXCEPTION;
-        return false;
+    if (request->header_count > 0 && request->headers[0].value != NULL) {
+        const char *host = NULL;
+        size_t url_len;
+
+        for (i = 0; i < request->header_count; ++i) {
+            if (strcasecmp(request->headers[i].key, "host") == 0) {
+                host = request->headers[i].value;
+                break;
+            }
+        }
+        if (host != NULL) {
+            url_len = strlen(host) + strlen(request->path != NULL ? request->path : "/") +
+                      strlen(request->query_string != NULL ? request->query_string : "") + 9;
+            url = heap_caps_malloc(url_len, MALLOC_CAP_8BIT);
+            if (url == NULL) {
+                goto fail;
+            }
+            snprintf(url, url_len, "http://%s%s%s%s",
+                     host,
+                     request->path != NULL ? request->path : "/",
+                     (request->query_string != NULL && request->query_string[0] != '\0') ? "?" : "",
+                     request->query_string != NULL ? request->query_string : "");
+        }
     }
 
-    JS_PopGCRef(ctx, &query_ref);
+    headers_value = esp32_mquickjs_make_headers_object(ctx, *global_obj, *headers_plain);
+    if (JS_IsException(headers_value)) {
+        goto fail;
+    }
+
+    *out_obj = esp32_mquickjs_make_request_object(ctx,
+                                                  *global_obj,
+                                                  request->method != NULL ? request->method : "GET",
+                                                  url != NULL ? url : (request->path != NULL ? request->path : "/"),
+                                                  request->path != NULL ? request->path : "/",
+                                                  route != NULL && route->uri != NULL ? route->uri :
+                                                      (request->path != NULL ? request->path : "/"),
+                                                  request->query_string != NULL ? request->query_string : "",
+                                                  *query_obj,
+                                                  headers_value,
+                                                  JS_NewString(ctx, request->body != NULL ? request->body : ""));
+    heap_caps_free(url);
     JS_PopGCRef(ctx, &headers_ref);
-    return true;
+    JS_PopGCRef(ctx, &query_ref);
+    JS_PopGCRef(ctx, &global_ref);
+    return !JS_IsException(*out_obj);
+
+fail:
+    heap_caps_free(url);
+    JS_PopGCRef(ctx, &headers_ref);
+    JS_PopGCRef(ctx, &query_ref);
+    JS_PopGCRef(ctx, &global_ref);
+    *out_obj = JS_EXCEPTION;
+    return false;
 }
 
 static int http_server_parse_status(JSContext *ctx, JSValue value, int32_t *out_status)
@@ -1058,6 +1046,12 @@ static int http_server_parse_headers(JSContext *ctx,
     *out_count = 0;
     if (JS_IsUndefined(value) || JS_IsNull(value)) {
         return 0;
+    }
+    if (esp32_mquickjs_is_headers_object(ctx, value)) {
+        value = esp32_mquickjs_headers_to_plain_object(ctx, value);
+        if (JS_IsException(value)) {
+            return -1;
+        }
     }
     if (!http_server_is_object(ctx, value)) {
         return -1;
@@ -1183,35 +1177,31 @@ static int http_server_make_response(JSContext *ctx,
     JSValue *status_value;
     JSValue *headers_value;
     JSValue *body_value;
-    JSCStringBuf body_buf;
-    const char *body_str;
+    JSGCRef status_text_ref;
+    JSValue *status_text_value;
+    JSCStringBuf status_text_buf;
+    const char *status_text;
 
     memset(out_response, 0, sizeof(*out_response));
     out_response->status = 200;
+    out_response->status_text = NULL;
 
-    if (JS_IsUndefined(value) || JS_IsNull(value)) {
-        return 0;
-    }
-    if (JS_IsString(ctx, value)) {
-        body_str = JS_ToCString(ctx, value, &body_buf);
-        if (body_str == NULL) {
-            return -1;
-        }
-        out_response->body = http_server_strdup(body_str);
-        return out_response->body != NULL ? 0 : -1;
-    }
-    if (!http_server_is_object(ctx, value)) {
+    if (!esp32_mquickjs_is_response_object(ctx, value)) {
+        JS_ThrowTypeError(ctx, "http.server handlers must return a Response");
         return -1;
     }
 
     status_value = JS_PushGCRef(ctx, &status_ref);
     headers_value = JS_PushGCRef(ctx, &headers_ref);
     body_value = JS_PushGCRef(ctx, &body_ref);
+    status_text_value = JS_PushGCRef(ctx, &status_text_ref);
 
     *status_value = JS_GetPropertyStr(ctx, value, "status");
     *headers_value = JS_GetPropertyStr(ctx, value, "headers");
     *body_value = JS_GetPropertyStr(ctx, value, "body");
-    if (JS_IsException(*status_value) || JS_IsException(*headers_value) || JS_IsException(*body_value)) {
+    *status_text_value = JS_GetPropertyStr(ctx, value, "statusText");
+    if (JS_IsException(*status_value) || JS_IsException(*headers_value) || JS_IsException(*body_value) ||
+        JS_IsException(*status_text_value)) {
         goto fail;
     }
     if (http_server_parse_status(ctx, *status_value, &out_response->status) != 0) {
@@ -1223,23 +1213,32 @@ static int http_server_make_response(JSContext *ctx,
                                   &out_response->header_count) != 0) {
         goto fail;
     }
+    status_text = JS_IsUndefined(*status_text_value) || JS_IsNull(*status_text_value)
+                      ? http_server_status_text(out_response->status)
+                      : JS_ToCString(ctx, *status_text_value, &status_text_buf);
+    if (status_text == NULL) {
+        goto fail;
+    }
+    out_response->status_text = http_server_strdup(status_text);
+    if (out_response->status_text == NULL) {
+        goto fail;
+    }
     if (!JS_IsUndefined(*body_value) && !JS_IsNull(*body_value)) {
-        body_str = JS_ToCString(ctx, *body_value, &body_buf);
-        if (body_str == NULL) {
+        if (!esp32_mquickjs_fs_parse_stream_ref(ctx, *body_value, &out_response->body_stream_ref)) {
+            JS_ThrowTypeError(ctx, "Response.body must be a Stream");
             goto fail;
         }
-        out_response->body = http_server_strdup(body_str);
-        if (out_response->body == NULL) {
-            goto fail;
-        }
+        out_response->has_body_stream = true;
     }
 
+    JS_PopGCRef(ctx, &status_text_ref);
     JS_PopGCRef(ctx, &body_ref);
     JS_PopGCRef(ctx, &headers_ref);
     JS_PopGCRef(ctx, &status_ref);
     return 0;
 
 fail:
+    JS_PopGCRef(ctx, &status_text_ref);
     JS_PopGCRef(ctx, &body_ref);
     JS_PopGCRef(ctx, &headers_ref);
     JS_PopGCRef(ctx, &status_ref);
@@ -1418,7 +1417,7 @@ static esp_err_t http_server_send_response(httpd_req_t *req,
                                            const esp32_mquickjs_http_server_response_t *response)
 {
     char status_line[32];
-    const char *body = response->body != NULL ? response->body : "";
+    uint8_t *chunk_buffer = NULL;
     size_t i;
     esp_err_t err;
 
@@ -1426,12 +1425,13 @@ static esp_err_t http_server_send_response(httpd_req_t *req,
              sizeof(status_line),
              "%" PRId32 " %s",
              response->status,
-             http_server_status_text(response->status));
+             response->status_text != NULL ? response->status_text : http_server_status_text(response->status));
     err = httpd_resp_set_status(req, status_line);
     if (err != ESP_OK) {
         return err;
     }
-    if (response->body != NULL && !http_server_has_content_type(response)) {
+    if (response->has_body_stream &&
+        !http_server_has_content_type(response)) {
         err = httpd_resp_set_type(req, "text/plain; charset=utf-8");
         if (err != ESP_OK) {
             return err;
@@ -1445,10 +1445,47 @@ static esp_err_t http_server_send_response(httpd_req_t *req,
         }
     }
 
-    if (response->body == NULL) {
-        return httpd_resp_send(req, NULL, 0);
+    if (response->has_body_stream) {
+        size_t read_len = 0;
+
+        if (req->method == HTTP_HEAD) {
+            err = esp32_mquickjs_fs_stream_close(&response->body_stream_ref);
+            if (err != ESP_OK) {
+                return err;
+            }
+            return httpd_resp_send_chunk(req, NULL, 0);
+        }
+        chunk_buffer = heap_caps_malloc(ESP32_MQUICKJS_HTTP_SERVER_STREAM_CHUNK_SIZE, MALLOC_CAP_8BIT);
+        if (chunk_buffer == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+        do {
+            err = esp32_mquickjs_fs_stream_read(&response->body_stream_ref,
+                                                chunk_buffer,
+                                                ESP32_MQUICKJS_HTTP_SERVER_STREAM_CHUNK_SIZE,
+                                                &read_len);
+            if (err != ESP_OK) {
+                heap_caps_free(chunk_buffer);
+                esp32_mquickjs_fs_stream_close(&response->body_stream_ref);
+                return err;
+            }
+            if (read_len > 0) {
+                err = httpd_resp_send_chunk(req, (const char *)chunk_buffer, read_len);
+                if (err != ESP_OK) {
+                    heap_caps_free(chunk_buffer);
+                    esp32_mquickjs_fs_stream_close(&response->body_stream_ref);
+                    return err;
+                }
+            }
+        } while (read_len > 0);
+        heap_caps_free(chunk_buffer);
+        err = esp32_mquickjs_fs_stream_close(&response->body_stream_ref);
+        if (err != ESP_OK) {
+            return err;
+        }
+        return httpd_resp_send_chunk(req, NULL, 0);
     }
-    return httpd_resp_send(req, body, (ssize_t)strlen(body));
+    return httpd_resp_send(req, NULL, 0);
 }
 
 static bool http_server_start_slot(esp32_mquickjs_http_server_slot_t *server)
@@ -1726,6 +1763,7 @@ static bool http_server_register_route_js(JSContext *ctx,
         return true;
     }
     *JS_AddGCRef(ctx, &route->callback) = callback;
+    route->callback_ref_added = true;
 
     *out_result = JS_UNDEFINED;
     return true;
@@ -1820,9 +1858,6 @@ bool esp32_mquickjs_dispatch_http_server(JSContext *ctx,
         char littlefs_root[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
         char target_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
         FILE *file;
-        long file_size;
-        size_t read_len;
-        char *body;
         const char *content_type;
         JSValue response_obj;
 
@@ -1901,59 +1936,82 @@ bool esp32_mquickjs_dispatch_http_server(JSContext *ctx,
             file = fopen(target_path, "rb");
         }
         if (file == NULL) {
+            JSGCRef global_ref;
+            JSValue *global_obj;
+
+            global_obj = JS_PushGCRef(ctx, &global_ref);
+            *global_obj = JS_GetGlobalObject(ctx);
             JS_PopGCRef(ctx, &route_ref);
             JS_PopGCRef(ctx, &path_ref);
             JS_PopGCRef(ctx, &root_ref);
-            *result = JS_NewObject(ctx);
-            if (!JS_IsException(*result)) {
-                esp32_mquickjs_set_property(ctx, *result, "status", JS_NewInt32(ctx, 404));
-                esp32_mquickjs_set_property(ctx, *result, "body", JS_NewString(ctx, "Not Found"));
-            }
+            *result = JS_IsException(*global_obj)
+                          ? JS_EXCEPTION
+                          : esp32_mquickjs_make_response_object(ctx,
+                                                                *global_obj,
+                                                                404,
+                                                                "Not Found",
+                                                                "",
+                                                                JS_UNDEFINED,
+                                                                JS_NewString(ctx, "Not Found"));
+            JS_PopGCRef(ctx, &global_ref);
             return true;
         }
 
-        if (fseek(file, 0, SEEK_END) != 0) {
-            fclose(file);
-            JS_PopGCRef(ctx, &route_ref);
-            JS_PopGCRef(ctx, &path_ref);
-            JS_PopGCRef(ctx, &root_ref);
-            *result = JS_ThrowInternalError(ctx, "failed to read static file");
-            return true;
-        }
-        file_size = ftell(file);
-        if (file_size < 0 || fseek(file, 0, SEEK_SET) != 0) {
-            fclose(file);
-            JS_PopGCRef(ctx, &route_ref);
-            JS_PopGCRef(ctx, &path_ref);
-            JS_PopGCRef(ctx, &root_ref);
-            *result = JS_ThrowInternalError(ctx, "failed to read static file");
-            return true;
-        }
-        body = heap_caps_malloc((size_t)file_size + 1, MALLOC_CAP_8BIT);
-        if (body == NULL) {
-            fclose(file);
-            JS_PopGCRef(ctx, &route_ref);
-            JS_PopGCRef(ctx, &path_ref);
-            JS_PopGCRef(ctx, &root_ref);
-            *result = JS_ThrowOutOfMemory(ctx);
-            return true;
-        }
-        read_len = fread(body, 1, (size_t)file_size, file);
         fclose(file);
-        if (read_len != (size_t)file_size) {
-            heap_caps_free(body);
-            JS_PopGCRef(ctx, &route_ref);
-            JS_PopGCRef(ctx, &path_ref);
-            JS_PopGCRef(ctx, &root_ref);
-            *result = JS_ThrowInternalError(ctx, "failed to read static file");
-            return true;
-        }
-        body[read_len] = '\0';
         content_type = http_server_guess_content_type(target_path);
+        {
+            JSGCRef global_ref;
+            JSGCRef headers_ref;
+            JSValue *global_obj;
+            JSValue *headers_obj;
+            JSValue stream_obj;
 
-        response_obj = JS_NewObject(ctx);
+            global_obj = JS_PushGCRef(ctx, &global_ref);
+            headers_obj = JS_PushGCRef(ctx, &headers_ref);
+            *global_obj = JS_GetGlobalObject(ctx);
+            *headers_obj = JS_NewObject(ctx);
+            if (JS_IsException(*global_obj) || JS_IsException(*headers_obj)) {
+                JS_PopGCRef(ctx, &headers_ref);
+                JS_PopGCRef(ctx, &global_ref);
+                JS_PopGCRef(ctx, &route_ref);
+                JS_PopGCRef(ctx, &path_ref);
+                JS_PopGCRef(ctx, &root_ref);
+                *result = JS_EXCEPTION;
+                return true;
+            }
+            if (!esp32_mquickjs_set_property(ctx,
+                                             *headers_obj,
+                                             "content-type",
+                                             JS_NewString(ctx, content_type))) {
+                JS_PopGCRef(ctx, &headers_ref);
+                JS_PopGCRef(ctx, &global_ref);
+                JS_PopGCRef(ctx, &route_ref);
+                JS_PopGCRef(ctx, &path_ref);
+                JS_PopGCRef(ctx, &root_ref);
+                *result = JS_EXCEPTION;
+                return true;
+            }
+            stream_obj = esp32_mquickjs_stream_open_file(ctx, *global_obj, target_path, "rb");
+            if (JS_IsException(stream_obj)) {
+                JS_PopGCRef(ctx, &headers_ref);
+                JS_PopGCRef(ctx, &global_ref);
+                JS_PopGCRef(ctx, &route_ref);
+                JS_PopGCRef(ctx, &path_ref);
+                JS_PopGCRef(ctx, &root_ref);
+                *result = JS_EXCEPTION;
+                return true;
+            }
+            response_obj = esp32_mquickjs_make_response_object(ctx,
+                                                               *global_obj,
+                                                               200,
+                                                               "OK",
+                                                               "",
+                                                               *headers_obj,
+                                                               stream_obj);
+            JS_PopGCRef(ctx, &headers_ref);
+            JS_PopGCRef(ctx, &global_ref);
+        }
         if (JS_IsException(response_obj)) {
-            heap_caps_free(body);
             JS_PopGCRef(ctx, &route_ref);
             JS_PopGCRef(ctx, &path_ref);
             JS_PopGCRef(ctx, &root_ref);
@@ -1961,15 +2019,6 @@ bool esp32_mquickjs_dispatch_http_server(JSContext *ctx,
             return true;
         }
 
-        {
-            JSValue headers = JS_NewObject(ctx);
-            esp32_mquickjs_set_property(ctx, headers, "content-type", JS_NewString(ctx, content_type));
-            esp32_mquickjs_set_property(ctx, response_obj, "status", JS_NewInt32(ctx, 200));
-            esp32_mquickjs_set_property(ctx, response_obj, "headers", headers);
-            esp32_mquickjs_set_property(ctx, response_obj, "body", JS_NewString(ctx, body));
-        }
-
-        heap_caps_free(body);
         JS_PopGCRef(ctx, &route_ref);
         JS_PopGCRef(ctx, &path_ref);
         JS_PopGCRef(ctx, &root_ref);
@@ -2207,6 +2256,18 @@ static bool http_server_async_poller(JSContext *ctx,
             http_server_send_error(request->async_req, 500, "invalid response object");
         } else if (http_server_send_response(request->async_req, &response) != ESP_OK) {
             ESP_LOGE(TAG, "failed to send response");
+        }
+
+        if (!JS_IsException(req_obj)) {
+            JSGCRef req_body_ref;
+            JSValue *req_body_value;
+
+            req_body_value = JS_PushGCRef(ctx, &req_body_ref);
+            *req_body_value = JS_GetPropertyStr(ctx, req_obj, "body");
+            if (!JS_IsException(*req_body_value)) {
+                esp32_mquickjs_stream_close_value(ctx, *req_body_value);
+            }
+            JS_PopGCRef(ctx, &req_body_ref);
         }
 
         JS_PopGCRef(ctx, &callback_ref);

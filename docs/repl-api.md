@@ -12,9 +12,9 @@ This project exposes a small JavaScript REPL on the XIAO ESP32-S3. Run `help()` 
   Run the JavaScript garbage collector.
 - `defer()`
   Create a deferred helper object for callback-style async work.
-- `fetch(url, options?)`
-  Run a blocking HTTP request and return a response object.
-- `fetch(url, callback)` / `fetch(url, options, callback)`
+- `fetch(input, options?)`
+  Run a blocking HTTP request and return a `Response`.
+- `fetch(input, callback)` / `fetch(input, options, callback)`
   Run an asynchronous HTTP request and call `callback(error, response)` on completion.
 - `load(path)`
   Evaluate a script from LittleFS. Relative paths resolve under `/littlefs`, and paths cannot escape that root.
@@ -125,6 +125,8 @@ All `fs` operations are restricted to `/littlefs`.
   Return `true` if the path exists.
 - `fs.readText(path)`
   Read a UTF-8 text file.
+- `fs.open(path, mode?)`
+  Open a file stream. Supported modes are `r`, `rb`, `w`, `wb`, `a`, `ab`, `r+`, `w+`, and `a+`.
 - `fs.writeText(path, text)`
   Overwrite a text file and return the number of bytes written.
 - `fs.appendText(path, text)`
@@ -145,6 +147,113 @@ print(fs.stat("notes.txt"));
 print(JSON.stringify(fs.list(".")));
 fs.rename("notes.txt", "notes-old.txt");
 fs.remove("notes-old.txt");
+```
+
+## `Stream` Type
+
+`fs.open()` returns a `Stream`. `Response.body`, `Request.body`, and `Response.stream(...)` also use the same stream interface.
+
+- `Stream.SEEK_SET`
+- `Stream.SEEK_CUR`
+- `Stream.SEEK_END`
+  Seek constants for `stream.seek(...)`.
+
+Stream instance shape:
+
+- `kind`
+  Stream kind. File streams currently report `"file"`.
+- `path`
+  Full LittleFS path for file-backed streams, for example `"/littlefs/notes.txt"`.
+- `mode`
+  The mode string passed to `fs.open(...)`.
+- `readable`
+- `writable`
+- `read(size?)`
+  Read up to `size` bytes as a UTF-8 string. Returns `null` at EOF. Default chunk size is `1024`.
+- `write(text)`
+  Write a string and return the written byte count.
+- `flush()`
+- `close()`
+- `seek(offset, whence?)`
+  Move the file cursor and return the new position.
+- `tell()`
+  Return the current file cursor position.
+- `eof()`
+  Return `true` once the stream reached EOF.
+
+Example:
+
+```js
+var stream = fs.open("_sys/ui/core.js", "r");
+print(stream.tell());
+print(JSON.stringify(stream.read(32)));
+stream.seek(0, Stream.SEEK_SET);
+stream.close();
+```
+
+## `Headers`, `Request`, and `Response`
+
+- `new Headers(init?)`
+  Create a header collection from a plain object or another `Headers`.
+- `new Request(input, init?)`
+  Create a request from a URL string or another `Request`.
+- `new Response(body?, init?)`
+  Create a response from a string, `Stream`, or omitted body.
+- `Response.text(text, init?)`
+- `Response.json(value, init?)`
+- `Response.stream(stream, init?)`
+
+`Headers` methods:
+
+- `headers.get(name)`
+- `headers.set(name, value)`
+- `headers.has(name)`
+- `headers.delete(name)`
+- `headers.entries()`
+- `headers.toObject()`
+
+`Request` shape:
+
+- `method`
+- `url`
+- `path`
+- `queryString`
+- `query`
+- `headers`
+  A `Headers` object.
+- `body`
+  A `Stream`.
+- `text()`
+- `json()`
+
+`Response` shape:
+
+- `ok`
+- `status`
+- `statusText`
+- `url`
+- `headers`
+  A `Headers` object.
+- `body`
+  A `Stream`.
+- `text()`
+- `json()`
+
+Examples:
+
+```js
+var request = new Request("https://example.com", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ hello: "world" }),
+});
+
+var response = fetch(request);
+print(response.status, response.ok);
+print(response.text().length);
+
+var headers = new Headers({ "content-type": "text/plain; charset=utf-8" });
+print(headers.get("content-type"));
 ```
 
 ## `i2c` Module
@@ -400,58 +509,39 @@ wifi.disconnect();
 
 - `http.DEFAULT_TIMEOUT_MS`
   Default request timeout in milliseconds, `15000`.
-- `http.MAX_RESPONSE_BYTES`
-  Maximum response body captured into memory, `32768`.
 - `http.server(options?)`
   Create a lightweight HTTP server object backed by `esp_http_server`.
-- `http.fetch(url, options?)`
-  Run a blocking HTTP request and return a response object.
-- `http.fetch(url, callback)` / `http.fetch(url, options, callback)`
-  Run an asynchronous HTTP request and call `callback(error, response)`.
+- `http.fetch(input, options?)`
+  Alias of global `fetch(input, options?)`.
+- `http.fetch(input, callback)` / `http.fetch(input, options, callback)`
+  Alias of the asynchronous `fetch(...)` forms.
 
 Supported `options` fields:
 
 - `method`
   HTTP method string such as `"GET"`, `"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"`, `"HEAD"`, or `"OPTIONS"`.
 - `headers`
-  Plain object of request headers.
+  Plain object or `Headers`.
 - `body`
-  UTF-8 string request body.
+  UTF-8 string request body or `Stream`.
 - `timeoutMs`
   Per-request timeout in milliseconds.
-
-Response object shape:
-
-- `ok`
-  `true` for HTTP 2xx.
-- `status`
-  Numeric HTTP status code.
-- `statusText`
-  Short status text when known.
-- `url`
-  Final request URL reported by the client.
-- `body`
-  UTF-8 response body, truncated at `http.MAX_RESPONSE_BYTES`.
-- `headers`
-  Plain object of captured response headers.
-- `truncated`
-  `true` when the body exceeded the in-memory capture limit or capture switched to a partial response under memory pressure.
 
 Examples:
 
 ```js
 var response = fetch("http://example.com");
-print(response.status, response.ok, response.body.length);
+print(response.status, response.ok, response.text().length);
 
 fetch("https://example.com", function (error, response) {
-  print(error === null, response.status);
+  print(error === null, response.status, response.text().length);
 });
 
 var head = http.fetch("http://example.com", {
   method: "HEAD",
   timeoutMs: 5000,
 });
-print(head.status, head.body.length);
+print(head.status, head.text().length);
 ```
 
 HTTP server API:
@@ -475,17 +565,10 @@ HTTP server API:
 Handler shape:
 
 - Input request object:
-  - `method`
-  - `path`
-  - `route`
-  - `queryString`
-  - `query`
-  - `body`
-  - `headers`
+  - `Request`
+  - route-specific fields such as `route` are also present on the object
 - Return value:
-  - string: sent as a `200` body
-  - object: `{ status, headers, body }`
-  - `undefined` / `null`: empty `200` response
+  - `Response`
 
 Route patterns:
 
@@ -504,22 +587,29 @@ Example:
 var server = http.server({ port: 8080, host: "0.0.0.0" });
 
 server.get("/ping", function (req) {
-  return { status: 200, body: "pong" };
+  return Response.text("pong");
 });
 
 server.post("/echo", function (req) {
-  return {
-    status: 200,
+  return Response.text(req.text(), {
     headers: { "content-type": "text/plain; charset=utf-8" },
-    body: req.body,
-  };
+  });
 });
 
 server.get(/^\/hello$/, function (req) {
-  return req.query.name || "hello";
+  return Response.text(req.query.name || "hello");
 });
 
 server.get("/assets/*", staticFileHandler("./_sys"));
 
+server.get("/core", function (req) {
+  return Response.stream(fs.open("_sys/display/core.js", "rb"), {
+    headers: { "content-type": "application/javascript; charset=utf-8" },
+  });
+});
+
 server.start();
 ```
+
+`staticFileHandler(root)` streams files directly from LittleFS in chunks. Large assets do not need to be loaded into a JavaScript string before they are sent.
+`Response.stream(...)` also streams in chunks and closes the supplied stream after the response is sent.

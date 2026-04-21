@@ -193,6 +193,7 @@ static int js_value_to_littlefs_path(JSContext *ctx,
     return 0;
 }
 
+
 static JSValue fs_make_stat_object(JSContext *ctx, const char *path, const struct stat *st)
 {
     JSGCRef entry_ref;
@@ -420,6 +421,7 @@ bool esp32_mquickjs_install_fs_module(JSContext *ctx, JSValue global_obj)
 
     if (!esp32_mquickjs_set_property(ctx, *module_obj, "ROOT",
                                      JS_NewString(ctx, ESP32_MQUICKJS_LITTLEFS_BASE_PATH)) ||
+        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "open", "fs.open") ||
         !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "list", "fs.list") ||
         !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "stat", "fs.stat") ||
         !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "exists", "fs.exists") ||
@@ -449,6 +451,45 @@ bool esp32_mquickjs_dispatch_fs(JSContext *ctx,
                                 JSValue *result)
 {
     char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+
+    if (strcmp(operation, "open") == 0) {
+        JSCStringBuf mode_buf;
+        const char *mode = "r";
+
+        if (argc < 1) {
+            *result = JS_ThrowTypeError(ctx, "fs.open(path, mode?) expects a path");
+            return true;
+        }
+        if (js_value_to_littlefs_path(ctx, argv[0], "fs.open(path, mode?)", path, sizeof(path)) != 0) {
+            *result = JS_EXCEPTION;
+            return true;
+        }
+        if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+            if (!JS_IsString(ctx, argv[1])) {
+                *result = JS_ThrowTypeError(ctx, "fs.open(path, mode) expects mode to be a string");
+                return true;
+            }
+            mode = JS_ToCString(ctx, argv[1], &mode_buf);
+            if (mode == NULL) {
+                *result = JS_EXCEPTION;
+                return true;
+            }
+        }
+
+        {
+            JSGCRef global_ref;
+            JSValue *global_obj = JS_PushGCRef(ctx, &global_ref);
+            *global_obj = JS_GetGlobalObject(ctx);
+            if (JS_IsException(*global_obj)) {
+                JS_PopGCRef(ctx, &global_ref);
+                *result = JS_EXCEPTION;
+                return true;
+            }
+            *result = esp32_mquickjs_stream_open_file(ctx, *global_obj, path, mode);
+            JS_PopGCRef(ctx, &global_ref);
+        }
+        return true;
+    }
 
     if (strcmp(operation, "list") == 0) {
         if (argc == 0) {

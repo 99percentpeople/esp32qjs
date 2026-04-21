@@ -1101,6 +1101,11 @@ static JSValue js_host_bridge(JSContext *ctx, int argc, JSValue *argv)
         return result;
     }
 
+    if (strncmp(operation, "stream.", 7) == 0 &&
+        esp32_mquickjs_dispatch_stream(ctx, operation + 7, argc - 1, argv + 1, &result)) {
+        return result;
+    }
+
     if (strncmp(operation, "gpio.", 5) == 0 &&
         esp32_mquickjs_dispatch_gpio(ctx, operation + 5, argc - 1, argv + 1, &result)) {
         return result;
@@ -1164,6 +1169,7 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
         !esp32_mquickjs_set_bound_bridge_function(ctx, *global_obj, *global_obj, "fetch", "http.fetch") ||
         !esp32_mquickjs_set_bound_bridge_function(ctx, *global_obj, *global_obj, "setInterval", "setInterval") ||
         !esp32_mquickjs_set_alias(ctx, *global_obj, *global_obj, "clearInterval", "clearTimeout") ||
+        !esp32_mquickjs_install_stream_module(ctx, *global_obj) ||
         !esp32_mquickjs_install_fs_module(ctx, *global_obj) ||
         !esp32_mquickjs_install_gpio_module(ctx, *global_obj) ||
         !esp32_mquickjs_install_i2c_module(ctx, *global_obj) ||

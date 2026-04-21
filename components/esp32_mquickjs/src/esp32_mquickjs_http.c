@@ -38,7 +38,6 @@ typedef struct {
 
 typedef struct {
     bool ok;
-    bool truncated;
     int32_t status;
     char *url;
     char *status_text;
@@ -52,7 +51,6 @@ typedef struct {
     size_t body_len;
     size_t body_cap;
     esp_err_t error;
-    bool drop_body;
     bool drop_headers;
 } esp32_mquickjs_http_capture_t;
 
@@ -151,6 +149,58 @@ static void http_free_request(esp32_mquickjs_http_request_t *request)
     heap_caps_free(request->body);
     http_free_headers(request->headers, request->header_count);
     memset(request, 0, sizeof(*request));
+}
+
+static int http_clone_request(const esp32_mquickjs_http_request_t *source, esp32_mquickjs_http_request_t *target)
+{
+    size_t i;
+
+    if (source == NULL || target == NULL) {
+        return -1;
+    }
+
+    memset(target, 0, sizeof(*target));
+    target->timeout_ms = source->timeout_ms;
+
+    if (source->url != NULL) {
+        target->url = http_strdup(source->url);
+        if (target->url == NULL) {
+            goto fail;
+        }
+    }
+    if (source->method != NULL) {
+        target->method = http_strdup(source->method);
+        if (target->method == NULL) {
+            goto fail;
+        }
+    }
+    if (source->body != NULL) {
+        target->body = http_strdup(source->body);
+        if (target->body == NULL) {
+            goto fail;
+        }
+    }
+    if (source->header_count > 0) {
+        target->headers = heap_caps_calloc(source->header_count, sizeof(*target->headers), MALLOC_CAP_8BIT);
+        if (target->headers == NULL) {
+            goto fail;
+        }
+        for (i = 0; i < source->header_count; ++i) {
+            target->headers[i].key = http_strdup(source->headers[i].key);
+            target->headers[i].value = http_strdup(source->headers[i].value);
+            if (target->headers[i].key == NULL || target->headers[i].value == NULL) {
+                target->header_count = i + 1;
+                goto fail;
+            }
+        }
+        target->header_count = source->header_count;
+    }
+
+    return 0;
+
+fail:
+    http_free_request(target);
+    return -1;
 }
 
 static void http_free_response(esp32_mquickjs_http_response_t *response)
@@ -291,35 +341,34 @@ static bool http_method_from_string(const char *method, esp_http_client_method_t
     return false;
 }
 
+static bool http_request_has_header(const esp32_mquickjs_http_request_t *request, const char *name)
+{
+    size_t i;
+
+    if (request == NULL || name == NULL) {
+        return false;
+    }
+    for (i = 0; i < request->header_count; ++i) {
+        if (request->headers[i].key != NULL && strcasecmp(request->headers[i].key, name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static esp_err_t http_capture_append_body(esp32_mquickjs_http_capture_t *capture,
                                           const char *data,
                                           size_t data_len)
 {
     static const size_t growth_step = 1024;
     size_t needed_cap;
-    size_t room_left;
-    size_t write_len;
     char *body;
 
     if (capture == NULL || capture->response == NULL || data == NULL || data_len == 0) {
         return ESP_OK;
     }
-    if (capture->drop_body) {
-        capture->response->truncated = true;
-        return ESP_OK;
-    }
 
-    room_left = ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BYTES > capture->body_len
-                    ? ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BYTES - capture->body_len
-                    : 0;
-    write_len = data_len <= room_left ? data_len : room_left;
-    if (write_len == 0) {
-        capture->response->truncated = true;
-        capture->drop_body = true;
-        return ESP_OK;
-    }
-
-    needed_cap = capture->body_len + write_len + 1;
+    needed_cap = capture->body_len + data_len + 1;
     if (capture->body_cap < needed_cap) {
         size_t new_cap = needed_cap;
 
@@ -328,27 +377,18 @@ static esp_err_t http_capture_append_body(esp32_mquickjs_http_capture_t *capture
         } else {
             new_cap = ((new_cap + growth_step - 1) / growth_step) * growth_step;
         }
-        if (new_cap > ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BYTES + 1) {
-            new_cap = ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BYTES + 1;
-        }
 
         body = heap_caps_realloc(capture->response->body, new_cap, MALLOC_CAP_8BIT);
         if (body == NULL) {
-            capture->response->truncated = true;
-            capture->drop_body = true;
-            return ESP_OK;
+            return ESP_ERR_NO_MEM;
         }
         capture->response->body = body;
         capture->body_cap = new_cap;
     }
 
-    memcpy(capture->response->body + capture->body_len, data, write_len);
-    capture->body_len += write_len;
+    memcpy(capture->response->body + capture->body_len, data, data_len);
+    capture->body_len += data_len;
     capture->response->body[capture->body_len] = '\0';
-    if (write_len < data_len) {
-        capture->response->truncated = true;
-        capture->drop_body = true;
-    }
 
     return ESP_OK;
 }
@@ -510,11 +550,29 @@ static esp32_mquickjs_http_response_t *http_perform_request(const esp32_mquickjs
     }
 
     if (request->body != NULL) {
-        if (esp_http_client_set_post_field(client,
-                                           request->body,
-                                           (int)strlen(request->body)) != ESP_OK) {
-            *out_err = ESP_FAIL;
-            snprintf(error_text, error_text_size, "failed to set request body");
+        esp_err_t body_err;
+
+        if (!http_request_has_header(request, "Content-Type")) {
+            body_err = esp_http_client_set_header(client, "Content-Type", "application/x-www-form-urlencoded");
+            if (body_err != ESP_OK) {
+                *out_err = body_err;
+                snprintf(error_text,
+                         error_text_size,
+                         "failed to set default Content-Type for request body: %s",
+                         esp_err_to_name(body_err));
+                esp_http_client_cleanup(client);
+                http_free_response(response);
+                return NULL;
+            }
+        }
+
+        body_err = esp_http_client_set_post_field(client, request->body, (int)strlen(request->body));
+        if (body_err != ESP_OK) {
+            *out_err = body_err;
+            snprintf(error_text,
+                     error_text_size,
+                     "failed to set request body: %s",
+                     esp_err_to_name(body_err));
             esp_http_client_cleanup(client);
             http_free_response(response);
             return NULL;
@@ -575,20 +633,30 @@ static esp32_mquickjs_http_response_t *http_perform_request(const esp32_mquickjs
     return response;
 }
 
-static JSValue http_make_headers_object(JSContext *ctx,
-                                        const esp32_mquickjs_http_response_t *response)
+static JSValue http_make_response_object(JSContext *ctx,
+                                         const esp32_mquickjs_http_response_t *response)
 {
+    JSGCRef global_ref;
     JSGCRef headers_ref;
+    JSGCRef body_ref;
+    JSValue *global_obj;
     JSValue *headers_obj;
-    size_t i;
+    JSValue *body_stream;
+    JSValue plain_headers = JS_UNDEFINED;
 
+    global_obj = JS_PushGCRef(ctx, &global_ref);
     headers_obj = JS_PushGCRef(ctx, &headers_ref);
+    body_stream = JS_PushGCRef(ctx, &body_ref);
+    *global_obj = JS_GetGlobalObject(ctx);
     *headers_obj = JS_NewObject(ctx);
-    if (JS_IsException(*headers_obj)) {
+    *body_stream = JS_UNDEFINED;
+    if (JS_IsException(*global_obj) || JS_IsException(*headers_obj)) {
         goto fail;
     }
 
     if (response != NULL) {
+        size_t i;
+
         for (i = 0; i < response->header_count; ++i) {
             if (!esp32_mquickjs_set_property(ctx,
                                              *headers_obj,
@@ -598,52 +666,41 @@ static JSValue http_make_headers_object(JSContext *ctx,
             }
         }
     }
+    plain_headers = *headers_obj;
+    *headers_obj = JS_UNDEFINED;
 
-    return JS_PopGCRef(ctx, &headers_ref);
+    *body_stream = esp32_mquickjs_make_text_body_stream(ctx,
+                                                        *global_obj,
+                                                        response != NULL && response->body != NULL
+                                                            ? response->body
+                                                            : "");
+    if (JS_IsException(*body_stream)) {
+        goto fail;
+    }
+
+    plain_headers = esp32_mquickjs_make_headers_object(ctx, *global_obj, plain_headers);
+    if (JS_IsException(plain_headers)) {
+        goto fail;
+    }
+
+    {
+        JSValue result = esp32_mquickjs_make_response_object(ctx,
+                                                             *global_obj,
+                                                             response != NULL ? response->status : 200,
+                                                             response != NULL ? response->status_text : "OK",
+                                                             response != NULL ? response->url : "",
+                                                             plain_headers,
+                                                             *body_stream);
+
+        JS_PopGCRef(ctx, &body_ref);
+        JS_PopGCRef(ctx, &global_ref);
+        return result;
+    }
 
 fail:
     JS_PopGCRef(ctx, &headers_ref);
-    return JS_EXCEPTION;
-}
-
-static JSValue http_make_response_object(JSContext *ctx,
-                                         const esp32_mquickjs_http_response_t *response)
-{
-    JSGCRef response_ref;
-    JSValue *response_obj;
-    JSValue headers_obj;
-
-    response_obj = JS_PushGCRef(ctx, &response_ref);
-    *response_obj = JS_NewObject(ctx);
-    if (JS_IsException(*response_obj)) {
-        goto fail;
-    }
-
-    headers_obj = http_make_headers_object(ctx, response);
-    if (JS_IsException(headers_obj)) {
-        goto fail;
-    }
-
-    if (!esp32_mquickjs_set_property(ctx, *response_obj, "ok",
-                                     JS_NewBool(response->ok)) ||
-        !esp32_mquickjs_set_property(ctx, *response_obj, "status",
-                                     JS_NewInt32(ctx, response->status)) ||
-        !esp32_mquickjs_set_property(ctx, *response_obj, "statusText",
-                                     JS_NewString(ctx, response->status_text != NULL ? response->status_text : "")) ||
-        !esp32_mquickjs_set_property(ctx, *response_obj, "url",
-                                     JS_NewString(ctx, response->url != NULL ? response->url : "")) ||
-        !esp32_mquickjs_set_property(ctx, *response_obj, "body",
-                                     JS_NewString(ctx, response->body != NULL ? response->body : "")) ||
-        !esp32_mquickjs_set_property(ctx, *response_obj, "headers", headers_obj) ||
-        !esp32_mquickjs_set_property(ctx, *response_obj, "truncated",
-                                     JS_NewBool(response->truncated))) {
-        goto fail;
-    }
-
-    return JS_PopGCRef(ctx, &response_ref);
-
-fail:
-    JS_PopGCRef(ctx, &response_ref);
+    JS_PopGCRef(ctx, &body_ref);
+    JS_PopGCRef(ctx, &global_ref);
     return JS_EXCEPTION;
 }
 
@@ -690,6 +747,12 @@ static int http_parse_headers(JSContext *ctx,
         *out_headers = NULL;
         *out_header_count = 0;
         return 0;
+    }
+    if (esp32_mquickjs_is_headers_object(ctx, headers_value)) {
+        headers_value = esp32_mquickjs_headers_to_plain_object(ctx, headers_value);
+        if (JS_IsException(headers_value)) {
+            return -1;
+        }
     }
 
     global_obj = JS_PushGCRef(ctx, &global_ref);
@@ -871,19 +934,33 @@ static int http_parse_options(JSContext *ctx,
     }
 
     if (!JS_IsUndefined(*body_value) && !JS_IsNull(*body_value)) {
-        if (!JS_IsString(ctx, *body_value)) {
-            JS_ThrowTypeError(ctx, "fetch(url, options.body) expects a string");
-            goto fail;
-        }
+        if (esp32_mquickjs_stream_is_stream(ctx, *body_value)) {
+            char *body_text = NULL;
+            size_t body_len = 0;
 
-        body = JS_ToCString(ctx, *body_value, &body_buf);
-        if (body == NULL) {
-            goto fail;
-        }
-        request->body = http_strdup(body);
-        if (request->body == NULL) {
-            JS_ThrowOutOfMemory(ctx);
-            goto fail;
+            if (esp32_mquickjs_stream_read_all_text(ctx,
+                                                    *body_value,
+                                                    "fetch(url, options.body)",
+                                                    &body_text,
+                                                    &body_len) != 0) {
+                goto fail;
+            }
+            request->body = body_text;
+        } else {
+            if (!JS_IsString(ctx, *body_value)) {
+                JS_ThrowTypeError(ctx, "fetch(url, options.body) expects a string or Stream");
+                goto fail;
+            }
+
+            body = JS_ToCString(ctx, *body_value, &body_buf);
+            if (body == NULL) {
+                goto fail;
+            }
+            request->body = http_strdup(body);
+            if (request->body == NULL) {
+                JS_ThrowOutOfMemory(ctx);
+                goto fail;
+            }
         }
     }
 
@@ -926,6 +1003,109 @@ static JSValue http_fetch_sync(JSContext *ctx,
     result = http_make_response_object(ctx, response);
     http_free_response(response);
     return result;
+}
+
+static int http_parse_request_object(JSContext *ctx,
+                                     JSValue request_value,
+                                     esp32_mquickjs_http_request_t *request)
+{
+    JSGCRef method_ref;
+    JSGCRef url_ref;
+    JSGCRef headers_ref;
+    JSGCRef body_ref;
+    JSGCRef timeout_ref;
+    JSValue *method_value;
+    JSValue *url_value;
+    JSValue *headers_value;
+    JSValue *body_value;
+    JSValue *timeout_value;
+    JSCStringBuf method_buf;
+    JSCStringBuf url_buf;
+    const char *method;
+    const char *url;
+
+    method_value = JS_PushGCRef(ctx, &method_ref);
+    url_value = JS_PushGCRef(ctx, &url_ref);
+    headers_value = JS_PushGCRef(ctx, &headers_ref);
+    body_value = JS_PushGCRef(ctx, &body_ref);
+    timeout_value = JS_PushGCRef(ctx, &timeout_ref);
+    *method_value = JS_GetPropertyStr(ctx, request_value, "method");
+    *url_value = JS_GetPropertyStr(ctx, request_value, "url");
+    *headers_value = JS_GetPropertyStr(ctx, request_value, "headers");
+    *body_value = JS_GetPropertyStr(ctx, request_value, "body");
+    *timeout_value = JS_GetPropertyStr(ctx, request_value, "timeoutMs");
+
+    if (JS_IsException(*method_value) || JS_IsException(*url_value) || JS_IsException(*headers_value) ||
+        JS_IsException(*body_value) || JS_IsException(*timeout_value)) {
+        goto fail;
+    }
+    if (!JS_IsString(ctx, *method_value) || !JS_IsString(ctx, *url_value)) {
+        JS_ThrowTypeError(ctx, "fetch(request) expects Request.method and Request.url");
+        goto fail;
+    }
+
+    method = JS_ToCString(ctx, *method_value, &method_buf);
+    url = JS_ToCString(ctx, *url_value, &url_buf);
+    if (method == NULL || url == NULL) {
+        goto fail;
+    }
+
+    request->method = http_strdup(method);
+    request->url = http_strdup(url);
+    request->timeout_ms = ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS;
+    if (request->method == NULL || request->url == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        goto fail;
+    }
+
+    if (http_parse_timeout(ctx, *timeout_value, &request->timeout_ms) != 0) {
+        JS_ThrowTypeError(ctx, "fetch(request) expects Request.timeoutMs to be a non-negative integer");
+        goto fail;
+    }
+    if (http_parse_headers(ctx, *headers_value, &request->headers, &request->header_count) != 0) {
+        goto fail;
+    }
+    if (!JS_IsUndefined(*body_value) && !JS_IsNull(*body_value)) {
+        if (esp32_mquickjs_stream_is_stream(ctx, *body_value)) {
+            char *body_text = NULL;
+            size_t body_len = 0;
+
+            if (esp32_mquickjs_stream_read_all_text(ctx, *body_value, "fetch(request.body)", &body_text, &body_len) != 0) {
+                goto fail;
+            }
+            request->body = body_text;
+        } else if (JS_IsString(ctx, *body_value)) {
+            JSCStringBuf body_buf;
+            const char *body = JS_ToCString(ctx, *body_value, &body_buf);
+
+            if (body == NULL) {
+                goto fail;
+            }
+            request->body = http_strdup(body);
+            if (request->body == NULL) {
+                JS_ThrowOutOfMemory(ctx);
+                goto fail;
+            }
+        } else {
+            JS_ThrowTypeError(ctx, "fetch(request.body) expects a string or Stream");
+            goto fail;
+        }
+    }
+
+    JS_PopGCRef(ctx, &timeout_ref);
+    JS_PopGCRef(ctx, &body_ref);
+    JS_PopGCRef(ctx, &headers_ref);
+    JS_PopGCRef(ctx, &url_ref);
+    JS_PopGCRef(ctx, &method_ref);
+    return 0;
+
+fail:
+    JS_PopGCRef(ctx, &timeout_ref);
+    JS_PopGCRef(ctx, &body_ref);
+    JS_PopGCRef(ctx, &headers_ref);
+    JS_PopGCRef(ctx, &url_ref);
+    JS_PopGCRef(ctx, &method_ref);
+    return -1;
 }
 
 static void http_async_cleanup_slot(JSContext *ctx, esp32_mquickjs_http_async_slot_t *slot)
@@ -1001,7 +1181,10 @@ static JSValue http_fetch_async(JSContext *ctx,
 
     callback_ref = JS_AddGCRef(ctx, &slot->callback);
     *callback_ref = callback;
-    slot->request = *request;
+    if (http_clone_request(request, &slot->request) != 0) {
+        http_async_cleanup_slot(ctx, slot);
+        return JS_ThrowOutOfMemory(ctx);
+    }
     worker_args = heap_caps_calloc(1, sizeof(*worker_args), MALLOC_CAP_8BIT);
     if (worker_args == NULL) {
         http_async_cleanup_slot(ctx, slot);
@@ -1039,8 +1222,6 @@ bool esp32_mquickjs_install_http_module(JSContext *ctx,
 
     if (!esp32_mquickjs_set_property(ctx, *module_obj, "DEFAULT_TIMEOUT_MS",
                                      JS_NewUint32(ctx, ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS)) ||
-        !esp32_mquickjs_set_property(ctx, *module_obj, "MAX_RESPONSE_BYTES",
-                                     JS_NewUint32(ctx, ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BYTES)) ||
         !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "fetch", "http.fetch")) {
         goto fail;
     }
@@ -1077,27 +1258,6 @@ bool esp32_mquickjs_dispatch_http(JSContext *ctx,
         return false;
     }
 
-    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
-        *result = JS_ThrowTypeError(ctx,
-                                    "fetch(url, options?, callback?) expects a URL string");
-        return true;
-    }
-
-    url = JS_ToCString(ctx, argv[0], &url_buf);
-    if (url == NULL) {
-        *result = JS_EXCEPTION;
-        return true;
-    }
-
-    request.url = http_strdup(url);
-    request.method = http_strdup("GET");
-    request.timeout_ms = ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS;
-    if (request.url == NULL || request.method == NULL) {
-        http_free_request(&request);
-        *result = JS_ThrowOutOfMemory(ctx);
-        return true;
-    }
-
     if (argc >= 2) {
         if (JS_IsFunction(ctx, argv[1])) {
             callback = argv[1];
@@ -1116,10 +1276,48 @@ bool esp32_mquickjs_dispatch_http(JSContext *ctx,
         is_async = true;
     }
 
-    if (http_parse_options(ctx, options, &request) != 0) {
-        http_free_request(&request);
-        *result = JS_EXCEPTION;
+    if (argc < 1) {
+        *result = JS_ThrowTypeError(ctx, "fetch(input, options?, callback?) expects a URL string or Request");
         return true;
+    }
+
+    if (esp32_mquickjs_is_request_object(ctx, argv[0])) {
+        if (!JS_IsUndefined(options) && !JS_IsNull(options)) {
+            http_free_request(&request);
+            *result = JS_ThrowTypeError(ctx, "fetch(request, callback?) does not accept a separate options object");
+            return true;
+        }
+        if (http_parse_request_object(ctx, argv[0], &request) != 0) {
+            http_free_request(&request);
+            *result = JS_EXCEPTION;
+            return true;
+        }
+    } else {
+        if (!JS_IsString(ctx, argv[0])) {
+            *result = JS_ThrowTypeError(ctx, "fetch(input, options?, callback?) expects a URL string or Request");
+            return true;
+        }
+
+        url = JS_ToCString(ctx, argv[0], &url_buf);
+        if (url == NULL) {
+            *result = JS_EXCEPTION;
+            return true;
+        }
+
+        request.url = http_strdup(url);
+        request.method = http_strdup("GET");
+        request.timeout_ms = ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS;
+        if (request.url == NULL || request.method == NULL) {
+            http_free_request(&request);
+            *result = JS_ThrowOutOfMemory(ctx);
+            return true;
+        }
+
+        if (http_parse_options(ctx, options, &request) != 0) {
+            http_free_request(&request);
+            *result = JS_EXCEPTION;
+            return true;
+        }
     }
 
     if (is_async) {
