@@ -3,7 +3,7 @@
 This project supports direct flashing to remote ESP32 boards through `esp_rfc2217_server`. The Windows server must override the default reset sequence. Without this override, the server uses `ClassicReset`, which does not reliably put `USB-Serial/JTAG` boards into download mode.
 
 ## Server Setup on Windows
-Run `uv sync` once in the repository root to provision the repo-local Python tools. Then copy [.env.example](/home/zach/esp32qjs/.env.example) to `/.env`, choose a board profile with `BOARD=...`, and set the remote board address plus `ESP_IDF_PATH` once. `REMOTE_URL` is preferred; the script also accepts the legacy `ESPPORT` variable. For `rfc2217://...` URLs, the helper auto-adds `ign_set_control` and `timeout=10` when they are missing. With `SERVER_PYTHON_EXE=auto`, the helper prefers the uv-managed `esptool` install automatically, and `build` / `monitor` derive `idf.py` and `export.sh` from `ESP_IDF_PATH`. Then run [scripts/remote.py](/home/zach/esp32qjs/scripts/remote.py) on the machine that owns the board:
+Run `uv sync` once in the repository root to provision the repo-local Python tools. Then copy [.env.example](/home/zach/esp32qjs/.env.example) to `/.env`, choose a board profile with `BOARD=...`, and set the remote board address plus `IDF_PATH` once. `REMOTE_URL` is preferred; For `rfc2217://...` URLs, the helper auto-adds `ign_set_control` and `timeout=10` when they are missing. With `SERVER_PYTHON_EXE=auto`, the helper prefers the uv-managed `esptool` install automatically, and `build` / `monitor` derive `idf.py` and `export.sh` from `IDF_PATH`. Then run [scripts/remote.py](/home/zach/esp32qjs/scripts/remote.py) on the machine that owns the board:
 
 ```bash
 python scripts/remote.py server --force-restart

@@ -53,7 +53,7 @@ class BoardProfile:
     idf_target: str
     build_dir: Path
     sdkconfig_defaults: Path | None
-    esp_idf_path: str
+    idf_path: str
     remote_host: str
     remote_port: int
     remote_url: str
@@ -73,7 +73,7 @@ class ProjectConfig:
     generated_sdkconfig: Path
     sdkconfig_defaults: Path | None
     idf_target: str
-    esp_idf_path: str
+    idf_path: str
     remote_host: str
     remote_port: int
     remote_url: str
@@ -220,20 +220,17 @@ def load_profile(board_override: str | None = None) -> BoardProfile:
     board_dir = board_file.parent
     board_env = load_dotenv(board_file)
 
-    esp_idf_path = merged_value(
+    idf_path = merged_value(
         repo_env,
         board_env,
-        "ESP_IDF_PATH",
+        "IDF_PATH",
         merged_value(repo_env, board_env, "IDF_PATH", str(Path.home() / "esp" / "esp-idf")),
     )
     remote_port = merged_int(repo_env, board_env, "REMOTE_PORT", 4000)
     remote_url_override = (
         os.environ.get("REMOTE_URL")
         or repo_env.get("REMOTE_URL")
-        or os.environ.get("ESPPORT")
-        or repo_env.get("ESPPORT")
         or board_env.get("REMOTE_URL")
-        or board_env.get("ESPPORT")
         or ""
     )
     sdkconfig_defaults_raw = merged_value(repo_env, board_env, "SDKCONFIG_DEFAULTS", "")
@@ -256,7 +253,7 @@ def load_profile(board_override: str | None = None) -> BoardProfile:
             if sdkconfig_defaults_raw
             else (board_sdkconfig_defaults_file(board_dir) if board_sdkconfig_defaults_file(board_dir).exists() else None)
         ),
-        esp_idf_path=str(Path(esp_idf_path).expanduser()),
+        idf_path=str(Path(idf_path).expanduser()),
         remote_host=merged_value(repo_env, board_env, "REMOTE_HOST", "192.168.68.54"),
         remote_port=remote_port,
         remote_url=remote_url_override,
@@ -497,7 +494,7 @@ def start_server(config: ProjectConfig, force_restart: bool) -> int:
 
 def idf_py_cmd(project_args: list[str], config: ProjectConfig) -> list[str]:
     """Return a command that can run `idf.py` for the selected board profile."""
-    esp_idf_root = Path(config.esp_idf_path).expanduser()
+    esp_idf_root = Path(config.idf_path).expanduser()
     idf_py_script = esp_idf_root / "tools" / "idf.py"
     export_script_path = esp_idf_root / "export.sh"
     idf_env_ready = bool(os.environ.get("IDF_PATH") and os.environ.get("ESP_IDF_VERSION"))
@@ -515,7 +512,7 @@ def idf_py_cmd(project_args: list[str], config: ProjectConfig) -> list[str]:
 
     if not idf_py_script.exists():
         raise SystemExit(
-            f"idf.py not found under {esp_idf_root}. Set ESP_IDF_PATH to the ESP-IDF install directory."
+            f"idf.py not found under {esp_idf_root}. Set idf_path to the ESP-IDF install directory."
         )
 
     if platform.system() != "Windows" and export_script_path.exists() and not idf_env_ready:
@@ -540,7 +537,7 @@ def idf_py_cmd(project_args: list[str], config: ProjectConfig) -> list[str]:
     if which("idf.py"):
         return ["idf.py", *full_args]
 
-    raise SystemExit("ESP-IDF tooling is not ready. Set ESP_IDF_PATH to the ESP-IDF install directory.")
+    raise SystemExit("ESP-IDF tooling is not ready. Set idf_path to the ESP-IDF install directory.")
 
 
 STALE_BUILD_ERROR_PATTERNS = (
@@ -861,7 +858,7 @@ def show_config(config: ProjectConfig) -> None:
     print(f"build_dir={format_path(config.build_dir)}")
     print(f"generated_sdkconfig={format_path(config.generated_sdkconfig)}")
     print(f"sdkconfig_defaults={format_path(config.sdkconfig_defaults)}")
-    print(f"esp_idf_path={config.esp_idf_path}")
+    print(f"idf_path={config.idf_path}")
     print(f"remote_host={config.remote_host}")
     print(f"remote_port={config.remote_port}")
     print(f"remote_url={remote_url(config.remote_url, config.remote_host, config.remote_port)}")
@@ -896,7 +893,7 @@ def build_project_config(args: argparse.Namespace, profile: BoardProfile) -> Pro
         generated_sdkconfig=build_dir / "sdkconfig",
         sdkconfig_defaults=sdkconfig_defaults,
         idf_target=args.idf_target,
-        esp_idf_path=args.esp_idf_path,
+        idf_path=args.idf_path,
         remote_host=getattr(args, "remote_host", profile.remote_host),
         remote_port=getattr(args, "remote_port", profile.remote_port),
         remote_url=getattr(args, "remote_url", profile.remote_url),
@@ -926,7 +923,7 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, Board
     parser.add_argument("--build-dir", default=format_path(profile.build_dir))
     parser.add_argument("--idf-target", default=profile.idf_target)
     parser.add_argument("--sdkconfig-defaults", default=format_path(profile.sdkconfig_defaults))
-    parser.add_argument("--esp-idf-path", default=profile.esp_idf_path)
+    parser.add_argument("--idf-path", default=profile.idf_path)
     parser.add_argument(
         "--assume",
         choices=("ask", "y", "n"),
