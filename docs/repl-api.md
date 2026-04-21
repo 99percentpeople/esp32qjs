@@ -402,6 +402,8 @@ wifi.disconnect();
   Default request timeout in milliseconds, `15000`.
 - `http.MAX_RESPONSE_BYTES`
   Maximum response body captured into memory, `32768`.
+- `http.server(options?)`
+  Create a lightweight HTTP server object backed by `esp_http_server`.
 - `http.fetch(url, options?)`
   Run a blocking HTTP request and return a response object.
 - `http.fetch(url, callback)` / `http.fetch(url, options, callback)`
@@ -450,4 +452,74 @@ var head = http.fetch("http://example.com", {
   timeoutMs: 5000,
 });
 print(head.status, head.body.length);
+```
+
+HTTP server API:
+
+- `var server = http.server({ port: 8080, host: "0.0.0.0" })`
+  Create a server. Default port is `80`. Default host is `"0.0.0.0"` to listen on all interfaces.
+- `server.get(path, handler)`
+- `server.post(path, handler)`
+- `server.put(path, handler)`
+- `server.patch(path, handler)`
+- `server.delete(path, handler)`
+- `server.head(path, handler)`
+- `server.options(path, handler)`
+- `server.all(path, handler)`
+  Register a route handler.
+- `http.staticFileHandler(root)` / `staticFileHandler(root)`
+  Create a handler function suitable for routes such as `server.get("/*", staticFileHandler("./www"))`.
+- `server.start()`
+- `server.stop()`
+
+Handler shape:
+
+- Input request object:
+  - `method`
+  - `path`
+  - `route`
+  - `queryString`
+  - `query`
+  - `body`
+  - `headers`
+- Return value:
+  - string: sent as a `200` body
+  - object: `{ status, headers, body }`
+  - `undefined` / `null`: empty `200` response
+
+Route patterns:
+
+- Exact strings such as `"/ping"` match the request path directly.
+- Strings containing `*` are compiled into a JavaScript `RegExp` and matched with the runtime's built-in regex engine.
+- You can also pass a `RegExp` directly, for example `/^\\/api\\/v1\\//`.
+
+Host binding:
+
+- Omit `host` or set it to `"0.0.0.0"` to listen on all interfaces.
+- Set `host` to a specific local IPv4 address to bind the server to the matching network interface.
+
+Example:
+
+```js
+var server = http.server({ port: 8080, host: "0.0.0.0" });
+
+server.get("/ping", function (req) {
+  return { status: 200, body: "pong" };
+});
+
+server.post("/echo", function (req) {
+  return {
+    status: 200,
+    headers: { "content-type": "text/plain; charset=utf-8" },
+    body: req.body,
+  };
+});
+
+server.get(/^\/hello$/, function (req) {
+  return req.query.name || "hello";
+});
+
+server.get("/assets/*", staticFileHandler("./_sys"));
+
+server.start();
 ```

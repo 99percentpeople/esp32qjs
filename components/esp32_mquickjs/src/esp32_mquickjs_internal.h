@@ -86,6 +86,9 @@ bool esp32_mquickjs_install_wifi_module(JSContext *ctx,
 bool esp32_mquickjs_install_http_module(JSContext *ctx,
                                         JSValue global_obj,
                                         esp32_mquickjs_runtime_t *runtime);
+bool esp32_mquickjs_install_http_server_module(JSContext *ctx,
+                                               JSValue global_obj,
+                                               esp32_mquickjs_runtime_t *runtime);
 
 bool esp32_mquickjs_dispatch_fs(JSContext *ctx,
                                 const char *operation,
@@ -120,5 +123,10 @@ bool esp32_mquickjs_dispatch_http(JSContext *ctx,
                                   int argc,
                                   JSValue *argv,
                                   JSValue *result);
+bool esp32_mquickjs_dispatch_http_server(JSContext *ctx,
+                                         const char *operation,
+                                         int argc,
+                                         JSValue *argv,
+                                         JSValue *result);
 
 esp_err_t esp32_mquickjs_wifi_get_status(esp32_mquickjs_wifi_status_t *status);

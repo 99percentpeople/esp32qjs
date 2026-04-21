@@ -64,6 +64,13 @@ bool esp32_mquickjs_register_async_poller(esp32_mquickjs_runtime_t *runtime,
                                           esp32_mquickjs_async_poller_t poller,
                                           void *opaque);
 
+bool esp32_mquickjs_set_bound_bridge_function_with_arg(JSContext *ctx,
+                                                       JSValue target_obj,
+                                                       JSValue global_obj,
+                                                       const char *target_name,
+                                                       const char *operation,
+                                                       JSValue bound_arg);
+
 void esp32_mquickjs_attach_current_task(esp32_mquickjs_runtime_t *runtime);
 
 void esp32_mquickjs_notify_activity(esp32_mquickjs_runtime_t *runtime);

@@ -6,6 +6,7 @@ idf_component_register(
         "src/esp32_mquickjs_gpio.c"
         "src/esp32_mquickjs_i2c.c"
         "src/esp32_mquickjs_http.c"
+        "src/esp32_mquickjs_http_server.c"
         "src/esp32_mquickjs_wifi.c"
         "src/js_stdlib.c"
     INCLUDE_DIRS
@@ -20,6 +21,7 @@ idf_component_register(
         joltwallet__littlefs
         esp_event
         esp_http_client
+        esp_http_server
         esp_netif
         esp_wifi
         mbedtls

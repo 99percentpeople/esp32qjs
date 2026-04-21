@@ -416,6 +416,21 @@ bool esp32_mquickjs_set_bound_bridge_function(JSContext *ctx,
     return esp32_mquickjs_set_property(ctx, target_obj, target_name, func);
 }
 
+bool esp32_mquickjs_set_bound_bridge_function_with_arg(JSContext *ctx,
+                                                       JSValue target_obj,
+                                                       JSValue global_obj,
+                                                       const char *target_name,
+                                                       const char *operation,
+                                                       JSValue bound_arg)
+{
+    JSValue func = esp32_mquickjs_make_bound_bridge_function_with_arg(ctx, global_obj, operation, bound_arg);
+
+    if (JS_IsException(func)) {
+        return false;
+    }
+    return esp32_mquickjs_set_property(ctx, target_obj, target_name, func);
+}
+
 static int js_timeout_arg(JSContext *ctx,
                           JSValue value,
                           uint32_t default_timeout_ms,
@@ -1111,6 +1126,11 @@ static JSValue js_host_bridge(JSContext *ctx, int argc, JSValue *argv)
         return result;
     }
 
+    if (strncmp(operation, "httpServer.", 11) == 0 &&
+        esp32_mquickjs_dispatch_http_server(ctx, operation + 11, argc - 1, argv + 1, &result)) {
+        return result;
+    }
+
     return JS_ThrowReferenceError(ctx, "unknown host bridge operation: %s", operation);
 }
 
@@ -1149,7 +1169,8 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
         !esp32_mquickjs_install_i2c_module(ctx, *global_obj) ||
         !esp32_mquickjs_install_esp32_module(ctx, *global_obj) ||
         !esp32_mquickjs_install_wifi_module(ctx, *global_obj, runtime) ||
-        !esp32_mquickjs_install_http_module(ctx, *global_obj, runtime)) {
+        !esp32_mquickjs_install_http_module(ctx, *global_obj, runtime) ||
+        !esp32_mquickjs_install_http_server_module(ctx, *global_obj, runtime)) {
         JS_PopGCRef(ctx, &global_ref);
         esp32_mquickjs_print_exception(ctx);
         return false;
