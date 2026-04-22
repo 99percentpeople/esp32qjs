@@ -299,31 +299,80 @@ print(i2c.write(0x3c, [0x00, 0xAF])); // SSD1306 display on
 
 ## `gpio` Module
 
+- `gpio.DISABLED`
+  Disabled mode string for `gpio.pinMode()` or `gpio.configure()`.
 - `gpio.INPUT`
   Input mode string for `gpio.pinMode()`.
 - `gpio.OUTPUT`
   Output mode string for `gpio.pinMode()`.
+- `gpio.INPUT_OUTPUT`
+  Input + output mode string for bidirectional pins.
+- `gpio.OUTPUT_OPEN_DRAIN`
+  Open-drain output mode string.
+- `gpio.INPUT_OUTPUT_OPEN_DRAIN`
+  Open-drain input + output mode string.
+- `gpio.FLOATING`
+  Disable internal pulls.
+- `gpio.PULLUP`
+  Enable the internal pull-up.
+- `gpio.PULLDOWN`
+  Enable the internal pull-down.
+- `gpio.PULLUP_PULLDOWN`
+  Enable both internal pulls when supported by the pad.
+- `gpio.LOW`, `gpio.HIGH`
+  Numeric output level helpers (`0` / `1`).
+- `gpio.DRIVE_0` .. `gpio.DRIVE_3`
+  Drive-strength levels accepted by `gpio.setDriveStrength()` and `gpio.configure()`.
 - `gpio.LED_BUILTIN`
   Built-in LED pin number for the current board.
 - `gpio.USER_LED_PIN`
   User LED pin number for the current board.
 - `gpio.USER_LED_ACTIVE_LOW`
   Whether the board LED is active-low.
+- `gpio.isValid(pin)`
+  Return `true` when `pin` is a usable digital GPIO on the current target.
+- `gpio.isOutputCapable(pin)`
+  Return `true` when the pad supports output mode, drive strength, and hold.
 - `gpio.pinMode(pin, mode)`
-  Configure a GPIO as `gpio.INPUT` or `gpio.OUTPUT`.
+  Configure a GPIO as `gpio.DISABLED`, `gpio.INPUT`, `gpio.OUTPUT`, `gpio.INPUT_OUTPUT`, `gpio.OUTPUT_OPEN_DRAIN`, or `gpio.INPUT_OUTPUT_OPEN_DRAIN`.
+- `gpio.setPull(pin, mode)`
+  Set internal pull resistors with `gpio.FLOATING`, `gpio.PULLUP`, `gpio.PULLDOWN`, or `gpio.PULLUP_PULLDOWN`.
+- `gpio.status(pin)`
+  Return the live pad configuration object:
+  `{ pin, valid, outputCapable, mode, pull, level, inputEnabled, outputEnabled, openDrain, pullup, pulldown, driveStrength, held, functionSelect, signalOut, outputControlledByPeripheral, outputEnableInverted, sleepEnabled }`.
+- `gpio.configure(pin, options)`
+  Apply `{ mode, pull, level, driveStrength, hold }` in one call and return `gpio.status(pin)`.
 - `gpio.digitalWrite(pin, value)`
-  Set a GPIO output level.
+  Set a GPIO output level. If the pin is not already output-enabled, the helper promotes it to `gpio.OUTPUT`.
 - `gpio.digitalRead(pin)`
   Read a GPIO level and return `true` or `false`.
+- `gpio.toggle(pin)`
+  Flip the current output level and return the new boolean level.
+- `gpio.getDriveStrength(pin)`
+  Return the current numeric drive strength (`0..3`).
+- `gpio.setDriveStrength(pin, strength)`
+  Update the pad drive strength and return the applied numeric value.
+- `gpio.hold(pin, enabled)`
+  Enable or disable pad hold on output-capable GPIOs.
+- `gpio.reset(pin)`
+  Reset the pad back to the ESP-IDF default GPIO state.
 - `gpio.led(value)`
   Control the board user LED. `true` turns it on.
 
 Example:
 
 ```js
-gpio.pinMode(gpio.LED_BUILTIN, gpio.OUTPUT);
-gpio.led(true);
+var pin = gpio.USER_LED_PIN >= 0 ? gpio.USER_LED_PIN : gpio.LED_BUILTIN;
+
+print(gpio.isValid(pin), gpio.isOutputCapable(pin));
+print(JSON.stringify(gpio.configure(pin, {
+  mode: gpio.OUTPUT,
+  pull: gpio.FLOATING,
+  driveStrength: gpio.DRIVE_1,
+  level: gpio.HIGH,
+})));
 sleep(100);
+print(gpio.toggle(pin)); // false
 gpio.led(false);
 ```
 

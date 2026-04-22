@@ -1,25 +1,102 @@
-__esp32qjsTest.run("gpio/basic", function () {
+test("gpio/basic", function () {
   var pin = gpio.USER_LED_PIN >= 0 ? gpio.USER_LED_PIN : gpio.LED_BUILTIN;
+  var initialDriveStrength;
+  var status;
 
-  __esp32qjsTest.ok(typeof gpio.INPUT === "string", "gpio.INPUT should be a string");
-  __esp32qjsTest.ok(typeof gpio.OUTPUT === "string", "gpio.OUTPUT should be a string");
-  __esp32qjsTest.ok(typeof gpio.USER_LED_ACTIVE_LOW === "boolean", "gpio.USER_LED_ACTIVE_LOW should be boolean");
-  __esp32qjsTest.ok(typeof gpio.pinMode === "function", "gpio.pinMode should exist");
-  __esp32qjsTest.ok(typeof gpio.digitalWrite === "function", "gpio.digitalWrite should exist");
-  __esp32qjsTest.ok(typeof gpio.digitalRead === "function", "gpio.digitalRead should exist");
-  __esp32qjsTest.ok(typeof gpio.led === "function", "gpio.led should exist");
+  test.ok(typeof gpio.DISABLED === "string", "gpio.DISABLED should be a string");
+  test.ok(typeof gpio.INPUT === "string", "gpio.INPUT should be a string");
+  test.ok(typeof gpio.OUTPUT === "string", "gpio.OUTPUT should be a string");
+  test.ok(typeof gpio.INPUT_OUTPUT === "string", "gpio.INPUT_OUTPUT should be a string");
+  test.ok(typeof gpio.OUTPUT_OPEN_DRAIN === "string", "gpio.OUTPUT_OPEN_DRAIN should be a string");
+  test.ok(typeof gpio.INPUT_OUTPUT_OPEN_DRAIN === "string", "gpio.INPUT_OUTPUT_OPEN_DRAIN should be a string");
+  test.ok(typeof gpio.FLOATING === "string", "gpio.FLOATING should be a string");
+  test.ok(typeof gpio.PULLUP === "string", "gpio.PULLUP should be a string");
+  test.ok(typeof gpio.PULLDOWN === "string", "gpio.PULLDOWN should be a string");
+  test.ok(typeof gpio.PULLUP_PULLDOWN === "string", "gpio.PULLUP_PULLDOWN should be a string");
+  test.equal(gpio.LOW, 0, "gpio.LOW should be 0");
+  test.equal(gpio.HIGH, 1, "gpio.HIGH should be 1");
+  test.equal(gpio.DRIVE_0, 0, "gpio.DRIVE_0 should be 0");
+  test.equal(gpio.DRIVE_3, 3, "gpio.DRIVE_3 should be 3");
+  test.ok(typeof gpio.USER_LED_ACTIVE_LOW === "boolean", "gpio.USER_LED_ACTIVE_LOW should be boolean");
+  test.ok(typeof gpio.isValid === "function", "gpio.isValid should exist");
+  test.ok(typeof gpio.isOutputCapable === "function", "gpio.isOutputCapable should exist");
+  test.ok(typeof gpio.pinMode === "function", "gpio.pinMode should exist");
+  test.ok(typeof gpio.setPull === "function", "gpio.setPull should exist");
+  test.ok(typeof gpio.status === "function", "gpio.status should exist");
+  test.ok(typeof gpio.configure === "function", "gpio.configure should exist");
+  test.ok(typeof gpio.digitalWrite === "function", "gpio.digitalWrite should exist");
+  test.ok(typeof gpio.digitalRead === "function", "gpio.digitalRead should exist");
+  test.ok(typeof gpio.toggle === "function", "gpio.toggle should exist");
+  test.ok(typeof gpio.getDriveStrength === "function", "gpio.getDriveStrength should exist");
+  test.ok(typeof gpio.setDriveStrength === "function", "gpio.setDriveStrength should exist");
+  test.ok(typeof gpio.hold === "function", "gpio.hold should exist");
+  test.ok(typeof gpio.reset === "function", "gpio.reset should exist");
+  test.ok(typeof gpio.led === "function", "gpio.led should exist");
+  test.ok(!gpio.isValid(-1), "negative pin should be invalid");
+  test.ok(!gpio.isOutputCapable(-1), "negative pin should not be output capable");
 
   if (pin < 0) {
     return { pin: pin, skippedHardwareCheck: true };
   }
 
+  test.ok(gpio.isValid(pin), "board LED pin should be valid");
+  test.ok(gpio.isOutputCapable(pin), "board LED pin should be output capable");
+
+  gpio.reset(pin);
+  status = gpio.status(pin);
+  test.equal(status.pin, pin, "status pin");
+  test.ok(status.valid, "status should report valid pin");
+  test.ok(status.outputCapable, "status should report output capable pin");
+  test.equal(status.mode, gpio.DISABLED, "reset should disable input/output");
+  test.ok(typeof status.level === "boolean", "status.level should be boolean");
+  test.ok(typeof status.driveStrength === "number", "status.driveStrength should be numeric");
+  test.ok(typeof status.functionSelect === "number", "status.functionSelect should be numeric");
+  test.ok(typeof status.signalOut === "number", "status.signalOut should be numeric");
+  test.ok(typeof status.outputControlledByPeripheral === "boolean", "status.outputControlledByPeripheral should be boolean");
+  test.ok(typeof status.outputEnableInverted === "boolean", "status.outputEnableInverted should be boolean");
+  test.ok(typeof status.sleepEnabled === "boolean", "status.sleepEnabled should be boolean");
+
+  gpio.pinMode(pin, gpio.INPUT_OUTPUT);
+  status = gpio.status(pin);
+  test.equal(status.mode, gpio.INPUT_OUTPUT, "pinMode should support INPUT_OUTPUT");
+  test.ok(status.inputEnabled, "INPUT_OUTPUT should enable input");
+  test.ok(status.outputEnabled, "INPUT_OUTPUT should enable output");
+
+  gpio.setPull(pin, gpio.PULLDOWN);
+  status = gpio.status(pin);
+  test.equal(status.pull, gpio.PULLDOWN, "setPull should update pull mode");
+  test.ok(status.pulldown, "setPull should enable pulldown");
+
+  initialDriveStrength = gpio.getDriveStrength(pin);
+  test.ok(initialDriveStrength >= gpio.DRIVE_0 && initialDriveStrength <= gpio.DRIVE_3, "initial drive strength range");
+  gpio.setDriveStrength(pin, gpio.DRIVE_1);
+  test.equal(gpio.getDriveStrength(pin), gpio.DRIVE_1, "setDriveStrength should update drive strength");
+
   gpio.pinMode(pin, gpio.OUTPUT);
   gpio.digitalWrite(pin, true);
-  __esp32qjsTest.ok(typeof gpio.digitalRead(pin) === "boolean", "digitalRead should return a boolean");
+  test.ok(typeof gpio.digitalRead(pin) === "boolean", "digitalRead should return a boolean");
+  var toggledLevel = gpio.toggle(pin);
+  test.ok(typeof toggledLevel === "boolean", "toggle should return a boolean");
+  test.ok(typeof gpio.digitalRead(pin) === "boolean", "digitalRead should stay boolean after toggle");
   gpio.digitalWrite(pin, false);
-  __esp32qjsTest.ok(typeof gpio.digitalRead(pin) === "boolean", "digitalRead should still return a boolean");
+  test.ok(typeof gpio.digitalRead(pin) === "boolean", "digitalRead should still return a boolean");
+  status = gpio.configure(pin, {
+    mode: gpio.OUTPUT,
+    pull: gpio.FLOATING,
+    driveStrength: initialDriveStrength,
+    level: gpio.HIGH,
+  });
+  test.equal(status.mode, gpio.OUTPUT, "configure should keep output mode");
+  test.equal(status.pull, gpio.FLOATING, "configure should update pull mode");
+  test.equal(status.driveStrength, initialDriveStrength, "configure should restore drive strength");
+  test.ok(typeof status.level === "boolean", "configure should report a boolean level");
+  gpio.hold(pin, true);
+  test.ok(gpio.status(pin).held, "hold(true) should be reflected in status");
+  gpio.hold(pin, false);
+  test.ok(!gpio.status(pin).held, "hold(false) should clear held state");
   gpio.led(true);
   gpio.led(false);
+  gpio.reset(pin);
 
   return { pin: pin };
 });

@@ -1,4 +1,4 @@
-__esp32qjsTest.run("timers/runtime", function () {
+test("timers/runtime", function () {
   var deferred = defer();
   var deferredRejected = defer();
   var intervalTicks = waitFor(function (resolve) {
@@ -54,18 +54,18 @@ __esp32qjsTest.run("timers/runtime", function () {
     deferredRejected.reject("deferred-fail");
   }, 25);
 
-  __esp32qjsTest.equal(intervalTicks, 3, "interval tick count");
-  __esp32qjsTest.equal(timeoutValue, "timeout", "timeout result");
-  __esp32qjsTest.equal(deferred.wait(1000), "deferred-ok", "deferred wait");
-  __esp32qjsTest.ok(!clearedTimeoutResult, "cleared timeout should not run");
-  __esp32qjsTest.ok(clearedIntervalTicks >= 2, "cleared interval should tick before clear");
+  test.equal(intervalTicks, 3, "interval tick count");
+  test.equal(timeoutValue, "timeout", "timeout result");
+  test.equal(deferred.wait(1000), "deferred-ok", "deferred wait");
+  test.ok(!clearedTimeoutResult, "cleared timeout should not run");
+  test.ok(clearedIntervalTicks >= 2, "cleared interval should tick before clear");
 
   try {
     deferredRejected.wait(1000);
   } catch (deferredError) {
     deferredRejectedCaught = String(deferredError).indexOf("deferred-fail") >= 0;
   }
-  __esp32qjsTest.ok(deferredRejectedCaught, "deferred reject should surface");
+  test.ok(deferredRejectedCaught, "deferred reject should surface");
 
   try {
     waitFor(function (resolve, reject) {
@@ -76,7 +76,7 @@ __esp32qjsTest.run("timers/runtime", function () {
   } catch (waitForError) {
     waitForRejectedCaught = String(waitForError).indexOf("waitFor-fail") >= 0;
   }
-  __esp32qjsTest.ok(waitForRejectedCaught, "waitFor reject should surface");
+  test.ok(waitForRejectedCaught, "waitFor reject should surface");
 
   return { intervalTicks: intervalTicks, timeoutValue: timeoutValue };
 });

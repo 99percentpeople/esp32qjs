@@ -23,50 +23,56 @@
     print(prefix + JSON.stringify(payload));
   }
 
-  globalThis.__esp32qjsTest = {
-    ok: function (value, message) {
-      if (!value) {
-        throw new Error(message || "expected truthy value");
-      }
-    },
-    equal: function (actual, expected, message) {
-      if (actual !== expected) {
-        throw new Error((message || "values differ") + ": expected " + expected + ", got " + actual);
-      }
-    },
-    config: function () {
-      return globalThis.__esp32qjsTestConfig || {};
-    },
-    requireConfig: function () {
-      var cfg = globalThis.__esp32qjsTestConfig || {};
-      var values = {};
-      var i;
+  function config() {
+    return globalThis.testConfig || {};
+  }
 
-      for (i = 0; i < arguments.length; i++) {
-        var key = arguments[i];
-        if (!cfg[key]) {
-          throw new Error("missing test config: " + key);
-        }
-        values[key] = cfg[key];
-      }
+  function helper(name, fn) {
+    var details;
 
-      return values;
-    },
-    run: function (name, fn) {
-      var details;
+    try {
+      details = fn();
+      emit("__TEST_PASS__:", {
+        name: name,
+        details: details === undefined ? null : details,
+      });
+    } catch (error) {
+      emit("__TEST_FAIL__:", {
+        name: name,
+        error: stringifyError(error),
+      });
+    }
+  }
 
-      try {
-        details = fn();
-        emit("__TEST_PASS__:", {
-          name: name,
-          details: details === undefined ? null : details,
-        });
-      } catch (error) {
-        emit("__TEST_FAIL__:", {
-          name: name,
-          error: stringifyError(error),
-        });
-      }
-    },
+  helper.ok = function (value, message) {
+    if (!value) {
+      throw new Error(message || "expected truthy value");
+    }
   };
+
+  helper.equal = function (actual, expected, message) {
+    if (actual !== expected) {
+      throw new Error((message || "values differ") + ": expected " + expected + ", got " + actual);
+    }
+  };
+
+  helper.config = config;
+  helper.requireConfig = function () {
+    var cfg = config();
+    var values = {};
+    var i;
+
+    for (i = 0; i < arguments.length; i++) {
+      var key = arguments[i];
+      if (!cfg[key]) {
+        throw new Error("missing test config: " + key);
+      }
+      values[key] = cfg[key];
+    }
+
+    return values;
+  };
+
+  helper.run = helper;
+  globalThis.test = helper;
 })();

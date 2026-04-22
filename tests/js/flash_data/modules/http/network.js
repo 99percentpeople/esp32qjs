@@ -1,5 +1,5 @@
-__esp32qjsTest.run("http/network", function () {
-  var cfg = __esp32qjsTest.requireConfig("wifiSsid", "wifiPassword", "httpUrl");
+test("http/network", function () {
+  var cfg = test.requireConfig("wifiSsid", "wifiPassword", "httpUrl");
   var wifiStatus = wifi.status();
   var response;
   var body;
@@ -16,7 +16,7 @@ __esp32qjsTest.run("http/network", function () {
     }, 20000);
   }
 
-  __esp32qjsTest.ok(wifiStatus.connected, "wifi should be connected before fetch");
+  test.ok(wifiStatus.connected, "wifi should be connected before fetch");
 
   response = waitFor(function (resolve, reject) {
     fetch(cfg.httpUrl, function (nextResponse, error) {
@@ -28,9 +28,9 @@ __esp32qjsTest.run("http/network", function () {
     });
   }, 20000);
 
-  __esp32qjsTest.ok(response.status >= 200 && response.status < 600, "fetch status should be valid");
+  test.ok(response.status >= 200 && response.status < 600, "fetch status should be valid");
   body = response.text();
-  __esp32qjsTest.ok(typeof body === "string", "fetch body should be text");
+  test.ok(typeof body === "string", "fetch body should be text");
 
   wifi.disconnect();
 

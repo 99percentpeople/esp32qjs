@@ -214,7 +214,46 @@ interface FsModule {
   remove(path: string): boolean;
 }
 
-type GpioMode = "input" | "output";
+type GpioMode =
+  | "disabled"
+  | "input"
+  | "output"
+  | "inputOutput"
+  | "outputOpenDrain"
+  | "inputOutputOpenDrain";
+
+type GpioPullMode = "floating" | "pullup" | "pulldown" | "pullupPulldown";
+
+type GpioDriveStrength = 0 | 1 | 2 | 3;
+
+interface GpioStatus {
+  pin: number;
+  valid: boolean;
+  outputCapable: boolean;
+  mode: GpioMode;
+  pull: GpioPullMode;
+  level: boolean;
+  inputEnabled: boolean;
+  outputEnabled: boolean;
+  openDrain: boolean;
+  pullup: boolean;
+  pulldown: boolean;
+  driveStrength: GpioDriveStrength;
+  held: boolean;
+  functionSelect: number;
+  signalOut: number;
+  outputControlledByPeripheral: boolean;
+  outputEnableInverted: boolean;
+  sleepEnabled: boolean;
+}
+
+interface GpioConfigureOptions {
+  mode?: GpioMode;
+  pull?: GpioPullMode;
+  level?: boolean | number;
+  driveStrength?: GpioDriveStrength;
+  hold?: boolean | number;
+}
 
 /**
  * GPIO helpers bound to the active board profile.
@@ -227,14 +266,38 @@ type GpioMode = "input" | "output";
  * ```
  */
 interface GpioModule {
+  readonly DISABLED: "disabled";
   readonly INPUT: "input";
   readonly OUTPUT: "output";
+  readonly INPUT_OUTPUT: "inputOutput";
+  readonly OUTPUT_OPEN_DRAIN: "outputOpenDrain";
+  readonly INPUT_OUTPUT_OPEN_DRAIN: "inputOutputOpenDrain";
+  readonly FLOATING: "floating";
+  readonly PULLUP: "pullup";
+  readonly PULLDOWN: "pulldown";
+  readonly PULLUP_PULLDOWN: "pullupPulldown";
+  readonly LOW: 0;
+  readonly HIGH: 1;
+  readonly DRIVE_0: 0;
+  readonly DRIVE_1: 1;
+  readonly DRIVE_2: 2;
+  readonly DRIVE_3: 3;
   readonly LED_BUILTIN: number;
   readonly USER_LED_PIN: number;
   readonly USER_LED_ACTIVE_LOW: boolean;
+  isValid(pin: number): boolean;
+  isOutputCapable(pin: number): boolean;
   pinMode(pin: number, mode: GpioMode): number;
+  setPull(pin: number, mode: GpioPullMode): number;
+  status(pin: number): GpioStatus;
+  configure(pin: number, options: GpioConfigureOptions): GpioStatus;
   digitalWrite(pin: number, value: boolean): boolean;
   digitalRead(pin: number): boolean;
+  toggle(pin: number): boolean;
+  getDriveStrength(pin: number): GpioDriveStrength;
+  setDriveStrength(pin: number, strength: GpioDriveStrength): GpioDriveStrength;
+  hold(pin: number, enabled: boolean): boolean;
+  reset(pin: number): number;
   led(value: boolean): boolean;
 }
 

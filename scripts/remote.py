@@ -21,7 +21,7 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
@@ -120,6 +120,7 @@ class TestStageSummary:
     selection_label: str = ""
     selection: tuple[str, ...] = ()
     note: str = ""
+    failure_details: list[str] = field(default_factory=list)
 
     @property
     def total_cases(self) -> int:
@@ -159,6 +160,14 @@ class TestStageError(RuntimeError):
         super().__init__(message)
         self.summary = summary
         self.message = message
+
+
+@dataclass(frozen=True)
+class JsCaseResult:
+    case: JsTestCase
+    case_name: str
+    status: str
+    error: str = ""
 
 
 @dataclass(frozen=True)
@@ -1071,6 +1080,10 @@ def print_test_report(report: TestRunReport) -> None:
             f"{suffix}",
             flush=True,
         )
+        if summary.failure_details:
+            print(f"  {summary.name} failures:", flush=True)
+            for detail in summary.failure_details:
+                print(f"  - {detail}", flush=True)
     print(
         f"Overall: status={report.status} scopes={scopes} stages={len(report.stages)} "
         f"total={report.total_cases} passed={report.passed_cases} "
@@ -1289,7 +1302,7 @@ def ensure_js_test_runtime(session: MonitorSession) -> None:
 
     send_js_command(
         session,
-        'print("__ESP32QJS_TEST_PROBE__:" + (globalThis.__esp32qjsTest ? "ready" : "missing"))',
+        'print("__ESP32QJS_TEST_PROBE__:" + (typeof globalThis.test === "function" ? "ready" : "missing"))',
     )
     probe_output = read_monitor_until_marker(session, "__ESP32QJS_TEST_PROBE__:", 5.0, "the JS test runtime probe")
     if "__ESP32QJS_TEST_PROBE__:ready" not in probe_output:
@@ -1310,9 +1323,24 @@ def configure_js_test_runtime(session: MonitorSession, config: ProjectConfig) ->
 
     send_js_command(
         session,
-        f'globalThis.__esp32qjsTestConfig = JSON.parse({encoded}); print("__ESP32QJS_TEST_CONFIG__")',
+        (
+            f"globalThis.testConfig = JSON.parse({encoded}); "
+            'print("__ESP32QJS_TEST_CONFIG__")'
+        ),
     )
     read_monitor_until_marker(session, "__ESP32QJS_TEST_CONFIG__", 5.0, "the JS test config handshake")
+
+
+def collect_js_runtime(session: MonitorSession) -> None:
+    """Run a best-effort JS GC cycle between test cases to reduce cross-case state pressure."""
+    try:
+        send_js_command(
+            session,
+            'if (typeof gc === "function") gc(); print("__ESP32QJS_TEST_GC__")',
+        )
+        read_monitor_until_marker(session, "__ESP32QJS_TEST_GC__", 5.0, "the JS GC handshake")
+    except (MarkerTimeoutError, OSError):
+        print("Warning: skipped JS GC handshake before the next case", flush=True)
 
 
 def validate_network_test_config(config: ProjectConfig, modules: tuple[JsTestModule, ...], network_enabled: bool) -> None:
@@ -1337,10 +1365,28 @@ def validate_network_test_config(config: ProjectConfig, modules: tuple[JsTestMod
         )
 
 
-def run_js_test_case(session: MonitorSession, case: JsTestCase) -> None:
-    """Execute one JS test case file and require a structured pass result."""
+def run_js_test_case(session: MonitorSession, case: JsTestCase) -> JsCaseResult:
+    """Execute one JS test case file and collect a structured pass/fail result."""
     print(f"Running JS test {case.path}", flush=True)
-    send_js_command(session, f'load("{case.path}")')
+    case_path = json.dumps(case.path)
+    try:
+        send_js_command(
+            session,
+            (
+                "try { "
+                f"load({case_path}); "
+                "} catch (error) { "
+                'print("__TEST_FAIL__:" + JSON.stringify({'
+                f"name: {case_path}, "
+                "error: String(error)"
+                "})); "
+                "}"
+            ),
+        )
+    except OSError as exc:
+        message = f"unable to send command to monitor session ({exc})"
+        print(f"FAIL {case.path}: {message}", flush=True)
+        return JsCaseResult(case=case, case_name=case.path, status="failed", error=message)
 
     deadline = time.monotonic() + case.timeout_seconds
     quiet_deadline: float | None = None
@@ -1370,20 +1416,53 @@ def run_js_test_case(session: MonitorSession, case: JsTestCase) -> None:
         time.sleep(0.05)
 
     if result_line is None:
-        raise SystemExit(
-            f"Timed out waiting for a result from JS test {case.path}.\n"
-            f"Last serial output:\n{format_output_tail(output)}"
+        print(
+            f"FAIL {case.path}: timed out waiting for a structured result\n"
+            f"Last serial output:\n{format_output_tail(output)}",
+            flush=True,
+        )
+        return JsCaseResult(
+            case=case,
+            case_name=case.path,
+            status="failed",
+            error="timed out waiting for a structured result",
         )
 
     if result_line.startswith(JS_TEST_FAIL_PREFIX):
-        payload = json.loads(result_line[len(JS_TEST_FAIL_PREFIX):])
-        raise SystemExit(
-            f"JS test {payload.get('name', case.path)} failed: {payload.get('error', 'unknown error')}\n"
-            f"Last serial output:\n{format_output_tail(output)}"
-        )
+        try:
+            payload = json.loads(result_line[len(JS_TEST_FAIL_PREFIX):])
+        except json.JSONDecodeError as exc:
+            message = f"emitted an invalid failure payload ({exc})"
+            print(
+                f"FAIL {case.path}: {message}\n"
+                f"Last serial output:\n{format_output_tail(output)}",
+                flush=True,
+            )
+            return JsCaseResult(case=case, case_name=case.path, status="failed", error=message)
 
-    payload = json.loads(result_line[len(JS_TEST_PASS_PREFIX):])
-    print(f"PASS {payload.get('name', case.path)}", flush=True)
+        case_name = payload.get("name", case.path)
+        message = payload.get("error", "unknown error")
+        print(
+            f"FAIL {case_name}: {message}\n"
+            f"Last serial output:\n{format_output_tail(output)}",
+            flush=True,
+        )
+        return JsCaseResult(case=case, case_name=case_name, status="failed", error=message)
+
+    try:
+        payload = json.loads(result_line[len(JS_TEST_PASS_PREFIX):])
+    except json.JSONDecodeError as exc:
+        message = f"emitted an invalid pass payload ({exc})"
+        print(
+            f"FAIL {case.path}: {message}\n"
+            f"Last serial output:\n{format_output_tail(output)}",
+            flush=True,
+        )
+        return JsCaseResult(case=case, case_name=case.path, status="failed", error=message)
+
+    case_name = payload.get("name", case.path)
+    print(f"PASS {case_name}", flush=True)
+    return JsCaseResult(case=case, case_name=case_name, status="passed")
 
 
 def run_js_tests(config: ProjectConfig,
@@ -1422,7 +1501,7 @@ def run_js_tests(config: ProjectConfig,
         print_test_stage_summary(summary)
         raise TestStageError(summary, "Board-backed JS tests currently require a POSIX host because they run through a PTY monitor session.")
 
-    session = start_monitor_session(js_config)
+    session = start_monitor_session(config)
     try:
         try:
             ensure_js_test_runtime(session)
@@ -1454,15 +1533,17 @@ def run_js_tests(config: ProjectConfig,
                     print(f"Skipping JS test {case.path} (requires --network)", flush=True)
                     summary.skipped_cases += 1
                     continue
-                try:
-                    run_js_test_case(session, case)
-                except SystemExit as exc:
+                collect_js_runtime(session)
+                result = run_js_test_case(session, case)
+                if result.status == "failed":
                     summary.failed_cases += 1
                     summary.status = "failed"
-                    print_test_stage_summary(summary)
-                    raise TestStageError(summary, str(exc)) from exc
+                    summary.failure_details.append(f"{result.case_name}: {result.error}")
+                    continue
                 summary.passed_cases += 1
         print_test_stage_summary(summary)
+        if summary.status != "passed":
+            raise TestStageError(summary, "JS tests failed. See the final report for failure details.")
         return summary
     finally:
         close_monitor_session(session)
@@ -1481,11 +1562,18 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
         if args.no_flash_fs:
             raise SystemExit("`--no-flash-fs` requires JS scope.")
 
-    try:
-        if "c" in scopes:
-            report.stages.append(run_host_c_tests())
+    stage_errors: list[str] = []
 
-        if "js" in scopes:
+    if "c" in scopes:
+        try:
+            report.stages.append(run_host_c_tests())
+        except TestStageError as exc:
+            if not report.stages or report.stages[-1] is not exc.summary:
+                report.stages.append(exc.summary)
+            stage_errors.append(exc.message)
+
+    if "js" in scopes:
+        try:
             report.stages.append(
                 run_js_tests(
                     config,
@@ -1494,13 +1582,14 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
                     flash_fs_first=not args.no_flash_fs,
                 )
             )
-    except TestStageError as exc:
-        if not report.stages or report.stages[-1] is not exc.summary:
-            report.stages.append(exc.summary)
-        print_test_report(report)
-        raise SystemExit(exc.message) from exc
+        except TestStageError as exc:
+            if not report.stages or report.stages[-1] is not exc.summary:
+                report.stages.append(exc.summary)
+            stage_errors.append(exc.message)
 
     print_test_report(report)
+    if stage_errors:
+        raise SystemExit("One or more test stages failed.")
 
 
 def build_project_config(args: argparse.Namespace, profile: BoardProfile) -> ProjectConfig:
