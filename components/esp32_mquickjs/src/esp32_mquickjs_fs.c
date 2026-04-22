@@ -1,5 +1,6 @@
 #include "esp32_mquickjs_fs.h"
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_fs_path.h"
 #include "esp32_mquickjs_stream.h"
 
 #include <dirent.h>
@@ -17,86 +18,6 @@
 static const char *TAG = "esp32qjs";
 
 static bool s_littlefs_mounted;
-
-static bool resolve_littlefs_path(const char *input_path, char *out_path, size_t out_path_size)
-{
-    static const size_t base_len = sizeof(ESP32_MQUICKJS_LITTLEFS_BASE_PATH) - 1;
-    const char *cursor;
-    size_t out_len;
-
-    if (input_path == NULL || out_path == NULL || out_path_size <= base_len + 1) {
-        return false;
-    }
-
-    memcpy(out_path, ESP32_MQUICKJS_LITTLEFS_BASE_PATH, base_len);
-    out_path[base_len] = '\0';
-    out_len = base_len;
-
-    if (input_path[0] == '\0' || strcmp(input_path, ".") == 0) {
-        return true;
-    }
-
-    if (input_path[0] == '/') {
-        if (strncmp(input_path, ESP32_MQUICKJS_LITTLEFS_BASE_PATH, base_len) != 0) {
-            return false;
-        }
-        if (input_path[base_len] != '\0' && input_path[base_len] != '/') {
-            return false;
-        }
-        cursor = input_path + base_len;
-    } else {
-        cursor = input_path;
-    }
-
-    while (*cursor != '\0') {
-        const char *segment_start;
-        size_t segment_len;
-
-        while (*cursor == '/') {
-            cursor++;
-        }
-        if (*cursor == '\0') {
-            break;
-        }
-
-        segment_start = cursor;
-        while (*cursor != '\0' && *cursor != '/') {
-            cursor++;
-        }
-        segment_len = (size_t)(cursor - segment_start);
-
-        if (segment_len == 1 && segment_start[0] == '.') {
-            continue;
-        }
-
-        if (segment_len == 2 && segment_start[0] == '.' && segment_start[1] == '.') {
-            char *slash;
-
-            if (out_len == base_len) {
-                return false;
-            }
-
-            slash = strrchr(out_path, '/');
-            if (slash == NULL || (size_t)(slash - out_path) < base_len) {
-                return false;
-            }
-            *slash = '\0';
-            out_len = (size_t)(slash - out_path);
-            continue;
-        }
-
-        if (out_len + 1 + segment_len >= out_path_size) {
-            return false;
-        }
-
-        out_path[out_len++] = '/';
-        memcpy(out_path + out_len, segment_start, segment_len);
-        out_len += segment_len;
-        out_path[out_len] = '\0';
-    }
-
-    return true;
-}
 
 static uint8_t *load_script_file(const char *path, size_t *out_len)
 {
@@ -154,21 +75,6 @@ static JSValue fs_throw_errno(JSContext *ctx, const char *action, const char *pa
     return JS_ThrowInternalError(ctx, "%s failed for %s (%s)", action, path, strerror(err));
 }
 
-static const char *path_basename(const char *path)
-{
-    const char *slash;
-
-    if (path == NULL || path[0] == '\0') {
-        return "";
-    }
-
-    slash = strrchr(path, '/');
-    if (slash == NULL) {
-        return path;
-    }
-    return slash[1] == '\0' ? slash : slash + 1;
-}
-
 static int js_value_to_littlefs_path(JSContext *ctx,
                                      JSValue value,
                                      const char *api_name,
@@ -184,7 +90,10 @@ static int js_value_to_littlefs_path(JSContext *ctx,
     }
 
     path = JS_ToCString(ctx, value, &path_buf);
-    if (!resolve_littlefs_path(path, out_path, out_path_size)) {
+    if (!esp32_mquickjs_fs_resolve_path(ESP32_MQUICKJS_LITTLEFS_BASE_PATH,
+                                        path,
+                                        out_path,
+                                        out_path_size)) {
         JS_ThrowTypeError(ctx,
                           "%s expects a path under %s",
                           api_name,
@@ -207,7 +116,7 @@ static JSValue fs_make_stat_object(JSContext *ctx, const char *path, const struc
         goto fail;
     }
     if (!esp32_mquickjs_set_property(ctx, *entry, "name",
-                                     JS_NewString(ctx, path_basename(path))) ||
+                                     JS_NewString(ctx, esp32_mquickjs_fs_path_basename(path))) ||
         !esp32_mquickjs_set_property(ctx, *entry, "path",
                                      JS_NewString(ctx, path)) ||
         !esp32_mquickjs_set_property(ctx, *entry, "isDir",
@@ -395,7 +304,10 @@ JSValue esp32_mquickjs_load_from_littlefs(JSContext *ctx,
                                      "LittleFS is not mounted at %s",
                                      ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
     }
-    if (!resolve_littlefs_path(script_path, resolved_path, sizeof(resolved_path))) {
+    if (!esp32_mquickjs_fs_resolve_path(ESP32_MQUICKJS_LITTLEFS_BASE_PATH,
+                                        script_path,
+                                        resolved_path,
+                                        sizeof(resolved_path))) {
         return JS_ThrowTypeError(ctx, "load(path) expects a non-empty path under %s",
                                  ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
     }

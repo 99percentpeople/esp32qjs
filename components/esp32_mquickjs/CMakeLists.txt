@@ -114,6 +114,7 @@ idf_component_register(
         "src/esp32_mquickjs.c"
         "src/esp32_mquickjs_esp32.c"
         "src/esp32_mquickjs_fs.c"
+        "src/esp32_mquickjs_fs_path.c"
         "src/esp32_mquickjs_stream.c"
         "src/esp32_mquickjs_request_response.c"
         "src/esp32_mquickjs_gpio.c"

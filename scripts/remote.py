@@ -14,12 +14,14 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
@@ -43,6 +45,121 @@ custom_reset_sequence = R0|D0|W0.1|D1|R0|W0.1|R1|D0|R1|W0.1|D0|R0
 custom_hard_reset_sequence = R1|W0.2|R0
 """
 
+HOST_TEST_BUILD_DIR = ROOT_DIR / "build-host-tests"
+JS_TEST_FLASH_DATA_DIR = ROOT_DIR / "tests" / "js" / "flash_data"
+JS_TEST_READY_MARKER = "__ESP32QJS_TEST_READY__"
+JS_TEST_PASS_PREFIX = "__TEST_PASS__:"
+JS_TEST_FAIL_PREFIX = "__TEST_FAIL__:"
+ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])")
+CTEST_SUMMARY_RE = re.compile(r"(?m)^(\d+)% tests passed, (\d+) tests failed out of (\d+)$")
+TEST_SCOPE_ORDER = ("c", "js")
+
+
+@dataclass(frozen=True)
+class JsTestCase:
+    path: str
+    network_required: bool = False
+    timeout_seconds: float = 15.0
+
+
+@dataclass(frozen=True)
+class JsTestModule:
+    name: str
+    cases: tuple[JsTestCase, ...]
+
+
+JS_TEST_MODULES = (
+    JsTestModule("core", (JsTestCase("modules/core/eval.js"),)),
+    JsTestModule("esp32", (JsTestCase("modules/esp32/runtime.js"),)),
+    JsTestModule("gpio", (JsTestCase("modules/gpio/basic.js"),)),
+    JsTestModule("i2c", (JsTestCase("modules/i2c/status.js"),)),
+    JsTestModule("timers", (JsTestCase("modules/timers/runtime.js"),)),
+    JsTestModule("fs", (JsTestCase("modules/fs/filesystem.js"),)),
+    JsTestModule("stream", (JsTestCase("modules/stream/stream.js"),)),
+    JsTestModule("load", (JsTestCase("modules/load/load.js"),)),
+    JsTestModule(
+        "wifi",
+        (
+            JsTestCase("modules/wifi/offline.js"),
+            JsTestCase("modules/wifi/network.js", network_required=True, timeout_seconds=25.0),
+        ),
+    ),
+    JsTestModule(
+        "http",
+        (
+            JsTestCase("modules/http/offline.js"),
+            JsTestCase("modules/http/network.js", network_required=True, timeout_seconds=25.0),
+        ),
+    ),
+)
+JS_TEST_MODULE_MAP = {module.name: module for module in JS_TEST_MODULES}
+
+
+class MarkerTimeoutError(RuntimeError):
+    """Raised when expected serial output does not arrive before the timeout."""
+
+    def __init__(self, description: str, output: str):
+        super().__init__(description)
+        self.description = description
+        self.output = output
+
+
+@dataclass
+class MonitorSession:
+    process: subprocess.Popen[bytes]
+    master_fd: int
+
+
+@dataclass
+class TestStageSummary:
+    name: str
+    status: str = "passed"
+    passed_cases: int = 0
+    skipped_cases: int = 0
+    failed_cases: int = 0
+    selection_label: str = ""
+    selection: tuple[str, ...] = ()
+    note: str = ""
+
+    @property
+    def total_cases(self) -> int:
+        return self.passed_cases + self.skipped_cases + self.failed_cases
+
+
+@dataclass
+class TestRunReport:
+    scopes: tuple[str, ...]
+    stages: list[TestStageSummary]
+
+    @property
+    def passed_cases(self) -> int:
+        return sum(stage.passed_cases for stage in self.stages)
+
+    @property
+    def skipped_cases(self) -> int:
+        return sum(stage.skipped_cases for stage in self.stages)
+
+    @property
+    def failed_cases(self) -> int:
+        return sum(stage.failed_cases for stage in self.stages)
+
+    @property
+    def total_cases(self) -> int:
+        return sum(stage.total_cases for stage in self.stages)
+
+    @property
+    def status(self) -> str:
+        return "failed" if any(stage.status != "passed" for stage in self.stages) else "passed"
+
+
+class TestStageError(RuntimeError):
+    """Raised when a test stage fails after producing a summary."""
+
+    def __init__(self, summary: TestStageSummary, message: str):
+        super().__init__(message)
+        self.summary = summary
+        self.message = message
+
 
 @dataclass(frozen=True)
 class BoardProfile:
@@ -62,6 +179,9 @@ class BoardProfile:
     listen_port: int
     server_python_exe: str
     esptool_bin: str
+    test_wifi_ssid: str
+    test_wifi_password: str
+    test_http_url: str
 
 
 @dataclass(frozen=True)
@@ -83,6 +203,10 @@ class ProjectConfig:
     server_python_exe: str
     esptool_bin: str
     assume_prompt: str
+    test_wifi_ssid: str
+    test_wifi_password: str
+    test_http_url: str
+    cmake_cache_entries: tuple[str, ...] = ()
 
 
 def load_dotenv(path: Path) -> dict[str, str]:
@@ -267,6 +391,9 @@ def load_profile(board_override: str | None = None) -> BoardProfile:
         listen_port=merged_int(repo_env, board_env, "LISTEN_PORT", remote_port),
         server_python_exe=merged_value(repo_env, board_env, "SERVER_PYTHON_EXE", "auto"),
         esptool_bin=merged_value(repo_env, board_env, "ESPTOOL_BIN", "auto"),
+        test_wifi_ssid=merged_value(repo_env, board_env, "TEST_WIFI_SSID", ""),
+        test_wifi_password=merged_value(repo_env, board_env, "TEST_WIFI_PASSWORD", ""),
+        test_http_url=merged_value(repo_env, board_env, "TEST_HTTP_URL", ""),
     )
 
 
@@ -504,6 +631,7 @@ def idf_py_cmd(project_args: list[str], config: ProjectConfig) -> list[str]:
         f"-DIDF_TARGET={config.idf_target}",
         f"-DSDKCONFIG={config.generated_sdkconfig}",
     ]
+    cmake_args.extend(config.cmake_cache_entries)
 
     if config.sdkconfig_defaults is not None:
         cmake_args.append(f"-DSDKCONFIG_DEFAULTS={config.sdkconfig_defaults}")
@@ -780,14 +908,19 @@ def flash_fs(config: ProjectConfig, build_first: bool) -> None:
     )
 
 
+def monitor_cmd(config: ProjectConfig) -> list[str]:
+    """Build the monitor command for the selected board profile."""
+    write_monitor_config()
+    return idf_py_cmd(
+        ["-p", remote_url(config.remote_url, config.remote_host, config.remote_port), "-b", str(config.monitor_baud), "monitor"],
+        config,
+    )
+
+
 def monitor(config: ProjectConfig) -> None:
     """Open ESP-IDF monitor over RFC2217."""
-    write_monitor_config()
     run(
-        idf_py_cmd(
-            ["-p", remote_url(config.remote_url, config.remote_host, config.remote_port), "-b", str(config.monitor_baud), "monitor"],
-            config,
-        ),
+        monitor_cmd(config),
         cwd=ROOT_DIR,
         interactive=True,
     )
@@ -868,6 +1001,506 @@ def show_config(config: ProjectConfig) -> None:
     print(f"server_python_exe={config.server_python_exe}")
     print(f"esptool_bin={config.esptool_bin}")
     print(f"assume_prompt={config.assume_prompt}")
+    print(f"test_wifi_ssid={config.test_wifi_ssid}")
+    print(f"test_wifi_password_set={'yes' if config.test_wifi_password else 'no'}")
+    print(f"test_http_url={config.test_http_url}")
+
+
+def resolve_test_scopes(raw_scopes: list[str] | None) -> tuple[str, ...]:
+    """Resolve selected test stages, defaulting to both C and JS in execution order."""
+    if not raw_scopes:
+        return TEST_SCOPE_ORDER
+
+    selected = set(raw_scopes)
+    return tuple(scope for scope in TEST_SCOPE_ORDER if scope in selected)
+
+
+def resolve_js_modules(raw_modules: list[str] | None) -> tuple[JsTestModule, ...]:
+    """Resolve JS test modules while preserving the registry order."""
+    if not raw_modules:
+        return JS_TEST_MODULES
+
+    selected = set(raw_modules)
+    return tuple(module for module in JS_TEST_MODULES if module.name in selected)
+
+
+def parse_ctest_summary(output: str) -> tuple[int, int] | None:
+    """Extract failed and total test counts from ctest output when available."""
+    match = CTEST_SUMMARY_RE.search(output)
+    if match is None:
+        return None
+    failed = int(match.group(2))
+    total = int(match.group(3))
+    return failed, total
+
+
+def print_test_stage_summary(summary: TestStageSummary) -> None:
+    """Print one stage summary in a format shared by C and JS tests."""
+    extras: list[str] = []
+    if summary.selection:
+        label = summary.selection_label or "selection"
+        extras.append(f"{label}={','.join(summary.selection)}")
+    if summary.note:
+        extras.append(f"note={summary.note}")
+
+    suffix = f" {' '.join(extras)}" if extras else ""
+    print(
+        f"{summary.name} summary: "
+        f"status={summary.status} total={summary.total_cases} "
+        f"passed={summary.passed_cases} skipped={summary.skipped_cases} failed={summary.failed_cases}"
+        f"{suffix}",
+        flush=True,
+    )
+
+
+def print_test_report(report: TestRunReport) -> None:
+    """Print the final report for the whole `test` command run."""
+    scopes = ",".join(report.scopes) if report.scopes else "<none>"
+    print("Test report:", flush=True)
+    for summary in report.stages:
+        extras: list[str] = []
+        if summary.selection:
+            label = summary.selection_label or "selection"
+            extras.append(f"{label}={','.join(summary.selection)}")
+        if summary.note:
+            extras.append(f"note={summary.note}")
+        suffix = f" {' '.join(extras)}" if extras else ""
+        print(
+            f"- {summary.name}: status={summary.status} total={summary.total_cases} "
+            f"passed={summary.passed_cases} skipped={summary.skipped_cases} failed={summary.failed_cases}"
+            f"{suffix}",
+            flush=True,
+        )
+    print(
+        f"Overall: status={report.status} scopes={scopes} stages={len(report.stages)} "
+        f"total={report.total_cases} passed={report.passed_cases} "
+        f"skipped={report.skipped_cases} failed={report.failed_cases}",
+        flush=True,
+    )
+
+
+def run_host_c_tests() -> TestStageSummary:
+    """Configure, build, and run the host-native C test suite."""
+    summary = TestStageSummary(name="C")
+    print(f"Running host C tests in {HOST_TEST_BUILD_DIR}", flush=True)
+    try:
+        subprocess.run(
+            ["cmake", "-S", str(ROOT_DIR / "tests" / "c"), "-B", str(HOST_TEST_BUILD_DIR)],
+            cwd=ROOT_DIR,
+            check=True,
+        )
+        subprocess.run(
+            ["cmake", "--build", str(HOST_TEST_BUILD_DIR)],
+            cwd=ROOT_DIR,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        summary.status = "failed"
+        summary.note = f"build step exited with code {exc.returncode}"
+        print_test_stage_summary(summary)
+        raise TestStageError(summary, "Host C tests failed during configure/build.") from exc
+
+    ctest_result = subprocess.run(
+        ["ctest", "--test-dir", str(HOST_TEST_BUILD_DIR), "--output-on-failure"],
+        cwd=ROOT_DIR,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if ctest_result.stdout:
+        print(ctest_result.stdout, end="")
+    if ctest_result.stderr:
+        print(ctest_result.stderr, end="", file=sys.stderr)
+
+    counts = parse_ctest_summary(f"{ctest_result.stdout}\n{ctest_result.stderr}")
+    if counts is not None:
+        failed, total = counts
+        summary.passed_cases = total - failed
+        summary.failed_cases = failed
+    else:
+        summary.note = "ctest summary unavailable"
+
+    if ctest_result.returncode != 0:
+        summary.status = "failed"
+        if not summary.note:
+            summary.note = f"ctest exited with code {ctest_result.returncode}"
+        print_test_stage_summary(summary)
+        raise TestStageError(summary, "Host C tests failed.") from subprocess.CalledProcessError(
+            ctest_result.returncode,
+            ctest_result.args,
+            output=ctest_result.stdout,
+            stderr=ctest_result.stderr,
+        )
+
+    print_test_stage_summary(summary)
+    return summary
+
+
+def normalize_serial_output(output: str) -> str:
+    """Strip ANSI control sequences and carriage returns from serial captures."""
+    return ANSI_ESCAPE_RE.sub("", output.replace("\r", ""))
+
+
+def format_output_tail(output: str, max_lines: int = 20) -> str:
+    """Render the trailing normalized serial output for error messages."""
+    lines = normalize_serial_output(output).splitlines()
+    if not lines:
+        return "<no serial output>"
+    return "\n".join(lines[-max_lines:])
+
+
+def start_monitor_session(config: ProjectConfig) -> MonitorSession:
+    """Start an ESP-IDF monitor session in a PTY so the JS runner can interact with it programmatically."""
+    master_fd, slave_fd = os.openpty()
+    try:
+        process = subprocess.Popen(
+            monitor_cmd(config),
+            cwd=ROOT_DIR,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            text=False,
+            start_new_session=True,
+            close_fds=True,
+        )
+    finally:
+        os.close(slave_fd)
+
+    os.set_blocking(master_fd, False)
+    return MonitorSession(process=process, master_fd=master_fd)
+
+
+def close_monitor_session(session: MonitorSession) -> None:
+    """Close a PTY-backed monitor session and terminate the underlying process group if needed."""
+    try:
+        os.write(session.master_fd, b"\x1d")
+    except OSError:
+        pass
+
+    try:
+        session.process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(session.process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            session.process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(session.process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            session.process.wait(timeout=2)
+    finally:
+        try:
+            os.close(session.master_fd)
+        except OSError:
+            pass
+
+
+def read_monitor_chunk(session: MonitorSession) -> bytes:
+    """Read all currently available bytes from the PTY-backed monitor session."""
+    chunks: list[bytes] = []
+
+    while True:
+        try:
+            chunk = os.read(session.master_fd, 4096)
+        except BlockingIOError:
+            break
+        except OSError:
+            break
+
+        if not chunk:
+            break
+        chunks.append(chunk)
+
+    return b"".join(chunks)
+
+
+def read_monitor_until_marker(session: MonitorSession, marker: str, timeout_seconds: float, description: str) -> str:
+    """Read monitor output until a normalized marker appears or timeout expires."""
+    deadline = time.monotonic() + timeout_seconds
+    output = ""
+
+    while time.monotonic() < deadline:
+        chunk = read_monitor_chunk(session)
+        if chunk:
+            output += chunk.decode("utf-8", errors="replace")
+            normalized = normalize_serial_output(output)
+            if marker in normalized:
+                return normalized
+            continue
+
+        if session.process.poll() is not None:
+            break
+
+        time.sleep(0.05)
+
+    raise MarkerTimeoutError(description, output)
+
+
+def try_read_monitor_until_marker(session: MonitorSession, marker: str, timeout_seconds: float) -> str | None:
+    """Best-effort variant of `read_monitor_until_marker` used for optional readiness probes."""
+    deadline = time.monotonic() + timeout_seconds
+    output = ""
+
+    while time.monotonic() < deadline:
+        chunk = read_monitor_chunk(session)
+        if chunk:
+            output += chunk.decode("utf-8", errors="replace")
+            normalized = normalize_serial_output(output)
+            if marker in normalized:
+                return normalized
+            continue
+
+        if session.process.poll() is not None:
+            break
+
+        time.sleep(0.05)
+
+    return None
+
+
+def send_js_command(session: MonitorSession, command: str) -> None:
+    """Send one JavaScript command line to the remote REPL."""
+    payload = f"{command}\r".encode("utf-8")
+    os.write(session.master_fd, payload)
+
+
+def js_test_build_config(config: ProjectConfig) -> ProjectConfig:
+    """Return a build config that targets the dedicated JS test LittleFS image."""
+    build_dir = config.build_dir.parent / f"{config.build_dir.name}-js-test"
+    cmake_entries = [*config.cmake_cache_entries, f"-DESP32QJS_FLASH_DATA_DIR={JS_TEST_FLASH_DATA_DIR}"]
+
+    return replace(
+        config,
+        build_dir=build_dir,
+        generated_sdkconfig=build_dir / "sdkconfig",
+        cmake_cache_entries=tuple(cmake_entries),
+    )
+
+
+def ensure_js_test_runtime(session: MonitorSession) -> None:
+    """Confirm that the test bootstrap is active, either after boot or via a live probe."""
+    ready_output = try_read_monitor_until_marker(session, JS_TEST_READY_MARKER, 25.0)
+    if ready_output is not None:
+        return
+
+    send_js_command(
+        session,
+        'print("__ESP32QJS_TEST_PROBE__:" + (globalThis.__esp32qjsTest ? "ready" : "missing"))',
+    )
+    probe_output = read_monitor_until_marker(session, "__ESP32QJS_TEST_PROBE__:", 5.0, "the JS test runtime probe")
+    if "__ESP32QJS_TEST_PROBE__:ready" not in probe_output:
+        raise SystemExit(
+            "The current LittleFS image does not expose the JS test runtime. "
+            "Rerun without `--no-flash-fs` to flash the test storage image."
+        )
+
+
+def configure_js_test_runtime(session: MonitorSession, config: ProjectConfig) -> None:
+    """Push dynamic test configuration such as Wi-Fi credentials to the REPL."""
+    test_config = {
+        "wifiSsid": config.test_wifi_ssid,
+        "wifiPassword": config.test_wifi_password,
+        "httpUrl": config.test_http_url,
+    }
+    encoded = json.dumps(json.dumps(test_config, separators=(",", ":")))
+
+    send_js_command(
+        session,
+        f'globalThis.__esp32qjsTestConfig = JSON.parse({encoded}); print("__ESP32QJS_TEST_CONFIG__")',
+    )
+    read_monitor_until_marker(session, "__ESP32QJS_TEST_CONFIG__", 5.0, "the JS test config handshake")
+
+
+def validate_network_test_config(config: ProjectConfig, modules: tuple[JsTestModule, ...], network_enabled: bool) -> None:
+    """Fail fast when network-only cases were requested without the needed credentials."""
+    if not network_enabled:
+        return
+
+    module_names = {module.name for module in modules}
+    missing: list[str] = []
+    if "wifi" in module_names or "http" in module_names:
+        if not config.test_wifi_ssid:
+            missing.append("TEST_WIFI_SSID")
+        if not config.test_wifi_password:
+            missing.append("TEST_WIFI_PASSWORD")
+    if "http" in module_names and not config.test_http_url:
+        missing.append("TEST_HTTP_URL")
+
+    if missing:
+        joined = ", ".join(missing)
+        raise SystemExit(
+            f"Network JS tests require {joined}. Set them in `/.env` or the active board profile."
+        )
+
+
+def run_js_test_case(session: MonitorSession, case: JsTestCase) -> None:
+    """Execute one JS test case file and require a structured pass result."""
+    print(f"Running JS test {case.path}", flush=True)
+    send_js_command(session, f'load("{case.path}")')
+
+    deadline = time.monotonic() + case.timeout_seconds
+    quiet_deadline: float | None = None
+    output = ""
+    result_line: str | None = None
+
+    while True:
+        now = time.monotonic()
+        if quiet_deadline is None and now >= deadline:
+            break
+        if quiet_deadline is not None and now >= quiet_deadline:
+            break
+
+        chunk = read_monitor_chunk(session)
+        if chunk:
+            output += chunk.decode("utf-8", errors="replace")
+            normalized = normalize_serial_output(output)
+            for line in normalized.splitlines():
+                if line.startswith(JS_TEST_PASS_PREFIX) or line.startswith(JS_TEST_FAIL_PREFIX):
+                    result_line = line
+                    quiet_deadline = time.monotonic() + 0.2
+            continue
+
+        if session.process.poll() is not None:
+            break
+
+        time.sleep(0.05)
+
+    if result_line is None:
+        raise SystemExit(
+            f"Timed out waiting for a result from JS test {case.path}.\n"
+            f"Last serial output:\n{format_output_tail(output)}"
+        )
+
+    if result_line.startswith(JS_TEST_FAIL_PREFIX):
+        payload = json.loads(result_line[len(JS_TEST_FAIL_PREFIX):])
+        raise SystemExit(
+            f"JS test {payload.get('name', case.path)} failed: {payload.get('error', 'unknown error')}\n"
+            f"Last serial output:\n{format_output_tail(output)}"
+        )
+
+    payload = json.loads(result_line[len(JS_TEST_PASS_PREFIX):])
+    print(f"PASS {payload.get('name', case.path)}", flush=True)
+
+
+def run_js_tests(config: ProjectConfig,
+                 modules: tuple[JsTestModule, ...],
+                 network_enabled: bool,
+                 flash_fs_first: bool) -> TestStageSummary:
+    """Flash the dedicated test image when needed, then drive JS tests over serial."""
+    summary = TestStageSummary(
+        name="JS",
+        selection_label="modules",
+        selection=tuple(module.name for module in modules),
+    )
+    try:
+        validate_network_test_config(config, modules, network_enabled)
+    except SystemExit as exc:
+        summary.status = "failed"
+        summary.note = str(exc)
+        print_test_stage_summary(summary)
+        raise TestStageError(summary, str(exc)) from exc
+
+    js_config = js_test_build_config(config)
+
+    if flash_fs_first:
+        print(f"Flashing JS test LittleFS image from {JS_TEST_FLASH_DATA_DIR}", flush=True)
+        try:
+            flash_fs(js_config, build_first=True)
+        except subprocess.CalledProcessError as exc:
+            summary.status = "failed"
+            summary.note = f"flash-fs exited with code {exc.returncode}"
+            print_test_stage_summary(summary)
+            raise TestStageError(summary, "JS test storage flash failed.") from exc
+
+    if os.name == "nt":
+        summary.status = "failed"
+        summary.note = "board-backed JS tests require a POSIX host"
+        print_test_stage_summary(summary)
+        raise TestStageError(summary, "Board-backed JS tests currently require a POSIX host because they run through a PTY monitor session.")
+
+    session = start_monitor_session(js_config)
+    try:
+        try:
+            ensure_js_test_runtime(session)
+        except MarkerTimeoutError as exc:
+            summary.status = "failed"
+            summary.note = f"startup timeout waiting for {exc.description}"
+            print_test_stage_summary(summary)
+            raise TestStageError(
+                summary,
+                f"Timed out waiting for {exc.description}.\n"
+                f"Last serial output:\n{format_output_tail(exc.output)}",
+            ) from exc
+        try:
+            configure_js_test_runtime(session, js_config)
+        except MarkerTimeoutError as exc:
+            summary.status = "failed"
+            summary.note = f"config timeout waiting for {exc.description}"
+            print_test_stage_summary(summary)
+            raise TestStageError(
+                summary,
+                f"Timed out waiting for {exc.description}.\n"
+                f"Last serial output:\n{format_output_tail(exc.output)}",
+            ) from exc
+
+        for module in modules:
+            print(f"Running JS module {module.name}", flush=True)
+            for case in module.cases:
+                if case.network_required and not network_enabled:
+                    print(f"Skipping JS test {case.path} (requires --network)", flush=True)
+                    summary.skipped_cases += 1
+                    continue
+                try:
+                    run_js_test_case(session, case)
+                except SystemExit as exc:
+                    summary.failed_cases += 1
+                    summary.status = "failed"
+                    print_test_stage_summary(summary)
+                    raise TestStageError(summary, str(exc)) from exc
+                summary.passed_cases += 1
+        print_test_stage_summary(summary)
+        return summary
+    finally:
+        close_monitor_session(session)
+
+
+def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
+    """Run the selected host C and/or board JS automated tests."""
+    scopes = resolve_test_scopes(args.scope)
+    report = TestRunReport(scopes=scopes, stages=[])
+
+    if "js" not in scopes:
+        if args.module:
+            raise SystemExit("`--module` requires JS scope.")
+        if args.network:
+            raise SystemExit("`--network` requires JS scope.")
+        if args.no_flash_fs:
+            raise SystemExit("`--no-flash-fs` requires JS scope.")
+
+    try:
+        if "c" in scopes:
+            report.stages.append(run_host_c_tests())
+
+        if "js" in scopes:
+            report.stages.append(
+                run_js_tests(
+                    config,
+                    resolve_js_modules(args.module),
+                    network_enabled=args.network,
+                    flash_fs_first=not args.no_flash_fs,
+                )
+            )
+    except TestStageError as exc:
+        if not report.stages or report.stages[-1] is not exc.summary:
+            report.stages.append(exc.summary)
+        print_test_report(report)
+        raise SystemExit(exc.message) from exc
+
+    print_test_report(report)
 
 
 def build_project_config(args: argparse.Namespace, profile: BoardProfile) -> ProjectConfig:
@@ -903,7 +1536,36 @@ def build_project_config(args: argparse.Namespace, profile: BoardProfile) -> Pro
         server_python_exe=getattr(args, "python_exe", profile.server_python_exe),
         esptool_bin=getattr(args, "esptool_bin", profile.esptool_bin),
         assume_prompt=args.assume,
+        test_wifi_ssid=profile.test_wifi_ssid,
+        test_wifi_password=profile.test_wifi_password,
+        test_http_url=profile.test_http_url,
     )
+
+
+def add_common_board_args(parser: argparse.ArgumentParser, profile: BoardProfile) -> None:
+    """Attach the shared board/build-selection options at the top-level parser."""
+    parser.add_argument(
+        "--board",
+        default=profile.reference,
+        help="Board profile name from configs/boards/*/.env, or a direct path to a board directory/profile file.",
+    )
+    parser.add_argument("--build-dir", default=format_path(profile.build_dir))
+    parser.add_argument("--idf-target", default=profile.idf_target)
+    parser.add_argument("--sdkconfig-defaults", default=format_path(profile.sdkconfig_defaults))
+    parser.add_argument("--idf-path", default=profile.idf_path)
+    parser.set_defaults(board_file=str(profile.file))
+
+
+def add_common_connection_args(parser: argparse.ArgumentParser, profile: BoardProfile) -> None:
+    """Attach the shared board-connection and tool overrides once at the top level."""
+    parser.add_argument("--remote-url", default=profile.remote_url)
+    parser.add_argument("--remote-host", default=profile.remote_host)
+    parser.add_argument("--remote-port", type=int, default=profile.remote_port)
+    parser.add_argument("--baud", type=int, default=profile.monitor_baud)
+    parser.add_argument("--esptool-bin", default=profile.esptool_bin)
+    parser.add_argument("--com-port", default=profile.com_port)
+    parser.add_argument("--listen-port", type=int, default=profile.listen_port)
+    parser.add_argument("--python-exe", default=profile.server_python_exe)
 
 
 def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, BoardProfile]:
@@ -915,22 +1577,14 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, Board
     profile = load_profile(pre_args.board)
 
     parser = argparse.ArgumentParser(description="Unified helper for remote ESP32 board development.")
-    parser.add_argument(
-        "--board",
-        default=profile.reference,
-        help="Board profile name from configs/boards/*/.env, or a direct path to a board directory/profile file.",
-    )
-    parser.add_argument("--build-dir", default=format_path(profile.build_dir))
-    parser.add_argument("--idf-target", default=profile.idf_target)
-    parser.add_argument("--sdkconfig-defaults", default=format_path(profile.sdkconfig_defaults))
-    parser.add_argument("--idf-path", default=profile.idf_path)
+    add_common_board_args(parser, profile)
+    add_common_connection_args(parser, profile)
     parser.add_argument(
         "--assume",
         choices=("ask", "y", "n"),
         default="ask",
         help="Skip manual prompts by answering yes/no automatically. Default: ask.",
     )
-    parser.set_defaults(board_file=str(profile.file))
 
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -941,9 +1595,6 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, Board
     show_parser.set_defaults(_noop=True)
 
     server = sub.add_parser("server", help="Write config and start esp_rfc2217_server.")
-    server.add_argument("--com-port", default=profile.com_port)
-    server.add_argument("--listen-port", type=int, default=profile.listen_port)
-    server.add_argument("--python-exe", default=profile.server_python_exe)
     server.add_argument("--force-restart", action="store_true")
 
     build_parser = sub.add_parser("build", help="Run idf.py build for the selected board.")
@@ -953,38 +1604,41 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, Board
     build_fs_parser.set_defaults(_noop=True)
 
     chip = sub.add_parser("chip-id", help="Check remote RFC2217 connectivity.")
-    chip.add_argument("--remote-url", default=profile.remote_url)
-    chip.add_argument("--remote-host", default=profile.remote_host)
-    chip.add_argument("--remote-port", type=int, default=profile.remote_port)
-    chip.add_argument("--esptool-bin", default=profile.esptool_bin)
 
     flash_parser = sub.add_parser("flash", help="Build and flash over RFC2217.")
-    flash_parser.add_argument("--remote-url", default=profile.remote_url)
-    flash_parser.add_argument("--remote-host", default=profile.remote_host)
-    flash_parser.add_argument("--remote-port", type=int, default=profile.remote_port)
-    flash_parser.add_argument("--esptool-bin", default=profile.esptool_bin)
     flash_parser.add_argument("--no-build", action="store_true")
 
     flash_fs_parser = sub.add_parser("flash-fs", help="Build and flash only the LittleFS storage partition.")
-    flash_fs_parser.add_argument("--remote-url", default=profile.remote_url)
-    flash_fs_parser.add_argument("--remote-host", default=profile.remote_host)
-    flash_fs_parser.add_argument("--remote-port", type=int, default=profile.remote_port)
-    flash_fs_parser.add_argument("--esptool-bin", default=profile.esptool_bin)
     flash_fs_parser.add_argument("--no-build", action="store_true")
 
     mon = sub.add_parser("monitor", help="Open ESP-IDF monitor over RFC2217.")
-    mon.add_argument("--remote-url", default=profile.remote_url)
-    mon.add_argument("--remote-host", default=profile.remote_host)
-    mon.add_argument("--remote-port", type=int, default=profile.remote_port)
-    mon.add_argument("--baud", type=int, default=profile.monitor_baud)
 
     fm = sub.add_parser("flash-monitor", help="Build/flash, then open monitor over RFC2217.")
-    fm.add_argument("--remote-url", default=profile.remote_url)
-    fm.add_argument("--remote-host", default=profile.remote_host)
-    fm.add_argument("--remote-port", type=int, default=profile.remote_port)
-    fm.add_argument("--esptool-bin", default=profile.esptool_bin)
-    fm.add_argument("--baud", type=int, default=profile.monitor_baud)
     fm.add_argument("--no-build", action="store_true")
+
+    test = sub.add_parser("test", help="Run host C tests and/or board-backed JS tests.")
+    test.add_argument(
+        "--scope",
+        action="append",
+        choices=("c", "js"),
+        help="Limit test stages. Repeat to include both. Default: run C and JS.",
+    )
+    test.add_argument(
+        "--module",
+        action="append",
+        choices=[module.name for module in JS_TEST_MODULES],
+        help="Limit JS tests to specific modules. Default: run all modules.",
+    )
+    test.add_argument(
+        "--network",
+        action="store_true",
+        help="Enable network-required JS cases inside the wifi/http modules.",
+    )
+    test.add_argument(
+        "--no-flash-fs",
+        action="store_true",
+        help="Reuse the existing JS test LittleFS image instead of rebuilding and reflashing it.",
+    )
 
     return parser.parse_args(raw_argv), profile
 
@@ -1030,6 +1684,10 @@ def main() -> int:
 
     if args.command == "flash-monitor":
         flash_monitor(config, build_first=not args.no_build)
+        return 0
+
+    if args.command == "test":
+        run_test_command(config, args)
         return 0
 
     return 2

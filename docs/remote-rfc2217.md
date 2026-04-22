@@ -28,6 +28,7 @@ python scripts/remote.py chip-id
 python scripts/remote.py flash
 python scripts/remote.py flash-fs
 python scripts/remote.py monitor
+python scripts/remote.py test
 python scripts/remote.py --assume n build
 ```
 
@@ -37,13 +38,14 @@ Board profiles live under [`configs/boards/<board>/`](</home/zach/esp32qjs/confi
 python scripts/remote.py --board xiao_esp32s3 flash-monitor
 python scripts/remote.py --board esp32c3_supermini build
 python scripts/remote.py --board esp32c3_supermini chip-id
+python scripts/remote.py --board esp32c3_supermini test --scope js --module fs --module stream
 ```
 
-When a one-off override is needed, pass either `--remote-host/--remote-port` or a full `--remote-url`:
+When a one-off override is needed, pass the board and connection overrides as top-level options before the subcommand, using either `--remote-host/--remote-port` or a full `--remote-url`:
 
 ```bash
-python scripts/remote.py flash --remote-host 192.168.68.54 --remote-port 4000
-python scripts/remote.py monitor --remote-url "rfc2217://192.168.68.54:4000?ign_set_control&timeout=10"
+python scripts/remote.py --remote-host 192.168.68.54 --remote-port 4000 flash
+python scripts/remote.py --remote-url "rfc2217://192.168.68.54:4000?ign_set_control&timeout=10" monitor
 python scripts/remote.py --board esp32c3_supermini --build-dir build-c3 monitor
 ```
 
@@ -67,6 +69,17 @@ For JavaScript-only changes under `flash_data/`, use the faster filesystem-only 
 python scripts/remote.py build-fs
 python scripts/remote.py flash-fs
 ```
+
+For automated validation, use the unified test entrypoint:
+
+```bash
+python scripts/remote.py test
+python scripts/remote.py test --scope c
+python scripts/remote.py test --scope js --module fs --module stream --no-flash-fs
+python scripts/remote.py test --scope js --module wifi --module http --network
+```
+
+By default `python scripts/remote.py test` runs host C tests plus all JS modules. The default JS baseline covers the built-in offline runtime APIs across `core`, `esp32`, `gpio`, `i2c`, `timers`, `fs`, `stream`, `load`, `wifi`, and `http`. The `wifi` and `http` modules still run by default, but their network-required cases stay disabled unless `--network` is passed. Configure `TEST_WIFI_SSID`, `TEST_WIFI_PASSWORD`, and `TEST_HTTP_URL` in `/.env` or the selected board profile before enabling network cases. App-level LittleFS helpers such as `display` and `ui` are still outside the dedicated test image and should be validated separately when they change.
 
 ## Known Behavior
 - `?ign_set_control&timeout=10` is required for this setup.

@@ -10,6 +10,7 @@ set(requires
 
 if(CONFIG_ESP32QJS_ENABLE_REPL)
     list(APPEND srcs
+        "repl_line.c"
         "repl.c"
         "repl_input.c"
     )
@@ -21,4 +22,7 @@ idf_component_register(
     REQUIRES ${requires}
 )
 
-littlefs_create_partition_image(storage ../flash_data FLASH_IN_PROJECT)
+set(ESP32QJS_FLASH_DATA_DIR "${CMAKE_SOURCE_DIR}/flash_data" CACHE PATH
+    "Directory used to build the LittleFS storage image")
+
+littlefs_create_partition_image(storage "${ESP32QJS_FLASH_DATA_DIR}" FLASH_IN_PROJECT)
