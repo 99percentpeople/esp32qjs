@@ -1345,12 +1345,12 @@ static bool http_async_poller(JSContext *ctx,
         http_async_cleanup_slot(ctx, slot);
 
         if (event.err != ESP_OK) {
-            argv[0] = JS_NewString(ctx, event.error_text[0] != '\0' ? event.error_text : esp_err_to_name(event.err));
-            argv[1] = JS_NULL;
+            argv[0] = JS_UNDEFINED;
+            argv[1] = JS_NewString(ctx, event.error_text[0] != '\0' ? event.error_text : esp_err_to_name(event.err));
         } else {
-            argv[0] = JS_NULL;
-            argv[1] = http_make_response_object(ctx, event.response);
-            if (JS_IsException(argv[1])) {
+            argv[0] = http_make_response_object(ctx, event.response);
+            argv[1] = JS_UNDEFINED;
+            if (JS_IsException(argv[0])) {
                 JS_PopGCRef(ctx, &callback_ref);
                 http_free_response(event.response);
                 return true;

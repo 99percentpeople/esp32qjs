@@ -27,8 +27,7 @@ interface Deferred<T = unknown> {
   readonly error: unknown;
   resolve(value?: T): T | undefined;
   reject(error?: unknown): unknown;
-  callback(value: T): T;
-  nodeCallback(error: unknown, value?: T): T | undefined;
+  callback(value?: T, error?: unknown): void;
   wait(timeoutMs?: number): T;
 }
 
@@ -360,10 +359,13 @@ interface WiFiScanResult {
 }
 
 type WiFiConnectCallback = (
-  error: unknown | null,
-  status?: WiFiStatus | null,
+  status?: WiFiStatus,
+  error?: unknown,
 ) => void;
-type WiFiScanCallback = (results: WiFiScanResult[]) => void;
+type WiFiScanCallback = (
+  results?: WiFiScanResult[],
+  error?: unknown,
+) => void;
 
 /**
  * Wi-Fi station helpers.
@@ -371,7 +373,7 @@ type WiFiScanCallback = (results: WiFiScanResult[]) => void;
  * @example
  * ```js
  * print(JSON.stringify(wifi.status()));
- * wifi.scan(function (results) { print(results.length); });
+ * wifi.scan(function (results, error) { print(error === undefined, results.length); });
  * ```
  */
 interface WiFiModule {
@@ -407,8 +409,8 @@ interface FetchOptions extends RequestInit {
 
 type FetchInput = string | Request;
 type FetchCallback = (
-  error: unknown | null,
-  response?: Response | null,
+  response?: Response,
+  error?: unknown,
 ) => void;
 
 /**

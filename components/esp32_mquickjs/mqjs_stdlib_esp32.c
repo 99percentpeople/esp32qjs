@@ -62,8 +62,7 @@ static const JSClassDef js_response_class =
 static const JSPropDef js_deferred_proto[] = {
     JS_CFUNC_DEF("resolve", 1, js_deferred_resolve),
     JS_CFUNC_DEF("reject", 1, js_deferred_reject),
-    JS_CFUNC_DEF("callback", 1, js_deferred_callback),
-    JS_CFUNC_DEF("nodeCallback", 2, js_deferred_nodeCallback),
+    JS_CFUNC_DEF("callback", 2, js_deferred_callback),
     JS_CFUNC_DEF("wait", 1, js_deferred_wait),
     JS_PROP_END,
 };

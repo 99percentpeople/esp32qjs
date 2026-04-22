@@ -21,7 +21,6 @@ JSValue js_deferred_constructor(JSContext *ctx, JSValue *this_val, int argc, JSV
 JSValue js_deferred_resolve(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_deferred_reject(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_deferred_callback(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
-JSValue js_deferred_nodeCallback(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_deferred_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_gc(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

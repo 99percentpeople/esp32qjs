@@ -496,7 +496,6 @@ static JSValue js_make_deferred(JSContext *ctx)
     JSValue resolve_fn;
     JSValue reject_fn;
     JSValue callback_fn;
-    JSValue node_callback_fn;
     JSValue wait_fn;
 
     deferred_obj = JS_PushGCRef(ctx, &deferred_ref);
@@ -508,10 +507,9 @@ static JSValue js_make_deferred(JSContext *ctx)
     resolve_fn = js_bind_method(ctx, *deferred_obj, "resolve");
     reject_fn = js_bind_method(ctx, *deferred_obj, "reject");
     callback_fn = js_bind_method(ctx, *deferred_obj, "callback");
-    node_callback_fn = js_bind_method(ctx, *deferred_obj, "nodeCallback");
     wait_fn = js_bind_method(ctx, *deferred_obj, "wait");
     if (JS_IsException(resolve_fn) || JS_IsException(reject_fn) || JS_IsException(callback_fn) ||
-        JS_IsException(node_callback_fn) || JS_IsException(wait_fn)) {
+        JS_IsException(wait_fn)) {
         goto fail;
     }
 
@@ -524,7 +522,6 @@ static JSValue js_make_deferred(JSContext *ctx)
         !esp32_mquickjs_set_property(ctx, *deferred_obj, "resolve", resolve_fn) ||
         !esp32_mquickjs_set_property(ctx, *deferred_obj, "reject", reject_fn) ||
         !esp32_mquickjs_set_property(ctx, *deferred_obj, "callback", callback_fn) ||
-        !esp32_mquickjs_set_property(ctx, *deferred_obj, "nodeCallback", node_callback_fn) ||
         !esp32_mquickjs_set_property(ctx, *deferred_obj, "wait", wait_fn)) {
         goto fail;
     }
@@ -629,25 +626,17 @@ JSValue js_deferred_reject(JSContext *ctx, JSValue *this_val, int argc, JSValue 
 
 JSValue js_deferred_callback(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    return js_deferred_resolve_common(ctx,
-                                      *this_val,
-                                      true,
-                                      argc >= 1 ? argv[0] : JS_UNDEFINED,
-                                      false);
-}
-
-JSValue js_deferred_nodeCallback(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
     if (!js_is_deferred(ctx, *this_val)) {
-        return JS_ThrowTypeError(ctx, "Deferred.nodeCallback(error, value?) expects a deferred object");
+        return JS_ThrowTypeError(ctx, "Deferred.callback(data, error?) expects a deferred object");
     }
-    if (argc >= 1 && !JS_IsNull(argv[0]) && !JS_IsUndefined(argv[0])) {
-        if (!js_settle_deferred(ctx, *this_val, false, argv[0])) {
+
+    if (argc >= 2 && !JS_IsNull(argv[1]) && !JS_IsUndefined(argv[1])) {
+        if (!js_settle_deferred(ctx, *this_val, false, argv[1])) {
             return JS_EXCEPTION;
         }
         return JS_UNDEFINED;
     }
-    if (!js_settle_deferred(ctx, *this_val, true, argc >= 2 ? argv[1] : JS_UNDEFINED)) {
+    if (!js_settle_deferred(ctx, *this_val, true, argc >= 1 ? argv[0] : JS_UNDEFINED)) {
         return JS_EXCEPTION;
     }
     return JS_UNDEFINED;
