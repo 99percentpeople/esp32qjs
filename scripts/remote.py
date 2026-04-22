@@ -226,7 +226,7 @@ def load_profile(board_override: str | None = None) -> BoardProfile:
         "IDF_PATH",
         merged_value(repo_env, board_env, "IDF_PATH", str(Path.home() / "esp" / "esp-idf")),
     )
-    remote_port = merged_int(repo_env, board_env, "REMOTE_PORT", 4000)
+    remote_port = merged_int(repo_env, board_env, "REMOTE_PORT", 2217)
     remote_url_override = (
         os.environ.get("REMOTE_URL")
         or repo_env.get("REMOTE_URL")
@@ -254,7 +254,7 @@ def load_profile(board_override: str | None = None) -> BoardProfile:
             else (board_sdkconfig_defaults_file(board_dir) if board_sdkconfig_defaults_file(board_dir).exists() else None)
         ),
         idf_path=str(Path(idf_path).expanduser()),
-        remote_host=merged_value(repo_env, board_env, "REMOTE_HOST", "192.168.68.54"),
+        remote_host=merged_value(repo_env, board_env, "REMOTE_HOST", "127.0.0.1"),
         remote_port=remote_port,
         remote_url=remote_url_override,
         monitor_baud=merged_int(

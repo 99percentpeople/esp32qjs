@@ -1,5 +1,7 @@
-var WIFI_SSID = "Chevalier-gen";
-var WIFI_PASSWORD = "F@wq2zpv";
+// var WIFI_SSID = "Chevalier-gen";
+// var WIFI_PASSWORD = "F@wq2zpv";
+var WIFI_SSID = "be65_IoT";
+var WIFI_PASSWORD = "1145141919810";
 var WIFI_CONNECT_TIMEOUT_MS = 15000;
 
 load("_sys/display.js");

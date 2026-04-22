@@ -1,4 +1,5 @@
-#include "esp32_mquickjs_internal.h"
+#include "esp32_mquickjs_esp32.h"
+#include "esp32_mquickjs_core.h"
 
 #include <string.h>
 
@@ -130,62 +131,34 @@ fail:
     return JS_EXCEPTION;
 }
 
-bool esp32_mquickjs_install_esp32_module(JSContext *ctx, JSValue global_obj)
+JSValue js_esp32_info(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    JSGCRef module_ref;
-    JSValue *module_obj;
-
-    module_obj = JS_PushGCRef(ctx, &module_ref);
-    *module_obj = JS_NewObject(ctx);
-    if (JS_IsException(*module_obj)) {
-        goto fail;
-    }
-
-    if (!esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "info", "esp32.info") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "millis", "esp32.millis") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "micros", "esp32.micros") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "freeHeap", "esp32.freeHeap")) {
-        goto fail;
-    }
-
-    if (!esp32_mquickjs_set_property(ctx, global_obj, "esp32", JS_PopGCRef(ctx, &module_ref))) {
-        return false;
-    }
-    return true;
-
-fail:
-    JS_PopGCRef(ctx, &module_ref);
-    return false;
-}
-
-bool esp32_mquickjs_dispatch_esp32(JSContext *ctx,
-                                   const char *operation,
-                                   int argc,
-                                   JSValue *argv,
-                                   JSValue *result)
-{
+    (void)this_val;
     (void)argc;
     (void)argv;
+    return esp32_make_info_object(ctx);
+}
 
-    if (strcmp(operation, "info") == 0) {
-        *result = esp32_make_info_object(ctx);
-        return true;
-    }
+JSValue js_esp32_millis(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewInt64(ctx, esp_timer_get_time() / 1000);
+}
 
-    if (strcmp(operation, "millis") == 0) {
-        *result = JS_NewInt64(ctx, esp_timer_get_time() / 1000);
-        return true;
-    }
+JSValue js_esp32_micros(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewInt64(ctx, esp_timer_get_time());
+}
 
-    if (strcmp(operation, "micros") == 0) {
-        *result = JS_NewInt64(ctx, esp_timer_get_time());
-        return true;
-    }
-
-    if (strcmp(operation, "freeHeap") == 0) {
-        *result = JS_NewUint32(ctx, esp_get_free_heap_size());
-        return true;
-    }
-
-    return false;
+JSValue js_esp32_freeHeap(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewUint32(ctx, esp_get_free_heap_size());
 }

@@ -1,4 +1,6 @@
-#include "esp32_mquickjs_internal.h"
+#include "esp32_mquickjs_fs.h"
+#include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_stream.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -408,231 +410,201 @@ JSValue esp32_mquickjs_load_from_littlefs(JSContext *ctx,
     return result;
 }
 
-bool esp32_mquickjs_install_fs_module(JSContext *ctx, JSValue global_obj)
+JSValue js_fs_open(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    JSGCRef module_ref;
-    JSValue *module_obj;
+    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+    JSCStringBuf mode_buf;
+    const char *mode = "r";
 
-    module_obj = JS_PushGCRef(ctx, &module_ref);
-    *module_obj = JS_NewObject(ctx);
-    if (JS_IsException(*module_obj)) {
-        goto fail;
+    (void)this_val;
+
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "fs.open(path, mode?) expects a path");
+    }
+    if (js_value_to_littlefs_path(ctx, argv[0], "fs.open(path, mode?)", path, sizeof(path)) != 0) {
+        return JS_EXCEPTION;
+    }
+    if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+        if (!JS_IsString(ctx, argv[1])) {
+            return JS_ThrowTypeError(ctx, "fs.open(path, mode) expects mode to be a string");
+        }
+        mode = JS_ToCString(ctx, argv[1], &mode_buf);
+        if (mode == NULL) {
+            return JS_EXCEPTION;
+        }
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *module_obj, "ROOT",
-                                     JS_NewString(ctx, ESP32_MQUICKJS_LITTLEFS_BASE_PATH)) ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "open", "fs.open") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "list", "fs.list") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "stat", "fs.stat") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "exists", "fs.exists") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "readText", "fs.readText") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "writeText", "fs.writeText") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "appendText", "fs.appendText") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "remove", "fs.remove") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "rename", "fs.rename") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "mkdir", "fs.mkdir")) {
-        goto fail;
-    }
+    {
+        JSGCRef global_ref;
+        JSValue *global_obj = JS_PushGCRef(ctx, &global_ref);
+        JSValue result;
 
-    if (!esp32_mquickjs_set_property(ctx, global_obj, "fs", JS_PopGCRef(ctx, &module_ref))) {
-        return false;
+        *global_obj = JS_GetGlobalObject(ctx);
+        if (JS_IsException(*global_obj)) {
+            JS_PopGCRef(ctx, &global_ref);
+            return JS_EXCEPTION;
+        }
+        result = esp32_mquickjs_stream_open_file(ctx, *global_obj, path, mode);
+        JS_PopGCRef(ctx, &global_ref);
+        return result;
     }
-    return true;
-
-fail:
-    JS_PopGCRef(ctx, &module_ref);
-    return false;
 }
 
-bool esp32_mquickjs_dispatch_fs(JSContext *ctx,
-                                const char *operation,
-                                int argc,
-                                JSValue *argv,
-                                JSValue *result)
+JSValue js_fs_list(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
 
-    if (strcmp(operation, "open") == 0) {
-        JSCStringBuf mode_buf;
-        const char *mode = "r";
+    (void)this_val;
 
-        if (argc < 1) {
-            *result = JS_ThrowTypeError(ctx, "fs.open(path, mode?) expects a path");
-            return true;
-        }
-        if (js_value_to_littlefs_path(ctx, argv[0], "fs.open(path, mode?)", path, sizeof(path)) != 0) {
-            *result = JS_EXCEPTION;
-            return true;
-        }
-        if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
-            if (!JS_IsString(ctx, argv[1])) {
-                *result = JS_ThrowTypeError(ctx, "fs.open(path, mode) expects mode to be a string");
-                return true;
-            }
-            mode = JS_ToCString(ctx, argv[1], &mode_buf);
-            if (mode == NULL) {
-                *result = JS_EXCEPTION;
-                return true;
-            }
-        }
-
-        {
-            JSGCRef global_ref;
-            JSValue *global_obj = JS_PushGCRef(ctx, &global_ref);
-            *global_obj = JS_GetGlobalObject(ctx);
-            if (JS_IsException(*global_obj)) {
-                JS_PopGCRef(ctx, &global_ref);
-                *result = JS_EXCEPTION;
-                return true;
-            }
-            *result = esp32_mquickjs_stream_open_file(ctx, *global_obj, path, mode);
-            JS_PopGCRef(ctx, &global_ref);
-        }
-        return true;
+    if (argc == 0) {
+        return js_fs_list_path(ctx, ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
     }
-
-    if (strcmp(operation, "list") == 0) {
-        if (argc == 0) {
-            *result = js_fs_list_path(ctx, ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
-            return true;
-        }
-        if (js_value_to_littlefs_path(ctx, argv[0], "fs.list(path)", path, sizeof(path)) != 0) {
-            *result = JS_EXCEPTION;
-            return true;
-        }
-        *result = js_fs_list_path(ctx, path);
-        return true;
+    if (js_value_to_littlefs_path(ctx, argv[0], "fs.list(path)", path, sizeof(path)) != 0) {
+        return JS_EXCEPTION;
     }
+    return js_fs_list_path(ctx, path);
+}
 
-    if (strcmp(operation, "stat") == 0) {
-        if (argc < 1) {
-            *result = JS_ThrowTypeError(ctx, "fs.stat(path) expects a path");
-            return true;
-        }
-        if (js_value_to_littlefs_path(ctx, argv[0], "fs.stat(path)", path, sizeof(path)) != 0) {
-            *result = JS_EXCEPTION;
-            return true;
-        }
-        *result = js_fs_stat_path(ctx, path);
-        return true;
+JSValue js_fs_stat(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+
+    (void)this_val;
+
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "fs.stat(path) expects a path");
     }
-
-    if (strcmp(operation, "exists") == 0) {
-        struct stat st;
-
-        if (argc < 1) {
-            *result = JS_ThrowTypeError(ctx, "fs.exists(path) expects a path");
-            return true;
-        }
-        if (js_value_to_littlefs_path(ctx, argv[0], "fs.exists(path)", path, sizeof(path)) != 0) {
-            *result = JS_EXCEPTION;
-            return true;
-        }
-        *result = JS_NewBool(stat(path, &st) == 0);
-        return true;
+    if (js_value_to_littlefs_path(ctx, argv[0], "fs.stat(path)", path, sizeof(path)) != 0) {
+        return JS_EXCEPTION;
     }
+    return js_fs_stat_path(ctx, path);
+}
 
-    if (strcmp(operation, "readText") == 0) {
-        if (argc < 1) {
-            *result = JS_ThrowTypeError(ctx, "fs.readText(path) expects a path");
-            return true;
-        }
-        if (js_value_to_littlefs_path(ctx, argv[0], "fs.readText(path)", path, sizeof(path)) != 0) {
-            *result = JS_EXCEPTION;
-            return true;
-        }
-        *result = js_fs_read_text_path(ctx, path);
-        return true;
+JSValue js_fs_exists(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+    struct stat st;
+
+    (void)this_val;
+
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "fs.exists(path) expects a path");
     }
-
-    if (strcmp(operation, "writeText") == 0 || strcmp(operation, "appendText") == 0) {
-        bool append = (strcmp(operation, "appendText") == 0);
-
-        if (argc < 2) {
-            *result = JS_ThrowTypeError(ctx,
-                                        append ? "fs.appendText(path, text) expects a path and text"
-                                               : "fs.writeText(path, text) expects a path and text");
-            return true;
-        }
-        if (js_value_to_littlefs_path(ctx,
-                                      argv[0],
-                                      append ? "fs.appendText(path, text)" : "fs.writeText(path, text)",
-                                      path,
-                                      sizeof(path)) != 0) {
-            *result = JS_EXCEPTION;
-            return true;
-        }
-        *result = js_fs_write_text_path(ctx, path, argv[1], append);
-        return true;
+    if (js_value_to_littlefs_path(ctx, argv[0], "fs.exists(path)", path, sizeof(path)) != 0) {
+        return JS_EXCEPTION;
     }
+    return JS_NewBool(stat(path, &st) == 0);
+}
 
-    if (strcmp(operation, "remove") == 0) {
-        struct stat st;
+JSValue js_fs_readText(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
 
-        if (argc < 1) {
-            *result = JS_ThrowTypeError(ctx, "fs.remove(path) expects a path");
-            return true;
-        }
-        if (js_value_to_littlefs_path(ctx, argv[0], "fs.remove(path)", path, sizeof(path)) != 0) {
-            *result = JS_EXCEPTION;
-            return true;
-        }
-        if (stat(path, &st) != 0) {
-            *result = fs_throw_errno(ctx, "remove()", path);
-            return true;
-        }
-        if ((S_ISDIR(st.st_mode) ? rmdir(path) : remove(path)) != 0) {
-            *result = fs_throw_errno(ctx, "remove()", path);
-            return true;
-        }
-        *result = JS_NewBool(true);
-        return true;
+    (void)this_val;
+
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "fs.readText(path) expects a path");
     }
-
-    if (strcmp(operation, "rename") == 0) {
-        char to_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
-
-        if (argc < 2) {
-            *result = JS_ThrowTypeError(ctx, "fs.rename(fromPath, toPath) expects two paths");
-            return true;
-        }
-        if (js_value_to_littlefs_path(ctx,
-                                      argv[0],
-                                      "fs.rename(fromPath, toPath)",
-                                      path,
-                                      sizeof(path)) != 0 ||
-            js_value_to_littlefs_path(ctx,
-                                      argv[1],
-                                      "fs.rename(fromPath, toPath)",
-                                      to_path,
-                                      sizeof(to_path)) != 0) {
-            *result = JS_EXCEPTION;
-            return true;
-        }
-        if (rename(path, to_path) != 0) {
-            *result = fs_throw_errno(ctx, "rename()", path);
-            return true;
-        }
-        *result = JS_NewBool(true);
-        return true;
+    if (js_value_to_littlefs_path(ctx, argv[0], "fs.readText(path)", path, sizeof(path)) != 0) {
+        return JS_EXCEPTION;
     }
+    return js_fs_read_text_path(ctx, path);
+}
 
-    if (strcmp(operation, "mkdir") == 0) {
-        if (argc < 1) {
-            *result = JS_ThrowTypeError(ctx, "fs.mkdir(path) expects a path");
-            return true;
-        }
-        if (js_value_to_littlefs_path(ctx, argv[0], "fs.mkdir(path)", path, sizeof(path)) != 0) {
-            *result = JS_EXCEPTION;
-            return true;
-        }
-        if (mkdir(path, 0777) != 0) {
-            *result = fs_throw_errno(ctx, "mkdir()", path);
-            return true;
-        }
-        *result = JS_NewBool(true);
-        return true;
+JSValue js_fs_writeText(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+
+    (void)this_val;
+
+    if (argc < 2) {
+        return JS_ThrowTypeError(ctx, "fs.writeText(path, text) expects a path and text");
     }
+    if (js_value_to_littlefs_path(ctx, argv[0], "fs.writeText(path, text)", path, sizeof(path)) != 0) {
+        return JS_EXCEPTION;
+    }
+    return js_fs_write_text_path(ctx, path, argv[1], false);
+}
 
-    return false;
+JSValue js_fs_appendText(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+
+    (void)this_val;
+
+    if (argc < 2) {
+        return JS_ThrowTypeError(ctx, "fs.appendText(path, text) expects a path and text");
+    }
+    if (js_value_to_littlefs_path(ctx, argv[0], "fs.appendText(path, text)", path, sizeof(path)) != 0) {
+        return JS_EXCEPTION;
+    }
+    return js_fs_write_text_path(ctx, path, argv[1], true);
+}
+
+JSValue js_fs_remove(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+    struct stat st;
+
+    (void)this_val;
+
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "fs.remove(path) expects a path");
+    }
+    if (js_value_to_littlefs_path(ctx, argv[0], "fs.remove(path)", path, sizeof(path)) != 0) {
+        return JS_EXCEPTION;
+    }
+    if (stat(path, &st) != 0) {
+        return fs_throw_errno(ctx, "remove()", path);
+    }
+    if ((S_ISDIR(st.st_mode) ? rmdir(path) : remove(path)) != 0) {
+        return fs_throw_errno(ctx, "remove()", path);
+    }
+    return JS_NewBool(true);
+}
+
+JSValue js_fs_rename(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    char from_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+    char to_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+
+    (void)this_val;
+
+    if (argc < 2) {
+        return JS_ThrowTypeError(ctx, "fs.rename(fromPath, toPath) expects two paths");
+    }
+    if (js_value_to_littlefs_path(ctx,
+                                  argv[0],
+                                  "fs.rename(fromPath, toPath)",
+                                  from_path,
+                                  sizeof(from_path)) != 0 ||
+        js_value_to_littlefs_path(ctx,
+                                  argv[1],
+                                  "fs.rename(fromPath, toPath)",
+                                  to_path,
+                                  sizeof(to_path)) != 0) {
+        return JS_EXCEPTION;
+    }
+    if (rename(from_path, to_path) != 0) {
+        return fs_throw_errno(ctx, "rename()", from_path);
+    }
+    return JS_NewBool(true);
+}
+
+JSValue js_fs_mkdir(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+
+    (void)this_val;
+
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "fs.mkdir(path) expects a path");
+    }
+    if (js_value_to_littlefs_path(ctx, argv[0], "fs.mkdir(path)", path, sizeof(path)) != 0) {
+        return JS_EXCEPTION;
+    }
+    if (mkdir(path, 0777) != 0) {
+        return fs_throw_errno(ctx, "mkdir()", path);
+    }
+    return JS_NewBool(true);
 }

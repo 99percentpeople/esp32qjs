@@ -1,4 +1,5 @@
-#include "esp32_mquickjs_internal.h"
+#include "esp32_mquickjs_gpio.h"
+#include "esp32_mquickjs_core.h"
 
 #include <stdbool.h>
 #include <string.h>
@@ -86,111 +87,91 @@ static JSValue gpio_write(JSContext *ctx, gpio_num_t pin, bool level)
     return JS_NewBool(level);
 }
 
-bool esp32_mquickjs_install_gpio_module(JSContext *ctx, JSValue global_obj)
+JSValue js_gpio_pinMode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    JSGCRef module_ref;
-    JSValue *module_obj;
+    JSCStringBuf mode_buf;
+    const char *mode;
+    gpio_num_t pin;
 
-    module_obj = JS_PushGCRef(ctx, &module_ref);
-    *module_obj = JS_NewObject(ctx);
-    if (JS_IsException(*module_obj)) {
-        goto fail;
+    (void)this_val;
+
+    if (argc < 2 || js_value_to_gpio_num(ctx, argv[0], &pin) != 0 || !JS_IsString(ctx, argv[1])) {
+        return JS_ThrowTypeError(ctx, "gpio.pinMode(pin, mode) expects a valid GPIO and mode string");
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *module_obj, "INPUT",
-                                     JS_NewString(ctx, "input")) ||
-        !esp32_mquickjs_set_property(ctx, *module_obj, "OUTPUT",
-                                     JS_NewString(ctx, "output")) ||
-        !esp32_mquickjs_set_property(ctx, *module_obj, "LED_BUILTIN",
-                                     JS_NewInt32(ctx, ESP32_MQUICKJS_USER_LED_PIN)) ||
-        !esp32_mquickjs_set_property(ctx, *module_obj, "USER_LED_PIN",
-                                     JS_NewInt32(ctx, ESP32_MQUICKJS_USER_LED_PIN)) ||
-        !esp32_mquickjs_set_property(ctx, *module_obj, "USER_LED_ACTIVE_LOW",
-                                     JS_NewBool(ESP32_MQUICKJS_USER_LED_ACTIVE_LOW)) ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "pinMode", "gpio.pinMode") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "digitalWrite", "gpio.digitalWrite") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "digitalRead", "gpio.digitalRead") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "led", "gpio.led")) {
-        goto fail;
-    }
-
-    if (!esp32_mquickjs_set_property(ctx, global_obj, "gpio", JS_PopGCRef(ctx, &module_ref))) {
-        return false;
-    }
-    return true;
-
-fail:
-    JS_PopGCRef(ctx, &module_ref);
-    return false;
+    mode = JS_ToCString(ctx, argv[1], &mode_buf);
+    return gpio_set_mode(ctx, pin, mode);
 }
 
-bool esp32_mquickjs_dispatch_gpio(JSContext *ctx,
-                                  const char *operation,
-                                  int argc,
-                                  JSValue *argv,
-                                  JSValue *result)
+JSValue js_gpio_digitalWrite(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    if (strcmp(operation, "pinMode") == 0) {
-        JSCStringBuf mode_buf;
-        const char *mode;
-        gpio_num_t pin;
+    gpio_num_t pin;
+    bool level;
 
-        if (argc < 2 || js_value_to_gpio_num(ctx, argv[0], &pin) != 0 || !JS_IsString(ctx, argv[1])) {
-            *result = JS_ThrowTypeError(ctx, "gpio.pinMode(pin, mode) expects a valid GPIO and mode string");
-            return true;
-        }
+    (void)this_val;
 
-        mode = JS_ToCString(ctx, argv[1], &mode_buf);
-        *result = gpio_set_mode(ctx, pin, mode);
-        return true;
+    if (argc < 2 || js_value_to_gpio_num(ctx, argv[0], &pin) != 0 ||
+        js_value_to_bool(ctx, argv[1], &level) != 0) {
+        return JS_ThrowTypeError(ctx,
+                                 "gpio.digitalWrite(pin, value) expects a valid GPIO and boolean-like value");
     }
 
-    if (strcmp(operation, "digitalWrite") == 0) {
-        gpio_num_t pin;
-        bool level;
+    return gpio_write(ctx, pin, level);
+}
 
-        if (argc < 2 || js_value_to_gpio_num(ctx, argv[0], &pin) != 0 ||
-            js_value_to_bool(ctx, argv[1], &level) != 0) {
-            *result = JS_ThrowTypeError(ctx,
-                                        "gpio.digitalWrite(pin, value) expects a valid GPIO and boolean-like value");
-            return true;
-        }
+JSValue js_gpio_digitalRead(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    gpio_num_t pin;
 
-        *result = gpio_write(ctx, pin, level);
-        return true;
+    (void)this_val;
+
+    if (argc < 1 || js_value_to_gpio_num(ctx, argv[0], &pin) != 0) {
+        return JS_ThrowTypeError(ctx, "gpio.digitalRead(pin) expects a valid GPIO");
     }
 
-    if (strcmp(operation, "digitalRead") == 0) {
-        gpio_num_t pin;
+    return JS_NewBool(gpio_get_level(pin) != 0);
+}
 
-        if (argc < 1 || js_value_to_gpio_num(ctx, argv[0], &pin) != 0) {
-            *result = JS_ThrowTypeError(ctx, "gpio.digitalRead(pin) expects a valid GPIO");
-            return true;
-        }
+JSValue js_gpio_led(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    bool led_on;
+    bool gpio_level;
+    JSValue write_result;
 
-        *result = JS_NewBool(gpio_get_level(pin) != 0);
-        return true;
+    (void)this_val;
+
+    if (argc < 1 || js_value_to_bool(ctx, argv[0], &led_on) != 0) {
+        return JS_ThrowTypeError(ctx, "gpio.led(value) expects a boolean-like value");
     }
 
-    if (strcmp(operation, "led") == 0) {
-        bool led_on;
-        bool gpio_level;
-        JSValue write_result;
-
-        if (argc < 1 || js_value_to_bool(ctx, argv[0], &led_on) != 0) {
-            *result = JS_ThrowTypeError(ctx, "gpio.led(value) expects a boolean-like value");
-            return true;
-        }
-
-        gpio_level = ESP32_MQUICKJS_USER_LED_ACTIVE_LOW ? !led_on : led_on;
-        write_result = gpio_write(ctx, (gpio_num_t)ESP32_MQUICKJS_USER_LED_PIN, gpio_level);
-        if (JS_IsException(write_result)) {
-            *result = write_result;
-            return true;
-        }
-        *result = JS_NewBool(led_on);
-        return true;
+    gpio_level = ESP32_MQUICKJS_USER_LED_ACTIVE_LOW ? !led_on : led_on;
+    write_result = gpio_write(ctx, (gpio_num_t)ESP32_MQUICKJS_USER_LED_PIN, gpio_level);
+    if (JS_IsException(write_result)) {
+        return write_result;
     }
+    return JS_NewBool(led_on);
+}
 
-    return false;
+JSValue js_gpio_get_led_builtin(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewInt32(ctx, ESP32_MQUICKJS_USER_LED_PIN);
+}
+
+JSValue js_gpio_get_user_led_pin(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewInt32(ctx, ESP32_MQUICKJS_USER_LED_PIN);
+}
+
+JSValue js_gpio_get_user_led_active_low(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewBool(ESP32_MQUICKJS_USER_LED_ACTIVE_LOW);
 }

@@ -1,4 +1,7 @@
-#include "esp32_mquickjs_internal.h"
+#include "esp32_mquickjs_http.h"
+#include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_request_response.h"
+#include "esp32_mquickjs_stream.h"
 
 #include <ctype.h>
 #include <inttypes.h>
@@ -1207,45 +1210,27 @@ static JSValue http_fetch_async(JSContext *ctx,
     return JS_UNDEFINED;
 }
 
-bool esp32_mquickjs_install_http_module(JSContext *ctx,
-                                        JSValue global_obj,
-                                        esp32_mquickjs_runtime_t *runtime)
+bool esp32_mquickjs_init_http_runtime(JSContext *ctx,
+                                      esp32_mquickjs_runtime_t *runtime)
 {
-    JSGCRef module_ref;
-    JSValue *module_obj;
-
-    module_obj = JS_PushGCRef(ctx, &module_ref);
-    *module_obj = JS_NewObject(ctx);
-    if (JS_IsException(*module_obj)) {
-        goto fail;
-    }
-
-    if (!esp32_mquickjs_set_property(ctx, *module_obj, "DEFAULT_TIMEOUT_MS",
-                                     JS_NewUint32(ctx, ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS)) ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "fetch", "http.fetch")) {
-        goto fail;
-    }
+    (void)ctx;
 
     if (!esp32_mquickjs_register_async_poller(runtime, http_async_poller, NULL)) {
         JS_ThrowInternalError(ctx, "failed to register http async poller");
-        goto fail;
-    }
-
-    if (!esp32_mquickjs_set_property(ctx, global_obj, "http", JS_PopGCRef(ctx, &module_ref))) {
         return false;
     }
     return true;
-
-fail:
-    JS_PopGCRef(ctx, &module_ref);
-    return false;
 }
 
-bool esp32_mquickjs_dispatch_http(JSContext *ctx,
-                                  const char *operation,
-                                  int argc,
-                                  JSValue *argv,
-                                  JSValue *result)
+JSValue js_http_get_default_timeout_ms(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewUint32(ctx, ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS);
+}
+
+JSValue js_http_fetch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     esp32_mquickjs_http_request_t request = {0};
     JSCStringBuf url_buf;
@@ -1254,9 +1239,7 @@ bool esp32_mquickjs_dispatch_http(JSContext *ctx,
     JSValue callback = JS_UNDEFINED;
     bool is_async = false;
 
-    if (strcmp(operation, "fetch") != 0) {
-        return false;
-    }
+    (void)this_val;
 
     if (argc >= 2) {
         if (JS_IsFunction(ctx, argv[1])) {
@@ -1269,39 +1252,33 @@ bool esp32_mquickjs_dispatch_http(JSContext *ctx,
     if (argc >= 3) {
         if (!JS_IsFunction(ctx, argv[2])) {
             http_free_request(&request);
-            *result = JS_ThrowTypeError(ctx, "fetch(url, options, callback) expects a callback function");
-            return true;
+            return JS_ThrowTypeError(ctx, "fetch(url, options, callback) expects a callback function");
         }
         callback = argv[2];
         is_async = true;
     }
 
     if (argc < 1) {
-        *result = JS_ThrowTypeError(ctx, "fetch(input, options?, callback?) expects a URL string or Request");
-        return true;
+        return JS_ThrowTypeError(ctx, "fetch(input, options?, callback?) expects a URL string or Request");
     }
 
     if (esp32_mquickjs_is_request_object(ctx, argv[0])) {
         if (!JS_IsUndefined(options) && !JS_IsNull(options)) {
             http_free_request(&request);
-            *result = JS_ThrowTypeError(ctx, "fetch(request, callback?) does not accept a separate options object");
-            return true;
+            return JS_ThrowTypeError(ctx, "fetch(request, callback?) does not accept a separate options object");
         }
         if (http_parse_request_object(ctx, argv[0], &request) != 0) {
             http_free_request(&request);
-            *result = JS_EXCEPTION;
-            return true;
+            return JS_EXCEPTION;
         }
     } else {
         if (!JS_IsString(ctx, argv[0])) {
-            *result = JS_ThrowTypeError(ctx, "fetch(input, options?, callback?) expects a URL string or Request");
-            return true;
+            return JS_ThrowTypeError(ctx, "fetch(input, options?, callback?) expects a URL string or Request");
         }
 
         url = JS_ToCString(ctx, argv[0], &url_buf);
         if (url == NULL) {
-            *result = JS_EXCEPTION;
-            return true;
+            return JS_EXCEPTION;
         }
 
         request.url = http_strdup(url);
@@ -1309,29 +1286,27 @@ bool esp32_mquickjs_dispatch_http(JSContext *ctx,
         request.timeout_ms = ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS;
         if (request.url == NULL || request.method == NULL) {
             http_free_request(&request);
-            *result = JS_ThrowOutOfMemory(ctx);
-            return true;
+            return JS_ThrowOutOfMemory(ctx);
         }
 
         if (http_parse_options(ctx, options, &request) != 0) {
             http_free_request(&request);
-            *result = JS_EXCEPTION;
-            return true;
+            return JS_EXCEPTION;
         }
     }
 
     if (is_async) {
-        *result = http_fetch_async(ctx, &request, callback);
-        if (!JS_IsException(*result)) {
+        JSValue result = http_fetch_async(ctx, &request, callback);
+        if (!JS_IsException(result)) {
             memset(&request, 0, sizeof(request));
         }
         http_free_request(&request);
-        return true;
+        return result;
     }
 
-    *result = http_fetch_sync(ctx, &request);
+    JSValue result = http_fetch_sync(ctx, &request);
     http_free_request(&request);
-    return true;
+    return result;
 }
 
 static bool http_async_poller(JSContext *ctx,

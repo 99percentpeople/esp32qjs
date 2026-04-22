@@ -1,4 +1,5 @@
-#include "esp32_mquickjs_internal.h"
+#include "esp32_mquickjs_wifi.h"
+#include "esp32_mquickjs_core.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -1002,134 +1003,111 @@ static JSValue wifi_connect_async_js(JSContext *ctx,
     return JS_UNDEFINED;
 }
 
-bool esp32_mquickjs_install_wifi_module(JSContext *ctx,
-                                        JSValue global_obj,
-                                        esp32_mquickjs_runtime_t *runtime)
+bool esp32_mquickjs_init_wifi_runtime(JSContext *ctx,
+                                      esp32_mquickjs_runtime_t *runtime)
 {
-    JSGCRef module_ref;
-    JSValue *module_obj;
-
-    module_obj = JS_PushGCRef(ctx, &module_ref);
-    *module_obj = JS_NewObject(ctx);
-    if (JS_IsException(*module_obj)) {
-        goto fail;
-    }
-
-    if (!esp32_mquickjs_set_property(ctx, *module_obj, "DEFAULT_TIMEOUT_MS",
-                                     JS_NewUint32(ctx, ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS)) ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "connect", "wifi.connect") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "disconnect", "wifi.disconnect") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "status", "wifi.status") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "scan", "wifi.scan")) {
-        goto fail;
-    }
+    (void)ctx;
 
     if (!esp32_mquickjs_register_async_poller(runtime, wifi_async_poller, NULL)) {
         JS_ThrowInternalError(ctx, "failed to register wifi async poller");
-        goto fail;
-    }
-
-    if (!esp32_mquickjs_set_property(ctx, global_obj, "wifi", JS_PopGCRef(ctx, &module_ref))) {
         return false;
     }
     return true;
-
-fail:
-    JS_PopGCRef(ctx, &module_ref);
-    return false;
 }
 
-bool esp32_mquickjs_dispatch_wifi(JSContext *ctx,
-                                  const char *operation,
-                                  int argc,
-                                  JSValue *argv,
-                                  JSValue *result)
+JSValue js_wifi_get_default_timeout_ms(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    if (strcmp(operation, "status") == 0) {
-        *result = wifi_make_status_object(ctx);
-        return true;
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewUint32(ctx, ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS);
+}
+
+JSValue js_wifi_status(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return wifi_make_status_object(ctx);
+}
+
+JSValue js_wifi_scan(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    JSValue result = JS_UNDEFINED;
+
+    (void)this_val;
+
+    if (argc == 0 || JS_IsUndefined(argv[0])) {
+        return wifi_scan_sync(ctx);
+    }
+    if (argc == 1 && JS_IsFunction(ctx, argv[0])) {
+        return wifi_scan_async(ctx, argv[0]);
     }
 
-    if (strcmp(operation, "scan") == 0) {
-        if (argc == 0 || JS_IsUndefined(argv[0])) {
-            *result = wifi_scan_sync(ctx);
-            return true;
-        }
-        if (argc == 1 && JS_IsFunction(ctx, argv[0])) {
-            *result = wifi_scan_async(ctx, argv[0]);
-            return true;
-        }
+    result = JS_ThrowTypeError(ctx,
+                               "wifi.scan(callback?) expects no arguments or a single callback function");
+    return result;
+}
 
-        *result = JS_ThrowTypeError(ctx,
-                                    "wifi.scan(callback?) expects no arguments or a single callback function");
-        return true;
+JSValue js_wifi_connect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    JSCStringBuf ssid_buf;
+    JSCStringBuf password_buf;
+    const char *ssid;
+    const char *password;
+    uint32_t timeout_ms = ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS;
+    bool is_async = false;
+    JSValue callback = JS_UNDEFINED;
+    esp_err_t err;
+
+    (void)this_val;
+    if (argc < 2 || !JS_IsString(ctx, argv[0]) || !JS_IsString(ctx, argv[1])) {
+        return JS_ThrowTypeError(ctx,
+                                 "wifi.connect(ssid, password, timeoutMs?, callback?) expects two strings, an optional timeout, and an optional callback");
     }
-
-    if (strcmp(operation, "connect") == 0) {
-        JSCStringBuf ssid_buf;
-        JSCStringBuf password_buf;
-        const char *ssid;
-        const char *password;
-        uint32_t timeout_ms = ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS;
-        bool is_async = false;
-        JSValue callback = JS_UNDEFINED;
-        esp_err_t err;
-
-        if (argc < 2 || !JS_IsString(ctx, argv[0]) || !JS_IsString(ctx, argv[1])) {
-            *result = JS_ThrowTypeError(ctx,
-                                        "wifi.connect(ssid, password, timeoutMs?, callback?) expects two strings, an optional timeout, and an optional callback");
-            return true;
-        }
-        if (argc >= 3) {
-            if (JS_IsFunction(ctx, argv[2])) {
-                callback = argv[2];
-                is_async = true;
-            } else if (js_value_to_timeout_ms(ctx,
-                                              argv[2],
-                                              ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS,
-                                              &timeout_ms) != 0) {
-                *result = JS_ThrowTypeError(ctx, "wifi.connect(..., timeoutMs) expects a non-negative integer");
-                return true;
-            }
-        }
-        if (argc >= 4) {
-            if (!JS_IsFunction(ctx, argv[3])) {
-                *result = JS_ThrowTypeError(ctx, "wifi.connect(..., callback) expects a callback function");
-                return true;
-            }
-            callback = argv[3];
+    if (argc >= 3) {
+        if (JS_IsFunction(ctx, argv[2])) {
+            callback = argv[2];
             is_async = true;
+        } else if (js_value_to_timeout_ms(ctx,
+                                          argv[2],
+                                          ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS,
+                                          &timeout_ms) != 0) {
+            return JS_ThrowTypeError(ctx, "wifi.connect(..., timeoutMs) expects a non-negative integer");
         }
-
-        ssid = JS_ToCString(ctx, argv[0], &ssid_buf);
-        password = JS_ToCString(ctx, argv[1], &password_buf);
-        if (is_async) {
-            *result = wifi_connect_async_js(ctx, ssid, password, timeout_ms, callback);
-            return true;
+    }
+    if (argc >= 4) {
+        if (!JS_IsFunction(ctx, argv[3])) {
+            return JS_ThrowTypeError(ctx, "wifi.connect(..., callback) expects a callback function");
         }
-        err = wifi_connect(ssid, password, timeout_ms);
-        if (err != ESP_OK) {
-            *result = wifi_throw_connect_error(ctx, err);
-            return true;
-        }
-
-        *result = wifi_make_status_object(ctx);
-        return true;
+        callback = argv[3];
+        is_async = true;
+    }
+    ssid = JS_ToCString(ctx, argv[0], &ssid_buf);
+    password = JS_ToCString(ctx, argv[1], &password_buf);
+    if (is_async) {
+        return wifi_connect_async_js(ctx, ssid, password, timeout_ms, callback);
+    }
+    err = wifi_connect(ssid, password, timeout_ms);
+    if (err != ESP_OK) {
+        return wifi_throw_connect_error(ctx, err);
     }
 
-    if (strcmp(operation, "disconnect") == 0) {
-        esp_err_t err = wifi_disconnect();
+    return wifi_make_status_object(ctx);
+}
 
-        if (err != ESP_OK) {
-            *result = JS_ThrowInternalError(ctx, "wifi.disconnect() failed: %s", esp_err_to_name(err));
-            return true;
-        }
+JSValue js_wifi_disconnect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    esp_err_t err;
 
-        *result = wifi_make_status_object(ctx);
-        return true;
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    err = wifi_disconnect();
+    if (err != ESP_OK) {
+        return JS_ThrowInternalError(ctx, "wifi.disconnect() failed: %s", esp_err_to_name(err));
     }
-
-    return false;
+    return wifi_make_status_object(ctx);
 }
 
 static bool wifi_async_poller(JSContext *ctx,

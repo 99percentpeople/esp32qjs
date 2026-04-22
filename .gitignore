@@ -13,3 +13,4 @@ managed_components/
 __pycache__/
 *.pyc
 .venv/
+node_modules/

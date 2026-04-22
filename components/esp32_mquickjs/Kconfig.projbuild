@@ -40,7 +40,7 @@ config ESP32_MQUICKJS_USER_LED_PIN
     range 0 48
     default 21
     help
-        GPIO used for gpio.led() and LED_BUILTIN.
+        GPIO used for gpio.led() and gpio.LED_BUILTIN.
 
 config ESP32_MQUICKJS_USER_LED_ACTIVE_LOW
     bool "User LED is active-low"

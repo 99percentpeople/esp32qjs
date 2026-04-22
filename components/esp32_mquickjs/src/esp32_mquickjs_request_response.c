@@ -1,4 +1,6 @@
-#include "esp32_mquickjs_internal.h"
+#include "esp32_mquickjs_request_response.h"
+#include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_stream.h"
 
 #include <ctype.h>
 #include <string.h>
@@ -591,6 +593,8 @@ JSValue esp32_mquickjs_make_request_object(JSContext *ctx,
                                            const char *url,
                                            const char *path,
                                            const char *route,
+                                           const char *mount_path,
+                                           const char *relative_path,
                                            const char *query_string,
                                            JSValue query_value,
                                            JSValue headers_init,
@@ -641,6 +645,10 @@ JSValue esp32_mquickjs_make_request_object(JSContext *ctx,
         !esp32_mquickjs_set_property(ctx, *request_obj, "path", JS_NewString(ctx, path != NULL ? path : "/")) ||
         !esp32_mquickjs_set_property(ctx, *request_obj, "route",
                                      JS_NewString(ctx, route != NULL ? route : (path != NULL ? path : "/"))) ||
+        !esp32_mquickjs_set_property(ctx, *request_obj, "mountPath",
+                                     JS_NewString(ctx, mount_path != NULL ? mount_path : "")) ||
+        !esp32_mquickjs_set_property(ctx, *request_obj, "relativePath",
+                                     JS_NewString(ctx, relative_path != NULL ? relative_path : "")) ||
         !esp32_mquickjs_set_property(ctx, *request_obj, "queryString",
                                      JS_NewString(ctx, query_string != NULL ? query_string : "")) ||
         !esp32_mquickjs_set_property(ctx, *request_obj, "query", *query_obj) ||
@@ -895,6 +903,9 @@ static JSValue rr_make_request_from_args(JSContext *ctx, JSValue global_obj, int
     char *method = NULL;
     char *url = NULL;
     char *path = NULL;
+    char *route = NULL;
+    char *mount_path = NULL;
+    char *relative_path = NULL;
     char *query_string = NULL;
     JSValue query_value = JS_UNDEFINED;
     JSValue result = JS_EXCEPTION;
@@ -916,33 +927,56 @@ static JSValue rr_make_request_from_args(JSContext *ctx, JSValue global_obj, int
     if (esp32_mquickjs_is_request_object(ctx, argv[0])) {
         JSGCRef url_ref;
         JSGCRef path_ref;
+        JSGCRef route_ref;
+        JSGCRef mount_path_ref;
+        JSGCRef relative_path_ref;
         JSGCRef query_string_ref;
         JSValue *url_value;
         JSValue *path_value;
+        JSValue *route_value;
+        JSValue *mount_path_value;
+        JSValue *relative_path_value;
         JSValue *query_string_value;
         JSCStringBuf method_buf;
         JSCStringBuf url_buf;
         JSCStringBuf path_buf;
+        JSCStringBuf route_buf;
+        JSCStringBuf mount_path_buf;
+        JSCStringBuf relative_path_buf;
         JSCStringBuf query_buf;
         const char *method_str;
         const char *url_str;
         const char *path_str;
+        const char *route_str;
+        const char *mount_path_str;
+        const char *relative_path_str;
         const char *query_str;
 
         url_value = JS_PushGCRef(ctx, &url_ref);
         path_value = JS_PushGCRef(ctx, &path_ref);
+        route_value = JS_PushGCRef(ctx, &route_ref);
+        mount_path_value = JS_PushGCRef(ctx, &mount_path_ref);
+        relative_path_value = JS_PushGCRef(ctx, &relative_path_ref);
         query_string_value = JS_PushGCRef(ctx, &query_string_ref);
         *method_value = JS_GetPropertyStr(ctx, argv[0], "method");
         *headers_value = JS_GetPropertyStr(ctx, argv[0], "headers");
         *body_value = JS_GetPropertyStr(ctx, argv[0], "body");
         *url_value = JS_GetPropertyStr(ctx, argv[0], "url");
         *path_value = JS_GetPropertyStr(ctx, argv[0], "path");
+        *route_value = JS_GetPropertyStr(ctx, argv[0], "route");
+        *mount_path_value = JS_GetPropertyStr(ctx, argv[0], "mountPath");
+        *relative_path_value = JS_GetPropertyStr(ctx, argv[0], "relativePath");
         *query_string_value = JS_GetPropertyStr(ctx, argv[0], "queryString");
         query_value = JS_GetPropertyStr(ctx, argv[0], "query");
         if (JS_IsException(*method_value) || JS_IsException(*headers_value) || JS_IsException(*body_value) ||
-            JS_IsException(*url_value) || JS_IsException(*path_value) || JS_IsException(*query_string_value) ||
+            JS_IsException(*url_value) || JS_IsException(*path_value) || JS_IsException(*route_value) ||
+            JS_IsException(*mount_path_value) || JS_IsException(*relative_path_value) ||
+            JS_IsException(*query_string_value) ||
             JS_IsException(query_value)) {
             JS_PopGCRef(ctx, &query_string_ref);
+            JS_PopGCRef(ctx, &relative_path_ref);
+            JS_PopGCRef(ctx, &mount_path_ref);
+            JS_PopGCRef(ctx, &route_ref);
             JS_PopGCRef(ctx, &path_ref);
             JS_PopGCRef(ctx, &url_ref);
             goto done;
@@ -950,12 +984,21 @@ static JSValue rr_make_request_from_args(JSContext *ctx, JSValue global_obj, int
         method_str = JS_ToCString(ctx, *method_value, &method_buf);
         url_str = JS_ToCString(ctx, *url_value, &url_buf);
         path_str = JS_ToCString(ctx, *path_value, &path_buf);
+        route_str = JS_ToCString(ctx, *route_value, &route_buf);
+        mount_path_str = JS_ToCString(ctx, *mount_path_value, &mount_path_buf);
+        relative_path_str = JS_ToCString(ctx, *relative_path_value, &relative_path_buf);
         query_str = JS_ToCString(ctx, *query_string_value, &query_buf);
         method = rr_strdup(method_str != NULL ? method_str : "GET");
         url = rr_strdup(url_str != NULL ? url_str : "");
         path = rr_strdup(path_str != NULL ? path_str : "/");
+        route = rr_strdup(route_str != NULL ? route_str : (path_str != NULL ? path_str : "/"));
+        mount_path = rr_strdup(mount_path_str != NULL ? mount_path_str : "");
+        relative_path = rr_strdup(relative_path_str != NULL ? relative_path_str : "");
         query_string = rr_strdup(query_str != NULL ? query_str : "");
         JS_PopGCRef(ctx, &query_string_ref);
+        JS_PopGCRef(ctx, &relative_path_ref);
+        JS_PopGCRef(ctx, &mount_path_ref);
+        JS_PopGCRef(ctx, &route_ref);
         JS_PopGCRef(ctx, &path_ref);
         JS_PopGCRef(ctx, &url_ref);
     } else if (JS_IsString(ctx, argv[0])) {
@@ -967,6 +1010,9 @@ static JSValue rr_make_request_from_args(JSContext *ctx, JSValue global_obj, int
         }
         url = rr_strdup(url_str);
         method = rr_strdup("GET");
+        route = NULL;
+        mount_path = rr_strdup("");
+        relative_path = rr_strdup("");
         if (url == NULL || method == NULL || rr_parse_url_parts(ctx, url_str, &path, &query_string, &query_value) != 0) {
             JS_ThrowOutOfMemory(ctx);
             goto done;
@@ -1037,7 +1083,9 @@ static JSValue rr_make_request_from_args(JSContext *ctx, JSValue global_obj, int
                                                 method != NULL ? method : "GET",
                                                 url != NULL ? url : "",
                                                 path != NULL ? path : "/",
-                                                path != NULL ? path : "/",
+                                                route != NULL ? route : (path != NULL ? path : "/"),
+                                                mount_path != NULL ? mount_path : "",
+                                                relative_path != NULL ? relative_path : "",
                                                 query_string != NULL ? query_string : "",
                                                 query_value,
                                                 *headers_value,
@@ -1047,6 +1095,9 @@ done:
     heap_caps_free(method);
     heap_caps_free(url);
     heap_caps_free(path);
+    heap_caps_free(route);
+    heap_caps_free(mount_path);
+    heap_caps_free(relative_path);
     heap_caps_free(query_string);
     JS_PopGCRef(ctx, &body_ref);
     JS_PopGCRef(ctx, &headers_ref);

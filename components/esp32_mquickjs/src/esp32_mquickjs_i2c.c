@@ -1,4 +1,5 @@
-#include "esp32_mquickjs_internal.h"
+#include "esp32_mquickjs_i2c.h"
+#include "esp32_mquickjs_core.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -491,114 +492,128 @@ static JSValue i2c_write_read(JSContext *ctx,
     return result;
 }
 
-bool esp32_mquickjs_install_i2c_module(JSContext *ctx, JSValue global_obj)
+void esp32_mquickjs_init_i2c_runtime(void)
 {
-    JSGCRef module_ref;
-    JSValue *module_obj;
-
     i2c_reset_state();
-
-    module_obj = JS_PushGCRef(ctx, &module_ref);
-    *module_obj = JS_NewObject(ctx);
-    if (JS_IsException(*module_obj)) {
-        goto fail;
-    }
-
-    if (!esp32_mquickjs_set_property(ctx, *module_obj, "DEFAULT_SDA",
-                                     JS_NewInt32(ctx, ESP32_MQUICKJS_I2C_DEFAULT_SDA_PIN)) ||
-        !esp32_mquickjs_set_property(ctx, *module_obj, "DEFAULT_SCL",
-                                     JS_NewInt32(ctx, ESP32_MQUICKJS_I2C_DEFAULT_SCL_PIN)) ||
-        !esp32_mquickjs_set_property(ctx, *module_obj, "DEFAULT_FREQ_HZ",
-                                     JS_NewUint32(ctx, ESP32_MQUICKJS_I2C_DEFAULT_FREQ_HZ)) ||
-        !esp32_mquickjs_set_property(ctx, *module_obj, "DEFAULT_TIMEOUT_MS",
-                                     JS_NewUint32(ctx, ESP32_MQUICKJS_I2C_DEFAULT_TIMEOUT_MS)) ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "open", "i2c.open") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "close", "i2c.close") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "status", "i2c.status") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "scan", "i2c.scan") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "write", "i2c.write") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "read", "i2c.read") ||
-        !esp32_mquickjs_set_bound_bridge_function(ctx, *module_obj, global_obj, "writeRead", "i2c.writeRead")) {
-        goto fail;
-    }
-
-    if (!esp32_mquickjs_set_property(ctx, global_obj, "i2c", JS_PopGCRef(ctx, &module_ref))) {
-        return false;
-    }
-    return true;
-
-fail:
-    JS_PopGCRef(ctx, &module_ref);
-    return false;
 }
 
-bool esp32_mquickjs_dispatch_i2c(JSContext *ctx,
-                                 const char *operation,
-                                 int argc,
-                                 JSValue *argv,
-                                 JSValue *result)
+JSValue js_i2c_open(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    if (strcmp(operation, "open") == 0) {
-        *result = i2c_open(ctx, argc, argv);
-        return true;
+    (void)this_val;
+    return i2c_open(ctx, argc, argv);
+}
+
+JSValue js_i2c_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return i2c_close(ctx);
+}
+
+JSValue js_i2c_status(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return i2c_make_status_object(ctx);
+}
+
+JSValue js_i2c_scan(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    JSValue result = JS_UNDEFINED;
+
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+
+    if (!i2c_require_open(ctx, &result)) {
+        return result;
     }
+    return i2c_scan(ctx);
+}
 
-    if (strcmp(operation, "close") == 0) {
-        *result = i2c_close(ctx);
-        return true;
+JSValue js_i2c_write(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    uint16_t address = 0;
+    JSValue result = JS_UNDEFINED;
+
+    (void)this_val;
+
+    if (!i2c_require_open(ctx, &result)) {
+        return result;
     }
-
-    if (strcmp(operation, "status") == 0) {
-        *result = i2c_make_status_object(ctx);
-        return true;
+    if (argc < 2 || !js_value_to_i2c_address(ctx, argv[0], &address)) {
+        return JS_ThrowTypeError(ctx, "i2c.write(addr, data) expects a 7-bit address and byte array");
     }
+    return i2c_write(ctx, address, argv[1]);
+}
 
-    if (!i2c_require_open(ctx, result)) {
-        return true;
+JSValue js_i2c_read(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    uint16_t address = 0;
+    uint32_t length = 0;
+    JSValue result = JS_UNDEFINED;
+
+    (void)this_val;
+
+    if (!i2c_require_open(ctx, &result)) {
+        return result;
     }
-
-    if (strcmp(operation, "scan") == 0) {
-        *result = i2c_scan(ctx);
-        return true;
+    if (argc < 2 || !js_value_to_i2c_address(ctx, argv[0], &address) ||
+        !js_value_to_u32(ctx, argv[1], &length)) {
+        return JS_ThrowTypeError(ctx, "i2c.read(addr, length) expects a 7-bit address and byte length");
     }
+    return i2c_read(ctx, address, length);
+}
 
-    if (strcmp(operation, "write") == 0) {
-        uint16_t address = 0;
+JSValue js_i2c_writeRead(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    uint16_t address = 0;
+    uint32_t read_length = 0;
+    JSValue result = JS_UNDEFINED;
 
-        if (argc < 2 || !js_value_to_i2c_address(ctx, argv[0], &address)) {
-            *result = JS_ThrowTypeError(ctx, "i2c.write(addr, data) expects a 7-bit address and byte array");
-            return true;
-        }
-        *result = i2c_write(ctx, address, argv[1]);
-        return true;
+    (void)this_val;
+
+    if (!i2c_require_open(ctx, &result)) {
+        return result;
     }
-
-    if (strcmp(operation, "read") == 0) {
-        uint16_t address = 0;
-        uint32_t length = 0;
-
-        if (argc < 2 || !js_value_to_i2c_address(ctx, argv[0], &address) ||
-            !js_value_to_u32(ctx, argv[1], &length)) {
-            *result = JS_ThrowTypeError(ctx, "i2c.read(addr, length) expects a 7-bit address and byte length");
-            return true;
-        }
-        *result = i2c_read(ctx, address, length);
-        return true;
+    if (argc < 3 || !js_value_to_i2c_address(ctx, argv[0], &address) ||
+        !js_value_to_u32(ctx, argv[2], &read_length)) {
+        return JS_ThrowTypeError(ctx,
+                                 "i2c.writeRead(addr, writeData, readLength) expects a 7-bit address, write bytes, and read length");
     }
+    return i2c_write_read(ctx, address, argv[1], read_length);
+}
 
-    if (strcmp(operation, "writeRead") == 0) {
-        uint16_t address = 0;
-        uint32_t read_length = 0;
+JSValue js_i2c_get_default_sda(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewInt32(ctx, ESP32_MQUICKJS_I2C_DEFAULT_SDA_PIN);
+}
 
-        if (argc < 3 || !js_value_to_i2c_address(ctx, argv[0], &address) ||
-            !js_value_to_u32(ctx, argv[2], &read_length)) {
-            *result = JS_ThrowTypeError(ctx,
-                                        "i2c.writeRead(addr, writeData, readLength) expects a 7-bit address, write bytes, and read length");
-            return true;
-        }
-        *result = i2c_write_read(ctx, address, argv[1], read_length);
-        return true;
-    }
+JSValue js_i2c_get_default_scl(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewInt32(ctx, ESP32_MQUICKJS_I2C_DEFAULT_SCL_PIN);
+}
 
-    return false;
+JSValue js_i2c_get_default_freq_hz(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewUint32(ctx, ESP32_MQUICKJS_I2C_DEFAULT_FREQ_HZ);
+}
+
+JSValue js_i2c_get_default_timeout_ms(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewUint32(ctx, ESP32_MQUICKJS_I2C_DEFAULT_TIMEOUT_MS);
 }

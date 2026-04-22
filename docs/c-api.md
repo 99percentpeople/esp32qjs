@@ -1,11 +1,11 @@
-# REPL API Reference
+# C API Reference
 
-This project exposes a small JavaScript REPL on the XIAO ESP32-S3. Run `help()` on the device to point back to this document.
+This document covers the APIs exported directly by the firmware runtime.
 
 ## Global Helpers
 
 - `help()`
-  Print the location of this document.
+  Print the location of these API documents.
 - `print(...values)`
   Write values to the serial console.
 - `gc()`
@@ -21,7 +21,7 @@ This project exposes a small JavaScript REPL on the XIAO ESP32-S3. Run `help()` 
 - `sleep(ms)` / `delay(ms)`
   Block the REPL task for `ms` milliseconds.
 - `waitFor(start, timeoutMs?)`
-  Run `start(resolve, reject, deferred)` and block while the REPL keeps pumping timers, Wi-Fi, and HTTP callbacks. Return the resolved value or throw the rejection.
+  Run `start(resolve, reject, deferred)` and block while the runtime keeps pumping timers, Wi-Fi, and HTTP callbacks. Return the resolved value or throw the rejection.
 
 Startup behavior:
 
@@ -106,8 +106,6 @@ clearInterval(id);
 
 ## Constants
 
-- `LED_BUILTIN`
-  Built-in LED pin number, `21`.
 - `SCRIPTS_DIR`
   Script base directory, `"/littlefs"`.
 
@@ -219,6 +217,12 @@ stream.close();
 - `path`
 - `queryString`
 - `query`
+- `route`
+  The matched route pattern as a string.
+- `mountPath`
+  The mounted path prefix computed by the router, primarily for middleware.
+- `relativePath`
+  The path after removing the mounted prefix, primarily for file-serving middleware.
 - `headers`
   A `Headers` object.
 - `body`
@@ -238,6 +242,12 @@ stream.close();
   A `Stream`.
 - `text()`
 - `json()`
+
+Body consumption notes:
+
+- `Request.text()` / `Request.json()` read the full request body and consume the underlying stream.
+- `Response.text()` / `Response.json()` read the full response body and consume the underlying stream.
+- If you read directly from `request.body` or `response.body`, close the stream manually when you are done.
 
 Examples:
 
@@ -259,13 +269,13 @@ print(headers.get("content-type"));
 ## `i2c` Module
 
 - `i2c.DEFAULT_SDA`
-  Default SDA pin from Kconfig, `5`.
+  Default SDA pin from Kconfig.
 - `i2c.DEFAULT_SCL`
-  Default SCL pin from Kconfig, `6`.
+  Default SCL pin from Kconfig.
 - `i2c.DEFAULT_FREQ_HZ`
   Default bus speed, `400000`.
 - `i2c.DEFAULT_TIMEOUT_MS`
-  Default transfer timeout in milliseconds, `100`.
+  Default transfer timeout in milliseconds.
 - `i2c.open(options?)`
   Open the shared I2C master bus. `options` can include `{ sda, scl, freqHz, timeoutMs, internalPullup }`.
 - `i2c.close()`
@@ -289,138 +299,6 @@ print(JSON.stringify(i2c.scan())); // [60] for an SSD1306 at 0x3c
 print(i2c.write(0x3c, [0x00, 0xAF])); // SSD1306 display on
 ```
 
-## `display` Helpers
-
-These helpers are implemented in JavaScript on top of the `i2c` module and live under `/littlefs/_sys/display/`. Load `/littlefs/_sys/display.js` from `index.js` or from the REPL before using them.
-
-The display layer is organized around a unified surface interface:
-
-- `display.Surface`
-  Base surface contract.
-- `display.MonoSurface`
-  Generic 1-bit framebuffer surface.
-- `display.registerDriver(name, factory)`
-  Register a hardware driver factory.
-- `display.create(options)` / `display.open(options)`
-  Create or initialize a display by driver name. `options.driver` is required.
-- `display.listDrivers()`
-  Return the registered driver names.
-
-The built-in driver name is `ssd1306`.
-
-Supported `options` fields:
-
-- `sda`, `scl`, `freqHz`, `timeoutMs`, `internalPullup`
-  Passed through to `i2c.open(...)` when the bus needs to be configured.
-- `address`
-  SSD1306 I2C address, default `0x3c`.
-- `width`, `height`
-  Display size, default `128x64`.
-- `spacing`
-  Extra inter-character spacing for `drawText()`.
-
-Display instance methods:
-
-- `init()`
-  Initialize the panel and clear the framebuffer.
-- `clear(enabled = false)` / `fill(enabled)`
-  Fill the local framebuffer with off/on pixels.
-- `setPixel(x, y, enabled)` / `getPixel(x, y)`
-  Read or write one pixel in the framebuffer.
-- `fillRect(x, y, width, height, enabled)`
-  Fill a rectangle in the framebuffer.
-- `drawLine(x0, y0, x1, y1, enabled)`
-  Draw a line with Bresenham logic.
-- `drawRect(x, y, width, height, enabled)`
-  Draw a rectangle outline.
-- `drawBitmap(x, y, bitmap, enabled?)`
-  Draw a bitmap shaped as `{ width, height, pixels }`.
-- `drawChar(x, y, ch, enabled)`
-  Draw one glyph using the built-in 5x7 font.
-- `drawText(x, y, text, enabled, spacing?)`
-  Draw text. Lowercase is normalized to uppercase in the built-in font.
-- `measureText(text, style?)`
-  Return `{ width, height, lines }` for the built-in 5x7 font.
-- `flush()`
-  Write the framebuffer to the panel over I2C.
-- `on()` / `off()`
-  Turn the panel on or off.
-- `invert(enabled)`
-  Toggle inverse display mode.
-- `contrast(value)`
-  Set contrast `0..255`.
-
-Example:
-
-```js
-var oled = display.open({ driver: "ssd1306", sda: 5, scl: 6, address: 0x3c });
-oled.clear();
-oled.drawText(0, 0, "HELLO");
-oled.drawRect(0, 10, 64, 18, true);
-oled.flush();
-```
-
-## `ui` Helpers
-
-These helpers are implemented in JavaScript on top of the `display` surface interface and live under `/littlefs/_sys/ui/`. Load `/littlefs/_sys/ui.js` after `/littlefs/_sys/display.js`.
-
-- `ui.box(props?, ...children)`
-  Decorated container with optional `padding`, `background`, `border`, `align`, and `valign`.
-- `ui.row(props?, ...children)`
-  Horizontal layout with optional `gap`, `justify`, `align`, and child `flex`.
-- `ui.column(props?, ...children)`
-  Vertical layout with optional `gap`, `justify`, `align`, and child `flex`.
-- `ui.text(value, props?)`
-  Text node drawn with the active surface font.
-- `ui.spacer(size | props)`
-  Empty layout node for fixed spacing.
-- `ui.padding(insets, child, props?)`
-  Convenience wrapper that applies padding around a single child.
-- `ui.measure(surface, node)`
-  Return the natural `{ width, height }` of a node tree.
-- `ui.layout(surface, node, options?)`
-  Compute node frames without drawing.
-- `ui.render(surface, node, options?)`
-  Clear, layout, paint, and optionally `flush()` the surface.
-
-Supported common props:
-
-- `width`, `height`
-  Fixed outer size in pixels.
-- `padding`
-  Number or `{ top, right, bottom, left }`.
-- `gap`
-  Space between row or column children.
-- `flex`
-  Extra main-axis space share for row or column children.
-- `align`
-  Cross-axis alignment: `"start"`, `"center"`, `"end"`, or `"stretch"`.
-- `justify`
-  Main-axis alignment for rows and columns: `"start"`, `"center"`, `"end"`, or `"space-between"`.
-- `background`
-  Fill the node frame before painting children.
-- `border`
-  Draw a 1-pixel border around the node frame.
-- `color`
-  Text color for `ui.text(...)`.
-
-Example:
-
-```js
-var oled = display.open({ driver: "ssd1306", sda: 5, scl: 6, address: 0x3c });
-var screen = ui.column(
-  { padding: 2, gap: 4, border: true },
-  ui.text("HELLO"),
-  ui.row(
-    { gap: 4, align: "center" },
-    ui.box({ width: 12, height: 12, border: true }),
-    ui.text("WIFI OK")
-  )
-);
-
-ui.render(oled, screen);
-```
-
 ## `gpio` Module
 
 - `gpio.INPUT`
@@ -428,11 +306,11 @@ ui.render(oled, screen);
 - `gpio.OUTPUT`
   Output mode string for `gpio.pinMode()`.
 - `gpio.LED_BUILTIN`
-  Built-in LED pin number, `21`.
+  Built-in LED pin number for the current board.
 - `gpio.USER_LED_PIN`
-  XIAO ESP32-S3 user LED pin number.
+  User LED pin number for the current board.
 - `gpio.USER_LED_ACTIVE_LOW`
-  `true` because the board LED is active-low.
+  Whether the board LED is active-low.
 - `gpio.pinMode(pin, mode)`
   Configure a GPIO as `gpio.INPUT` or `gpio.OUTPUT`.
 - `gpio.digitalWrite(pin, value)`
@@ -440,7 +318,7 @@ ui.render(oled, screen);
 - `gpio.digitalRead(pin)`
   Read a GPIO level and return `true` or `false`.
 - `gpio.led(value)`
-  Control the XIAO ESP32-S3 user LED. `true` turns it on.
+  Control the board user LED. `true` turns it on.
 
 Example:
 
@@ -476,7 +354,7 @@ print(esp32.freeHeap());
 Wi-Fi credentials are kept in RAM. Rebooting the board clears the active station config.
 
 - `wifi.DEFAULT_TIMEOUT_MS`
-  Default station connect timeout in milliseconds, `15000`.
+  Default station connect timeout in milliseconds.
 - `wifi.status()`
   Return `{ initialized, started, connected, scanning, ssid, hostname, ip, netmask, gateway, lastDisconnectReason, lastDisconnectReasonName }`.
 - `wifi.connect(ssid, password, timeoutMs = wifi.DEFAULT_TIMEOUT_MS)`
@@ -508,7 +386,7 @@ wifi.disconnect();
 ## `http` Module
 
 - `http.DEFAULT_TIMEOUT_MS`
-  Default request timeout in milliseconds, `15000`.
+  Default request timeout in milliseconds.
 - `http.server(options?)`
   Create a lightweight HTTP server object backed by `esp_http_server`.
 - `http.fetch(input, options?)`
@@ -516,7 +394,7 @@ wifi.disconnect();
 - `http.fetch(input, callback)` / `http.fetch(input, options, callback)`
   Alias of the asynchronous `fetch(...)` forms.
 
-Supported `options` fields:
+Supported `fetch` options:
 
 - `method`
   HTTP method string such as `"GET"`, `"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"`, `"HEAD"`, or `"OPTIONS"`.
@@ -544,42 +422,58 @@ var head = http.fetch("http://example.com", {
 print(head.status, head.text().length);
 ```
 
-HTTP server API:
+Synchronous `fetch(...)` runs on the same JS thread as `http.server(...)`. If you call your own local server from the same script, prefer the asynchronous form with `waitFor(...)`:
+
+```js
+var response = waitFor(function (resolve, reject, deferred) {
+  fetch("http://" + wifi.status().ip + ":8080/ping", deferred.nodeCallback);
+}, 10000);
+print(response.text());
+```
+
+### HTTP Server API
 
 - `var server = http.server({ port: 8080, host: "0.0.0.0" })`
   Create a server. Default port is `80`. Default host is `"0.0.0.0"` to listen on all interfaces.
-- `server.get(path, handler)`
-- `server.post(path, handler)`
-- `server.put(path, handler)`
-- `server.patch(path, handler)`
-- `server.delete(path, handler)`
-- `server.head(path, handler)`
-- `server.options(path, handler)`
-- `server.all(path, handler)`
+- `server.get(pathOrPattern, handler)`
+- `server.post(pathOrPattern, handler)`
+- `server.put(pathOrPattern, handler)`
+- `server.patch(pathOrPattern, handler)`
+- `server.delete(pathOrPattern, handler)`
+- `server.head(pathOrPattern, handler)`
+- `server.options(pathOrPattern, handler)`
+- `server.all(pathOrPattern, handler)`
   Register a route handler.
 - `http.staticFileHandler(root)` / `staticFileHandler(root)`
-  Create a handler function suitable for routes such as `server.get("/*", staticFileHandler("./www"))`.
+  Create a static file handler suitable for routes such as `server.get("/assets/*", staticFileHandler("./www"))`.
 - `server.start()`
 - `server.stop()`
 
 Handler shape:
 
-- Input request object:
-  - `Request`
-  - route-specific fields such as `route` are also present on the object
-- Return value:
-  - `Response`
+- `handler` can be:
+  - a function `(req) => Response`
+  - or an object with `handle(req)` that returns a `Response`
+- `req` is always a `Request`
+- route handlers must return a `Response`
 
 Route patterns:
 
 - Exact strings such as `"/ping"` match the request path directly.
-- Strings containing `*` are compiled into a JavaScript `RegExp` and matched with the runtime's built-in regex engine.
+- Strings containing `*` use the built-in simple glob matcher, for example `"/assets/*"`.
 - You can also pass a `RegExp` directly, for example `/^\\/api\\/v1\\//`.
 
 Host binding:
 
 - Omit `host` or set it to `"0.0.0.0"` to listen on all interfaces.
 - Set `host` to a specific local IPv4 address to bind the server to the matching network interface.
+
+`staticFileHandler(root)` behavior:
+
+- `root` must resolve under `/littlefs`.
+- Matched file paths are resolved from `req.relativePath`.
+- Files are streamed directly from LittleFS in chunks.
+- `Response.stream(...)` also streams in chunks and closes the supplied stream after the response is sent.
 
 Example:
 
@@ -610,6 +504,3 @@ server.get("/core", function (req) {
 
 server.start();
 ```
-
-`staticFileHandler(root)` streams files directly from LittleFS in chunks. Large assets do not need to be loaded into a JavaScript string before they are sent.
-`Response.stream(...)` also streams in chunks and closes the supplied stream after the response is sent.
