@@ -1,4 +1,7 @@
 #include "esp32_mquickjs_wifi.h"
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
+
 #include "esp32_mquickjs_core.h"
 
 #include <inttypes.h>
@@ -1268,3 +1271,5 @@ static bool wifi_async_poller(JSContext *ctx,
 
     return needs_redraw;
 }
+
+#endif

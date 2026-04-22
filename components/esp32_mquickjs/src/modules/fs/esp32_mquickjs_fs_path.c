@@ -1,5 +1,7 @@
 #include "esp32_mquickjs_fs_path.h"
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_FS
+
 #include <string.h>
 
 bool esp32_mquickjs_fs_resolve_path(const char *base_path,
@@ -104,3 +106,5 @@ const char *esp32_mquickjs_fs_path_basename(const char *path)
     }
     return slash[1] == '\0' ? slash : slash + 1;
 }
+
+#endif

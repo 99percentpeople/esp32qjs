@@ -17,7 +17,9 @@ add_test(NAME test_repl_logic COMMAND test_repl_logic)
 
 add_executable(test_fs_path
     test_fs_path.c
-    ../../components/esp32_mquickjs/src/esp32_mquickjs_fs_path.c
+    ../../components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs_path.c
 )
-target_include_directories(test_fs_path PRIVATE ../../components/esp32_mquickjs/src)
+target_compile_definitions(test_fs_path PRIVATE CONFIG_ESP32_MQUICKJS_FEATURE_FS=1)
+target_include_directories(test_fs_path PRIVATE ../../components/esp32_mquickjs/internal)
+target_include_directories(test_fs_path PRIVATE ../../components/esp32_mquickjs/include)
 add_test(NAME test_fs_path COMMAND test_fs_path)

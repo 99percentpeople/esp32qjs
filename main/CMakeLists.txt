@@ -8,6 +8,10 @@ set(requires
     esp_driver_usb_serial_jtag
 )
 
+set(priv_requires
+    esp_timer
+)
+
 if(CONFIG_ESP32QJS_ENABLE_REPL)
     list(APPEND srcs
         "repl_line.c"
@@ -20,6 +24,7 @@ idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS "."
     REQUIRES ${requires}
+    PRIV_REQUIRES ${priv_requires}
 )
 
 set(ESP32QJS_FLASH_DATA_DIR "${CMAKE_SOURCE_DIR}/flash_data" CACHE PATH

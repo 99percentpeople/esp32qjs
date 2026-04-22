@@ -13,6 +13,9 @@ test("gpio/basic", function () {
   test.ok(typeof gpio.PULLUP === "string", "gpio.PULLUP should be a string");
   test.ok(typeof gpio.PULLDOWN === "string", "gpio.PULLDOWN should be a string");
   test.ok(typeof gpio.PULLUP_PULLDOWN === "string", "gpio.PULLUP_PULLDOWN should be a string");
+  test.ok(typeof gpio.CHANGE === "string", "gpio.CHANGE should be a string");
+  test.ok(typeof gpio.RISING === "string", "gpio.RISING should be a string");
+  test.ok(typeof gpio.FALLING === "string", "gpio.FALLING should be a string");
   test.equal(gpio.LOW, 0, "gpio.LOW should be 0");
   test.equal(gpio.HIGH, 1, "gpio.HIGH should be 1");
   test.equal(gpio.DRIVE_0, 0, "gpio.DRIVE_0 should be 0");
@@ -30,6 +33,8 @@ test("gpio/basic", function () {
   test.ok(typeof gpio.getDriveStrength === "function", "gpio.getDriveStrength should exist");
   test.ok(typeof gpio.setDriveStrength === "function", "gpio.setDriveStrength should exist");
   test.ok(typeof gpio.hold === "function", "gpio.hold should exist");
+  test.ok(typeof gpio.attachInterrupt === "function", "gpio.attachInterrupt should exist");
+  test.ok(typeof gpio.detachInterrupt === "function", "gpio.detachInterrupt should exist");
   test.ok(typeof gpio.reset === "function", "gpio.reset should exist");
   test.ok(typeof gpio.led === "function", "gpio.led should exist");
   test.ok(!gpio.isValid(-1), "negative pin should be invalid");
@@ -55,6 +60,9 @@ test("gpio/basic", function () {
   test.ok(typeof status.outputControlledByPeripheral === "boolean", "status.outputControlledByPeripheral should be boolean");
   test.ok(typeof status.outputEnableInverted === "boolean", "status.outputEnableInverted should be boolean");
   test.ok(typeof status.sleepEnabled === "boolean", "status.sleepEnabled should be boolean");
+  test.ok(typeof status.interruptAttached === "boolean", "status.interruptAttached should be boolean");
+  test.equal(status.interruptMode, null, "reset should clear interrupt mode");
+  test.ok(typeof status.interruptDropped === "number", "status.interruptDropped should be numeric");
 
   gpio.pinMode(pin, gpio.INPUT_OUTPUT);
   status = gpio.status(pin);
@@ -80,6 +88,48 @@ test("gpio/basic", function () {
   test.ok(typeof gpio.digitalRead(pin) === "boolean", "digitalRead should stay boolean after toggle");
   gpio.digitalWrite(pin, false);
   test.ok(typeof gpio.digitalRead(pin) === "boolean", "digitalRead should still return a boolean");
+  gpio.configure(pin, {
+    mode: gpio.INPUT_OUTPUT,
+    pull: gpio.PULLDOWN,
+    level: gpio.LOW,
+  });
+  var interruptEvents = [];
+  status = gpio.attachInterrupt(pin, function (event) {
+    interruptEvents.push({
+      pin: event.pin,
+      level: event.level,
+      mode: event.mode,
+    });
+  }, gpio.CHANGE);
+  test.ok(status.interruptAttached, "attachInterrupt should update status");
+  test.equal(status.interruptMode, gpio.CHANGE, "attachInterrupt should report change mode");
+  test.equal(status.interruptDropped, 0, "attachInterrupt should reset dropped count");
+  gpio.digitalWrite(pin, true);
+  var interruptEvent = waitFor(function (resolve) {
+    var intervalId = setInterval(function () {
+      if (interruptEvents.length > 0) {
+        clearInterval(intervalId);
+        resolve(interruptEvents[0]);
+      }
+    }, 10);
+
+    return function () {
+      clearInterval(intervalId);
+    };
+  }, 1000);
+  test.equal(interruptEvent.pin, pin, "interrupt callback pin");
+  test.equal(interruptEvent.mode, gpio.CHANGE, "interrupt callback mode");
+  test.ok(typeof interruptEvent.level === "boolean", "interrupt callback level should be boolean");
+  status = gpio.detachInterrupt(pin);
+  test.ok(!status.interruptAttached, "detachInterrupt should clear attached state");
+  test.equal(status.interruptMode, null, "detachInterrupt should clear mode");
+  gpio.digitalWrite(pin, false);
+  var interruptCountAfterDetach = waitFor(function (resolve) {
+    setTimeout(function () {
+      resolve(interruptEvents.length);
+    }, 80);
+  }, 500);
+  test.equal(interruptCountAfterDetach, 1, "detachInterrupt should stop future callbacks");
   status = gpio.configure(pin, {
     mode: gpio.OUTPUT,
     pull: gpio.FLOATING,

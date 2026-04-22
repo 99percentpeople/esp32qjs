@@ -41,11 +41,55 @@ static const char *esp32_chip_model_name(void)
     }
 }
 
+static JSValue esp32_make_features_object(JSContext *ctx)
+{
+    JSGCRef features_ref;
+    JSValue *features;
+
+    features = JS_PushGCRef(ctx, &features_ref);
+    *features = JS_NewObject(ctx);
+    if (JS_IsException(*features)) {
+        goto fail;
+    }
+
+    if (!esp32_mquickjs_set_property(ctx, *features, "fs",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_FS)) ||
+        !esp32_mquickjs_set_property(ctx, *features, "gpio",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_GPIO)) ||
+        !esp32_mquickjs_set_property(ctx, *features, "ledc",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_LEDC)) ||
+        !esp32_mquickjs_set_property(ctx, *features, "adc",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_ADC)) ||
+        !esp32_mquickjs_set_property(ctx, *features, "dac",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_DAC)) ||
+        !esp32_mquickjs_set_property(ctx, *features, "i2c",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_I2C)) ||
+        !esp32_mquickjs_set_property(ctx, *features, "wifi",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_WIFI)) ||
+        !esp32_mquickjs_set_property(ctx, *features, "httpServer",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER)) ||
+        !esp32_mquickjs_set_property(ctx, *features, "staticFileHandler",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER &&
+                                                CONFIG_ESP32_MQUICKJS_FEATURE_FS)) ||
+        !esp32_mquickjs_set_property(ctx, *features, "http",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_HTTP))) {
+        goto fail;
+    }
+
+    return JS_PopGCRef(ctx, &features_ref);
+
+fail:
+    JS_PopGCRef(ctx, &features_ref);
+    return JS_EXCEPTION;
+}
+
 static JSValue esp32_make_info_object(JSContext *ctx)
 {
     esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
     JSGCRef info_ref;
     JSValue *info;
+    JSGCRef features_ref;
+    JSValue *features;
     uint32_t flash_size = 0;
     bool psram_enabled = false;
     size_t total_psram = 0;
@@ -79,14 +123,20 @@ static JSValue esp32_make_info_object(JSContext *ctx)
     }
 
     info = JS_PushGCRef(ctx, &info_ref);
+    features = JS_PushGCRef(ctx, &features_ref);
     *info = JS_NewObject(ctx);
     if (JS_IsException(*info)) {
+        goto fail;
+    }
+    *features = esp32_make_features_object(ctx);
+    if (JS_IsException(*features)) {
         goto fail;
     }
     if (!esp32_mquickjs_set_property(ctx, *info, "board",
                                      JS_NewString(ctx, ESP32_MQUICKJS_BOARD_NAME)) ||
         !esp32_mquickjs_set_property(ctx, *info, "chip",
                                      JS_NewString(ctx, esp32_chip_model_name())) ||
+        !esp32_mquickjs_set_property(ctx, *info, "features", *features) ||
         !esp32_mquickjs_set_property(ctx, *info, "userLedPin",
                                      JS_NewInt32(ctx, ESP32_MQUICKJS_USER_LED_PIN)) ||
         !esp32_mquickjs_set_property(ctx, *info, "userLedActiveLow",
@@ -124,9 +174,11 @@ static JSValue esp32_make_info_object(JSContext *ctx)
         goto fail;
     }
 
+    JS_PopGCRef(ctx, &features_ref);
     return JS_PopGCRef(ctx, &info_ref);
 
 fail:
+    JS_PopGCRef(ctx, &features_ref);
     JS_PopGCRef(ctx, &info_ref);
     return JS_EXCEPTION;
 }

@@ -1,0 +1,563 @@
+# API Stability Plan
+
+This document is a working proposal for a long-lived JavaScript host API.
+It is intentionally more opinionated than [docs/c-api.md](/home/zach/esp32qjs/docs/c-api.md): the goal here is not to describe today's implementation, but to define which API shapes should be frozen, which should still change before freeze, and how new modules such as `dac` should fit in.
+
+This plan covers:
+
+- built-in C-side host APIs exported by the firmware runtime
+- board/peripheral bindings such as `gpio`, `ledc`, `adc`, and `i2c`
+- transport/runtime helpers such as `wifi`, `http`, timers, and `load(...)`
+
+It does not treat JS-side LittleFS libraries such as `display` and `ui` as firmware ABI. Those should remain versioned JS libraries layered on top of the built-in host APIs.
+
+## Goals
+
+The stable API should satisfy these rules:
+
+- Module names stay small and literal. Prefer raw ESP-IDF or platform names such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, `wifi`, `http`, `esp32`, `fs`.
+- Built-in host APIs stay low-level. Board-independent drivers, widgets, protocol stacks, debounce logic, animation helpers, and other policy belong in JavaScript.
+- Additive change is preferred. Once a module shape is frozen, new fields and methods may be added, but existing names and semantics should not be renamed or weakened.
+- Host modules should be board-selectable features. Each optional module should be enabled or disabled by a `CONFIG_...` feature macro and chosen per board profile under `configs/boards/<board>/sdkconfig.defaults`.
+- Compiled feature sets should be discoverable from JS in one stable place such as `esp32.info().features`, instead of forcing user scripts to probe globals with `typeof`.
+- Mutating peripheral calls should return state objects when that improves observability, but status objects must reflect real or intentionally tracked state, not guessed state.
+- Asynchronous callbacks from ISR or background tasks must always be bridged back onto the JS thread.
+
+## Stability Levels
+
+This document uses three levels:
+
+- `Stable now`
+  The current API shape is already close to what should be frozen.
+- `Adjust before freeze`
+  The module is useful, but one or more design choices should be corrected before calling it stable.
+- `Planned`
+  The module is not fully implemented yet, but its public shape should be decided now.
+
+## Feature Gating Model
+
+The built-in host API should be split into:
+
+- `Core runtime surface`
+  Small helpers and types that are effectively part of the runtime itself.
+- `Optional host features`
+  Peripheral or connectivity modules that may be compiled in or out per board.
+
+Recommended compile-time model:
+
+- Define one `Kconfig` boolean for each optional module under [components/esp32_mquickjs/Kconfig.projbuild](/home/zach/esp32qjs/components/esp32_mquickjs/Kconfig.projbuild).
+- Use the generated `CONFIG_...` macros in C to:
+  - compile out module registration from [`src/core/mqjs_stdlib_esp32.c`](/home/zach/esp32qjs/components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c)
+  - compile out implementation files or guard their registration paths
+  - conditionally include component dependencies
+- Use those generated `CONFIG_...` symbols directly in source code; do not add a second alias layer such as `ESP32_MQUICKJS_FEATURE_*`.
+- Let each board profile set defaults in `configs/boards/<board>/sdkconfig.defaults`.
+
+Recommended feature symbols:
+
+- `CONFIG_ESP32_MQUICKJS_FEATURE_FS`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_GPIO`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_LEDC`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_ADC`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_DAC`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_I2C`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_WIFI`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_HTTP`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER`
+
+Recommended dependency rules:
+
+- `FEATURE_ADC` depends on `SOC_ADC_SUPPORTED`
+- `FEATURE_DAC` depends on `SOC_DAC_SUPPORTED`
+- `FEATURE_I2C` depends on `SOC_I2C_SUPPORTED`
+- `FEATURE_LEDC` depends on `SOC_LEDC_SUPPORTED`
+- `FEATURE_WIFI` depends on `SOC_WIFI_SUPPORTED`
+- `FEATURE_HTTP` depends on `FEATURE_WIFI` in the current firmware, unless another network backend is introduced later
+- `FEATURE_HTTP_SERVER` depends on `FEATURE_WIFI` in the current firmware
+- `staticFileHandler` is a composite capability that depends on `FEATURE_HTTP_SERVER && FEATURE_FS`
+- `FEATURE_FS` stays enabled on most boards because `load(...)`, LittleFS startup, and static file serving depend on it
+
+Recommended runtime discovery:
+
+- Add a stable `features` object to `esp32.info()`:
+
+```js
+print(JSON.stringify(esp32.info().features));
+// Example:
+// {
+//   fs: true,
+//   gpio: true,
+//   ledc: true,
+//   adc: true,
+//   dac: false,
+//   i2c: true,
+//   wifi: true,
+//   http: true
+// }
+```
+
+Behavior rule:
+
+- If a feature is disabled at compile time, that module is not registered into the JS global object.
+- Cross-board scripts should prefer `esp32.info().features.<name>` over probing module globals directly.
+
+## Board Profiles as Feature Presets
+
+Board directories under [configs/boards](/home/zach/esp32qjs/configs/boards) should become the canonical place where runtime feature sets are selected.
+
+Each board's `sdkconfig.defaults` should describe:
+
+- chip-independent board identity
+- pin defaults
+- memory defaults
+- enabled host features for that board
+
+Recommended examples for current boards:
+
+`esp32c3_supermini`
+
+- `FEATURE_FS=y`
+- `FEATURE_GPIO=y`
+- `FEATURE_LEDC=y`
+- `FEATURE_ADC=y`
+- `FEATURE_DAC=n`
+- `FEATURE_I2C=y`
+- `FEATURE_WIFI=y`
+- `FEATURE_HTTP=y`
+- `FEATURE_HTTP_SERVER=y`
+
+`xiao_esp32s3`
+
+- `FEATURE_FS=y`
+- `FEATURE_GPIO=y`
+- `FEATURE_LEDC=y`
+- `FEATURE_ADC=y`
+- `FEATURE_DAC=n`
+- `FEATURE_I2C=y`
+- `FEATURE_WIFI=y`
+- `FEATURE_HTTP=y`
+- `FEATURE_HTTP_SERVER=y`
+
+Future `esp32` or `esp32s2` boards can enable `FEATURE_DAC=y` when DAC pins are actually usable on the board.
+
+Board-level enablement should reflect both:
+
+- chip capability
+- practical board usefulness
+
+For example, a chip may support DAC while a specific board routes those pins poorly or reserves them for another function; in that case the board profile should still be free to disable the feature.
+
+## Module Inventory
+
+Built-in modules and types currently in scope:
+
+- Global helpers: `help`, `load`, `defer`, `waitFor`, `sleep`, `delay`, `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`, `gc`
+- Data/runtime types: `Headers`, `Request`, `Response`, `Stream`
+- Filesystem/runtime modules: `fs`, `esp32`
+- Peripheral modules: `gpio`, `ledc`, `adc`, `dac`, `i2c`
+- Connectivity modules: `wifi`, `http`, `HttpServer`, `StaticFileHandler`
+- JS-side libraries outside the firmware ABI: `display`, `ui`
+
+In the long-term plan, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `wifi`, and `http` should all be treated as optional host features rather than unconditional globals.
+
+## Freeze Principles By Area
+
+### Global Helpers
+
+Status: `Stable now`
+
+These helpers are small, board-independent, and already sit at the right abstraction level:
+
+- `load(path)`
+- `defer()`
+- `waitFor(start, timeoutMs?)`
+- `sleep(ms)` / `delay(ms)`
+- `setTimeout`, `clearTimeout`
+- `setInterval`, `clearInterval`
+- `gc()`
+- `help()`
+
+Freeze recommendations:
+
+- Keep both `sleep` and `delay`; `delay` is a harmless compatibility alias.
+- Keep callback-oriented async helpers. Do not require Promises for baseline firmware APIs.
+- Keep `load(...)` as the single primitive for JS-side library composition.
+
+### `fs` and `Stream`
+
+Status: `Stable now`
+
+Why:
+
+- The LittleFS root boundary is explicit and easy to reason about.
+- The API is small and composable.
+- `Stream` is already shared consistently by `fs`, `Request`, and `Response`.
+
+Freeze recommendations:
+
+- Keep current path sandboxing under `/littlefs`.
+- Keep current text-oriented convenience helpers such as `readText` and `writeText`.
+- Keep `Stream` as the common file/request/response body abstraction.
+- Treat `fs` as a feature-gated module in build configuration, but leave it enabled by default on normal boards.
+
+Adjustments that can still be additive later:
+
+- Add byte-oriented helpers later if binary workloads become common.
+- Do not change existing string-returning APIs to return arrays or typed arrays.
+
+### `Headers`, `Request`, and `Response`
+
+Status: `Stable now`
+
+Why:
+
+- They already form a coherent transport layer for `fetch(...)` and `http.server(...)`.
+- The shapes are web-inspired without pretending to be the full browser Fetch API.
+
+Freeze recommendations:
+
+- Keep these types intentionally small.
+- Avoid adding browser-only semantics that the firmware cannot honor consistently.
+- Prefer small additive helpers over deep Fetch-compat work.
+
+### `esp32`
+
+Status: `Stable now`
+
+Why:
+
+- `esp32.info()`, `millis()`, `micros()`, and `freeHeap()` are generic runtime/platform inspection helpers.
+- The module is not overloaded with peripheral control.
+
+Freeze recommendations:
+
+- Keep this module focused on platform/runtime introspection.
+- Do not move unrelated peripheral helpers into `esp32`.
+- If later adding power-management or reboot helpers, do so carefully and explicitly.
+- Extend `esp32.info()` with a stable `features` object so scripts can discover compiled host modules safely.
+
+## Peripheral Modules
+
+### `gpio`
+
+Status: `Stable now`
+
+Current shape is already close to the right long-term layer:
+
+- raw pin configuration
+- digital read/write
+- pull, drive strength, hold
+- interrupt registration via `attachInterrupt(...)`
+
+Why it is in a good place:
+
+- It stays close to ESP-IDF pad control instead of embedding drivers.
+- Interrupt callbacks are safely bridged back onto the JS thread.
+- Status inspection is strong enough for debugging.
+
+Freeze recommendations:
+
+- Keep `pinMode`, `setPull`, `digitalRead`, `digitalWrite`, `toggle`, `hold`, `reset`, `status`.
+- Keep `attachInterrupt(pin, callback, mode)` / `detachInterrupt(pin)`.
+- Keep interrupt event objects `{ pin, level, mode }`.
+- Keep richer state inspection in `status(pin)`.
+- Gate the whole module behind `FEATURE_GPIO`, even if most boards will leave it enabled.
+
+Intentional non-goals:
+
+- no built-in debounce
+- no long-press / double-click helpers
+- no Arduino-style `digitalPinToInterrupt(...)`
+- no device-specific drivers
+
+### `ledc`
+
+Status: `Adjust before freeze`
+
+The module is correctly placed as a low-level PWM timer/channel binding, but two parts should be tightened before it is considered frozen.
+
+What is already good:
+
+- timer and channel are modeled separately
+- API maps closely to ESP-IDF LEDC primitives
+- no servo, no `analogWrite(...)`, no animation policy in C
+
+What should change before freeze:
+
+- Status semantics should be stricter. Methods such as `setFreq(...)`, `bindChannelTimer(...)`, `timerPause(...)`, and `timerResume(...)` should not make a timer or channel appear fully configured unless it actually was configured.
+- The module currently assumes `LEDC_LOW_SPEED_MODE`. That is acceptable for current targets, but the API plan should explicitly define whether speed mode is intentionally fixed or whether a later explicit capability field is expected.
+
+Recommended stable shape:
+
+- Keep current names:
+  - `timerConfig`, `channelConfig`
+  - `timerStatus`, `channelStatus`
+  - `setDuty`, `setDutyWithHpoint`, `setDutyAndUpdate`, `updateDuty`
+  - `getDuty`, `getHpoint`
+  - `setFreq`, `getFreq`
+  - `bindChannelTimer`
+  - `stop`, `timerPause`, `timerResume`
+- Keep raw timer/channel indices and raw duty integers.
+- Do not add `analogWrite(...)` into this module.
+- Gate the module behind `FEATURE_LEDC` so boards without PWM use-cases can drop it.
+
+Future rule:
+
+- High-level PWM abstractions belong in JS on top of `ledc`, not inside the native binding.
+
+### `adc`
+
+Status: `Stable now`
+
+Why:
+
+- The API cleanly exposes ESP-IDF oneshot ADC.
+- Unit/channel mapping helpers are useful and low-level.
+- Calibration support is surfaced without hiding hardware limits.
+
+Freeze recommendations:
+
+- Keep the explicit lifecycle:
+  - `open(unit)`
+  - `configure(unit, channel, options)`
+  - `read(unit, channel)`
+  - `readMilliVolts(unit, channel)`
+  - `close(unit)`
+- Keep `ioToChannel(pin)` and `channelToIo(unit, channel)`.
+- Keep `status(unit)` returning full per-channel state.
+- Gate the module behind `FEATURE_ADC`.
+
+Intentional non-goals:
+
+- no continuous mode
+- no averaging
+- no oversampling
+- no sensor drivers
+
+### `i2c`
+
+Status: `Adjust before freeze`
+
+The current API is useful, but it is still the most obviously first-pass peripheral module.
+
+What is already good:
+
+- Small and understandable surface.
+- Raw address + read/write operations are enough for JS-side device drivers.
+- `scan()` is practical for REPL debugging.
+
+What should change before freeze:
+
+- The current implementation is a single global bus model. Long-term stable API should be able to represent more than one bus instance cleanly.
+- The current `add device -> transact -> remove device` flow on every call is simple, but it hardcodes a short-lived device model into the runtime.
+
+Recommended stable target:
+
+- Move to a bus-object model before freezing:
+
+```js
+var bus = i2c.open({
+  sda: i2c.DEFAULT_SDA,
+  scl: i2c.DEFAULT_SCL,
+  freqHz: 400000,
+});
+
+print(JSON.stringify(bus.status()));
+print(JSON.stringify(bus.scan()));
+bus.write(0x3c, [0x00, 0xae]);
+var id = bus.writeRead(0x68, [0x75], 1);
+bus.close();
+```
+
+- Keep the top-level `i2c` module as the factory and constants container.
+- Let `open(...)` return an `I2CBus` object instead of only mutating one global singleton.
+- Gate the module behind `FEATURE_I2C`.
+
+Recommended stable `I2CBus` methods:
+
+- `status()`
+- `close()`
+- `scan()`
+- `write(addr, data)`
+- `read(addr, length)`
+- `writeRead(addr, writeData, readLength)`
+
+Intentional non-goals:
+
+- no register map helpers
+- no sensor drivers
+- no device cache abstraction at the JS API layer unless later proven necessary
+
+### `dac`
+
+Status: `Adjust before freeze`
+
+This module now exists, but its first stable shape should stay intentionally small.
+
+Hardware support note:
+
+- Local ESP-IDF capability headers show DAC support on `esp32` and `esp32s2`.
+- Current `esp32c3` and `esp32s3` targets do not expose DAC hardware support.
+
+For cross-board stability, the proposed API is:
+
+- gate `dac` behind `FEATURE_DAC`
+- make `FEATURE_DAC` depend on `SOC_DAC_SUPPORTED`
+- expose compile-time availability through `esp32.info().features.dac`
+- do not register the module at all on boards where the feature is disabled
+
+Recommended first stable scope: oneshot DAC only.
+
+Proposed shape:
+
+```js
+// Mapping and limits
+dac.CHANNEL_COUNT
+dac.RESOLUTION_BITS
+dac.MAX_VALUE
+dac.CHANNEL_0
+dac.CHANNEL_1
+dac.status(channel?)
+dac.ioToChannel(pin)
+dac.channelToIo(channel)
+
+// Oneshot control
+dac.open(channel)
+dac.close(channel)
+dac.write(channel, value)
+```
+
+Recommended status object:
+
+```js
+{
+  channel: 0,
+  opened: true,
+  pin: 25,
+  resolutionBits: 8,
+  maxValue: 255,
+  lastValue: 128
+}
+```
+
+Recommended rules:
+
+- `write(channel, value)` should take the raw digital DAC value `0..MAX_VALUE`.
+- No voltage unit conversion should be built in.
+- No waveform helpers should be built into the first version.
+- The whole module should be absent unless the board profile enables `FEATURE_DAC`.
+
+What is intentionally deferred:
+
+- cosine generator support
+- continuous/DMA output
+- buffered streaming
+
+If those are needed later, they should be added as separate explicit surfaces rather than overloading the basic oneshot module.
+
+## Connectivity Modules
+
+### `wifi`
+
+Status: `Adjust before freeze`
+
+What is good:
+
+- `status()`, `scan()`, `connect()`, `disconnect()` are the right primitives.
+- Both sync and callback forms are useful on embedded JS runtimes.
+- Async callbacks are already bridged properly to the JS thread.
+
+What should be tightened:
+
+- `wifi.status()` should remain the single authoritative status shape.
+- Async callback result ordering should stay consistent across all methods:
+  `callback(result, error)`.
+- Any future reconnect, AP mode, hostname mutation, or event subscription work should be introduced carefully, not mixed into the basic station API casually.
+
+Recommended stable baseline:
+
+- `DEFAULT_TIMEOUT_MS`
+- `status()`
+- `scan()`
+- `scan(callback)`
+- `connect(ssid, password, timeoutMs?)`
+- `connect(ssid, password, callback)`
+- `connect(ssid, password, timeoutMs, callback)`
+- `disconnect()`
+- Gate the module behind `FEATURE_WIFI`.
+
+### `http`
+
+Status: `Adjust before freeze`
+
+What is good:
+
+- `fetch(...)` and `http.server(...)` are now separately gateable instead of being forced behind one feature.
+- `Request`, `Response`, `Headers`, `HttpServer`, and `StaticFileHandler` already compose well.
+
+What should be tightened:
+
+- Keep the surface intentionally smaller than browser Fetch or Express.
+- Decide that this is a callback/sync embedded API, not a promise-based compatibility layer.
+- Server routing and static file helpers should remain explicit, not auto-magic.
+
+Recommended stable baseline:
+
+- `fetch(url, init?, callback?)`
+- `http.fetch(...)` as the same transport primitive
+- `http.server(options?)`
+- `http.staticFileHandler(root)`
+- `HttpServer.start()`, `stop()`
+- `HttpServer.get/post/put/patch/delete/options/head/all`
+- `StaticFileHandler.handle(request)`
+- Gate the client transport behind `FEATURE_HTTP`.
+- Gate the server transport behind `FEATURE_HTTP_SERVER`.
+- Gate `staticFileHandler(...)` behind the composite capability `FEATURE_HTTP_SERVER && FEATURE_FS`.
+
+Future rule:
+
+- Middleware stacks, sessions, templates, and web-framework features belong in JS libraries, not in the native `http` module.
+
+## JS-Side Libraries
+
+### `display` and `ui`
+
+Status: `Versioned JS libraries, not firmware ABI`
+
+Recommendation:
+
+- Keep these documented, but version them as JS libraries layered on top of stable host APIs.
+- They should be free to evolve faster than the built-in firmware API.
+- Their compatibility should be handled by JS library versioning, not by freezing them as low-level host ABI.
+
+## Naming and Compatibility Rules
+
+Before calling the built-in host API stable, adopt these rules:
+
+- Use `i2c`, not `iic`.
+- Prefer ESP-IDF peripheral names over Arduino compatibility aliases.
+- Arduino-like convenience is acceptable where it does not distort the underlying model:
+  `gpio.attachInterrupt(...)` is acceptable.
+- Do not add broad alias sets for every peripheral API. One clear name is better than many compatibility names.
+- New optional modules should always be introduced as named build features with board-level defaults, not as unconditional globals.
+
+## Freeze Order
+
+Recommended order for stabilization:
+
+1. Freeze now:
+   `help/load/defer/waitFor/timers`, `fs`, `Stream`, `Headers`, `Request`, `Response`, `esp32`, `gpio`, `adc`
+2. Adjust before freeze:
+   `ledc`, `dac`, `i2c`, `wifi`, `http`
+
+## Immediate Next Steps
+
+Recommended implementation order from this plan:
+
+1. Add feature `Kconfig` switches for all optional modules and wire board defaults through `configs/boards/<board>/sdkconfig.defaults`.
+2. Extend `esp32.info()` with a stable `features` object.
+3. Refactor `i2c` to a bus-object model.
+4. Tighten `ledc` status semantics so status objects never imply configuration that did not happen.
+5. Audit `wifi` and `http` callback/result conventions and lock them down.
+6. Tighten the `dac` status and lifecycle semantics only as needed, while keeping higher-level waveform helpers out of the native layer.
+7. Once those are done, refresh [docs/c-api.md](/home/zach/esp32qjs/docs/c-api.md) so the descriptive reference matches the stabilized design.

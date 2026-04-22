@@ -2,6 +2,8 @@
 
 #include "esp32_mquickjs_types.h"
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_GPIO
+
 JSValue js_gpio_pinMode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_gpio_isValid(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_gpio_isOutputCapable(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
@@ -14,8 +16,12 @@ JSValue js_gpio_toggle(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
 JSValue js_gpio_getDriveStrength(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_gpio_setDriveStrength(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_gpio_hold(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_gpio_attachInterrupt(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_gpio_detachInterrupt(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_gpio_reset(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_gpio_led(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_gpio_get_led_builtin(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_gpio_get_user_led_pin(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_gpio_get_user_led_active_low(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+
+#endif

@@ -1,4 +1,7 @@
 #include "esp32_mquickjs_http.h"
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
+
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_request_response.h"
 #include "esp32_mquickjs_stream.h"
@@ -1369,3 +1372,5 @@ static bool http_async_poller(JSContext *ctx,
 
     return needs_redraw;
 }
+
+#endif

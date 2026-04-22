@@ -1,4 +1,9 @@
+#include "esp32_mquickjs_types.h"
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_FS
+
 #include "esp32_mquickjs_fs.h"
+
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_fs_path.h"
 #include "esp32_mquickjs_stream.h"
@@ -520,3 +525,5 @@ JSValue js_fs_mkdir(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     }
     return JS_NewBool(true);
 }
+
+#endif

@@ -12,6 +12,7 @@
 #include "repl_input.h"
 #endif
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_FS
 #define STARTUP_SCRIPT_PATH ESP32_MQUICKJS_LITTLEFS_BASE_PATH "/index.js"
 
 static void run_optional_script(JSContext *ctx,
@@ -34,12 +35,18 @@ static void run_optional_script(JSContext *ctx,
         esp32_mquickjs_print_exception(ctx);
     }
 }
+#endif
 
 static void run_startup_script(JSContext *ctx,
                                esp32_mquickjs_runtime_t *runtime)
 {
+#if CONFIG_ESP32_MQUICKJS_FEATURE_FS
 #ifdef CONFIG_ESP32QJS_AUTORUN_INDEX_JS
     run_optional_script(ctx, runtime, STARTUP_SCRIPT_PATH, "index.js", "<startup>");
+#else
+    (void)ctx;
+    (void)runtime;
+#endif
 #else
     (void)ctx;
     (void)runtime;

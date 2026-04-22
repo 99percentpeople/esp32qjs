@@ -105,6 +105,7 @@ clearInterval(id);
 ## Constants
 
 - `SCRIPTS_DIR`
+  Exposed only when the `fs` feature is compiled in.
   Script base directory, `"/littlefs"`.
 
 ## `fs` Module
@@ -319,8 +320,10 @@ print(i2c.write(0x3c, [0x00, 0xAF])); // SSD1306 display on
   Enable the internal pull-down.
 - `gpio.PULLUP_PULLDOWN`
   Enable both internal pulls when supported by the pad.
+- `gpio.CHANGE`, `gpio.RISING`, `gpio.FALLING`
+  Edge-trigger constants accepted by `gpio.attachInterrupt(...)`.
 - `gpio.LOW`, `gpio.HIGH`
-  Numeric output level helpers (`0` / `1`).
+  Numeric helpers (`0` / `1`) used both for output levels and level-trigger interrupt modes in `gpio.attachInterrupt(...)`.
 - `gpio.DRIVE_0` .. `gpio.DRIVE_3`
   Drive-strength levels accepted by `gpio.setDriveStrength()` and `gpio.configure()`.
 - `gpio.LED_BUILTIN`
@@ -339,7 +342,7 @@ print(i2c.write(0x3c, [0x00, 0xAF])); // SSD1306 display on
   Set internal pull resistors with `gpio.FLOATING`, `gpio.PULLUP`, `gpio.PULLDOWN`, or `gpio.PULLUP_PULLDOWN`.
 - `gpio.status(pin)`
   Return the live pad configuration object:
-  `{ pin, valid, outputCapable, mode, pull, level, inputEnabled, outputEnabled, openDrain, pullup, pulldown, driveStrength, held, functionSelect, signalOut, outputControlledByPeripheral, outputEnableInverted, sleepEnabled }`.
+  `{ pin, valid, outputCapable, mode, pull, level, inputEnabled, outputEnabled, openDrain, pullup, pulldown, driveStrength, held, functionSelect, signalOut, outputControlledByPeripheral, outputEnableInverted, sleepEnabled, interruptAttached, interruptMode, interruptDropped }`.
 - `gpio.configure(pin, options)`
   Apply `{ mode, pull, level, driveStrength, hold }` in one call and return `gpio.status(pin)`.
 - `gpio.digitalWrite(pin, value)`
@@ -354,16 +357,23 @@ print(i2c.write(0x3c, [0x00, 0xAF])); // SSD1306 display on
   Update the pad drive strength and return the applied numeric value.
 - `gpio.hold(pin, enabled)`
   Enable or disable pad hold on output-capable GPIOs.
+- `gpio.attachInterrupt(pin, callback, mode = gpio.CHANGE)`
+  Attach an Arduino-style GPIO interrupt callback. The ESP-IDF ISR only queues an event; the JavaScript callback runs later on the JS thread and receives `{ pin, level, mode }`.
+- `gpio.detachInterrupt(pin)`
+  Remove the interrupt callback from a pin and return `gpio.status(pin)`.
 - `gpio.reset(pin)`
   Reset the pad back to the ESP-IDF default GPIO state.
 - `gpio.led(value)`
   Control the board user LED. `true` turns it on.
 
-Example:
+Examples:
+
+Configure an output and toggle it:
 
 ```js
 var pin = gpio.USER_LED_PIN >= 0 ? gpio.USER_LED_PIN : gpio.LED_BUILTIN;
 
+// Make the LED pin a push-pull output with a known initial level.
 print(gpio.isValid(pin), gpio.isOutputCapable(pin));
 print(JSON.stringify(gpio.configure(pin, {
   mode: gpio.OUTPUT,
@@ -371,16 +381,238 @@ print(JSON.stringify(gpio.configure(pin, {
   driveStrength: gpio.DRIVE_1,
   level: gpio.HIGH,
 })));
+
+// Flip the output and read back the new boolean level.
 sleep(100);
 print(gpio.toggle(pin)); // false
 gpio.led(false);
+```
+
+Read an input with pull-up enabled:
+
+```js
+var buttonPin = 9;
+
+// Typical button wiring uses INPUT + pull-up and reads LOW when pressed.
+gpio.pinMode(buttonPin, gpio.INPUT);
+gpio.setPull(buttonPin, gpio.PULLUP);
+
+print("button level:", gpio.digitalRead(buttonPin));
+print(JSON.stringify(gpio.status(buttonPin)));
+```
+
+Attach an interrupt and handle it in JavaScript:
+
+```js
+var buttonPin = 9;
+var interruptCount = 0;
+
+gpio.pinMode(buttonPin, gpio.INPUT);
+gpio.setPull(buttonPin, gpio.PULLUP);
+
+// The callback runs on the JS thread, not directly inside the ISR.
+// You can ignore the event argument if you only want Arduino-style behavior.
+gpio.attachInterrupt(buttonPin, function (event) {
+  interruptCount++;
+  print("interrupt", interruptCount, event.pin, event.mode, event.level);
+}, gpio.FALLING);
+
+// ... your app logic here ...
+
+// Detach when the pin is no longer needed.
+gpio.detachInterrupt(buttonPin);
+```
+
+Use level-triggered interrupts explicitly:
+
+```js
+var pin = 9;
+
+gpio.pinMode(pin, gpio.INPUT);
+gpio.setPull(pin, gpio.PULLDOWN);
+
+// LOW/HIGH reuse the same 0/1 constants as digital levels.
+gpio.attachInterrupt(pin, function (event) {
+  print("level interrupt", event.mode, event.level);
+}, gpio.HIGH);
+```
+
+## `ledc` Module
+
+This module exposes the ESP-IDF LEDC low-level timer/channel primitives. It does not implement higher-level drivers such as servos or `analogWrite(...)`.
+
+- `ledc.AUTO_CLOCK`, `ledc.APB_CLOCK`, `ledc.XTAL_CLOCK`, `ledc.RC_FAST_CLOCK`
+  Clock-source strings accepted by `ledc.timerConfig(...)`.
+- `ledc.SLEEP_NO_ALIVE_NO_PD`, `ledc.SLEEP_NO_ALIVE_ALLOW_PD`, `ledc.SLEEP_KEEP_ALIVE`
+  Sleep-mode strings accepted by `ledc.channelConfig(...)`.
+- `ledc.CHANNEL_COUNT`
+  Number of LEDC channels on the active target.
+- `ledc.TIMER_COUNT`
+  Number of LEDC timers on the active target.
+- `ledc.MAX_DUTY_RESOLUTION_BITS`
+  Maximum duty-resolution bits supported by the active target.
+- `ledc.timerConfig(timer, options)`
+  Configure or deconfigure one timer. `options` accepts `{ freqHz, dutyResolution, clock, deconfigure }`.
+- `ledc.channelConfig(channel, options)`
+  Configure or deconfigure one channel. `options` accepts `{ pin, timer, duty, hpoint, outputInvert, sleepMode, deconfigure }`.
+- `ledc.timerStatus(timer)`
+  Return `{ timer, configured, paused, freqHz, dutyResolution, maxDuty, clock }`.
+- `ledc.channelStatus(channel)`
+  Return `{ channel, configured, pin, timer, duty, hpoint, maxDuty, outputInvert, sleepMode }`.
+- `ledc.setDuty(channel, duty)`
+- `ledc.setDutyWithHpoint(channel, duty, hpoint)`
+- `ledc.setDutyAndUpdate(channel, duty, hpoint?)`
+  Update duty/hpoint state and return `ledc.channelStatus(channel)`.
+- `ledc.updateDuty(channel)`
+  Apply pending duty changes to hardware and return `ledc.channelStatus(channel)`.
+- `ledc.getDuty(channel)`
+- `ledc.getHpoint(channel)`
+  Read live channel state from the driver.
+- `ledc.setFreq(timer, freqHz)`
+  Update timer frequency and return `ledc.timerStatus(timer)`.
+- `ledc.getFreq(timer)`
+  Read the live timer frequency.
+- `ledc.bindChannelTimer(channel, timer)`
+  Rebind a channel to another timer and return `ledc.channelStatus(channel)`.
+- `ledc.stop(channel, idleLevel = false)`
+  Stop PWM output on a channel.
+- `ledc.timerPause(timer)` / `ledc.timerResume(timer)`
+  Pause or resume a timer and return `ledc.timerStatus(timer)`.
+
+Example:
+
+```js
+var pin = gpio.USER_LED_PIN >= 0 ? gpio.USER_LED_PIN : gpio.LED_BUILTIN;
+
+ledc.timerConfig(0, { freqHz: 5000, dutyResolution: 8 });
+ledc.channelConfig(0, {
+  pin: pin,
+  timer: 0,
+  duty: 0,
+  sleepMode: ledc.SLEEP_NO_ALIVE_NO_PD,
+});
+
+for (var duty = 0; duty <= 255; duty += 32) {
+  ledc.setDutyAndUpdate(0, duty);
+  sleep(40);
+}
+
+ledc.stop(0, false);
+ledc.channelConfig(0, { deconfigure: true });
+ledc.timerConfig(0, { deconfigure: true });
+```
+
+## `adc` Module
+
+This module exposes ESP-IDF ADC oneshot primitives and GPIO/channel mapping helpers. It does not implement board-specific sensor drivers.
+
+- `adc.UNIT_1`, `adc.UNIT_2`
+  ADC unit identifiers accepted by `adc.open(...)`, `adc.status(...)`, and the read/configure helpers.
+- `adc.ATTEN_DB_0`, `adc.ATTEN_DB_2_5`, `adc.ATTEN_DB_6`, `adc.ATTEN_DB_12`
+  Attenuation constants accepted by `adc.configure(...)`.
+- `adc.BITWIDTH_DEFAULT`, `adc.BITWIDTH_9` .. `adc.BITWIDTH_13`
+  Bit-width constants accepted by `adc.configure(...)`.
+- `adc.UNIT_COUNT`
+  Number of ADC units on the active target.
+- `adc.MAX_CHANNEL_COUNT`
+  Maximum channels available on any ADC unit for the active target.
+- `adc.open(unit)`
+  Open one ADC unit for oneshot reads and return `adc.status(unit)`.
+- `adc.close(unit)`
+  Close one ADC unit and release any per-channel calibration state.
+- `adc.status(unit)`
+  Return `{ unit, opened, channelCount, channels }`, where `channels` contains `{ channel, configured, atten, bitwidth, pin, calibrated }`.
+- `adc.configure(unit, channel, options)`
+  Configure a channel with `{ atten, bitwidth }` and return `adc.status(unit)`.
+- `adc.read(unit, channel)`
+  Perform one raw oneshot read and return the integer ADC result.
+- `adc.readMilliVolts(unit, channel)`
+  Return a calibrated result in mV when calibration is available; otherwise it throws a clear calibration-availability error.
+- `adc.ioToChannel(pin)`
+  Map a GPIO to `{ unit, channel }` or return `null` when the pad is not ADC-capable.
+- `adc.channelToIo(unit, channel)`
+  Map a unit/channel pair back to its GPIO number or return `null`.
+
+Example:
+
+```js
+var ref = adc.ioToChannel(0);
+
+if (ref) {
+  adc.open(ref.unit);
+  adc.configure(ref.unit, ref.channel, {
+    atten: adc.ATTEN_DB_12,
+    bitwidth: adc.BITWIDTH_12,
+  });
+
+  print(adc.read(ref.unit, ref.channel));
+  try {
+    print(adc.readMilliVolts(ref.unit, ref.channel));
+  } catch (error) {
+    print(error.message || error);
+  }
+
+  adc.close(ref.unit);
+}
+```
+
+## `dac` Module
+
+This module exposes ESP-IDF DAC oneshot primitives and GPIO/channel mapping helpers. It is registered only on boards that compile with the `dac` feature enabled.
+
+- `dac.CHANNEL_0`, `dac.CHANNEL_1`
+  DAC channel identifiers accepted by `dac.open(...)`, `dac.close(...)`, `dac.status(...)`, `dac.write(...)`, and `dac.channelToIo(...)`.
+- `dac.CHANNEL_COUNT`
+  Number of DAC channels on the active target.
+- `dac.RESOLUTION_BITS`
+  DAC output resolution in raw digital bits.
+- `dac.MAX_VALUE`
+  Maximum raw value accepted by `dac.write(...)`.
+- `dac.open(channel)`
+  Open one DAC oneshot channel and return `dac.status(channel)`.
+- `dac.close(channel)`
+  Close one DAC channel and release its oneshot handle.
+- `dac.status(channel?)`
+  Return one channel status object or, when called with no arguments, an array of all channel statuses.
+- `dac.write(channel, value)`
+  Output one raw DAC value `0..dac.MAX_VALUE` and return `dac.status(channel)`.
+- `dac.ioToChannel(pin)`
+  Map a GPIO to `{ channel, pin }` or return `null` when the pad is not DAC-capable.
+- `dac.channelToIo(channel)`
+  Map a DAC channel back to its GPIO number.
+
+Status objects look like:
+
+```js
+{
+  channel: 0,
+  opened: true,
+  pin: 25,
+  resolutionBits: 8,
+  maxValue: 255,
+  lastValue: 128
+}
+```
+
+Example:
+
+```js
+var ref = dac.ioToChannel(25);
+
+if (ref) {
+  dac.open(ref.channel);
+  dac.write(ref.channel, 128);
+  print(JSON.stringify(dac.status(ref.channel)));
+  dac.close(ref.channel);
+}
 ```
 
 ## `esp32` Module
 
 - `esp32.info()`
   Return board/chip identity plus memory/runtime fields:
-  `{ board, chip, userLedPin, userLedActiveLow, scriptsDir, flashSize, psramEnabled, psramSize, freePsram, totalInternalHeap, freeInternalHeap, jsHeapSize, jsHeapRegion, littlefsMounted, autoRunIndexJs, formatLittlefsOnMountFail, freeHeap, jsTimeMs }`.
+  `{ board, chip, features, userLedPin, userLedActiveLow, scriptsDir, flashSize, psramEnabled, psramSize, freePsram, totalInternalHeap, freeInternalHeap, jsHeapSize, jsHeapRegion, littlefsMounted, autoRunIndexJs, formatLittlefsOnMountFail, freeHeap, jsTimeMs }`.
+  `features` is `{ fs, gpio, ledc, adc, dac, i2c, wifi, http, httpServer, staticFileHandler }` and is the stable way to discover which optional host modules or composite helpers were compiled into the firmware for the current board.
 - `esp32.millis()`
   Return monotonic milliseconds from `esp_timer`.
 - `esp32.micros()`
@@ -391,7 +623,10 @@ gpio.led(false);
 Example:
 
 ```js
-print(esp32.info());
+print(JSON.stringify(esp32.info().features));
+if (esp32.info().features.fs) {
+  print(SCRIPTS_DIR);
+}
 print(esp32.millis());
 print(esp32.freeHeap());
 ```
@@ -434,14 +669,16 @@ wifi.disconnect();
 
 ## `http` Module
 
+The `http` namespace is exposed when either the HTTP client feature or the HTTP server feature is enabled. Individual members are still feature-gated.
+
 - `http.DEFAULT_TIMEOUT_MS`
-  Default request timeout in milliseconds.
+  Default request timeout in milliseconds. Exposed only when `esp32.info().features.http` is enabled.
 - `http.server(options?)`
-  Create a lightweight HTTP server object backed by `esp_http_server`.
+  Create a lightweight HTTP server object backed by `esp_http_server`. Exposed only when `esp32.info().features.httpServer` is enabled.
 - `http.fetch(input, options?)`
-  Alias of global `fetch(input, options?)`.
+  Alias of global `fetch(input, options?)`. Exposed only when `esp32.info().features.http` is enabled.
 - `http.fetch(input, callback)` / `http.fetch(input, options, callback)`
-  Alias of the asynchronous `fetch(...)` forms.
+  Alias of the asynchronous `fetch(...)` forms. Exposed only when `esp32.info().features.http` is enabled.
 
 Supported `fetch` options:
 
@@ -494,7 +731,7 @@ print(response.text());
 - `server.all(pathOrPattern, handler)`
   Register a route handler.
 - `http.staticFileHandler(root)` / `staticFileHandler(root)`
-  Create a static file handler suitable for routes such as `server.get("/assets/*", staticFileHandler("./www"))`.
+  Create a static file handler suitable for routes such as `server.get("/assets/*", staticFileHandler("./www"))`. Exposed only when both `esp32.info().features.httpServer` and `esp32.info().features.fs` are enabled.
 - `server.start()`
 - `server.stop()`
 

@@ -2,6 +2,8 @@
 
 #include "esp32_mquickjs_types.h"
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
+
 bool esp32_mquickjs_init_wifi_runtime(JSContext *ctx,
                                       esp32_mquickjs_runtime_t *runtime);
 
@@ -12,3 +14,5 @@ JSValue js_wifi_scan(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 JSValue js_wifi_get_default_timeout_ms(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 
 esp_err_t esp32_mquickjs_wifi_get_status(esp32_mquickjs_wifi_status_t *status);
+
+#endif

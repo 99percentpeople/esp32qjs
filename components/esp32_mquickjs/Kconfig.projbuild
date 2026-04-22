@@ -7,6 +7,77 @@ config ESP32_MQUICKJS_BOARD_NAME
         Human-readable board name returned by esp32.info().board and shown by
         the REPL banner when serial interaction is enabled.
 
+menu "Host API features"
+
+config ESP32_MQUICKJS_FEATURE_FS
+    bool "Enable fs module"
+    default y
+    help
+        Enable the LittleFS-backed fs module and related script-path settings.
+
+config ESP32_MQUICKJS_FEATURE_GPIO
+    bool "Enable gpio module"
+    default y
+    help
+        Enable GPIO host bindings such as pinMode(), digitalRead(), and
+        attachInterrupt().
+
+config ESP32_MQUICKJS_FEATURE_LEDC
+    bool "Enable ledc module"
+    default y if SOC_LEDC_SUPPORTED
+    depends on SOC_LEDC_SUPPORTED
+    help
+        Enable LEDC timer/channel bindings for hardware PWM output.
+
+config ESP32_MQUICKJS_FEATURE_ADC
+    bool "Enable adc module"
+    default y if SOC_ADC_SUPPORTED
+    depends on SOC_ADC_SUPPORTED
+    help
+        Enable ADC oneshot and channel-mapping bindings.
+
+config ESP32_MQUICKJS_FEATURE_DAC
+    bool "Enable dac module"
+    default y if SOC_DAC_SUPPORTED
+    depends on SOC_DAC_SUPPORTED
+    help
+        Reserve DAC host-feature selection for targets that expose hardware DAC
+        channels.
+
+config ESP32_MQUICKJS_FEATURE_I2C
+    bool "Enable i2c module"
+    default y if SOC_I2C_SUPPORTED
+    depends on SOC_I2C_SUPPORTED
+    help
+        Enable I2C bus bindings and related default pin settings.
+
+config ESP32_MQUICKJS_FEATURE_WIFI
+    bool "Enable wifi module"
+    default y if SOC_WIFI_SUPPORTED
+    depends on SOC_WIFI_SUPPORTED
+    help
+        Enable Wi-Fi station bindings such as wifi.status(), wifi.scan(), and
+        wifi.connect().
+
+config ESP32_MQUICKJS_FEATURE_HTTP
+    bool "Enable http module"
+    default y if ESP32_MQUICKJS_FEATURE_WIFI
+    depends on ESP32_MQUICKJS_FEATURE_WIFI
+    help
+        Enable fetch(), http.fetch(), and related HTTP client helpers. In the
+        current firmware this depends on the Wi-Fi feature being enabled.
+
+config ESP32_MQUICKJS_FEATURE_HTTP_SERVER
+    bool "Enable http_server feature"
+    default y if ESP32_MQUICKJS_FEATURE_WIFI
+    depends on ESP32_MQUICKJS_FEATURE_WIFI
+    help
+        Enable http.server(), route registration, and related HTTP server
+        helpers. Composite helpers such as staticFileHandler() may add
+        further feature requirements such as fs.
+
+endmenu
+
 config ESP32_MQUICKJS_DEFAULT_EVAL_TIMEOUT_MS
     int "Default JavaScript eval timeout (ms)"
     range 50 10000
@@ -32,6 +103,7 @@ config ESP32_MQUICKJS_MAX_SCRIPT_PATH
     int "Maximum script path length"
     range 128 1024
     default 256
+    depends on ESP32_MQUICKJS_FEATURE_FS
     help
         Maximum LittleFS path length accepted by load() and fs APIs.
 
@@ -39,12 +111,14 @@ config ESP32_MQUICKJS_USER_LED_PIN
     int "User LED GPIO"
     range 0 48
     default 21
+    depends on ESP32_MQUICKJS_FEATURE_GPIO
     help
         GPIO used for gpio.led() and gpio.LED_BUILTIN.
 
 config ESP32_MQUICKJS_USER_LED_ACTIVE_LOW
     bool "User LED is active-low"
     default y
+    depends on ESP32_MQUICKJS_FEATURE_GPIO
     help
         Enable this for boards where writing low turns the LED on.
 
@@ -52,6 +126,7 @@ config ESP32_MQUICKJS_I2C_DEFAULT_SDA_PIN
     int "Default I2C SDA GPIO"
     range 0 48
     default 5
+    depends on ESP32_MQUICKJS_FEATURE_I2C
     help
         Default SDA pin used by i2c.open() when no pin override is provided.
 
@@ -59,6 +134,7 @@ config ESP32_MQUICKJS_I2C_DEFAULT_SCL_PIN
     int "Default I2C SCL GPIO"
     range 0 48
     default 6
+    depends on ESP32_MQUICKJS_FEATURE_I2C
     help
         Default SCL pin used by i2c.open() when no pin override is provided.
 
@@ -66,6 +142,7 @@ config ESP32_MQUICKJS_I2C_DEFAULT_FREQ_HZ
     int "Default I2C clock frequency (Hz)"
     range 10000 1000000
     default 400000
+    depends on ESP32_MQUICKJS_FEATURE_I2C
     help
         Default I2C bus speed used by i2c.open().
 
@@ -73,12 +150,14 @@ config ESP32_MQUICKJS_I2C_DEFAULT_TIMEOUT_MS
     int "Default I2C transfer timeout (ms)"
     range 1 5000
     default 100
+    depends on ESP32_MQUICKJS_FEATURE_I2C
     help
         Default timeout used by i2c.scan(), i2c.write(), i2c.read(), and i2c.writeRead().
 
 config ESP32_MQUICKJS_I2C_ENABLE_INTERNAL_PULLUP
     bool "Enable internal pull-up for I2C"
     default y
+    depends on ESP32_MQUICKJS_FEATURE_I2C
     help
         Enable the internal SDA/SCL pull-up resistors when opening the I2C bus.
 
@@ -86,6 +165,7 @@ config ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS
     int "Default Wi-Fi connect timeout (ms)"
     range 1000 120000
     default 15000
+    depends on ESP32_MQUICKJS_FEATURE_WIFI
     help
         Default timeout used by wifi.connect().
 
@@ -93,6 +173,7 @@ config ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS
     int "Default HTTP request timeout (ms)"
     range 1000 120000
     default 15000
+    depends on ESP32_MQUICKJS_FEATURE_HTTP
     help
         Default timeout used by fetch() and http.fetch().
 
@@ -100,6 +181,7 @@ config ESP32_MQUICKJS_HTTP_TASK_STACK_SIZE
     int "HTTP async worker task stack size (bytes)"
     range 4096 32768
     default 8192
+    depends on ESP32_MQUICKJS_FEATURE_HTTP
     help
         Stack size used by the async HTTP worker task.
 

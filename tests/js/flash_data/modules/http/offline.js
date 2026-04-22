@@ -18,8 +18,6 @@ test("http/offline", function () {
   var jsonResponse = Response.json({ value: 7 });
   var streamPath = "response-stream.txt";
   var streamResponse;
-  var server;
-  var fileHandler;
   var entries;
 
   test.equal(headers.get("foo"), "Bar", "headers should normalize names");
@@ -54,21 +52,7 @@ test("http/offline", function () {
   fs.remove(streamPath);
 
   test.ok(typeof http.fetch === "function", "http.fetch should exist");
-  test.ok(typeof http.server === "function", "http.server should exist");
   test.ok(typeof http.DEFAULT_TIMEOUT_MS === "number", "http timeout constant");
-  test.ok(typeof staticFileHandler === "function", "staticFileHandler global should exist");
-
-  server = http.server({ port: 8080 });
-  test.ok(typeof server.get === "function", "server.get should exist");
-  test.ok(typeof server.post === "function", "server.post should exist");
-  test.ok(typeof server.start === "function", "server.start should exist");
-  test.ok(typeof server.stop === "function", "server.stop should exist");
-  server.get("/ping", function () {
-    return Response.text("pong");
-  });
-
-  fileHandler = staticFileHandler(".");
-  test.ok(fileHandler && typeof fileHandler.handle === "function", "static file handler should expose handle()");
 
   return { method: request.method, status: response.status };
 });

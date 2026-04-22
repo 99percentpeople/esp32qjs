@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "vendor/mquickjs/mquickjs_build.h"
+#include "mquickjs_build.h"
 
 #define JS_CLASS_HEADERS (JS_CLASS_USER + 0)
 #define JS_CLASS_REQUEST (JS_CLASS_USER + 1)
@@ -16,7 +16,7 @@
 #define js_global_object js_global_object_base
 #define js_c_function_decl js_c_function_decl_base
 #define main mqjs_stdlib_base_main
-#include "vendor/mquickjs/mqjs_stdlib.c"
+#include "mqjs_stdlib.c"
 #undef main
 #undef js_c_function_decl
 #undef js_global_object
@@ -91,6 +91,7 @@ static const JSPropDef js_stream_proto[] = {
 static const JSClassDef js_stream_class =
     JS_CLASS_DEF("Stream", 0, js_stream_constructor, JS_CLASS_STREAM, js_stream, js_stream_proto, NULL, NULL);
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_FS
 static const JSPropDef js_fs[] = {
     JS_PROP_STRING_DEF("ROOT", "/littlefs", 0),
     JS_CFUNC_DEF("open", 2, js_fs_open),
@@ -108,7 +109,9 @@ static const JSPropDef js_fs[] = {
 
 static const JSClassDef js_fs_obj =
     JS_OBJECT_DEF("fs", js_fs);
+#endif
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_GPIO
 static const JSPropDef js_gpio[] = {
     JS_PROP_STRING_DEF("DISABLED", "disabled", 0),
     JS_PROP_STRING_DEF("INPUT", "input", 0),
@@ -120,6 +123,9 @@ static const JSPropDef js_gpio[] = {
     JS_PROP_STRING_DEF("PULLUP", "pullup", 0),
     JS_PROP_STRING_DEF("PULLDOWN", "pulldown", 0),
     JS_PROP_STRING_DEF("PULLUP_PULLDOWN", "pullupPulldown", 0),
+    JS_PROP_STRING_DEF("CHANGE", "change", 0),
+    JS_PROP_STRING_DEF("RISING", "rising", 0),
+    JS_PROP_STRING_DEF("FALLING", "falling", 0),
     JS_PROP_DOUBLE_DEF("LOW", 0, 0),
     JS_PROP_DOUBLE_DEF("HIGH", 1, 0),
     JS_PROP_DOUBLE_DEF("DRIVE_0", 0, 0),
@@ -141,6 +147,8 @@ static const JSPropDef js_gpio[] = {
     JS_CFUNC_DEF("getDriveStrength", 1, js_gpio_getDriveStrength),
     JS_CFUNC_DEF("setDriveStrength", 2, js_gpio_setDriveStrength),
     JS_CFUNC_DEF("hold", 2, js_gpio_hold),
+    JS_CFUNC_DEF("attachInterrupt", 3, js_gpio_attachInterrupt),
+    JS_CFUNC_DEF("detachInterrupt", 1, js_gpio_detachInterrupt),
     JS_CFUNC_DEF("reset", 1, js_gpio_reset),
     JS_CFUNC_DEF("led", 1, js_gpio_led),
     JS_PROP_END,
@@ -148,6 +156,93 @@ static const JSPropDef js_gpio[] = {
 
 static const JSClassDef js_gpio_obj =
     JS_OBJECT_DEF("gpio", js_gpio);
+#endif
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_LEDC
+static const JSPropDef js_ledc[] = {
+    JS_PROP_STRING_DEF("AUTO_CLOCK", "auto", 0),
+    JS_PROP_STRING_DEF("APB_CLOCK", "apb", 0),
+    JS_PROP_STRING_DEF("XTAL_CLOCK", "xtal", 0),
+    JS_PROP_STRING_DEF("RC_FAST_CLOCK", "rcFast", 0),
+    JS_PROP_STRING_DEF("SLEEP_NO_ALIVE_NO_PD", "noAliveNoPd", 0),
+    JS_PROP_STRING_DEF("SLEEP_NO_ALIVE_ALLOW_PD", "noAliveAllowPd", 0),
+    JS_PROP_STRING_DEF("SLEEP_KEEP_ALIVE", "keepAlive", 0),
+    JS_CGETSET_DEF("CHANNEL_COUNT", js_ledc_get_channel_count, NULL),
+    JS_CGETSET_DEF("TIMER_COUNT", js_ledc_get_timer_count, NULL),
+    JS_CGETSET_DEF("MAX_DUTY_RESOLUTION_BITS", js_ledc_get_max_duty_resolution_bits, NULL),
+    JS_CFUNC_DEF("timerConfig", 2, js_ledc_timerConfig),
+    JS_CFUNC_DEF("channelConfig", 2, js_ledc_channelConfig),
+    JS_CFUNC_DEF("setDuty", 2, js_ledc_setDuty),
+    JS_CFUNC_DEF("setDutyWithHpoint", 3, js_ledc_setDutyWithHpoint),
+    JS_CFUNC_DEF("setDutyAndUpdate", 2, js_ledc_setDutyAndUpdate),
+    JS_CFUNC_DEF("getDuty", 1, js_ledc_getDuty),
+    JS_CFUNC_DEF("getHpoint", 1, js_ledc_getHpoint),
+    JS_CFUNC_DEF("updateDuty", 1, js_ledc_updateDuty),
+    JS_CFUNC_DEF("setFreq", 2, js_ledc_setFreq),
+    JS_CFUNC_DEF("getFreq", 1, js_ledc_getFreq),
+    JS_CFUNC_DEF("bindChannelTimer", 2, js_ledc_bindChannelTimer),
+    JS_CFUNC_DEF("stop", 2, js_ledc_stop),
+    JS_CFUNC_DEF("timerPause", 1, js_ledc_timerPause),
+    JS_CFUNC_DEF("timerResume", 1, js_ledc_timerResume),
+    JS_CFUNC_DEF("timerStatus", 1, js_ledc_timerStatus),
+    JS_CFUNC_DEF("channelStatus", 1, js_ledc_channelStatus),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_ledc_obj =
+    JS_OBJECT_DEF("ledc", js_ledc);
+#endif
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_ADC
+static const JSPropDef js_adc[] = {
+    JS_PROP_DOUBLE_DEF("UNIT_1", 1, 0),
+    JS_PROP_DOUBLE_DEF("UNIT_2", 2, 0),
+    JS_PROP_DOUBLE_DEF("ATTEN_DB_0", 0, 0),
+    JS_PROP_DOUBLE_DEF("ATTEN_DB_2_5", 1, 0),
+    JS_PROP_DOUBLE_DEF("ATTEN_DB_6", 2, 0),
+    JS_PROP_DOUBLE_DEF("ATTEN_DB_12", 3, 0),
+    JS_PROP_DOUBLE_DEF("BITWIDTH_DEFAULT", 0, 0),
+    JS_PROP_DOUBLE_DEF("BITWIDTH_9", 9, 0),
+    JS_PROP_DOUBLE_DEF("BITWIDTH_10", 10, 0),
+    JS_PROP_DOUBLE_DEF("BITWIDTH_11", 11, 0),
+    JS_PROP_DOUBLE_DEF("BITWIDTH_12", 12, 0),
+    JS_PROP_DOUBLE_DEF("BITWIDTH_13", 13, 0),
+    JS_CGETSET_DEF("UNIT_COUNT", js_adc_get_unit_count, NULL),
+    JS_CGETSET_DEF("MAX_CHANNEL_COUNT", js_adc_get_max_channel_count, NULL),
+    JS_CFUNC_DEF("open", 1, js_adc_open),
+    JS_CFUNC_DEF("close", 1, js_adc_close),
+    JS_CFUNC_DEF("status", 1, js_adc_status),
+    JS_CFUNC_DEF("configure", 3, js_adc_configure),
+    JS_CFUNC_DEF("read", 2, js_adc_read),
+    JS_CFUNC_DEF("readMilliVolts", 2, js_adc_readMilliVolts),
+    JS_CFUNC_DEF("ioToChannel", 1, js_adc_ioToChannel),
+    JS_CFUNC_DEF("channelToIo", 2, js_adc_channelToIo),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_adc_obj =
+    JS_OBJECT_DEF("adc", js_adc);
+#endif
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_DAC
+static const JSPropDef js_dac[] = {
+    JS_PROP_DOUBLE_DEF("CHANNEL_0", 0, 0),
+    JS_PROP_DOUBLE_DEF("CHANNEL_1", 1, 0),
+    JS_CGETSET_DEF("CHANNEL_COUNT", js_dac_get_channel_count, NULL),
+    JS_CGETSET_DEF("RESOLUTION_BITS", js_dac_get_resolution_bits, NULL),
+    JS_CGETSET_DEF("MAX_VALUE", js_dac_get_max_value, NULL),
+    JS_CFUNC_DEF("open", 1, js_dac_open),
+    JS_CFUNC_DEF("close", 1, js_dac_close),
+    JS_CFUNC_DEF("status", 1, js_dac_status),
+    JS_CFUNC_DEF("write", 2, js_dac_write),
+    JS_CFUNC_DEF("ioToChannel", 1, js_dac_ioToChannel),
+    JS_CFUNC_DEF("channelToIo", 1, js_dac_channelToIo),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_dac_obj =
+    JS_OBJECT_DEF("dac", js_dac);
+#endif
 
 static const JSPropDef js_esp32[] = {
     JS_CFUNC_DEF("info", 0, js_esp32_info),
@@ -160,6 +255,7 @@ static const JSPropDef js_esp32[] = {
 static const JSClassDef js_esp32_obj =
     JS_OBJECT_DEF("esp32", js_esp32);
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_I2C
 static const JSPropDef js_i2c[] = {
     JS_CGETSET_DEF("DEFAULT_SDA", js_i2c_get_default_sda, NULL),
     JS_CGETSET_DEF("DEFAULT_SCL", js_i2c_get_default_scl, NULL),
@@ -177,7 +273,9 @@ static const JSPropDef js_i2c[] = {
 
 static const JSClassDef js_i2c_obj =
     JS_OBJECT_DEF("i2c", js_i2c);
+#endif
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
 static const JSPropDef js_wifi[] = {
     JS_CGETSET_DEF("DEFAULT_TIMEOUT_MS", js_wifi_get_default_timeout_ms, NULL),
     JS_CFUNC_DEF("connect", 4, js_wifi_connect),
@@ -189,18 +287,28 @@ static const JSPropDef js_wifi[] = {
 
 static const JSClassDef js_wifi_obj =
     JS_OBJECT_DEF("wifi", js_wifi);
+#endif
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP || CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
 static const JSPropDef js_http[] = {
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
     JS_CGETSET_DEF("DEFAULT_TIMEOUT_MS", js_http_get_default_timeout_ms, NULL),
     JS_CFUNC_DEF("fetch", 3, js_http_fetch),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
     JS_CFUNC_DEF("server", 1, js_http_server_create),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER && CONFIG_ESP32_MQUICKJS_FEATURE_FS
     JS_CFUNC_DEF("staticFileHandler", 1, js_http_static_file_handler),
+#endif
     JS_PROP_END,
 };
 
 static const JSClassDef js_http_obj =
     JS_OBJECT_DEF("http", js_http);
+#endif
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
 static const JSPropDef js_http_server_proto[] = {
     JS_CFUNC_DEF("start", 0, js_http_server_start),
     JS_CFUNC_DEF("stop", 0, js_http_server_stop),
@@ -217,7 +325,9 @@ static const JSPropDef js_http_server_proto[] = {
 
 static const JSClassDef js_http_server_class =
     JS_CLASS_DEF("HttpServer", 0, js_http_server_constructor, JS_CLASS_HTTP_SERVER, NULL, js_http_server_proto, NULL, NULL);
+#endif
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER && CONFIG_ESP32_MQUICKJS_FEATURE_FS
 static const JSPropDef js_static_file_handler_proto[] = {
     JS_CFUNC_DEF("handle", 1, js_http_static_file_handler_handle),
     JS_PROP_END,
@@ -225,6 +335,7 @@ static const JSPropDef js_static_file_handler_proto[] = {
 
 static const JSClassDef js_static_file_handler_class =
     JS_CLASS_DEF("StaticFileHandler", 0, js_http_static_file_handler_constructor, JS_CLASS_STATIC_FILE_HANDLER, NULL, js_static_file_handler_proto, NULL, NULL);
+#endif
 
 static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("Headers", &js_headers_class),
@@ -232,15 +343,40 @@ static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("Response", &js_response_class),
     JS_PROP_CLASS_DEF("_Deferred", &js_deferred_class),
     JS_PROP_CLASS_DEF("Stream", &js_stream_class),
+#if CONFIG_ESP32_MQUICKJS_FEATURE_FS
     JS_PROP_CLASS_DEF("fs", &js_fs_obj),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_GPIO
     JS_PROP_CLASS_DEF("gpio", &js_gpio_obj),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_LEDC
+    JS_PROP_CLASS_DEF("ledc", &js_ledc_obj),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_ADC
+    JS_PROP_CLASS_DEF("adc", &js_adc_obj),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_DAC
+    JS_PROP_CLASS_DEF("dac", &js_dac_obj),
+#endif
     JS_PROP_CLASS_DEF("esp32", &js_esp32_obj),
+#if CONFIG_ESP32_MQUICKJS_FEATURE_I2C
     JS_PROP_CLASS_DEF("i2c", &js_i2c_obj),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     JS_PROP_CLASS_DEF("wifi", &js_wifi_obj),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP || CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
     JS_PROP_CLASS_DEF("http", &js_http_obj),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
     JS_PROP_CLASS_DEF("HttpServer", &js_http_server_class),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER && CONFIG_ESP32_MQUICKJS_FEATURE_FS
     JS_PROP_CLASS_DEF("StaticFileHandler", &js_static_file_handler_class),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_FS
     JS_PROP_STRING_DEF("SCRIPTS_DIR", "/littlefs", 0),
+#endif
     JS_CFUNC_DEF("help", 0, js_help),
     JS_CFUNC_DEF("defer", 0, js_defer),
     JS_CFUNC_DEF("waitFor", 2, js_waitFor),
@@ -248,8 +384,12 @@ static const JSPropDef js_global_object_extra[] = {
     JS_CFUNC_DEF("delay", 1, js_sleep),
     JS_CFUNC_DEF("setInterval", 2, js_setInterval),
     JS_CFUNC_DEF("clearInterval", 1, js_clearTimeout),
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
     JS_CFUNC_DEF("fetch", 3, js_http_fetch),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER && CONFIG_ESP32_MQUICKJS_FEATURE_FS
     JS_CFUNC_DEF("staticFileHandler", 1, js_http_static_file_handler),
+#endif
     JS_PROP_END,
 };
 

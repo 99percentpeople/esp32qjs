@@ -1,4 +1,7 @@
 #include "esp32_mquickjs_http_server.h"
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
+
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_request_response.h"
 #include "esp32_mquickjs_stream.h"
@@ -1295,6 +1298,7 @@ static bool http_server_has_content_type(const esp32_mquickjs_http_server_respon
     return false;
 }
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER && CONFIG_ESP32_MQUICKJS_FEATURE_FS
 static bool http_server_resolve_littlefs_path(const char *input_path,
                                               char *out_path,
                                               size_t out_path_size)
@@ -1427,6 +1431,7 @@ static JSValue http_server_make_static_handler(JSContext *ctx, const char *root_
     }
     return JS_PopGCRef(ctx, &handler_ref);
 }
+#endif
 
 static esp_err_t http_server_send_response(httpd_req_t *req,
                                            const esp32_mquickjs_http_server_response_t *response)
@@ -1840,10 +1845,6 @@ JSValue js_http_server_all(JSContext *ctx, JSValue *this_val, int argc, JSValue 
     return http_server_route_method(ctx, *this_val, "server.all", "ANY", argc, argv);
 }
 
-static JSValue http_server_static_file_handler_handle_internal(JSContext *ctx,
-                                                               JSValue handler_value,
-                                                               JSValue request_value);
-
 JSValue js_http_server_create(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     JSGCRef options_ref;
@@ -1960,6 +1961,11 @@ JSValue js_http_server_create(JSContext *ctx, JSValue *this_val, int argc, JSVal
         return result;
     }
 }
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER && CONFIG_ESP32_MQUICKJS_FEATURE_FS
+static JSValue http_server_static_file_handler_handle_internal(JSContext *ctx,
+                                                               JSValue handler_value,
+                                                               JSValue request_value);
 
 JSValue js_http_static_file_handler(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
@@ -2127,6 +2133,7 @@ static JSValue http_server_static_file_handler_handle_internal(JSContext *ctx,
     JS_PopGCRef(ctx, &root_ref);
     return response_obj;
 }
+#endif
 
 static bool http_server_async_poller(JSContext *ctx,
                                      esp32_mquickjs_runtime_t *runtime,
@@ -2209,3 +2216,5 @@ static bool http_server_async_poller(JSContext *ctx,
 
     return handled;
 }
+
+#endif

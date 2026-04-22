@@ -96,11 +96,16 @@ void app_main(void)
         return;
     }
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_FS
     littlefs_mounted = esp32_mquickjs_mount_littlefs(CONFIG_ESP32QJS_LITTLEFS_FORMAT_ON_MOUNT_FAIL);
     s_js_runtime.littlefs_mounted = littlefs_mounted;
     if (!littlefs_mounted) {
         ESP_LOGW(TAG, "Continuing without LittleFS-backed script loading");
     }
+#else
+    littlefs_mounted = false;
+    s_js_runtime.littlefs_mounted = false;
+#endif
 
 #ifdef CONFIG_ESP32QJS_ENABLE_REPL
     s_js_runtime.prepare_output = esp32qjs_repl_prepare_output;

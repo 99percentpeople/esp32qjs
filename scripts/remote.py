@@ -48,8 +48,11 @@ custom_hard_reset_sequence = R1|W0.2|R0
 HOST_TEST_BUILD_DIR = ROOT_DIR / "build-host-tests"
 JS_TEST_FLASH_DATA_DIR = ROOT_DIR / "tests" / "js" / "flash_data"
 JS_TEST_READY_MARKER = "__ESP32QJS_TEST_READY__"
+JS_TEST_FEATURES_PREFIX = "__ESP32QJS_TEST_FEATURES__:"
 JS_TEST_PASS_PREFIX = "__TEST_PASS__:"
 JS_TEST_FAIL_PREFIX = "__TEST_FAIL__:"
+JS_REPL_BANNER_MARKER = "Run help() for usage."
+MONITOR_READY_MARKER = "--- Quit:"
 ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])")
 CTEST_SUMMARY_RE = re.compile(r"(?m)^(\d+)% tests passed, (\d+) tests failed out of (\d+)$")
 TEST_SCOPE_ORDER = ("c", "js")
@@ -66,23 +69,28 @@ class JsTestCase:
 class JsTestModule:
     name: str
     cases: tuple[JsTestCase, ...]
+    required_features: tuple[str, ...] = ()
 
 
 JS_TEST_MODULES = (
     JsTestModule("core", (JsTestCase("modules/core/eval.js"),)),
     JsTestModule("esp32", (JsTestCase("modules/esp32/runtime.js"),)),
-    JsTestModule("gpio", (JsTestCase("modules/gpio/basic.js"),)),
-    JsTestModule("i2c", (JsTestCase("modules/i2c/status.js"),)),
+    JsTestModule("gpio", (JsTestCase("modules/gpio/basic.js"),), required_features=("gpio",)),
+    JsTestModule("ledc", (JsTestCase("modules/ledc/basic.js"),), required_features=("ledc",)),
+    JsTestModule("adc", (JsTestCase("modules/adc/basic.js"),), required_features=("adc",)),
+    JsTestModule("dac", (JsTestCase("modules/dac/basic.js"),), required_features=("dac",)),
+    JsTestModule("i2c", (JsTestCase("modules/i2c/status.js"),), required_features=("i2c",)),
     JsTestModule("timers", (JsTestCase("modules/timers/runtime.js"),)),
-    JsTestModule("fs", (JsTestCase("modules/fs/filesystem.js"),)),
+    JsTestModule("fs", (JsTestCase("modules/fs/filesystem.js"),), required_features=("fs",)),
     JsTestModule("stream", (JsTestCase("modules/stream/stream.js"),)),
-    JsTestModule("load", (JsTestCase("modules/load/load.js"),)),
+    JsTestModule("load", (JsTestCase("modules/load/load.js"),), required_features=("fs",)),
     JsTestModule(
         "wifi",
         (
             JsTestCase("modules/wifi/offline.js"),
             JsTestCase("modules/wifi/network.js", network_required=True, timeout_seconds=25.0),
         ),
+        required_features=("wifi",),
     ),
     JsTestModule(
         "http",
@@ -90,6 +98,12 @@ JS_TEST_MODULES = (
             JsTestCase("modules/http/offline.js"),
             JsTestCase("modules/http/network.js", network_required=True, timeout_seconds=25.0),
         ),
+        required_features=("http",),
+    ),
+    JsTestModule(
+        "http_server",
+        (JsTestCase("modules/http_server/offline.js"),),
+        required_features=("httpServer",),
     ),
 )
 JS_TEST_MODULE_MAP = {module.name: module for module in JS_TEST_MODULES}
@@ -1231,7 +1245,16 @@ def read_monitor_chunk(session: MonitorSession) -> bytes:
     return b"".join(chunks)
 
 
-def read_monitor_until_marker(session: MonitorSession, marker: str, timeout_seconds: float, description: str) -> str:
+def find_last_output_line_with_prefix(output: str, prefix: str) -> str | None:
+    """Return the last normalized output line whose content starts with a marker prefix."""
+    for line in reversed(normalize_serial_output(output).splitlines()):
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            return stripped
+    return None
+
+
+def read_monitor_until_text(session: MonitorSession, marker: str, timeout_seconds: float, description: str) -> str:
     """Read monitor output until a normalized marker appears or timeout expires."""
     deadline = time.monotonic() + timeout_seconds
     output = ""
@@ -1253,8 +1276,29 @@ def read_monitor_until_marker(session: MonitorSession, marker: str, timeout_seco
     raise MarkerTimeoutError(description, output)
 
 
-def try_read_monitor_until_marker(session: MonitorSession, marker: str, timeout_seconds: float) -> str | None:
-    """Best-effort variant of `read_monitor_until_marker` used for optional readiness probes."""
+def read_monitor_until_line_prefix(session: MonitorSession, prefix: str, timeout_seconds: float, description: str) -> str:
+    """Read monitor output until a normalized output line starts with the given prefix."""
+    deadline = time.monotonic() + timeout_seconds
+    output = ""
+
+    while time.monotonic() < deadline:
+        chunk = read_monitor_chunk(session)
+        if chunk:
+            output += chunk.decode("utf-8", errors="replace")
+            if find_last_output_line_with_prefix(output, prefix) is not None:
+                return normalize_serial_output(output)
+            continue
+
+        if session.process.poll() is not None:
+            break
+
+        time.sleep(0.05)
+
+    raise MarkerTimeoutError(description, output)
+
+
+def try_read_monitor_until_line_prefix(session: MonitorSession, prefix: str, timeout_seconds: float) -> str | None:
+    """Best-effort variant of `read_monitor_until_line_prefix` used for optional readiness probes."""
     deadline = time.monotonic() + timeout_seconds
     output = ""
 
@@ -1263,7 +1307,7 @@ def try_read_monitor_until_marker(session: MonitorSession, marker: str, timeout_
         if chunk:
             output += chunk.decode("utf-8", errors="replace")
             normalized = normalize_serial_output(output)
-            if marker in normalized:
+            if find_last_output_line_with_prefix(normalized, prefix) is not None:
                 return normalized
             continue
 
@@ -1296,7 +1340,7 @@ def js_test_build_config(config: ProjectConfig) -> ProjectConfig:
 
 def ensure_js_test_runtime(session: MonitorSession) -> None:
     """Confirm that the test bootstrap is active, either after boot or via a live probe."""
-    ready_output = try_read_monitor_until_marker(session, JS_TEST_READY_MARKER, 25.0)
+    ready_output = try_read_monitor_until_line_prefix(session, JS_TEST_READY_MARKER, 25.0)
     if ready_output is not None:
         return
 
@@ -1304,12 +1348,40 @@ def ensure_js_test_runtime(session: MonitorSession) -> None:
         session,
         'print("__ESP32QJS_TEST_PROBE__:" + (typeof globalThis.test === "function" ? "ready" : "missing"))',
     )
-    probe_output = read_monitor_until_marker(session, "__ESP32QJS_TEST_PROBE__:", 5.0, "the JS test runtime probe")
-    if "__ESP32QJS_TEST_PROBE__:ready" not in probe_output:
+    probe_output = read_monitor_until_line_prefix(session, "__ESP32QJS_TEST_PROBE__:", 5.0, "the JS test runtime probe")
+    probe_line = find_last_output_line_with_prefix(probe_output, "__ESP32QJS_TEST_PROBE__:")
+    if probe_line != "__ESP32QJS_TEST_PROBE__:ready":
         raise SystemExit(
             "The current LittleFS image does not expose the JS test runtime. "
             "Rerun without `--no-flash-fs` to flash the test storage image."
         )
+
+
+def probe_js_runtime_features(session: MonitorSession) -> dict[str, bool]:
+    """Read the runtime feature map from `esp32.info().features`."""
+    send_js_command(
+        session,
+        'print("__ESP32QJS_TEST_FEATURES__:" + JSON.stringify(esp32.info().features))',
+    )
+    output = read_monitor_until_line_prefix(
+        session,
+        JS_TEST_FEATURES_PREFIX,
+        25.0,
+        "the JS runtime feature probe",
+    )
+    feature_line = find_last_output_line_with_prefix(output, JS_TEST_FEATURES_PREFIX)
+    if feature_line is None:
+        raise SystemExit("The JS runtime feature probe did not return a structured result.")
+    try:
+        payload = json.loads(feature_line[len(JS_TEST_FEATURES_PREFIX):])
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"The JS runtime feature probe emitted invalid JSON ({exc}).") from exc
+
+    features: dict[str, bool] = {}
+    for key, value in payload.items():
+        if isinstance(value, bool):
+            features[str(key)] = value
+    return features
 
 
 def configure_js_test_runtime(session: MonitorSession, config: ProjectConfig) -> None:
@@ -1328,7 +1400,7 @@ def configure_js_test_runtime(session: MonitorSession, config: ProjectConfig) ->
             'print("__ESP32QJS_TEST_CONFIG__")'
         ),
     )
-    read_monitor_until_marker(session, "__ESP32QJS_TEST_CONFIG__", 5.0, "the JS test config handshake")
+    read_monitor_until_line_prefix(session, "__ESP32QJS_TEST_CONFIG__", 5.0, "the JS test config handshake")
 
 
 def collect_js_runtime(session: MonitorSession) -> None:
@@ -1338,7 +1410,7 @@ def collect_js_runtime(session: MonitorSession) -> None:
             session,
             'if (typeof gc === "function") gc(); print("__ESP32QJS_TEST_GC__")',
         )
-        read_monitor_until_marker(session, "__ESP32QJS_TEST_GC__", 5.0, "the JS GC handshake")
+        read_monitor_until_line_prefix(session, "__ESP32QJS_TEST_GC__", 5.0, "the JS GC handshake")
     except (MarkerTimeoutError, OSError):
         print("Warning: skipped JS GC handshake before the next case", flush=True)
 
@@ -1363,6 +1435,36 @@ def validate_network_test_config(config: ProjectConfig, modules: tuple[JsTestMod
         raise SystemExit(
             f"Network JS tests require {joined}. Set them in `/.env` or the active board profile."
         )
+
+
+def is_js_module_enabled(module: JsTestModule, runtime_features: dict[str, bool]) -> bool:
+    """Check whether the runtime feature set supports a JS module."""
+    return all(runtime_features.get(feature, False) for feature in module.required_features)
+
+
+def resolve_js_modules_for_runtime(modules: tuple[JsTestModule, ...],
+                                   runtime_features: dict[str, bool],
+                                   explicit_selection: bool) -> tuple[tuple[JsTestModule, ...], str]:
+    """Filter JS modules against the active board feature set."""
+    if not runtime_features.get("fs", False):
+        message = "board-backed JS tests require the fs feature because the harness is loaded from LittleFS"
+        if explicit_selection:
+            raise SystemExit(message)
+        return (), message
+
+    disabled_modules = tuple(
+        module.name for module in modules if not is_js_module_enabled(module, runtime_features)
+    )
+    if explicit_selection and disabled_modules:
+        joined = ", ".join(disabled_modules)
+        raise SystemExit(f"Requested JS modules are disabled on this board: {joined}")
+
+    enabled_modules = tuple(
+        module for module in modules if is_js_module_enabled(module, runtime_features)
+    )
+    if disabled_modules:
+        return enabled_modules, f"auto-skipped disabled modules: {','.join(disabled_modules)}"
+    return enabled_modules, ""
 
 
 def run_js_test_case(session: MonitorSession, case: JsTestCase) -> JsCaseResult:
@@ -1467,6 +1569,7 @@ def run_js_test_case(session: MonitorSession, case: JsTestCase) -> JsCaseResult:
 
 def run_js_tests(config: ProjectConfig,
                  modules: tuple[JsTestModule, ...],
+                 explicit_module_selection: bool,
                  network_enabled: bool,
                  flash_fs_first: bool) -> TestStageSummary:
     """Flash the dedicated test image when needed, then drive JS tests over serial."""
@@ -1475,14 +1578,6 @@ def run_js_tests(config: ProjectConfig,
         selection_label="modules",
         selection=tuple(module.name for module in modules),
     )
-    try:
-        validate_network_test_config(config, modules, network_enabled)
-    except SystemExit as exc:
-        summary.status = "failed"
-        summary.note = str(exc)
-        print_test_stage_summary(summary)
-        raise TestStageError(summary, str(exc)) from exc
-
     js_config = js_test_build_config(config)
 
     if flash_fs_first:
@@ -1503,6 +1598,55 @@ def run_js_tests(config: ProjectConfig,
 
     session = start_monitor_session(config)
     try:
+        try:
+            read_monitor_until_text(session, MONITOR_READY_MARKER, 10.0, "the ESP-IDF monitor banner")
+            read_monitor_until_text(session, JS_REPL_BANNER_MARKER, 25.0, "the JS REPL banner")
+        except MarkerTimeoutError as exc:
+            summary.status = "failed"
+            summary.note = f"startup timeout waiting for {exc.description}"
+            print_test_stage_summary(summary)
+            raise TestStageError(
+                summary,
+                f"Timed out waiting for {exc.description}.\n"
+                f"Last serial output:\n{format_output_tail(exc.output)}",
+            ) from exc
+        try:
+            runtime_features = probe_js_runtime_features(session)
+        except MarkerTimeoutError as exc:
+            summary.status = "failed"
+            summary.note = f"feature probe timeout waiting for {exc.description}"
+            print_test_stage_summary(summary)
+            raise TestStageError(
+                summary,
+                f"Timed out waiting for {exc.description}.\n"
+                f"Last serial output:\n{format_output_tail(exc.output)}",
+            ) from exc
+        try:
+            selected_modules, selection_note = resolve_js_modules_for_runtime(
+                modules,
+                runtime_features,
+                explicit_selection=explicit_module_selection,
+            )
+        except SystemExit as exc:
+            summary.status = "failed"
+            summary.note = str(exc)
+            print_test_stage_summary(summary)
+            raise TestStageError(summary, str(exc)) from exc
+
+        summary.selection = tuple(module.name for module in selected_modules)
+        summary.note = selection_note
+
+        if not selected_modules:
+            print_test_stage_summary(summary)
+            return summary
+
+        try:
+            validate_network_test_config(config, selected_modules, network_enabled)
+        except SystemExit as exc:
+            summary.status = "failed"
+            summary.note = str(exc)
+            print_test_stage_summary(summary)
+            raise TestStageError(summary, str(exc)) from exc
         try:
             ensure_js_test_runtime(session)
         except MarkerTimeoutError as exc:
@@ -1526,7 +1670,7 @@ def run_js_tests(config: ProjectConfig,
                 f"Last serial output:\n{format_output_tail(exc.output)}",
             ) from exc
 
-        for module in modules:
+        for module in selected_modules:
             print(f"Running JS module {module.name}", flush=True)
             for case in module.cases:
                 if case.network_required and not network_enabled:
@@ -1578,6 +1722,7 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
                 run_js_tests(
                     config,
                     resolve_js_modules(args.module),
+                    explicit_module_selection=bool(args.module),
                     network_enabled=args.network,
                     flash_fs_first=not args.no_flash_fs,
                 )
@@ -1716,7 +1861,7 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, Board
         "--module",
         action="append",
         choices=[module.name for module in JS_TEST_MODULES],
-        help="Limit JS tests to specific modules. Default: run all modules.",
+        help="Limit JS tests to specific modules. Default: run board-enabled modules only.",
     )
     test.add_argument(
         "--network",

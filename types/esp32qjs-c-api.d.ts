@@ -226,6 +226,14 @@ type GpioPullMode = "floating" | "pullup" | "pulldown" | "pullupPulldown";
 
 type GpioDriveStrength = 0 | 1 | 2 | 3;
 
+type GpioInterruptMode = "change" | "rising" | "falling" | "low" | "high";
+
+interface GpioInterruptEvent {
+  pin: number;
+  level: boolean;
+  mode: GpioInterruptMode;
+}
+
 interface GpioStatus {
   pin: number;
   valid: boolean;
@@ -245,6 +253,9 @@ interface GpioStatus {
   outputControlledByPeripheral: boolean;
   outputEnableInverted: boolean;
   sleepEnabled: boolean;
+  interruptAttached: boolean;
+  interruptMode: GpioInterruptMode | null;
+  interruptDropped: number;
 }
 
 interface GpioConfigureOptions {
@@ -260,9 +271,18 @@ interface GpioConfigureOptions {
  *
  * @example
  * ```js
- * gpio.pinMode(gpio.LED_BUILTIN, gpio.OUTPUT);
- * gpio.led(true);
- * gpio.led(false);
+ * var pin = gpio.USER_LED_PIN >= 0 ? gpio.USER_LED_PIN : gpio.LED_BUILTIN;
+ *
+ * // Basic output control.
+ * gpio.pinMode(pin, gpio.OUTPUT);
+ * gpio.digitalWrite(pin, true);
+ * gpio.toggle(pin);
+ *
+ * // Arduino-style interrupt registration. The callback runs later on the JS thread.
+ * gpio.attachInterrupt(pin, function (event) {
+ *   print(event.pin, event.mode, event.level);
+ * }, gpio.CHANGE);
+ * gpio.detachInterrupt(pin);
  * ```
  */
 interface GpioModule {
@@ -276,6 +296,9 @@ interface GpioModule {
   readonly PULLUP: "pullup";
   readonly PULLDOWN: "pulldown";
   readonly PULLUP_PULLDOWN: "pullupPulldown";
+  readonly CHANGE: "change";
+  readonly RISING: "rising";
+  readonly FALLING: "falling";
   readonly LOW: 0;
   readonly HIGH: 1;
   readonly DRIVE_0: 0;
@@ -297,8 +320,227 @@ interface GpioModule {
   getDriveStrength(pin: number): GpioDriveStrength;
   setDriveStrength(pin: number, strength: GpioDriveStrength): GpioDriveStrength;
   hold(pin: number, enabled: boolean): boolean;
+  /**
+   * Register one interrupt callback for a GPIO.
+   *
+   * The callback is scheduled onto the JavaScript thread after the ISR queues
+   * an event, so higher-level behaviors such as debounce should be implemented
+   * in JavaScript rather than inside the native binding.
+   */
+  attachInterrupt(
+    pin: number,
+    callback: (event: GpioInterruptEvent) => void,
+    mode?: GpioInterruptMode | 0 | 1,
+  ): GpioStatus;
+  /** Remove the interrupt callback for a GPIO. */
+  detachInterrupt(pin: number): GpioStatus;
   reset(pin: number): number;
   led(value: boolean): boolean;
+}
+
+type LedcClock = "auto" | "apb" | "xtal" | "rcFast";
+type LedcSleepMode = "noAliveNoPd" | "noAliveAllowPd" | "keepAlive";
+
+interface LedcTimerStatus {
+  timer: number;
+  configured: boolean;
+  paused: boolean;
+  freqHz: number;
+  dutyResolution: number;
+  maxDuty: number;
+  clock: LedcClock;
+}
+
+interface LedcChannelStatus {
+  channel: number;
+  configured: boolean;
+  pin: number;
+  timer: number;
+  duty: number;
+  hpoint: number;
+  maxDuty: number;
+  outputInvert: boolean;
+  sleepMode: LedcSleepMode;
+}
+
+interface LedcTimerConfigOptions {
+  freqHz: number;
+  dutyResolution: number;
+  clock?: LedcClock;
+  deconfigure?: boolean;
+}
+
+interface LedcChannelConfigOptions {
+  pin?: number;
+  timer?: number;
+  duty?: number;
+  hpoint?: number;
+  outputInvert?: boolean;
+  sleepMode?: LedcSleepMode;
+  deconfigure?: boolean;
+}
+
+/**
+ * LEDC PWM timer/channel helpers.
+ *
+ * @example
+ * ```js
+ * ledc.timerConfig(0, { freqHz: 5000, dutyResolution: 8 });
+ * ledc.channelConfig(0, { pin: gpio.LED_BUILTIN, timer: 0, duty: 128 });
+ * ledc.setDutyAndUpdate(0, 64);
+ * ```
+ */
+interface LedcModule {
+  readonly AUTO_CLOCK: "auto";
+  readonly APB_CLOCK: "apb";
+  readonly XTAL_CLOCK: "xtal";
+  readonly RC_FAST_CLOCK: "rcFast";
+  readonly SLEEP_NO_ALIVE_NO_PD: "noAliveNoPd";
+  readonly SLEEP_NO_ALIVE_ALLOW_PD: "noAliveAllowPd";
+  readonly SLEEP_KEEP_ALIVE: "keepAlive";
+  readonly CHANNEL_COUNT: number;
+  readonly TIMER_COUNT: number;
+  readonly MAX_DUTY_RESOLUTION_BITS: number;
+  timerConfig(timer: number, options: LedcTimerConfigOptions): LedcTimerStatus;
+  channelConfig(channel: number, options: LedcChannelConfigOptions): LedcChannelStatus;
+  setDuty(channel: number, duty: number): LedcChannelStatus;
+  setDutyWithHpoint(channel: number, duty: number, hpoint: number): LedcChannelStatus;
+  setDutyAndUpdate(channel: number, duty: number, hpoint?: number): LedcChannelStatus;
+  getDuty(channel: number): number;
+  getHpoint(channel: number): number;
+  updateDuty(channel: number): LedcChannelStatus;
+  setFreq(timer: number, freqHz: number): LedcTimerStatus;
+  getFreq(timer: number): number;
+  bindChannelTimer(channel: number, timer: number): LedcChannelStatus;
+  stop(channel: number, idleLevel?: boolean): LedcChannelStatus;
+  timerPause(timer: number): LedcTimerStatus;
+  timerResume(timer: number): LedcTimerStatus;
+  timerStatus(timer: number): LedcTimerStatus;
+  channelStatus(channel: number): LedcChannelStatus;
+}
+
+type AdcUnit = 1 | 2;
+type AdcAtten = 0 | 1 | 2 | 3;
+type AdcBitwidth = 0 | 9 | 10 | 11 | 12 | 13;
+
+interface AdcChannelInfo {
+  channel: number;
+  configured: boolean;
+  atten: AdcAtten | null;
+  bitwidth: AdcBitwidth | null;
+  pin: number | null;
+  calibrated: boolean;
+}
+
+interface AdcStatus {
+  unit: AdcUnit;
+  opened: boolean;
+  channelCount: number;
+  channels: AdcChannelInfo[];
+}
+
+interface AdcConfigureOptions {
+  atten?: AdcAtten;
+  bitwidth?: AdcBitwidth;
+}
+
+interface AdcChannelRef {
+  unit: AdcUnit;
+  channel: number;
+}
+
+/**
+ * ADC oneshot helpers and GPIO/channel mapping.
+ *
+ * @example
+ * ```js
+ * var ref = adc.ioToChannel(0);
+ * adc.open(ref.unit);
+ * adc.configure(ref.unit, ref.channel, { atten: adc.ATTEN_DB_12, bitwidth: adc.BITWIDTH_12 });
+ * print(adc.read(ref.unit, ref.channel));
+ * ```
+ */
+interface AdcModule {
+  readonly UNIT_1: 1;
+  readonly UNIT_2: 2;
+  readonly ATTEN_DB_0: 0;
+  readonly ATTEN_DB_2_5: 1;
+  readonly ATTEN_DB_6: 2;
+  readonly ATTEN_DB_12: 3;
+  readonly BITWIDTH_DEFAULT: 0;
+  readonly BITWIDTH_9: 9;
+  readonly BITWIDTH_10: 10;
+  readonly BITWIDTH_11: 11;
+  readonly BITWIDTH_12: 12;
+  readonly BITWIDTH_13: 13;
+  readonly UNIT_COUNT: number;
+  readonly MAX_CHANNEL_COUNT: number;
+  open(unit: AdcUnit): AdcStatus;
+  close(unit: AdcUnit): boolean;
+  status(unit: AdcUnit): AdcStatus;
+  configure(unit: AdcUnit, channel: number, options: AdcConfigureOptions): AdcStatus;
+  read(unit: AdcUnit, channel: number): number;
+  readMilliVolts(unit: AdcUnit, channel: number): number;
+  ioToChannel(pin: number): AdcChannelRef | null;
+  channelToIo(unit: AdcUnit, channel: number): number | null;
+}
+
+type DacChannel = 0 | 1;
+
+interface DacChannelRef {
+  channel: DacChannel;
+  pin: number;
+}
+
+interface DacChannelStatus {
+  channel: DacChannel;
+  opened: boolean;
+  pin: number;
+  resolutionBits: number;
+  maxValue: number;
+  lastValue: number;
+}
+
+/**
+ * DAC oneshot helpers and GPIO/channel mapping.
+ *
+ * @example
+ * ```js
+ * dac.open(dac.CHANNEL_0);
+ * dac.write(dac.CHANNEL_0, 128);
+ * print(JSON.stringify(dac.status(dac.CHANNEL_0)));
+ * dac.close(dac.CHANNEL_0);
+ * ```
+ */
+interface DacModule {
+  readonly CHANNEL_0: 0;
+  readonly CHANNEL_1: 1;
+  readonly CHANNEL_COUNT: number;
+  readonly RESOLUTION_BITS: number;
+  readonly MAX_VALUE: number;
+  open(channel: DacChannel): DacChannelStatus;
+  close(channel: DacChannel): boolean;
+  status(): DacChannelStatus[];
+  status(channel: DacChannel): DacChannelStatus;
+  write(channel: DacChannel, value: number): DacChannelStatus;
+  ioToChannel(pin: number): DacChannelRef | null;
+  channelToIo(channel: DacChannel): number;
+}
+
+/**
+ * Runtime information returned by `esp32.info()`.
+ */
+interface Esp32Features {
+  fs: boolean;
+  gpio: boolean;
+  ledc: boolean;
+  adc: boolean;
+  dac: boolean;
+  i2c: boolean;
+  wifi: boolean;
+  http: boolean;
+  httpServer: boolean;
+  staticFileHandler: boolean;
 }
 
 /**
@@ -307,6 +549,7 @@ interface GpioModule {
 interface Esp32Info {
   board: string;
   chip: string;
+  features: Esp32Features;
   userLedPin: number;
   userLedActiveLow: boolean;
   scriptsDir: string;
@@ -476,6 +719,16 @@ type FetchCallback = (
   error?: unknown,
 ) => void;
 
+interface HttpFetchFunction {
+  (input: FetchInput, options?: FetchOptions): Response;
+  (input: FetchInput, callback: FetchCallback): void;
+  (
+    input: FetchInput,
+    options: FetchOptions,
+    callback: FetchCallback,
+  ): void;
+}
+
 /**
  * HTTP route handler object accepted by `server.get(...)` and friends.
  *
@@ -533,7 +786,7 @@ class StaticFileHandler implements HttpRouteHandlerObject {
 }
 
 /**
- * HTTP client and server helpers.
+ * HTTP client/server namespace. Individual helpers are feature-gated.
  *
  * @example
  * ```js
@@ -553,16 +806,10 @@ class StaticFileHandler implements HttpRouteHandlerObject {
  * ```
  */
 interface HttpModule {
-  readonly DEFAULT_TIMEOUT_MS: number;
-  fetch(input: FetchInput, options?: FetchOptions): Response;
-  fetch(input: FetchInput, callback: FetchCallback): void;
-  fetch(
-    input: FetchInput,
-    options: FetchOptions,
-    callback: FetchCallback,
-  ): void;
-  server(options?: HttpServerOptions): HttpServer;
-  staticFileHandler(root: string): StaticFileHandler;
+  readonly DEFAULT_TIMEOUT_MS?: number;
+  fetch?: HttpFetchFunction;
+  server?(options?: HttpServerOptions): HttpServer;
+  staticFileHandler?(root: string): StaticFileHandler;
 }
 
 declare global {
@@ -573,7 +820,7 @@ declare global {
   const HttpServer: typeof ESP32QJS.HttpServer;
   const StaticFileHandler: typeof ESP32QJS.StaticFileHandler;
 
-  /** LittleFS script root exposed to JavaScript. */
+  /** LittleFS script root exposed to JavaScript when `esp32.info().features.fs` is enabled. */
   const SCRIPTS_DIR: string;
 
   /**
@@ -656,13 +903,19 @@ declare global {
   const fs: ESP32QJS.FsModule;
   /** GPIO helpers for the active board profile. */
   const gpio: ESP32QJS.GpioModule;
+  /** LEDC PWM timer/channel helpers. */
+  const ledc: ESP32QJS.LedcModule;
+  /** ADC oneshot helpers. */
+  const adc: ESP32QJS.AdcModule;
+  /** DAC oneshot helpers. Exposed only when `esp32.info().features.dac` is enabled. */
+  const dac: ESP32QJS.DacModule;
   /** ESP32 runtime information helpers. */
   const esp32: ESP32QJS.Esp32Module;
   /** Shared I2C bus helpers. */
   const i2c: ESP32QJS.I2CModule;
   /** Wi-Fi station helpers. */
   const wifi: ESP32QJS.WiFiModule;
-  /** HTTP client and server helpers. */
+  /** HTTP client/server namespace. Exposed when either `esp32.info().features.http` or `.httpServer` is enabled. */
   const http: ESP32QJS.HttpModule;
 
   /**
@@ -675,5 +928,7 @@ declare global {
    * server.start();
    * ```
    */
-  function staticFileHandler(root: string): ESP32QJS.StaticFileHandler;
+  const staticFileHandler:
+    | ((root: string) => ESP32QJS.StaticFileHandler)
+    | undefined;
 }

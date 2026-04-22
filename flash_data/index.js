@@ -18,7 +18,7 @@ function connectStartupWifi(attempt) {
   }
 
   print("[startup] connecting wifi:", WIFI_SSID, "attempt", currentAttempt);
-  wifi.connect(WIFI_SSID, WIFI_PASSWORD, WIFI_CONNECT_TIMEOUT_MS, function (nextStatus, error) {
+  wifi.connect(WIFI_SSID, WIFI_PASSWORD, WIFI_CONNECT_TIMEOUT_MS, function (error, nextStatus) {
     if (error) {
       globalThis.startupWifiError = error;
       print("[startup] wifi connect attempt failed:", error);

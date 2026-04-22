@@ -1,4 +1,7 @@
 #include "esp32_mquickjs_i2c.h"
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_I2C
+
 #include "esp32_mquickjs_core.h"
 
 #include <stdbool.h>
@@ -617,3 +620,5 @@ JSValue js_i2c_get_default_timeout_ms(JSContext *ctx, JSValue *this_val, int arg
     (void)argv;
     return JS_NewUint32(ctx, ESP32_MQUICKJS_I2C_DEFAULT_TIMEOUT_MS);
 }
+
+#endif

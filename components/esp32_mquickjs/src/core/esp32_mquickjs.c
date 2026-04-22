@@ -1,10 +1,13 @@
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_esp32.h"
+#include "esp32_mquickjs_adc.h"
+#include "esp32_mquickjs_dac.h"
 #include "esp32_mquickjs_fs.h"
 #include "esp32_mquickjs_gpio.h"
 #include "esp32_mquickjs_http.h"
 #include "esp32_mquickjs_http_server.h"
 #include "esp32_mquickjs_i2c.h"
+#include "esp32_mquickjs_ledc.h"
 #include "esp32_mquickjs_stream.h"
 #include "esp32_mquickjs_wifi.h"
 #include "js_stdlib.h"
@@ -933,13 +936,37 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
     if (ctx == NULL || runtime == NULL) {
         return false;
     }
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_LEDC
+    esp32_mquickjs_init_ledc_runtime();
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_ADC
+    esp32_mquickjs_init_adc_runtime();
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_DAC
+    esp32_mquickjs_init_dac_runtime();
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_I2C
     esp32_mquickjs_init_i2c_runtime();
-    if (!esp32_mquickjs_init_wifi_runtime(ctx, runtime) ||
-        !esp32_mquickjs_init_http_runtime(ctx, runtime) ||
-        !esp32_mquickjs_init_http_server_runtime(ctx, runtime)) {
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
+    if (!esp32_mquickjs_init_wifi_runtime(ctx, runtime)) {
         esp32_mquickjs_print_exception(ctx);
         return false;
     }
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
+    if (!esp32_mquickjs_init_http_runtime(ctx, runtime)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
+    if (!esp32_mquickjs_init_http_server_runtime(ctx, runtime)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
+#endif
     return true;
 }
 
@@ -1070,6 +1097,12 @@ JSValue js_gc(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 
 JSValue js_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
+#if !CONFIG_ESP32_MQUICKJS_FEATURE_FS
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_ThrowInternalError(ctx, "load() requires the fs feature");
+#else
     JSCStringBuf command_buf;
     const char *command;
 
@@ -1081,6 +1114,7 @@ JSValue js_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     command = JS_ToCString(ctx, argv[0], &command_buf);
 
     return esp32_mquickjs_load_from_littlefs(ctx, s_active_runtime, command);
+#endif
 }
 
 JSValue js_sleep(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
