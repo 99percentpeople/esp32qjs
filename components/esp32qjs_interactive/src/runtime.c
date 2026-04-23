@@ -1,4 +1,4 @@
-#include "esp32qjs_interactive/esp32qjs_interactive.h"
+#include "esp32qjs_interactive.h"
 
 #include <stdarg.h>
 #include <stdbool.h>

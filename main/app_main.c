@@ -5,7 +5,7 @@
 #include "sdkconfig.h"
 #include "esp32_mquickjs.h"
 #if CONFIG_ESP32QJS_ENABLE_REPL
-#include "esp32qjs_interactive/esp32qjs_interactive.h"
+#include "esp32qjs_interactive.h"
 #endif
 #include "esp_heap_caps.h"
 #include "esp_log.h"
