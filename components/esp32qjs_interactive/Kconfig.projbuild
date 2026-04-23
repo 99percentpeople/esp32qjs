@@ -1,0 +1,26 @@
+menu "ESP32QJS Interaction"
+
+config ESP32QJS_REPL_TASK_STACK_SIZE
+    int "JavaScript runtime task stack size (bytes)"
+    range 4096 32768
+    default 8192
+    help
+        Stack size for the main JavaScript runtime task. The same task also
+        hosts the REPL when it is enabled.
+
+config ESP32QJS_REPL_DISPLAY_COLUMNS
+    int "Serial monitor display columns"
+    depends on ESP32QJS_ENABLE_REPL
+    range 40 240
+    default 80
+    help
+        Logical display width used by the line editor when restoring wrapped
+        prompts. Match this to the serial monitor width when needed.
+
+config ESP32QJS_AUTORUN_INDEX_JS
+    bool "Auto-run /littlefs/index.js at boot"
+    default y
+    help
+        Load /littlefs/index.js before the first REPL prompt appears.
+
+endmenu

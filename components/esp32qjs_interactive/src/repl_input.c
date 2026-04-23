@@ -9,7 +9,6 @@
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_select.h"
 #include "driver/usb_serial_jtag_vfs.h"
-#include "esp32_mquickjs.h"
 #include "esp_err.h"
 #include "esp_timer.h"
 #include "sdkconfig.h"
@@ -45,11 +44,13 @@ static bool s_prompt_visible;
 static bool s_cursor_hidden;
 static bool s_external_output_pending;
 static int64_t s_last_external_output_us;
+static esp32qjs_console_input_ready_from_isr_t s_notify_input_ready_from_isr;
+static void *s_notify_input_ready_opaque;
 
 static void console_select_notif_callback(usj_select_notif_t notif, int *task_woken)
 {
-    if (notif == USJ_SELECT_READ_NOTIF) {
-        esp32_mquickjs_notify_active_runtime_from_isr(task_woken);
+    if (notif == USJ_SELECT_READ_NOTIF && s_notify_input_ready_from_isr != NULL) {
+        s_notify_input_ready_from_isr(s_notify_input_ready_opaque, task_woken);
     }
 }
 
@@ -366,13 +367,17 @@ static void history_restore(bool up)
     }
 }
 
-void esp32qjs_console_init(void)
+void esp32qjs_console_init(esp32qjs_console_input_ready_from_isr_t notify_from_isr,
+                           void *notify_opaque)
 {
     usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
 
     setvbuf(stdin, NULL, _IONBF, 0);
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+
+    s_notify_input_ready_from_isr = notify_from_isr;
+    s_notify_input_ready_opaque = notify_opaque;
 
     ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&cfg));
     usb_serial_jtag_vfs_use_driver();

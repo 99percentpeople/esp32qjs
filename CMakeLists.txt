@@ -3,10 +3,11 @@
 cmake_minimum_required(VERSION 3.22)
 
 # App/resource tuning options live in main/Kconfig.projbuild and
-# components/esp32_mquickjs/Kconfig.projbuild.
+# components/esp32_mquickjs/Kconfig.projbuild plus interaction defaults.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/main/Kconfig.projbuild"
-    "${CMAKE_SOURCE_DIR}/components/esp32_mquickjs/Kconfig.projbuild")
+    "${CMAKE_SOURCE_DIR}/components/esp32_mquickjs/Kconfig.projbuild"
+    "${CMAKE_SOURCE_DIR}/components/esp32qjs_interactive/Kconfig.projbuild")
 
 file(GLOB_RECURSE _esp32qjs_board_config_files CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/configs/boards/*/.env"
@@ -26,3 +27,13 @@ endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(esp32qjs)
+
+if(EXISTS "${CMAKE_SOURCE_DIR}/scripts/fix_compile_commands.py")
+    add_custom_target(
+        fix_clangd ALL
+        COMMAND ${CMAKE_COMMAND} -E echo "Running fix_compile_commands.py..."
+        COMMAND ${CMAKE_COMMAND} -E env python3 ${CMAKE_SOURCE_DIR}/scripts/fix_compile_commands.py
+        COMMENT "Cleaning compile_commands.json for clangd"
+        VERBATIM
+    )
+endif()

@@ -6,7 +6,10 @@
 
 #define ESP32QJS_REPL_LINE_SIZE 1024
 
-void esp32qjs_console_init(void);
+typedef void (*esp32qjs_console_input_ready_from_isr_t)(void *opaque, int *task_woken);
+
+void esp32qjs_console_init(esp32qjs_console_input_ready_from_isr_t notify_from_isr,
+                           void *notify_opaque);
 void esp32qjs_repl_print_prompt(void);
 void esp32qjs_repl_redraw_line(void);
 void esp32qjs_repl_prepare_output(void *opaque);

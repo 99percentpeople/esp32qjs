@@ -10,9 +10,9 @@ enable_testing()
 
 add_executable(test_repl_logic
     test_repl_logic.c
-    ../../main/repl_line.c
+    ../../components/esp32qjs_interactive/src/repl_line.c
 )
-target_include_directories(test_repl_logic PRIVATE ../../main)
+target_include_directories(test_repl_logic PRIVATE ../../components/esp32qjs_interactive/internal)
 add_test(NAME test_repl_logic COMMAND test_repl_logic)
 
 add_executable(test_fs_path
