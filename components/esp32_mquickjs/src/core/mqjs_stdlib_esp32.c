@@ -278,10 +278,12 @@ static const JSClassDef js_i2c_obj =
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
 static const JSPropDef js_wifi[] = {
     JS_CGETSET_DEF("DEFAULT_TIMEOUT_MS", js_wifi_get_default_timeout_ms, NULL),
-    JS_CFUNC_DEF("connect", 4, js_wifi_connect),
+    JS_CFUNC_DEF("connect", 3, js_wifi_connect),
+    JS_CFUNC_DEF("connectAsync", 4, js_wifi_async_connect),
     JS_CFUNC_DEF("disconnect", 0, js_wifi_disconnect),
     JS_CFUNC_DEF("status", 0, js_wifi_status),
-    JS_CFUNC_DEF("scan", 1, js_wifi_scan),
+    JS_CFUNC_DEF("scan", 0, js_wifi_scan),
+    JS_CFUNC_DEF("scanAsync", 1, js_wifi_async_scan),
     JS_PROP_END,
 };
 
@@ -293,7 +295,8 @@ static const JSClassDef js_wifi_obj =
 static const JSPropDef js_http[] = {
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
     JS_CGETSET_DEF("DEFAULT_TIMEOUT_MS", js_http_get_default_timeout_ms, NULL),
-    JS_CFUNC_DEF("fetch", 3, js_http_fetch),
+    JS_CFUNC_DEF("fetch", 2, js_http_fetch),
+    JS_CFUNC_DEF("fetchAsync", 3, js_http_async_fetch),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
     JS_CFUNC_DEF("server", 1, js_http_server_create),
@@ -385,7 +388,7 @@ static const JSPropDef js_global_object_extra[] = {
     JS_CFUNC_DEF("setInterval", 2, js_setInterval),
     JS_CFUNC_DEF("clearInterval", 1, js_clearTimeout),
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
-    JS_CFUNC_DEF("fetch", 3, js_http_fetch),
+    JS_CFUNC_DEF("fetch", 2, js_http_fetch),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER && CONFIG_ESP32_MQUICKJS_FEATURE_FS
     JS_CFUNC_DEF("staticFileHandler", 1, js_http_static_file_handler),

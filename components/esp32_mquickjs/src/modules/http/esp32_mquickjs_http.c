@@ -6,51 +6,16 @@
 #include "esp32_mquickjs_request_response.h"
 #include "esp32_mquickjs_stream.h"
 
-#include <ctype.h>
-#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
-#include "esp_check.h"
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
-#include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
-#include "freertos/semphr.h"
-#include "freertos/task.h"
 
 #define ESP32_MQUICKJS_HTTP_MAX_REQUEST_HEADERS 16
 #define ESP32_MQUICKJS_HTTP_MAX_RESPONSE_HEADERS 16
-#define ESP32_MQUICKJS_HTTP_MAX_ASYNC_REQUESTS 4
-#define ESP32_MQUICKJS_HTTP_ASYNC_QUEUE_LEN 4
 #define ESP32_MQUICKJS_HTTP_USER_AGENT "esp32qjs/1.0"
-#define ESP32_MQUICKJS_HTTP_ERROR_TEXT_LEN 160
-
-typedef struct {
-    char *key;
-    char *value;
-} esp32_mquickjs_http_header_t;
-
-typedef struct {
-    char *url;
-    char *method;
-    char *body;
-    uint32_t timeout_ms;
-    esp32_mquickjs_http_header_t *headers;
-    size_t header_count;
-} esp32_mquickjs_http_request_t;
-
-typedef struct {
-    bool ok;
-    int32_t status;
-    char *url;
-    char *status_text;
-    char *body;
-    esp32_mquickjs_http_header_t *headers;
-    size_t header_count;
-} esp32_mquickjs_http_response_t;
 
 typedef struct {
     esp32_mquickjs_http_response_t *response;
@@ -60,57 +25,7 @@ typedef struct {
     bool drop_headers;
 } esp32_mquickjs_http_capture_t;
 
-typedef struct esp32_mquickjs_http_async_slot esp32_mquickjs_http_async_slot_t;
-
-typedef struct {
-    uint8_t slot_id;
-    uint32_t generation;
-    esp_err_t err;
-    esp32_mquickjs_http_response_t *response;
-    char error_text[ESP32_MQUICKJS_HTTP_ERROR_TEXT_LEN];
-} esp32_mquickjs_http_async_event_t;
-
-struct esp32_mquickjs_http_async_slot {
-    uint8_t slot_id;
-    bool allocated;
-    uint32_t generation;
-    JSGCRef callback;
-    esp32_mquickjs_http_request_t request;
-};
-
-typedef struct {
-    bool initialized;
-    QueueHandle_t queue;
-    SemaphoreHandle_t lock;
-    esp32_mquickjs_http_async_slot_t slots[ESP32_MQUICKJS_HTTP_MAX_ASYNC_REQUESTS];
-} esp32_mquickjs_http_state_t;
-
-typedef struct {
-    esp32_mquickjs_http_async_slot_t *slot;
-    uint32_t generation;
-} esp32_mquickjs_http_worker_args_t;
-
-static esp32_mquickjs_http_state_t s_http_state;
-
-static bool http_async_poller(JSContext *ctx,
-                              esp32_mquickjs_runtime_t *runtime,
-                              void *opaque);
-
-static void http_lock(void)
-{
-    if (s_http_state.lock != NULL) {
-        xSemaphoreTake(s_http_state.lock, portMAX_DELAY);
-    }
-}
-
-static void http_unlock(void)
-{
-    if (s_http_state.lock != NULL) {
-        xSemaphoreGive(s_http_state.lock);
-    }
-}
-
-static char *http_strdup(const char *value)
+char *esp32_mquickjs_http_strdup(const char *value)
 {
     size_t len;
     char *copy;
@@ -129,7 +44,7 @@ static char *http_strdup(const char *value)
     return copy;
 }
 
-static void http_free_headers(esp32_mquickjs_http_header_t *headers, size_t header_count)
+void esp32_mquickjs_http_free_headers(esp32_mquickjs_http_header_t *headers, size_t header_count)
 {
     size_t i;
 
@@ -144,7 +59,7 @@ static void http_free_headers(esp32_mquickjs_http_header_t *headers, size_t head
     heap_caps_free(headers);
 }
 
-static void http_free_request(esp32_mquickjs_http_request_t *request)
+void esp32_mquickjs_http_free_request(esp32_mquickjs_http_request_t *request)
 {
     if (request == NULL) {
         return;
@@ -153,11 +68,12 @@ static void http_free_request(esp32_mquickjs_http_request_t *request)
     heap_caps_free(request->url);
     heap_caps_free(request->method);
     heap_caps_free(request->body);
-    http_free_headers(request->headers, request->header_count);
+    esp32_mquickjs_http_free_headers(request->headers, request->header_count);
     memset(request, 0, sizeof(*request));
 }
 
-static int http_clone_request(const esp32_mquickjs_http_request_t *source, esp32_mquickjs_http_request_t *target)
+int esp32_mquickjs_http_clone_request(const esp32_mquickjs_http_request_t *source,
+                                      esp32_mquickjs_http_request_t *target)
 {
     size_t i;
 
@@ -169,19 +85,19 @@ static int http_clone_request(const esp32_mquickjs_http_request_t *source, esp32
     target->timeout_ms = source->timeout_ms;
 
     if (source->url != NULL) {
-        target->url = http_strdup(source->url);
+        target->url = esp32_mquickjs_http_strdup(source->url);
         if (target->url == NULL) {
             goto fail;
         }
     }
     if (source->method != NULL) {
-        target->method = http_strdup(source->method);
+        target->method = esp32_mquickjs_http_strdup(source->method);
         if (target->method == NULL) {
             goto fail;
         }
     }
     if (source->body != NULL) {
-        target->body = http_strdup(source->body);
+        target->body = esp32_mquickjs_http_strdup(source->body);
         if (target->body == NULL) {
             goto fail;
         }
@@ -192,8 +108,8 @@ static int http_clone_request(const esp32_mquickjs_http_request_t *source, esp32
             goto fail;
         }
         for (i = 0; i < source->header_count; ++i) {
-            target->headers[i].key = http_strdup(source->headers[i].key);
-            target->headers[i].value = http_strdup(source->headers[i].value);
+            target->headers[i].key = esp32_mquickjs_http_strdup(source->headers[i].key);
+            target->headers[i].value = esp32_mquickjs_http_strdup(source->headers[i].value);
             if (target->headers[i].key == NULL || target->headers[i].value == NULL) {
                 target->header_count = i + 1;
                 goto fail;
@@ -205,11 +121,11 @@ static int http_clone_request(const esp32_mquickjs_http_request_t *source, esp32
     return 0;
 
 fail:
-    http_free_request(target);
+    esp32_mquickjs_http_free_request(target);
     return -1;
 }
 
-static void http_free_response(esp32_mquickjs_http_response_t *response)
+void esp32_mquickjs_http_free_response(esp32_mquickjs_http_response_t *response)
 {
     if (response == NULL) {
         return;
@@ -218,38 +134,15 @@ static void http_free_response(esp32_mquickjs_http_response_t *response)
     heap_caps_free(response->url);
     heap_caps_free(response->status_text);
     heap_caps_free(response->body);
-    http_free_headers(response->headers, response->header_count);
+    esp32_mquickjs_http_free_headers(response->headers, response->header_count);
     heap_caps_free(response);
 }
 
-static bool http_init_state(void)
-{
-    int i;
-
-    if (s_http_state.initialized) {
-        return true;
-    }
-
-    memset(&s_http_state, 0, sizeof(s_http_state));
-    s_http_state.queue = xQueueCreate(ESP32_MQUICKJS_HTTP_ASYNC_QUEUE_LEN,
-                                      sizeof(esp32_mquickjs_http_async_event_t));
-    s_http_state.lock = xSemaphoreCreateMutex();
-    if (s_http_state.queue == NULL || s_http_state.lock == NULL) {
-        return false;
-    }
-
-    for (i = 0; i < ESP32_MQUICKJS_HTTP_MAX_ASYNC_REQUESTS; ++i) {
-        s_http_state.slots[i].slot_id = (uint8_t)i;
-    }
-    s_http_state.initialized = true;
-    return true;
-}
-
-static JSValue http_call_function(JSContext *ctx,
-                                  JSValue func,
-                                  JSValue this_val,
-                                  int argc,
-                                  JSValue *argv)
+JSValue esp32_mquickjs_http_call_function(JSContext *ctx,
+                                          JSValue func,
+                                          JSValue this_val,
+                                          int argc,
+                                          JSValue *argv)
 {
     int i;
 
@@ -427,8 +320,8 @@ static esp_err_t http_capture_add_header(esp32_mquickjs_http_capture_t *capture,
     }
 
     header = &capture->response->headers[capture->response->header_count++];
-    header->key = http_strdup(key);
-    header->value = http_strdup(value);
+    header->key = esp32_mquickjs_http_strdup(key);
+    header->value = esp32_mquickjs_http_strdup(value);
     if (header->key == NULL || header->value == NULL) {
         heap_caps_free(header->key);
         heap_caps_free(header->value);
@@ -477,20 +370,20 @@ static esp32_mquickjs_http_response_t *http_alloc_response(void)
         return NULL;
     }
 
-    response->status_text = http_strdup("");
-    response->body = http_strdup("");
+    response->status_text = esp32_mquickjs_http_strdup("");
+    response->body = esp32_mquickjs_http_strdup("");
     if (response->status_text == NULL || response->body == NULL) {
-        http_free_response(response);
+        esp32_mquickjs_http_free_response(response);
         return NULL;
     }
 
     return response;
 }
 
-static esp32_mquickjs_http_response_t *http_perform_request(const esp32_mquickjs_http_request_t *request,
-                                                            esp_err_t *out_err,
-                                                            char *error_text,
-                                                            size_t error_text_size)
+esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_mquickjs_http_request_t *request,
+                                                                    esp_err_t *out_err,
+                                                                    char *error_text,
+                                                                    size_t error_text_size)
 {
     esp_http_client_config_t config = {0};
     esp_http_client_handle_t client = NULL;
@@ -538,7 +431,7 @@ static esp32_mquickjs_http_response_t *http_perform_request(const esp32_mquickjs
     if (client == NULL) {
         *out_err = ESP_FAIL;
         snprintf(error_text, error_text_size, "esp_http_client_init() failed");
-        http_free_response(response);
+        esp32_mquickjs_http_free_response(response);
         return NULL;
     }
 
@@ -550,7 +443,7 @@ static esp32_mquickjs_http_response_t *http_perform_request(const esp32_mquickjs
             snprintf(error_text, error_text_size, "failed to set request header: %s",
                      request->headers[i].key);
             esp_http_client_cleanup(client);
-            http_free_response(response);
+            esp32_mquickjs_http_free_response(response);
             return NULL;
         }
     }
@@ -567,7 +460,7 @@ static esp32_mquickjs_http_response_t *http_perform_request(const esp32_mquickjs
                          "failed to set default Content-Type for request body: %s",
                          esp_err_to_name(body_err));
                 esp_http_client_cleanup(client);
-                http_free_response(response);
+                esp32_mquickjs_http_free_response(response);
                 return NULL;
             }
         }
@@ -580,7 +473,7 @@ static esp32_mquickjs_http_response_t *http_perform_request(const esp32_mquickjs
                      "failed to set request body: %s",
                      esp_err_to_name(body_err));
             esp_http_client_cleanup(client);
-            http_free_response(response);
+            esp32_mquickjs_http_free_response(response);
             return NULL;
         }
     }
@@ -590,7 +483,7 @@ static esp32_mquickjs_http_response_t *http_perform_request(const esp32_mquickjs
         snprintf(error_text, error_text_size, "esp_http_client_perform() failed: %s",
                  esp_err_to_name(*out_err));
         esp_http_client_cleanup(client);
-        http_free_response(response);
+        esp32_mquickjs_http_free_response(response);
         return NULL;
     }
     if (capture.error != ESP_OK) {
@@ -598,39 +491,39 @@ static esp32_mquickjs_http_response_t *http_perform_request(const esp32_mquickjs
         snprintf(error_text, error_text_size, "failed to capture HTTP response: %s",
                  esp_err_to_name(capture.error));
         esp_http_client_cleanup(client);
-        http_free_response(response);
+        esp32_mquickjs_http_free_response(response);
         return NULL;
     }
 
     response->status = esp_http_client_get_status_code(client);
     response->ok = response->status >= 200 && response->status < 300;
     heap_caps_free(response->status_text);
-    response->status_text = http_strdup(http_status_text(response->status));
+    response->status_text = esp32_mquickjs_http_strdup(http_status_text(response->status));
     if (response->status_text == NULL) {
         *out_err = ESP_ERR_NO_MEM;
         snprintf(error_text, error_text_size, "out of memory while storing status text");
         esp_http_client_cleanup(client);
-        http_free_response(response);
+        esp32_mquickjs_http_free_response(response);
         return NULL;
     }
 
     if (esp_http_client_get_url(client, resolved_url, sizeof(resolved_url)) == ESP_OK) {
-        response->url = http_strdup(resolved_url);
+        response->url = esp32_mquickjs_http_strdup(resolved_url);
         if (response->url == NULL) {
             *out_err = ESP_ERR_NO_MEM;
             snprintf(error_text, error_text_size, "out of memory while storing response url");
             esp_http_client_cleanup(client);
-            http_free_response(response);
+            esp32_mquickjs_http_free_response(response);
             return NULL;
         }
     }
     if (response->url == NULL) {
-        response->url = http_strdup(request->url);
+        response->url = esp32_mquickjs_http_strdup(request->url);
         if (response->url == NULL) {
             *out_err = ESP_ERR_NO_MEM;
             snprintf(error_text, error_text_size, "out of memory while storing response url");
             esp_http_client_cleanup(client);
-            http_free_response(response);
+            esp32_mquickjs_http_free_response(response);
             return NULL;
         }
     }
@@ -639,8 +532,8 @@ static esp32_mquickjs_http_response_t *http_perform_request(const esp32_mquickjs
     return response;
 }
 
-static JSValue http_make_response_object(JSContext *ctx,
-                                         const esp32_mquickjs_http_response_t *response)
+JSValue esp32_mquickjs_http_make_response_object(JSContext *ctx,
+                                                 const esp32_mquickjs_http_response_t *response)
 {
     JSGCRef global_ref;
     JSGCRef headers_ref;
@@ -789,7 +682,7 @@ static int http_parse_headers(JSContext *ctx,
         goto done;
     }
 
-    *keys_array = http_call_function(ctx, *keys_fn, *object_ctor, 1, &headers_value);
+    *keys_array = esp32_mquickjs_http_call_function(ctx, *keys_fn, *object_ctor, 1, &headers_value);
     if (JS_IsException(*keys_array)) {
         goto done;
     }
@@ -853,8 +746,8 @@ static int http_parse_headers(JSContext *ctx,
             goto done;
         }
 
-        headers[header_count].key = http_strdup(key);
-        headers[header_count].value = http_strdup(value);
+        headers[header_count].key = esp32_mquickjs_http_strdup(key);
+        headers[header_count].value = esp32_mquickjs_http_strdup(value);
         if (headers[header_count].key == NULL || headers[header_count].value == NULL) {
             JS_PopGCRef(ctx, &value_ref);
             JS_PopGCRef(ctx, &key_ref);
@@ -873,7 +766,7 @@ static int http_parse_headers(JSContext *ctx,
     result = 0;
 
 done:
-    http_free_headers(headers, (size_t)header_count);
+    esp32_mquickjs_http_free_headers(headers, (size_t)header_count);
     JS_PopGCRef(ctx, &length_ref);
     JS_PopGCRef(ctx, &keys_array_ref);
     JS_PopGCRef(ctx, &keys_ref);
@@ -932,7 +825,7 @@ static int http_parse_options(JSContext *ctx,
             goto fail;
         }
         heap_caps_free(request->method);
-        request->method = http_strdup(method);
+        request->method = esp32_mquickjs_http_strdup(method);
         if (request->method == NULL) {
             JS_ThrowOutOfMemory(ctx);
             goto fail;
@@ -962,7 +855,7 @@ static int http_parse_options(JSContext *ctx,
             if (body == NULL) {
                 goto fail;
             }
-            request->body = http_strdup(body);
+            request->body = esp32_mquickjs_http_strdup(body);
             if (request->body == NULL) {
                 JS_ThrowOutOfMemory(ctx);
                 goto fail;
@@ -1001,13 +894,13 @@ static JSValue http_fetch_sync(JSContext *ctx,
     esp_err_t err;
     JSValue result;
 
-    response = http_perform_request(request, &err, error_text, sizeof(error_text));
+    response = esp32_mquickjs_http_perform_request(request, &err, error_text, sizeof(error_text));
     if (response == NULL) {
         return JS_ThrowInternalError(ctx, "%s", error_text);
     }
 
-    result = http_make_response_object(ctx, response);
-    http_free_response(response);
+    result = esp32_mquickjs_http_make_response_object(ctx, response);
+    esp32_mquickjs_http_free_response(response);
     return result;
 }
 
@@ -1056,8 +949,8 @@ static int http_parse_request_object(JSContext *ctx,
         goto fail;
     }
 
-    request->method = http_strdup(method);
-    request->url = http_strdup(url);
+    request->method = esp32_mquickjs_http_strdup(method);
+    request->url = esp32_mquickjs_http_strdup(url);
     request->timeout_ms = ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS;
     if (request->method == NULL || request->url == NULL) {
         JS_ThrowOutOfMemory(ctx);
@@ -1087,7 +980,7 @@ static int http_parse_request_object(JSContext *ctx,
             if (body == NULL) {
                 goto fail;
             }
-            request->body = http_strdup(body);
+            request->body = esp32_mquickjs_http_strdup(body);
             if (request->body == NULL) {
                 JS_ThrowOutOfMemory(ctx);
                 goto fail;
@@ -1114,115 +1007,62 @@ fail:
     return -1;
 }
 
-static void http_async_cleanup_slot(JSContext *ctx, esp32_mquickjs_http_async_slot_t *slot)
+int esp32_mquickjs_http_build_request_from_args(JSContext *ctx,
+                                                int argc,
+                                                JSValue *argv,
+                                                esp32_mquickjs_http_request_t *request)
 {
-    if (slot == NULL || !slot->allocated) {
-        return;
+    JSCStringBuf url_buf;
+    const char *url;
+    JSValue options = JS_UNDEFINED;
+
+    if (argc < 1 || argc > 2) {
+        JS_ThrowTypeError(ctx, "fetch(input, options?) expects a URL string or Request");
+        return -1;
     }
 
-    JS_DeleteGCRef(ctx, &slot->callback);
-    http_free_request(&slot->request);
-    slot->allocated = false;
-}
-
-static void http_worker_task(void *opaque)
-{
-    esp32_mquickjs_http_worker_args_t *args = opaque;
-    esp32_mquickjs_http_async_slot_t *slot;
-    esp32_mquickjs_http_async_event_t event = {0};
-
-    if (args == NULL) {
-        vTaskDelete(NULL);
-        return;
-    }
-
-    slot = args->slot;
-    event.slot_id = slot->slot_id;
-    event.generation = args->generation;
-    event.response = http_perform_request(&slot->request,
-                                          &event.err,
-                                          event.error_text,
-                                          sizeof(event.error_text));
-    if (event.err == ESP_OK && event.response == NULL) {
-        event.err = ESP_FAIL;
-        snprintf(event.error_text, sizeof(event.error_text), "fetch worker returned no response");
-    }
-
-    heap_caps_free(args);
-    xQueueSend(s_http_state.queue, &event, portMAX_DELAY);
-    esp32_mquickjs_notify_activity(esp32_mquickjs_get_active_runtime());
-    vTaskDelete(NULL);
-}
-
-static JSValue http_fetch_async(JSContext *ctx,
-                                const esp32_mquickjs_http_request_t *request,
-                                JSValue callback)
-{
-    esp32_mquickjs_http_async_slot_t *slot = NULL;
-    esp32_mquickjs_http_worker_args_t *worker_args = NULL;
-    JSValue *callback_ref;
-    int i;
-
-    if (!http_init_state()) {
-        return JS_ThrowOutOfMemory(ctx);
-    }
-    if (!JS_IsFunction(ctx, callback)) {
-        return JS_ThrowTypeError(ctx, "fetch(url, callback) expects a function");
-    }
-
-    http_lock();
-    for (i = 0; i < ESP32_MQUICKJS_HTTP_MAX_ASYNC_REQUESTS; ++i) {
-        if (!s_http_state.slots[i].allocated) {
-            slot = &s_http_state.slots[i];
-            slot->allocated = true;
-            slot->generation++;
-            break;
+    if (argc >= 2) {
+        if (JS_IsFunction(ctx, argv[1])) {
+            JS_ThrowTypeError(ctx,
+                              "fetch(input, options?) does not accept a callback; use http.fetchAsync(input, callback)");
+            return -1;
         }
-    }
-    http_unlock();
-
-    if (slot == NULL) {
-        return JS_ThrowInternalError(ctx, "too many asynchronous fetch requests");
+        options = argv[1];
     }
 
-    callback_ref = JS_AddGCRef(ctx, &slot->callback);
-    *callback_ref = callback;
-    if (http_clone_request(request, &slot->request) != 0) {
-        http_async_cleanup_slot(ctx, slot);
-        return JS_ThrowOutOfMemory(ctx);
-    }
-    worker_args = heap_caps_calloc(1, sizeof(*worker_args), MALLOC_CAP_8BIT);
-    if (worker_args == NULL) {
-        http_async_cleanup_slot(ctx, slot);
-        return JS_ThrowOutOfMemory(ctx);
+    if (esp32_mquickjs_is_request_object(ctx, argv[0])) {
+        if (!JS_IsUndefined(options) && !JS_IsNull(options)) {
+            JS_ThrowTypeError(ctx, "fetch(request) does not accept a separate options object");
+            return -1;
+        }
+        return http_parse_request_object(ctx, argv[0], request);
     }
 
-    worker_args->slot = slot;
-    worker_args->generation = slot->generation;
-    if (xTaskCreate(http_worker_task,
-                    "http_fetch",
-                    ESP32_MQUICKJS_HTTP_TASK_STACK_SIZE,
-                    worker_args,
-                    tskIDLE_PRIORITY + 4,
-                    NULL) != pdPASS) {
-        heap_caps_free(worker_args);
-        http_async_cleanup_slot(ctx, slot);
-        return JS_ThrowInternalError(ctx, "failed to start fetch worker task");
+    if (!JS_IsString(ctx, argv[0])) {
+        JS_ThrowTypeError(ctx, "fetch(input, options?) expects a URL string or Request");
+        return -1;
     }
 
-    return JS_UNDEFINED;
+    url = JS_ToCString(ctx, argv[0], &url_buf);
+    if (url == NULL) {
+        return -1;
+    }
+
+    request->url = esp32_mquickjs_http_strdup(url);
+    request->method = esp32_mquickjs_http_strdup("GET");
+    request->timeout_ms = ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS;
+    if (request->url == NULL || request->method == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        return -1;
+    }
+
+    return http_parse_options(ctx, options, request);
 }
 
 bool esp32_mquickjs_init_http_runtime(JSContext *ctx,
                                       esp32_mquickjs_runtime_t *runtime)
 {
-    (void)ctx;
-
-    if (!esp32_mquickjs_register_async_poller(runtime, http_async_poller, NULL)) {
-        JS_ThrowInternalError(ctx, "failed to register http async poller");
-        return false;
-    }
-    return true;
+    return esp32_mquickjs_init_http_async_runtime(ctx, runtime);
 }
 
 JSValue js_http_get_default_timeout_ms(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -1236,141 +1076,18 @@ JSValue js_http_get_default_timeout_ms(JSContext *ctx, JSValue *this_val, int ar
 JSValue js_http_fetch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     esp32_mquickjs_http_request_t request = {0};
-    JSCStringBuf url_buf;
-    const char *url;
-    JSValue options = JS_UNDEFINED;
-    JSValue callback = JS_UNDEFINED;
-    bool is_async = false;
+    JSValue result;
 
     (void)this_val;
 
-    if (argc >= 2) {
-        if (JS_IsFunction(ctx, argv[1])) {
-            callback = argv[1];
-            is_async = true;
-        } else {
-            options = argv[1];
-        }
-    }
-    if (argc >= 3) {
-        if (!JS_IsFunction(ctx, argv[2])) {
-            http_free_request(&request);
-            return JS_ThrowTypeError(ctx, "fetch(url, options, callback) expects a callback function");
-        }
-        callback = argv[2];
-        is_async = true;
+    if (esp32_mquickjs_http_build_request_from_args(ctx, argc, argv, &request) != 0) {
+        esp32_mquickjs_http_free_request(&request);
+        return JS_EXCEPTION;
     }
 
-    if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "fetch(input, options?, callback?) expects a URL string or Request");
-    }
-
-    if (esp32_mquickjs_is_request_object(ctx, argv[0])) {
-        if (!JS_IsUndefined(options) && !JS_IsNull(options)) {
-            http_free_request(&request);
-            return JS_ThrowTypeError(ctx, "fetch(request, callback?) does not accept a separate options object");
-        }
-        if (http_parse_request_object(ctx, argv[0], &request) != 0) {
-            http_free_request(&request);
-            return JS_EXCEPTION;
-        }
-    } else {
-        if (!JS_IsString(ctx, argv[0])) {
-            return JS_ThrowTypeError(ctx, "fetch(input, options?, callback?) expects a URL string or Request");
-        }
-
-        url = JS_ToCString(ctx, argv[0], &url_buf);
-        if (url == NULL) {
-            return JS_EXCEPTION;
-        }
-
-        request.url = http_strdup(url);
-        request.method = http_strdup("GET");
-        request.timeout_ms = ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS;
-        if (request.url == NULL || request.method == NULL) {
-            http_free_request(&request);
-            return JS_ThrowOutOfMemory(ctx);
-        }
-
-        if (http_parse_options(ctx, options, &request) != 0) {
-            http_free_request(&request);
-            return JS_EXCEPTION;
-        }
-    }
-
-    if (is_async) {
-        JSValue result = http_fetch_async(ctx, &request, callback);
-        if (!JS_IsException(result)) {
-            memset(&request, 0, sizeof(request));
-        }
-        http_free_request(&request);
-        return result;
-    }
-
-    JSValue result = http_fetch_sync(ctx, &request);
-    http_free_request(&request);
+    result = http_fetch_sync(ctx, &request);
+    esp32_mquickjs_http_free_request(&request);
     return result;
-}
-
-static bool http_async_poller(JSContext *ctx,
-                              esp32_mquickjs_runtime_t *runtime,
-                              void *opaque)
-{
-    esp32_mquickjs_http_async_event_t event;
-    bool needs_redraw = false;
-
-    (void)opaque;
-    (void)runtime;
-    if (ctx == NULL || s_http_state.queue == NULL) {
-        return false;
-    }
-
-    while (xQueueReceive(s_http_state.queue, &event, 0) == pdTRUE) {
-        esp32_mquickjs_http_async_slot_t *slot;
-        JSGCRef callback_ref;
-        JSValue *callback_fn;
-        JSValue argv[2];
-        JSValue callback_result;
-
-        if (event.slot_id >= ESP32_MQUICKJS_HTTP_MAX_ASYNC_REQUESTS) {
-            http_free_response(event.response);
-            continue;
-        }
-
-        slot = &s_http_state.slots[event.slot_id];
-        if (!slot->allocated || slot->generation != event.generation) {
-            http_free_response(event.response);
-            continue;
-        }
-
-        callback_fn = JS_PushGCRef(ctx, &callback_ref);
-        *callback_fn = slot->callback.val;
-        http_async_cleanup_slot(ctx, slot);
-
-        if (event.err != ESP_OK) {
-            argv[0] = JS_UNDEFINED;
-            argv[1] = JS_NewString(ctx, event.error_text[0] != '\0' ? event.error_text : esp_err_to_name(event.err));
-        } else {
-            argv[0] = http_make_response_object(ctx, event.response);
-            argv[1] = JS_UNDEFINED;
-            if (JS_IsException(argv[0])) {
-                JS_PopGCRef(ctx, &callback_ref);
-                http_free_response(event.response);
-                return true;
-            }
-        }
-
-        callback_result = http_call_function(ctx, *callback_fn, JS_NULL, 2, argv);
-        if (JS_IsException(callback_result)) {
-            esp32_mquickjs_print_exception(ctx);
-            needs_redraw = true;
-        }
-
-        JS_PopGCRef(ctx, &callback_ref);
-        http_free_response(event.response);
-    }
-
-    return needs_redraw;
 }
 
 #endif

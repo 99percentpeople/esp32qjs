@@ -6,7 +6,7 @@ test("http/network", function () {
 
   if (!wifiStatus.connected) {
     wifiStatus = waitFor(function (resolve, reject) {
-      wifi.connect(cfg.wifiSsid, cfg.wifiPassword, 15000, function (nextStatus, error) {
+      wifi.connectAsync(cfg.wifiSsid, cfg.wifiPassword, 15000, function (nextStatus, error) {
         if (error) {
           reject(error);
           return;
@@ -19,7 +19,7 @@ test("http/network", function () {
   test.ok(wifiStatus.connected, "wifi should be connected before fetch");
 
   response = waitFor(function (resolve, reject) {
-    fetch(cfg.httpUrl, function (nextResponse, error) {
+    http.fetchAsync(cfg.httpUrl, function (nextResponse, error) {
       if (error) {
         reject(error);
         return;

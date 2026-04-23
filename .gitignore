@@ -9,6 +9,7 @@ setup.cfg
 .codex
 .vscode/
 managed_components/
+/components/esp32_mquickjs/generated/
 
 __pycache__/
 *.pyc

@@ -1,5 +1,4 @@
 set(MQUICKJS_DIR "${CMAKE_CURRENT_LIST_DIR}/vendor/mquickjs")
-set(MQUICKJS_GENERATED_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/generated")
 set(MQUICKJS_GENERATED_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(MQUICKJS_HOST_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/host_tools")
 set(MQUICKJS_HOST_TOOL "${MQUICKJS_HOST_BUILD_DIR}/mqjs_stdlib")
@@ -191,25 +190,8 @@ if(NOT CMAKE_SCRIPT_MODE_FILE)
             "${MQUICKJS_STDLIB_HEADER}"
     )
 
-    add_custom_command(
-        OUTPUT
-            "${MQUICKJS_GENERATED_SOURCE_DIR}/mquickjs_atom.h"
-            "${MQUICKJS_GENERATED_SOURCE_DIR}/mqjs_stdlib.h"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${MQUICKJS_GENERATED_SOURCE_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${MQUICKJS_ATOM_HEADER}"
-                "${MQUICKJS_GENERATED_SOURCE_DIR}/mquickjs_atom.h"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${MQUICKJS_STDLIB_HEADER}"
-                "${MQUICKJS_GENERATED_SOURCE_DIR}/mqjs_stdlib.h"
-        DEPENDS mquickjs_generated_headers
-        VERBATIM
-    )
-
     add_custom_target(update_mquickjs_headers
-        DEPENDS
-            "${MQUICKJS_GENERATED_SOURCE_DIR}/mquickjs_atom.h"
-            "${MQUICKJS_GENERATED_SOURCE_DIR}/mqjs_stdlib.h"
+        DEPENDS mquickjs_generated_headers
     )
 endif()
 
@@ -283,6 +265,7 @@ esp32_mquickjs_append_feature_component(
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
     "src/modules/http/esp32_mquickjs_http.c"
+    "src/modules/http/esp32_mquickjs_http_async.c"
     PRIV_REQUIRES
         esp_http_client
         mbedtls
@@ -299,6 +282,7 @@ esp32_mquickjs_append_feature_component(
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     "src/modules/wifi/esp32_mquickjs_wifi.c"
+    "src/modules/wifi/esp32_mquickjs_wifi_async.c"
     PRIV_REQUIRES
         esp_event
         esp_netif
@@ -315,7 +299,6 @@ idf_component_register(
         "${MQUICKJS_DIR}"
     PRIV_INCLUDE_DIRS
         "internal"
-        "${MQUICKJS_GENERATED_SOURCE_DIR}"
         "${MQUICKJS_GENERATED_BINARY_DIR}"
         "${MQUICKJS_DIR}"
     REQUIRES ${ESP32_MQUICKJS_PUBLIC_REQUIRES}
@@ -323,7 +306,7 @@ idf_component_register(
 )
 
 if(NOT CMAKE_SCRIPT_MODE_FILE)
-    add_dependencies(${COMPONENT_LIB} update_mquickjs_headers)
+    add_dependencies(${COMPONENT_LIB} mquickjs_generated_headers)
 endif()
 
 foreach(esp32_mquickjs_feature_config ${ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS})

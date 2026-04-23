@@ -1571,14 +1571,25 @@ def run_js_tests(config: ProjectConfig,
                  modules: tuple[JsTestModule, ...],
                  explicit_module_selection: bool,
                  network_enabled: bool,
+                 flash_firmware_first: bool,
                  flash_fs_first: bool) -> TestStageSummary:
-    """Flash the dedicated test image when needed, then drive JS tests over serial."""
+    """Flash the firmware and dedicated test image when needed, then drive JS tests over serial."""
     summary = TestStageSummary(
         name="JS",
         selection_label="modules",
         selection=tuple(module.name for module in modules),
     )
     js_config = js_test_build_config(config)
+
+    if flash_firmware_first:
+        print("Flashing latest firmware before JS tests", flush=True)
+        try:
+            flash(config, build_first=True)
+        except subprocess.CalledProcessError as exc:
+            summary.status = "failed"
+            summary.note = f"firmware flash exited with code {exc.returncode}"
+            print_test_stage_summary(summary)
+            raise TestStageError(summary, "JS firmware flash failed.") from exc
 
     if flash_fs_first:
         print(f"Flashing JS test LittleFS image from {JS_TEST_FLASH_DATA_DIR}", flush=True)
@@ -1703,6 +1714,8 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
             raise SystemExit("`--module` requires JS scope.")
         if args.network:
             raise SystemExit("`--network` requires JS scope.")
+        if args.no_flash_firmware:
+            raise SystemExit("`--no-flash-firmware` requires JS scope.")
         if args.no_flash_fs:
             raise SystemExit("`--no-flash-fs` requires JS scope.")
 
@@ -1724,6 +1737,7 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
                     resolve_js_modules(args.module),
                     explicit_module_selection=bool(args.module),
                     network_enabled=args.network,
+                    flash_firmware_first=not args.no_flash_firmware,
                     flash_fs_first=not args.no_flash_fs,
                 )
             )
@@ -1867,6 +1881,11 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, Board
         "--network",
         action="store_true",
         help="Enable network-required JS cases inside the wifi/http modules.",
+    )
+    test.add_argument(
+        "--no-flash-firmware",
+        action="store_true",
+        help="Reuse the existing firmware instead of rebuilding and reflashing it before JS tests.",
     )
     test.add_argument(
         "--no-flash-fs",

@@ -19,6 +19,8 @@ test("http/offline", function () {
   var streamPath = "response-stream.txt";
   var streamResponse;
   var entries;
+  var globalFetchError = "";
+  var moduleFetchError = "";
 
   test.equal(headers.get("foo"), "Bar", "headers should normalize names");
   test.ok(headers.has("foo"), "headers.has should find normalized key");
@@ -52,7 +54,23 @@ test("http/offline", function () {
   fs.remove(streamPath);
 
   test.ok(typeof http.fetch === "function", "http.fetch should exist");
+  test.ok(typeof http.fetchAsync === "function", "http.fetchAsync should exist");
+  test.ok(typeof http.async === "undefined", "http.async should not exist");
   test.ok(typeof http.DEFAULT_TIMEOUT_MS === "number", "http timeout constant");
+
+  try {
+    fetch("https://example.com", function () {});
+  } catch (globalFailure) {
+    globalFetchError = globalFailure && globalFailure.message ? globalFailure.message : String(globalFailure);
+  }
+  test.ok(globalFetchError.indexOf("http.fetchAsync") >= 0, "global fetch callback form should direct callers to http.fetchAsync");
+
+  try {
+    http.fetch("https://example.com", function () {});
+  } catch (moduleFailure) {
+    moduleFetchError = moduleFailure && moduleFailure.message ? moduleFailure.message : String(moduleFailure);
+  }
+  test.ok(moduleFetchError.indexOf("http.fetchAsync") >= 0, "http.fetch callback form should direct callers to http.fetchAsync");
 
   return { method: request.method, status: response.status };
 });

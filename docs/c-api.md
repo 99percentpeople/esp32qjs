@@ -14,8 +14,6 @@ This document covers the APIs exported directly by the firmware runtime.
   Create a deferred helper object for callback-style async work.
 - `fetch(input, options?)`
   Run a blocking HTTP request and return a `Response`.
-- `fetch(input, callback)` / `fetch(input, options, callback)`
-  Run an asynchronous HTTP request and call `callback(response, error)` on completion.
 - `load(path)`
   Evaluate a script from LittleFS. Relative paths resolve under `/littlefs`, and paths cannot escape that root.
 - `sleep(ms)` / `delay(ms)`
@@ -48,7 +46,7 @@ Example `index.js`:
 print("[startup] boot script running");
 load("_sys/display.js");
 load("_sys/ui.js");
-wifi.connect("your-ssid", "your-password", function (status, error) {
+wifi.connectAsync("your-ssid", "your-password", function (status, error) {
   print(error === undefined, status && status.ip);
 });
 ```
@@ -74,12 +72,12 @@ setTimeout(function () { d.resolve("ok"); }, 50);
 print(d.wait(1000));
 
 var aps = waitFor(function (resolve, reject, deferred) {
-  wifi.scan(deferred.callback);
+  wifi.scanAsync(deferred.callback);
 }, 10000);
 print(aps.length);
 
 var response = waitFor(function (resolve, reject, deferred) {
-  fetch("https://example.com", deferred.callback);
+  http.fetchAsync("https://example.com", deferred.callback);
 }, 10000);
 print(response.status);
 ```
@@ -641,13 +639,13 @@ Wi-Fi credentials are kept in RAM. Rebooting the board clears the active station
   Return `{ initialized, started, connected, scanning, ssid, hostname, ip, netmask, gateway, lastDisconnectReason, lastDisconnectReasonName }`.
 - `wifi.connect(ssid, password, timeoutMs = wifi.DEFAULT_TIMEOUT_MS)`
   Start station mode, connect to an AP, and return the updated status object.
-- `wifi.connect(ssid, password, callback)` / `wifi.connect(ssid, password, timeoutMs, callback)`
+- `wifi.connectAsync(ssid, password, callback)` / `wifi.connectAsync(ssid, password, timeoutMs, callback)`
   Start station mode without blocking the REPL and call `callback(status, error)` on completion.
 - `wifi.disconnect()`
   Disconnect the station and return the updated status object.
 - `wifi.scan()`
   Run a blocking AP scan and return an array of `{ ssid, bssid, rssi, channel, authMode, hidden }`.
-- `wifi.scan(callback)`
+- `wifi.scanAsync(callback)`
   Start a non-blocking scan and call `callback(results, error)` after the scan completes.
 
 Example:
@@ -656,11 +654,11 @@ Example:
 print(JSON.stringify(wifi.status()));
 const aps = wifi.scan();
 print(aps.length);
-wifi.scan(function (results, error) {
+wifi.scanAsync(function (results, error) {
   print(error === undefined, results.length);
 });
 wifi.connect("your-ssid", "your-password");
-wifi.connect("your-ssid", "your-password", function (status, error) {
+wifi.connectAsync("your-ssid", "your-password", function (status, error) {
   print(error === undefined, status && status.ip);
 });
 print(JSON.stringify(wifi.status()));
@@ -677,8 +675,8 @@ The `http` namespace is exposed when either the HTTP client feature or the HTTP 
   Create a lightweight HTTP server object backed by `esp_http_server`. Exposed only when `esp32.info().features.httpServer` is enabled.
 - `http.fetch(input, options?)`
   Alias of global `fetch(input, options?)`. Exposed only when `esp32.info().features.http` is enabled.
-- `http.fetch(input, callback)` / `http.fetch(input, options, callback)`
-  Alias of the asynchronous `fetch(...)` forms. Exposed only when `esp32.info().features.http` is enabled.
+- `http.fetchAsync(input, callback)` / `http.fetchAsync(input, options, callback)`
+  Run an asynchronous HTTP request and call `callback(response, error)` on completion. Exposed only when `esp32.info().features.http` is enabled.
 
 Supported `fetch` options:
 
@@ -697,7 +695,7 @@ Examples:
 var response = fetch("http://example.com");
 print(response.status, response.ok, response.text().length);
 
-fetch("https://example.com", function (response, error) {
+http.fetchAsync("https://example.com", function (response, error) {
   print(error === undefined, response.status, response.text().length);
 });
 
@@ -712,7 +710,7 @@ Synchronous `fetch(...)` runs on the same JS thread as `http.server(...)`. If yo
 
 ```js
 var response = waitFor(function (resolve, reject, deferred) {
-  fetch("http://" + wifi.status().ip + ":8080/ping", deferred.callback);
+  http.fetchAsync("http://" + wifi.status().ip + ":8080/ping", deferred.callback);
 }, 10000);
 print(response.text());
 ```

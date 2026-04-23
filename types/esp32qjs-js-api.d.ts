@@ -87,12 +87,36 @@ declare namespace ESP32QJS {
     fill(enabled?: boolean): this;
     setPixel(x: number, y: number, enabled: boolean): this;
     getPixel(x: number, y: number): boolean;
-    fillRect(x: number, y: number, width: number, height: number, enabled: boolean): this;
-    drawLine(x0: number, y0: number, x1: number, y1: number, enabled: boolean): this;
-    drawRect(x: number, y: number, width: number, height: number, enabled: boolean): this;
+    fillRect(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      enabled: boolean,
+    ): this;
+    drawLine(
+      x0: number,
+      y0: number,
+      x1: number,
+      y1: number,
+      enabled: boolean,
+    ): this;
+    drawRect(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      enabled: boolean,
+    ): this;
     drawBitmap(x: number, y: number, bitmap: Bitmap, enabled?: boolean): this;
     drawChar(x: number, y: number, ch: string, enabled: boolean): this;
-    drawText(x: number, y: number, text: string, enabled?: boolean, spacing?: number): this;
+    drawText(
+      x: number,
+      y: number,
+      text: string,
+      enabled?: boolean,
+      spacing?: number,
+    ): this;
   }
 
   /**
@@ -107,7 +131,9 @@ declare namespace ESP32QJS {
     [key: string]: unknown;
   }
 
-  type DisplayDriverFactory<T extends Surface = Surface> = (options: DisplayOpenOptions) => T;
+  type DisplayDriverFactory<T extends Surface = Surface> = (
+    options: DisplayOpenOptions,
+  ) => T;
 
   /**
    * Display helper module loaded from `_sys/display.js`.
@@ -127,7 +153,10 @@ declare namespace ESP32QJS {
     readonly MonoSurface: typeof MonoSurface;
     measureText(text: string, style?: TextStyle): TextMetrics;
     listDrivers(): string[];
-    registerDriver<T extends Surface = Surface>(name: string, factory: DisplayDriverFactory<T>): this;
+    registerDriver<T extends Surface = Surface>(
+      name: string,
+      factory: DisplayDriverFactory<T>,
+    ): this;
     create<T extends Surface = Surface>(options: DisplayOpenOptions): T;
     open<T extends Surface = Surface>(options: DisplayOpenOptions): T;
   }
@@ -218,16 +247,62 @@ declare namespace ESP32QJS {
    */
   interface UIModule {
     readonly VERSION: string;
-    node(type: string, props?: Record<string, unknown>, children?: UINode[]): UINode;
-    box(props?: UIBaseProps, ...children: Array<UINode | string | number | boolean | Array<UINode | string | number | boolean>>): UINode<UIBaseProps>;
-    row(props?: UIBaseProps, ...children: Array<UINode | string | number | boolean | Array<UINode | string | number | boolean>>): UINode<UIBaseProps>;
-    column(props?: UIBaseProps, ...children: Array<UINode | string | number | boolean | Array<UINode | string | number | boolean>>): UINode<UIBaseProps>;
-    text(value: string | number | boolean, props?: UITextProps): UINode<UITextProps>;
+    node(
+      type: string,
+      props?: Record<string, unknown>,
+      children?: UINode[],
+    ): UINode;
+    box(
+      props?: UIBaseProps,
+      ...children: Array<
+        | UINode
+        | string
+        | number
+        | boolean
+        | Array<UINode | string | number | boolean>
+      >
+    ): UINode<UIBaseProps>;
+    row(
+      props?: UIBaseProps,
+      ...children: Array<
+        | UINode
+        | string
+        | number
+        | boolean
+        | Array<UINode | string | number | boolean>
+      >
+    ): UINode<UIBaseProps>;
+    column(
+      props?: UIBaseProps,
+      ...children: Array<
+        | UINode
+        | string
+        | number
+        | boolean
+        | Array<UINode | string | number | boolean>
+      >
+    ): UINode<UIBaseProps>;
+    text(
+      value: string | number | boolean,
+      props?: UITextProps,
+    ): UINode<UITextProps>;
     spacer(sizeOrProps: number | UISpacerProps): UINode<UISpacerProps>;
-    padding(insets: number | InsetsInput, child: UINode | string | number | boolean, props?: UIBaseProps): UINode<UIBaseProps>;
+    padding(
+      insets: number | InsetsInput,
+      child: UINode | string | number | boolean,
+      props?: UIBaseProps,
+    ): UINode<UIBaseProps>;
     measure(surface: Surface, node: UINode | string | number | boolean): Size;
-    layout(surface: Surface, node: UINode | string | number | boolean, options?: Partial<Rect>): UINode;
-    render(surface: Surface, node: UINode | string | number | boolean, options?: UIRenderOptions): UINode;
+    layout(
+      surface: Surface,
+      node: UINode | string | number | boolean,
+      options?: Partial<Rect>,
+    ): UINode;
+    render(
+      surface: Surface,
+      node: UINode | string | number | boolean,
+      options?: UIRenderOptions,
+    ): UINode;
   }
 }
 

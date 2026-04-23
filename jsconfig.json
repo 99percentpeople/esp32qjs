@@ -1,9 +1,7 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
-    "module": "ESNext",
     "lib": [
-      "ES2020"
+      "ES5"
     ],
     "allowJs": true,
     "checkJs": false
