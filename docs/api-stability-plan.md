@@ -6,7 +6,7 @@ It is intentionally more opinionated than [docs/c-api.md](/home/zach/esp32qjs/do
 This plan covers:
 
 - built-in C-side host APIs exported by the firmware runtime
-- board/peripheral bindings such as `gpio`, `ledc`, `adc`, and `i2c`
+- board/peripheral bindings such as `gpio`, `ledc`, `adc`, `i2c`, and `spi`
 - transport/runtime helpers such as `wifi`, `http`, timers, and `load(...)`
 
 It does not treat JS-side LittleFS libraries such as `display` and `ui` as firmware ABI. Those should remain versioned JS libraries layered on top of the built-in host APIs.
@@ -15,13 +15,14 @@ It does not treat JS-side LittleFS libraries such as `display` and `ui` as firmw
 
 The stable API should satisfy these rules:
 
-- Module names stay small and literal. Prefer raw ESP-IDF or platform names such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, `wifi`, `http`, `esp32`, `fs`.
+- Module names stay small and literal. Prefer raw ESP-IDF or platform names such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `wifi`, `http`, `esp32`, `fs`.
 - Built-in host APIs stay low-level. Board-independent drivers, widgets, protocol stacks, debounce logic, animation helpers, and other policy belong in JavaScript.
 - Additive change is preferred. Once a module shape is frozen, new fields and methods may be added, but existing names and semantics should not be renamed or weakened.
 - Host modules should be board-selectable features. Each optional module should be enabled or disabled by a `CONFIG_...` feature macro and chosen per board profile under `configs/boards/<board>/sdkconfig.defaults`.
 - Compiled feature sets should be discoverable from JS in one stable place such as `esp32.info().features`, instead of forcing user scripts to probe globals with `typeof`.
 - Mutating peripheral calls should return state objects when that improves observability, but status objects must reflect real or intentionally tracked state, not guessed state.
 - Asynchronous callbacks from ISR or background tasks must always be bridged back onto the JS thread.
+- Synchronous and asynchronous variants should use distinct public names. Do not overload one function name so a callback parameter silently switches it from sync to async behavior.
 
 ## Stability Levels
 
@@ -154,11 +155,11 @@ Built-in modules and types currently in scope:
 - Global helpers: `help`, `load`, `defer`, `waitFor`, `sleep`, `delay`, `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`, `gc`
 - Data/runtime types: `Headers`, `Request`, `Response`, `Stream`
 - Filesystem/runtime modules: `fs`, `esp32`
-- Peripheral modules: `gpio`, `ledc`, `adc`, `dac`, `i2c`
+- Peripheral modules: `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`
 - Connectivity modules: `wifi`, `http`, `HttpServer`, `StaticFileHandler`
 - JS-side libraries outside the firmware ABI: `display`, `ui`
 
-In the long-term plan, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `wifi`, and `http` should all be treated as optional host features rather than unconditional globals.
+In the long-term plan, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `wifi`, and `http` should all be treated as optional host features rather than unconditional globals.
 
 ## Freeze Principles By Area
 
@@ -272,7 +273,7 @@ Intentional non-goals:
 
 ### `ledc`
 
-Status: `Adjust before freeze`
+Status: `Adjusted`
 
 The module is correctly placed as a low-level PWM timer/channel binding, but two parts should be tightened before it is considered frozen.
 
@@ -346,14 +347,14 @@ What is already good:
 - Raw address + read/write operations are enough for JS-side device drivers.
 - `scan()` is practical for REPL debugging.
 
-What should change before freeze:
+What should stay intentional:
 
-- The current implementation is a single global bus model. Long-term stable API should be able to represent more than one bus instance cleanly.
-- The current `add device -> transact -> remove device` flow on every call is simple, but it hardcodes a short-lived device model into the runtime.
+- The runtime now uses a bus-object model instead of a single global singleton, and future transport modules should follow that direction.
+- The current `add device -> transact -> remove device` flow on every call is still acceptable for the first stable raw I2C surface, but it should remain an internal detail rather than leaking into the JS API shape.
 
 Recommended stable target:
 
-- Move to a bus-object model before freezing:
+- Keep the bus-object model as the stable baseline:
 
 ```js
 var bus = i2c.open({
@@ -371,6 +372,7 @@ bus.close();
 
 - Keep the top-level `i2c` module as the factory and constants container.
 - Let `open(...)` return an `I2CBus` object instead of only mutating one global singleton.
+- Keep explicit `close()` as the primary lifecycle boundary even if the runtime also uses GC finalizers as a fallback to release leaked native handles.
 - Gate the module behind `FEATURE_I2C`.
 
 Recommended stable `I2CBus` methods:
@@ -387,6 +389,29 @@ Intentional non-goals:
 - no register map helpers
 - no sensor drivers
 - no device cache abstraction at the JS API layer unless later proven necessary
+
+### `spi`
+
+Status: `Adjust before freeze`
+
+The first version should deliberately mirror the I2C direction: one top-level factory module, one bus object, and one device object. That keeps the transport layer consistent before higher-level device protocols are added in JS.
+
+Recommended stable target:
+
+- Keep the top-level `spi` module as the factory and constants container.
+- Let `spi.openBus(options?)` return an `SPIBus`, using board/profile default pin constants when no pin override is supplied.
+- Let `SPIBus.openDevice(...)` return an `SPIDevice`.
+- Keep the first stable surface synchronous and explicit:
+  `SPIDevice.transfer(...)`, `SPIDevice.write(...)`, `SPIDevice.read(...)`
+- Keep explicit `close()` as the primary lifecycle boundary on both `SPIBus` and `SPIDevice`, even if the runtime also uses GC finalizers as a fallback.
+- Gate the module behind `FEATURE_SPI`.
+- Keep same-board loopback test coverage available through the remote test harness so SPI data-path regressions are caught without requiring a dedicated SPI peripheral.
+
+Intentional non-goals for the first stable SPI layer:
+
+- no command/address phase helpers
+- no queued async transactions
+- no protocol-specific flash/display helpers in the native layer
 
 ### `dac`
 
@@ -464,7 +489,7 @@ Status: `Adjust before freeze`
 What is good:
 
 - `status()`, `scan()`, `connect()`, `disconnect()` are the right primitives.
-- Both sync and callback forms are useful on embedded JS runtimes.
+- Both sync and callback-driven async forms are useful on embedded JS runtimes.
 - Async callbacks are already bridged properly to the JS thread.
 
 What should be tightened:
@@ -472,6 +497,7 @@ What should be tightened:
 - `wifi.status()` should remain the single authoritative status shape.
 - Async callback result ordering should stay consistent across all methods:
   `callback(result, error)`.
+- Keep sync and async entrypoints intentionally separate. `wifi.scan()` and `wifi.connect(...)` should remain synchronous only, while `wifi.scanAsync(...)` and `wifi.connectAsync(...)` carry the callback-driven async behavior.
 - Any future reconnect, AP mode, hostname mutation, or event subscription work should be introduced carefully, not mixed into the basic station API casually.
 
 Recommended stable baseline:
@@ -479,10 +505,10 @@ Recommended stable baseline:
 - `DEFAULT_TIMEOUT_MS`
 - `status()`
 - `scan()`
-- `scan(callback)`
+- `scanAsync(callback)`
 - `connect(ssid, password, timeoutMs?)`
-- `connect(ssid, password, callback)`
-- `connect(ssid, password, timeoutMs, callback)`
+- `connectAsync(ssid, password, callback)`
+- `connectAsync(ssid, password, timeoutMs, callback)`
 - `disconnect()`
 - Gate the module behind `FEATURE_WIFI`.
 
@@ -498,13 +524,16 @@ What is good:
 What should be tightened:
 
 - Keep the surface intentionally smaller than browser Fetch or Express.
+- Keep the embedded API explicitly split by function name: synchronous transport stays on `fetch(...)` / `http.fetch(...)`, and callback-driven async transport stays on `http.fetchAsync(...)`.
+- Do not overload `fetch(...)` with an optional callback that changes its execution model.
 - Decide that this is a callback/sync embedded API, not a promise-based compatibility layer.
 - Server routing and static file helpers should remain explicit, not auto-magic.
 
 Recommended stable baseline:
 
-- `fetch(url, init?, callback?)`
+- `fetch(url, init?)`
 - `http.fetch(...)` as the same transport primitive
+- `http.fetchAsync(input, callback)` / `http.fetchAsync(input, options, callback)`
 - `http.server(options?)`
 - `http.staticFileHandler(root)`
 - `HttpServer.start()`, `stop()`
@@ -548,7 +577,7 @@ Recommended order for stabilization:
 1. Freeze now:
    `help/load/defer/waitFor/timers`, `fs`, `Stream`, `Headers`, `Request`, `Response`, `esp32`, `gpio`, `adc`
 2. Adjust before freeze:
-   `ledc`, `dac`, `i2c`, `wifi`, `http`
+   `ledc`, `dac`, `i2c`, `spi`, `wifi`, `http`
 
 ## Immediate Next Steps
 
@@ -557,7 +586,8 @@ Recommended implementation order from this plan:
 1. Add feature `Kconfig` switches for all optional modules and wire board defaults through `configs/boards/<board>/sdkconfig.defaults`.
 2. Extend `esp32.info()` with a stable `features` object.
 3. Refactor `i2c` to a bus-object model.
-4. Tighten `ledc` status semantics so status objects never imply configuration that did not happen.
-5. Audit `wifi` and `http` callback/result conventions and lock them down.
-6. Tighten the `dac` status and lifecycle semantics only as needed, while keeping higher-level waveform helpers out of the native layer.
-7. Once those are done, refresh [docs/c-api.md](/home/zach/esp32qjs/docs/c-api.md) so the descriptive reference matches the stabilized design.
+4. Add `spi` with the same bus/device object model and explicit synchronous transaction methods.
+5. Tighten `ledc` status semantics so status objects never imply configuration that did not happen.
+6. Lock down the `wifi` and `http` sync/async split so callback-driven async behavior always uses distinct names such as `scanAsync`, `connectAsync`, and `fetchAsync`, while keeping `callback(result, error)` ordering consistent.
+7. Tighten the `dac` status and lifecycle semantics only as needed, while keeping higher-level waveform helpers out of the native layer.
+8. Once those are done, refresh [docs/c-api.md](/home/zach/esp32qjs/docs/c-api.md) so the descriptive reference matches the stabilized design.

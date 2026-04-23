@@ -35,7 +35,7 @@ The built-in driver name is `ssd1306`.
 Supported `options` fields:
 
 - `sda`, `scl`, `freqHz`, `timeoutMs`, `internalPullup`
-  Passed through to `i2c.open(...)` when the bus needs to be configured.
+  Passed through to `i2c.open(...)` when the driver needs to configure or reopen its internal `I2CBus` handle.
 - `address`
   SSD1306 I2C address, default `0x3c`.
 - `width`, `height`

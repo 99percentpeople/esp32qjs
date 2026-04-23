@@ -11,7 +11,10 @@
 #define JS_CLASS_STREAM (JS_CLASS_USER + 4)
 #define JS_CLASS_HTTP_SERVER (JS_CLASS_USER + 5)
 #define JS_CLASS_STATIC_FILE_HANDLER (JS_CLASS_USER + 6)
-#define JS_CLASS_COUNT (JS_CLASS_USER + 7)
+#define JS_CLASS_I2C_BUS (JS_CLASS_USER + 7)
+#define JS_CLASS_SPI_BUS (JS_CLASS_USER + 8)
+#define JS_CLASS_SPI_DEVICE (JS_CLASS_USER + 9)
+#define JS_CLASS_COUNT (JS_CLASS_USER + 10)
 
 #define js_global_object js_global_object_base
 #define js_c_function_decl js_c_function_decl_base
@@ -256,23 +259,74 @@ static const JSClassDef js_esp32_obj =
     JS_OBJECT_DEF("esp32", js_esp32);
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_I2C
+static const JSPropDef js_i2c_bus_proto[] = {
+    JS_CFUNC_DEF("close", 0, js_i2c_bus_close),
+    JS_CFUNC_DEF("status", 0, js_i2c_bus_status),
+    JS_CFUNC_DEF("scan", 0, js_i2c_bus_scan),
+    JS_CFUNC_DEF("write", 2, js_i2c_bus_write),
+    JS_CFUNC_DEF("read", 2, js_i2c_bus_read),
+    JS_CFUNC_DEF("writeRead", 3, js_i2c_bus_writeRead),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_i2c_bus_class =
+    JS_CLASS_DEF("I2CBus", 0, js_i2c_bus_constructor, JS_CLASS_I2C_BUS, NULL, js_i2c_bus_proto, NULL, js_i2c_bus_finalizer);
+
 static const JSPropDef js_i2c[] = {
     JS_CGETSET_DEF("DEFAULT_SDA", js_i2c_get_default_sda, NULL),
     JS_CGETSET_DEF("DEFAULT_SCL", js_i2c_get_default_scl, NULL),
     JS_CGETSET_DEF("DEFAULT_FREQ_HZ", js_i2c_get_default_freq_hz, NULL),
     JS_CGETSET_DEF("DEFAULT_TIMEOUT_MS", js_i2c_get_default_timeout_ms, NULL),
     JS_CFUNC_DEF("open", 1, js_i2c_open),
-    JS_CFUNC_DEF("close", 0, js_i2c_close),
-    JS_CFUNC_DEF("status", 0, js_i2c_status),
-    JS_CFUNC_DEF("scan", 0, js_i2c_scan),
-    JS_CFUNC_DEF("write", 2, js_i2c_write),
-    JS_CFUNC_DEF("read", 2, js_i2c_read),
-    JS_CFUNC_DEF("writeRead", 3, js_i2c_writeRead),
     JS_PROP_END,
 };
 
 static const JSClassDef js_i2c_obj =
     JS_OBJECT_DEF("i2c", js_i2c);
+#endif
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_SPI
+static const JSPropDef js_spi_bus_proto[] = {
+    JS_CFUNC_DEF("close", 0, js_spi_bus_close),
+    JS_CFUNC_DEF("status", 0, js_spi_bus_status),
+    JS_CFUNC_DEF("openDevice", 1, js_spi_bus_open_device),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_spi_bus_class =
+    JS_CLASS_DEF("SPIBus", 0, js_spi_bus_constructor, JS_CLASS_SPI_BUS, NULL, js_spi_bus_proto, NULL, js_spi_bus_finalizer);
+
+static const JSPropDef js_spi_device_proto[] = {
+    JS_CFUNC_DEF("close", 0, js_spi_device_close),
+    JS_CFUNC_DEF("status", 0, js_spi_device_status),
+    JS_CFUNC_DEF("transfer", 1, js_spi_device_transfer),
+    JS_CFUNC_DEF("write", 1, js_spi_device_write),
+    JS_CFUNC_DEF("read", 2, js_spi_device_read),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_spi_device_class =
+    JS_CLASS_DEF("SPIDevice", 0, js_spi_device_constructor, JS_CLASS_SPI_DEVICE, NULL, js_spi_device_proto, NULL, js_spi_device_finalizer);
+
+static const JSPropDef js_spi[] = {
+    JS_CGETSET_DEF("HOST_2", js_spi_get_host_2, NULL),
+#if CONFIG_SOC_SPI_PERIPH_NUM > 2
+    JS_CGETSET_DEF("HOST_3", js_spi_get_host_3, NULL),
+#endif
+    JS_CGETSET_DEF("DEFAULT_HOST", js_spi_get_default_host, NULL),
+    JS_CGETSET_DEF("DEFAULT_SCLK", js_spi_get_default_sclk, NULL),
+    JS_CGETSET_DEF("DEFAULT_MOSI", js_spi_get_default_mosi, NULL),
+    JS_CGETSET_DEF("DEFAULT_MISO", js_spi_get_default_miso, NULL),
+    JS_CGETSET_DEF("DEFAULT_CS", js_spi_get_default_cs, NULL),
+    JS_CGETSET_DEF("DEFAULT_FREQ_HZ", js_spi_get_default_freq_hz, NULL),
+    JS_CGETSET_DEF("DEFAULT_QUEUE_SIZE", js_spi_get_default_queue_size, NULL),
+    JS_CGETSET_DEF("DEFAULT_MAX_TRANSFER_SIZE", js_spi_get_default_max_transfer_size, NULL),
+    JS_CFUNC_DEF("openBus", 1, js_spi_open_bus),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_spi_obj =
+    JS_OBJECT_DEF("spi", js_spi);
 #endif
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
@@ -364,6 +418,12 @@ static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("esp32", &js_esp32_obj),
 #if CONFIG_ESP32_MQUICKJS_FEATURE_I2C
     JS_PROP_CLASS_DEF("i2c", &js_i2c_obj),
+    JS_PROP_CLASS_DEF("I2CBus", &js_i2c_bus_class),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_SPI
+    JS_PROP_CLASS_DEF("spi", &js_spi_obj),
+    JS_PROP_CLASS_DEF("SPIBus", &js_spi_bus_class),
+    JS_PROP_CLASS_DEF("SPIDevice", &js_spi_device_class),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     JS_PROP_CLASS_DEF("wifi", &js_wifi_obj),

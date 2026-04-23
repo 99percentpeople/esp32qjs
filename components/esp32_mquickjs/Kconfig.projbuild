@@ -51,6 +51,14 @@ config ESP32_MQUICKJS_FEATURE_I2C
     help
         Enable I2C bus bindings and related default pin settings.
 
+config ESP32_MQUICKJS_FEATURE_SPI
+    bool "Enable spi module"
+    default y if SOC_GPSPI_SUPPORTED
+    depends on SOC_GPSPI_SUPPORTED
+    help
+        Enable SPI master bus/device bindings such as spi.openBus() and
+        SPIDevice.transfer().
+
 config ESP32_MQUICKJS_FEATURE_WIFI
     bool "Enable wifi module"
     default y if SOC_WIFI_SUPPORTED
@@ -152,7 +160,8 @@ config ESP32_MQUICKJS_I2C_DEFAULT_TIMEOUT_MS
     default 100
     depends on ESP32_MQUICKJS_FEATURE_I2C
     help
-        Default timeout used by i2c.scan(), i2c.write(), i2c.read(), and i2c.writeRead().
+        Default timeout used by I2CBus.scan(), I2CBus.write(), I2CBus.read(),
+        and I2CBus.writeRead().
 
 config ESP32_MQUICKJS_I2C_ENABLE_INTERNAL_PULLUP
     bool "Enable internal pull-up for I2C"
@@ -160,6 +169,80 @@ config ESP32_MQUICKJS_I2C_ENABLE_INTERNAL_PULLUP
     depends on ESP32_MQUICKJS_FEATURE_I2C
     help
         Enable the internal SDA/SCL pull-up resistors when opening the I2C bus.
+
+config ESP32_MQUICKJS_SPI_DEFAULT_SCLK_PIN
+    int "Default SPI SCLK GPIO"
+    range 0 48
+    default 7 if IDF_TARGET_ESP32S3
+    default 4 if IDF_TARGET_ESP32C3
+    default 18
+    depends on ESP32_MQUICKJS_FEATURE_SPI
+    help
+        Default SCLK pin used by spi.openBus() when no pin override is provided.
+
+config ESP32_MQUICKJS_SPI_DEFAULT_MOSI_PIN
+    int "Default SPI MOSI GPIO"
+    range -1 48
+    default 9 if IDF_TARGET_ESP32S3
+    default 6 if IDF_TARGET_ESP32C3
+    default 23
+    depends on ESP32_MQUICKJS_FEATURE_SPI
+    help
+        Default MOSI pin used by spi.openBus() when no pin override is provided.
+        Use -1 for read-only buses without a MOSI signal.
+
+config ESP32_MQUICKJS_SPI_DEFAULT_MISO_PIN
+    int "Default SPI MISO GPIO"
+    range -1 48
+    default 8 if IDF_TARGET_ESP32S3
+    default 5 if IDF_TARGET_ESP32C3
+    default 19
+    depends on ESP32_MQUICKJS_FEATURE_SPI
+    help
+        Default MISO pin used by spi.openBus() when no pin override is provided.
+        Use -1 for write-only buses without a MISO signal.
+
+config ESP32_MQUICKJS_SPI_DEFAULT_CS_PIN
+    int "Default SPI CS GPIO"
+    range -1 48
+    default -1
+    depends on ESP32_MQUICKJS_FEATURE_SPI
+    help
+        Default chip-select pin used by SPIBus.openDevice() when no pin override
+        is provided. Use -1 when chip-select is device-specific or managed
+        manually.
+
+config ESP32_MQUICKJS_SPI_DEFAULT_FREQ_HZ
+    int "Default SPI device clock frequency (Hz)"
+    range 10000 40000000
+    default 1000000
+    depends on ESP32_MQUICKJS_FEATURE_SPI
+    help
+        Default device clock used by SPIBus.openDevice().
+
+config ESP32_MQUICKJS_SPI_DEFAULT_QUEUE_SIZE
+    int "Default SPI device queue size"
+    range 1 16
+    default 1
+    depends on ESP32_MQUICKJS_FEATURE_SPI
+    help
+        Default queue depth used by SPIBus.openDevice().
+
+config ESP32_MQUICKJS_SPI_DEFAULT_MAX_TRANSFER_SIZE
+    int "Default SPI bus max transfer size (bytes)"
+    range 1 65536
+    default 4092
+    depends on ESP32_MQUICKJS_FEATURE_SPI
+    help
+        Default max transfer size used by spi.openBus().
+
+config ESP32_MQUICKJS_SPI_MAX_DEVICES_PER_BUS
+    int "Maximum SPI devices per bus"
+    range 1 8
+    default 4
+    depends on ESP32_MQUICKJS_FEATURE_SPI
+    help
+        Maximum concurrently opened SPIDevice handles tracked per SPI bus.
 
 config ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS
     int "Default Wi-Fi connect timeout (ms)"

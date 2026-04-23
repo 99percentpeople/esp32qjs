@@ -559,6 +559,7 @@ declare namespace ESP32QJS {
     adc: boolean;
     dac: boolean;
     i2c: boolean;
+    spi: boolean;
     wifi: boolean;
     http: boolean;
     httpServer: boolean;
@@ -608,7 +609,7 @@ declare namespace ESP32QJS {
   }
 
   /**
-   * Shared I2C bus state.
+   * I2C bus state.
    */
   interface I2CStatus {
     opened: boolean;
@@ -631,20 +632,15 @@ declare namespace ESP32QJS {
   }
 
   /**
-   * I2C bus helpers.
+   * Open I2C bus handle.
    *
    * @example
    * ```js
-   * i2c.open({ sda: 5, scl: 6, freqHz: 400000 });
-   * print(JSON.stringify(i2c.scan()));
+   * var bus = i2c.open({ sda: 5, scl: 6, freqHz: 400000 });
+   * print(JSON.stringify(bus.scan()));
    * ```
    */
-  interface I2CModule {
-    readonly DEFAULT_SDA: number;
-    readonly DEFAULT_SCL: number;
-    readonly DEFAULT_FREQ_HZ: number;
-    readonly DEFAULT_TIMEOUT_MS: number;
-    open(options?: I2COpenOptions): I2CStatus;
+  interface I2CBus {
     close(): boolean;
     status(): I2CStatus;
     scan(): number[];
@@ -655,6 +651,113 @@ declare namespace ESP32QJS {
       writeData: ArrayLike<number>,
       readLength: number,
     ): number[];
+  }
+
+  /**
+   * I2C factory and constants.
+   */
+  interface I2CModule {
+    readonly DEFAULT_SDA: number;
+    readonly DEFAULT_SCL: number;
+    readonly DEFAULT_FREQ_HZ: number;
+    readonly DEFAULT_TIMEOUT_MS: number;
+    open(options?: I2COpenOptions): I2CBus;
+  }
+
+  /**
+   * SPI bus state.
+   */
+  interface SPIBusStatus {
+    opened: boolean;
+    host: number;
+    sclk: number;
+    mosi: number;
+    miso: number;
+    maxTransferSize: number;
+    deviceCount: number;
+  }
+
+  /**
+   * SPI device state.
+   */
+  interface SPIDeviceStatus {
+    opened: boolean;
+    host: number;
+    cs: number;
+    mode: 0 | 1 | 2 | 3;
+    freqHz: number;
+    queueSize: number;
+    csHigh: boolean;
+    lsbFirst: boolean;
+  }
+
+  /**
+   * SPI bus open options.
+   */
+  interface SPIOpenBusOptions {
+    host?: number;
+    sclk?: number;
+    mosi?: number;
+    miso?: number;
+    maxTransferSize?: number;
+  }
+
+  /**
+   * SPI device open options.
+   */
+  interface SPIOpenDeviceOptions {
+    cs?: number;
+    mode?: 0 | 1 | 2 | 3;
+    freqHz?: number;
+    queueSize?: number;
+    csHigh?: boolean;
+    lsbFirst?: boolean;
+  }
+
+  /**
+   * Open SPI bus handle.
+   *
+   * @example
+   * ```js
+   * var bus = spi.openBus();
+   * var dev = bus.openDevice({ cs: spi.DEFAULT_CS, mode: 0, freqHz: 1000000 });
+   * print(JSON.stringify(dev.transfer([0x9f])));
+   * dev.close();
+   * bus.close();
+   * ```
+   */
+  interface SPIBus {
+    close(): boolean;
+    status(): SPIBusStatus;
+    openDevice(options?: SPIOpenDeviceOptions): SPIDevice;
+  }
+
+  /**
+   * Open SPI device handle.
+   */
+  interface SPIDevice {
+    close(): boolean;
+    status(): SPIDeviceStatus;
+    transfer(data: ArrayLike<number>): number[];
+    write(data: ArrayLike<number>): number;
+    read(length: number, fillByte?: number): number[];
+  }
+
+  /**
+   * SPI factory and constants.
+   */
+  interface SPIModule {
+    readonly HOST_2: 2;
+    readonly HOST_3?: 3;
+    readonly DEFAULT_HOST: number;
+    readonly DEFAULT_SCLK: number;
+    readonly DEFAULT_MOSI: number;
+    readonly DEFAULT_MISO: number;
+    readonly DEFAULT_CS: number;
+    readonly DEFAULT_FREQ_HZ: number;
+    readonly DEFAULT_QUEUE_SIZE: number;
+    readonly DEFAULT_MAX_TRANSFER_SIZE: number;
+    openBus(options?: SPIOpenBusOptions): SPIBus;
   }
 
   /**
@@ -949,6 +1052,8 @@ declare global {
   const esp32: ESP32QJS.Esp32Module;
   /** Shared I2C bus helpers. */
   const i2c: ESP32QJS.I2CModule;
+  /** SPI master bus/device helpers. */
+  const spi: ESP32QJS.SPIModule;
   /** Wi-Fi station helpers. */
   const wifi: ESP32QJS.WiFiModule;
   /** HTTP client/server namespace. Exposed when either `esp32.info().features.http` or `.httpServer` is enabled. */

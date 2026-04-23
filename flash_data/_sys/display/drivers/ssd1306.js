@@ -18,7 +18,28 @@
     return system.toBool(value, fallback);
   }
 
-  function ensureI2CBus(options) {
+  function busMatches(bus, desired) {
+    var status;
+
+    if (!bus) {
+      return false;
+    }
+
+    try {
+      status = bus.status();
+    } catch (error) {
+      return false;
+    }
+
+    return status.opened &&
+      status.sda === desired.sda &&
+      status.scl === desired.scl &&
+      status.freqHz === desired.freqHz &&
+      status.timeoutMs === desired.timeoutMs &&
+      status.internalPullup === desired.internalPullup;
+  }
+
+  function ensureI2CBus(options, currentBus) {
     var desired = {
       sda: own(options, "sda") ? options.sda : i2c.DEFAULT_SDA,
       scl: own(options, "scl") ? options.scl : i2c.DEFAULT_SCL,
@@ -26,18 +47,19 @@
       timeoutMs: own(options, "timeoutMs") ? options.timeoutMs : i2c.DEFAULT_TIMEOUT_MS,
       internalPullup: toBool(options.internalPullup, true)
     };
-    var status = i2c.status();
+    var bus = currentBus;
 
-    if (!status.opened ||
-        status.sda !== desired.sda ||
-        status.scl !== desired.scl ||
-        status.freqHz !== desired.freqHz ||
-        status.timeoutMs !== desired.timeoutMs ||
-        status.internalPullup !== desired.internalPullup) {
-      status = i2c.open(desired);
+    if (!busMatches(bus, desired)) {
+      if (bus) {
+        try {
+          bus.close();
+        } catch (error) {
+        }
+      }
+      bus = i2c.open(desired);
     }
 
-    return status;
+    return bus;
   }
 
   function makeDataPayload(buffer) {
@@ -51,7 +73,7 @@
     return payload;
   }
 
-  function writeCommand(address, payload) {
+  function writeCommand(bus, address, payload) {
     var command = [0x00];
     var i;
 
@@ -63,7 +85,7 @@
       }
     }
 
-    return i2c.write(address, command);
+    return bus.write(address, command);
   }
 
   function SSD1306Display(options) {
@@ -88,7 +110,8 @@
   system.inherit(SSD1306Display, display.MonoSurface);
 
   SSD1306Display.prototype.command = function (payload) {
-    writeCommand(this.address, payload);
+    this.bus = ensureI2CBus(this.busOptions, this.bus);
+    writeCommand(this.bus, this.address, payload);
     return this;
   };
 
@@ -96,7 +119,7 @@
     var contrast = this.height <= 32 ? 0x8f : 0xcf;
     var comPins = this.height <= 32 ? 0x02 : 0x12;
 
-    ensureI2CBus(this.busOptions);
+    this.bus = ensureI2CBus(this.busOptions, this.bus);
     this.command([
       0xae,
       0xd5, 0x80,
@@ -140,11 +163,12 @@
   };
 
   SSD1306Display.prototype.flush = function () {
+    this.bus = ensureI2CBus(this.busOptions, this.bus);
     this.command([
       0x21, 0x00, this.width - 1,
       0x22, 0x00, this.pages - 1
     ]);
-    i2c.write(this.address, makeDataPayload(this.buffer));
+    this.bus.write(this.address, makeDataPayload(this.buffer));
     return this;
   };
 

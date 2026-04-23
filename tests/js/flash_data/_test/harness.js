@@ -37,6 +37,13 @@
         details: details === undefined ? null : details,
       });
     } catch (error) {
+      if (error && error.__testSkip) {
+        emit("__TEST_SKIP__:", {
+          name: name,
+          reason: error.reason || "",
+        });
+        return;
+      }
       emit("__TEST_FAIL__:", {
         name: name,
         error: stringifyError(error),
@@ -54,6 +61,13 @@
     if (actual !== expected) {
       throw new Error((message || "values differ") + ": expected " + expected + ", got " + actual);
     }
+  };
+
+  helper.skip = function (reason) {
+    throw {
+      __testSkip: true,
+      reason: reason || "",
+    };
   };
 
   helper.config = config;

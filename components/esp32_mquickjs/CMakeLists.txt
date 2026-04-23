@@ -13,6 +13,7 @@ set(ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS
     CONFIG_ESP32_MQUICKJS_FEATURE_ADC
     CONFIG_ESP32_MQUICKJS_FEATURE_DAC
     CONFIG_ESP32_MQUICKJS_FEATURE_I2C
+    CONFIG_ESP32_MQUICKJS_FEATURE_SPI
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
@@ -123,6 +124,10 @@ endfunction()
 foreach(esp32_mquickjs_feature_config ${ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS})
     esp32_mquickjs_append_host_feature_define(${esp32_mquickjs_feature_config})
 endforeach()
+
+if(DEFINED CONFIG_SOC_SPI_PERIPH_NUM)
+    list(APPEND MQUICKJS_HOST_CFLAGS "-DCONFIG_SOC_SPI_PERIPH_NUM=${CONFIG_SOC_SPI_PERIPH_NUM}")
+endif()
 
 set(MQUICKJS_ATOM_HEADER "${MQUICKJS_GENERATED_BINARY_DIR}/mquickjs_atom.h")
 set(MQUICKJS_STDLIB_HEADER "${MQUICKJS_GENERATED_BINARY_DIR}/mqjs_stdlib.h")
@@ -261,6 +266,18 @@ esp32_mquickjs_append_feature_component(
         esp_driver_gpio
         esp_driver_i2c
 )
+
+esp32_mquickjs_append_feature_component(
+    CONFIG_ESP32_MQUICKJS_FEATURE_SPI
+    "src/modules/spi/esp32_mquickjs_spi.c"
+    PRIV_REQUIRES
+        esp_driver_gpio
+        esp_driver_spi
+)
+
+if(DEFINED CONFIG_ESP32_MQUICKJS_FEATURE_SPI AND CONFIG_ESP32_MQUICKJS_FEATURE_SPI)
+    list(APPEND ESP32_MQUICKJS_PRIV_REQUIRES esp_driver_spi)
+endif()
 
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP

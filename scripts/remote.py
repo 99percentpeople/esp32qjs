@@ -50,6 +50,7 @@ JS_TEST_FLASH_DATA_DIR = ROOT_DIR / "tests" / "js" / "flash_data"
 JS_TEST_READY_MARKER = "__ESP32QJS_TEST_READY__"
 JS_TEST_FEATURES_PREFIX = "__ESP32QJS_TEST_FEATURES__:"
 JS_TEST_PASS_PREFIX = "__TEST_PASS__:"
+JS_TEST_SKIP_PREFIX = "__TEST_SKIP__:"
 JS_TEST_FAIL_PREFIX = "__TEST_FAIL__:"
 JS_REPL_BANNER_MARKER = "Run help() for usage."
 MONITOR_READY_MARKER = "--- Quit:"
@@ -61,7 +62,7 @@ TEST_SCOPE_ORDER = ("c", "js")
 @dataclass(frozen=True)
 class JsTestCase:
     path: str
-    network_required: bool = False
+    required_capabilities: tuple[str, ...] = ()
     timeout_seconds: float = 15.0
 
 
@@ -80,6 +81,14 @@ JS_TEST_MODULES = (
     JsTestModule("adc", (JsTestCase("modules/adc/basic.js"),), required_features=("adc",)),
     JsTestModule("dac", (JsTestCase("modules/dac/basic.js"),), required_features=("dac",)),
     JsTestModule("i2c", (JsTestCase("modules/i2c/status.js"),), required_features=("i2c",)),
+    JsTestModule(
+        "spi",
+        (
+            JsTestCase("modules/spi/basic.js"),
+            JsTestCase("modules/spi/loopback.js", required_capabilities=("loopback",)),
+        ),
+        required_features=("spi",),
+    ),
     JsTestModule("timers", (JsTestCase("modules/timers/runtime.js"),)),
     JsTestModule("fs", (JsTestCase("modules/fs/filesystem.js"),), required_features=("fs",)),
     JsTestModule("stream", (JsTestCase("modules/stream/stream.js"),)),
@@ -88,7 +97,7 @@ JS_TEST_MODULES = (
         "wifi",
         (
             JsTestCase("modules/wifi/offline.js"),
-            JsTestCase("modules/wifi/network.js", network_required=True, timeout_seconds=25.0),
+            JsTestCase("modules/wifi/network.js", required_capabilities=("network",), timeout_seconds=25.0),
         ),
         required_features=("wifi",),
     ),
@@ -96,7 +105,7 @@ JS_TEST_MODULES = (
         "http",
         (
             JsTestCase("modules/http/offline.js"),
-            JsTestCase("modules/http/network.js", network_required=True, timeout_seconds=25.0),
+            JsTestCase("modules/http/network.js", required_capabilities=("network",), timeout_seconds=25.0),
         ),
         required_features=("http",),
     ),
@@ -107,6 +116,10 @@ JS_TEST_MODULES = (
     ),
 )
 JS_TEST_MODULE_MAP = {module.name: module for module in JS_TEST_MODULES}
+JS_TEST_CAPABILITY_FLAGS = {
+    "network": "--network",
+    "loopback": "--loopback",
+}
 
 
 class MarkerTimeoutError(RuntimeError):
@@ -205,6 +218,7 @@ class BoardProfile:
     test_wifi_ssid: str
     test_wifi_password: str
     test_http_url: str
+    test_js_config: str
 
 
 @dataclass(frozen=True)
@@ -229,6 +243,7 @@ class ProjectConfig:
     test_wifi_ssid: str
     test_wifi_password: str
     test_http_url: str
+    test_js_config: str
     cmake_cache_entries: tuple[str, ...] = ()
 
 
@@ -417,6 +432,7 @@ def load_profile(board_override: str | None = None) -> BoardProfile:
         test_wifi_ssid=merged_value(repo_env, board_env, "TEST_WIFI_SSID", ""),
         test_wifi_password=merged_value(repo_env, board_env, "TEST_WIFI_PASSWORD", ""),
         test_http_url=merged_value(repo_env, board_env, "TEST_HTTP_URL", ""),
+        test_js_config=merged_value(repo_env, board_env, "TEST_JS_CONFIG", ""),
     )
 
 
@@ -1027,6 +1043,20 @@ def show_config(config: ProjectConfig) -> None:
     print(f"test_wifi_ssid={config.test_wifi_ssid}")
     print(f"test_wifi_password_set={'yes' if config.test_wifi_password else 'no'}")
     print(f"test_http_url={config.test_http_url}")
+    print(f"test_js_config_set={'yes' if config.test_js_config else 'no'}")
+
+
+def parse_test_js_config(raw_config: str) -> dict[str, object]:
+    """Decode optional JSON test configuration injected into the JS harness."""
+    if not raw_config:
+        return {}
+    try:
+        payload = json.loads(raw_config)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"TEST_JS_CONFIG must be a JSON object ({exc}).") from exc
+    if not isinstance(payload, dict):
+        raise SystemExit("TEST_JS_CONFIG must be a JSON object.")
+    return payload
 
 
 def resolve_test_scopes(raw_scopes: list[str] | None) -> tuple[str, ...]:
@@ -1045,6 +1075,21 @@ def resolve_js_modules(raw_modules: list[str] | None) -> tuple[JsTestModule, ...
 
     selected = set(raw_modules)
     return tuple(module for module in JS_TEST_MODULES if module.name in selected)
+
+
+def resolve_js_test_capabilities(args: argparse.Namespace) -> set[str]:
+    """Resolve opt-in JS test capabilities from CLI flags."""
+    capabilities: set[str] = set()
+    if args.network:
+        capabilities.add("network")
+    if args.loopback:
+        capabilities.add("loopback")
+    return capabilities
+
+
+def describe_case_capabilities(capabilities: tuple[str, ...]) -> str:
+    """Render required JS test capabilities as user-facing CLI flags."""
+    return ", ".join(JS_TEST_CAPABILITY_FLAGS.get(capability, capability) for capability in capabilities)
 
 
 def parse_ctest_summary(output: str) -> tuple[int, int] | None:
@@ -1384,13 +1429,17 @@ def probe_js_runtime_features(session: MonitorSession) -> dict[str, bool]:
     return features
 
 
-def configure_js_test_runtime(session: MonitorSession, config: ProjectConfig) -> None:
+def configure_js_test_runtime(
+    session: MonitorSession,
+    config: ProjectConfig,
+) -> None:
     """Push dynamic test configuration such as Wi-Fi credentials to the REPL."""
-    test_config = {
+    test_config: dict[str, object] = {
         "wifiSsid": config.test_wifi_ssid,
         "wifiPassword": config.test_wifi_password,
         "httpUrl": config.test_http_url,
     }
+    test_config.update(parse_test_js_config(config.test_js_config))
     encoded = json.dumps(json.dumps(test_config, separators=(",", ":")))
 
     send_js_command(
@@ -1507,7 +1556,11 @@ def run_js_test_case(session: MonitorSession, case: JsTestCase) -> JsCaseResult:
             output += chunk.decode("utf-8", errors="replace")
             normalized = normalize_serial_output(output)
             for line in normalized.splitlines():
-                if line.startswith(JS_TEST_PASS_PREFIX) or line.startswith(JS_TEST_FAIL_PREFIX):
+                if (
+                    line.startswith(JS_TEST_PASS_PREFIX) or
+                    line.startswith(JS_TEST_SKIP_PREFIX) or
+                    line.startswith(JS_TEST_FAIL_PREFIX)
+                ):
                     result_line = line
                     quiet_deadline = time.monotonic() + 0.2
             continue
@@ -1551,6 +1604,24 @@ def run_js_test_case(session: MonitorSession, case: JsTestCase) -> JsCaseResult:
         )
         return JsCaseResult(case=case, case_name=case_name, status="failed", error=message)
 
+    if result_line.startswith(JS_TEST_SKIP_PREFIX):
+        try:
+            payload = json.loads(result_line[len(JS_TEST_SKIP_PREFIX):])
+        except json.JSONDecodeError as exc:
+            message = f"emitted an invalid skip payload ({exc})"
+            print(
+                f"FAIL {case.path}: {message}\n"
+                f"Last serial output:\n{format_output_tail(output)}",
+                flush=True,
+            )
+            return JsCaseResult(case=case, case_name=case.path, status="failed", error=message)
+
+        case_name = payload.get("name", case.path)
+        reason = payload.get("reason", "")
+        reason_suffix = f" ({reason})" if reason else ""
+        print(f"SKIP {case_name}{reason_suffix}", flush=True)
+        return JsCaseResult(case=case, case_name=case_name, status="skipped", error=str(reason))
+
     try:
         payload = json.loads(result_line[len(JS_TEST_PASS_PREFIX):])
     except json.JSONDecodeError as exc:
@@ -1570,7 +1641,7 @@ def run_js_test_case(session: MonitorSession, case: JsTestCase) -> JsCaseResult:
 def run_js_tests(config: ProjectConfig,
                  modules: tuple[JsTestModule, ...],
                  explicit_module_selection: bool,
-                 network_enabled: bool,
+                 enabled_capabilities: set[str],
                  flash_firmware_first: bool,
                  flash_fs_first: bool) -> TestStageSummary:
     """Flash the firmware and dedicated test image when needed, then drive JS tests over serial."""
@@ -1652,7 +1723,7 @@ def run_js_tests(config: ProjectConfig,
             return summary
 
         try:
-            validate_network_test_config(config, selected_modules, network_enabled)
+            validate_network_test_config(config, selected_modules, "network" in enabled_capabilities)
         except SystemExit as exc:
             summary.status = "failed"
             summary.note = str(exc)
@@ -1684,8 +1755,13 @@ def run_js_tests(config: ProjectConfig,
         for module in selected_modules:
             print(f"Running JS module {module.name}", flush=True)
             for case in module.cases:
-                if case.network_required and not network_enabled:
-                    print(f"Skipping JS test {case.path} (requires --network)", flush=True)
+                missing_capabilities = tuple(
+                    capability for capability in case.required_capabilities
+                    if capability not in enabled_capabilities
+                )
+                if missing_capabilities:
+                    required_flags = describe_case_capabilities(missing_capabilities)
+                    print(f"Skipping JS test {case.path} (requires {required_flags})", flush=True)
                     summary.skipped_cases += 1
                     continue
                 collect_js_runtime(session)
@@ -1694,6 +1770,9 @@ def run_js_tests(config: ProjectConfig,
                     summary.failed_cases += 1
                     summary.status = "failed"
                     summary.failure_details.append(f"{result.case_name}: {result.error}")
+                    continue
+                if result.status == "skipped":
+                    summary.skipped_cases += 1
                     continue
                 summary.passed_cases += 1
         print_test_stage_summary(summary)
@@ -1714,6 +1793,8 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
             raise SystemExit("`--module` requires JS scope.")
         if args.network:
             raise SystemExit("`--network` requires JS scope.")
+        if args.loopback:
+            raise SystemExit("`--loopback` requires JS scope.")
         if args.no_flash_firmware:
             raise SystemExit("`--no-flash-firmware` requires JS scope.")
         if args.no_flash_fs:
@@ -1736,7 +1817,7 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
                     config,
                     resolve_js_modules(args.module),
                     explicit_module_selection=bool(args.module),
-                    network_enabled=args.network,
+                    enabled_capabilities=resolve_js_test_capabilities(args),
                     flash_firmware_first=not args.no_flash_firmware,
                     flash_fs_first=not args.no_flash_fs,
                 )
@@ -1787,6 +1868,7 @@ def build_project_config(args: argparse.Namespace, profile: BoardProfile) -> Pro
         test_wifi_ssid=profile.test_wifi_ssid,
         test_wifi_password=profile.test_wifi_password,
         test_http_url=profile.test_http_url,
+        test_js_config=profile.test_js_config,
     )
 
 
@@ -1881,6 +1963,11 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, Board
         "--network",
         action="store_true",
         help="Enable network-required JS cases inside the wifi/http modules.",
+    )
+    test.add_argument(
+        "--loopback",
+        action="store_true",
+        help="Enable JS cases that require physical loopback wiring, such as SPI MOSI-to-MISO validation.",
     )
     test.add_argument(
         "--no-flash-firmware",

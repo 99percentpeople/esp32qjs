@@ -8,6 +8,7 @@
 #include "esp32_mquickjs_http_server.h"
 #include "esp32_mquickjs_i2c.h"
 #include "esp32_mquickjs_ledc.h"
+#include "esp32_mquickjs_spi.h"
 #include "esp32_mquickjs_request_response.h"
 #include "esp32_mquickjs_stream.h"
 #include "esp32_mquickjs_wifi.h"

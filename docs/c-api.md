@@ -274,26 +274,102 @@ print(headers.get("content-type"));
 - `i2c.DEFAULT_TIMEOUT_MS`
   Default transfer timeout in milliseconds.
 - `i2c.open(options?)`
-  Open the shared I2C master bus. `options` can include `{ sda, scl, freqHz, timeoutMs, internalPullup }`.
-- `i2c.close()`
-  Close the active I2C bus.
-- `i2c.status()`
+  Open an I2C master bus and return an `I2CBus` instance. `options` can include `{ sda, scl, freqHz, timeoutMs, internalPullup }`. Each call returns a distinct bus handle; close it when the caller is done with that bus.
+
+`I2CBus` methods:
+
+- `bus.status()`
   Return `{ opened, sda, scl, freqHz, timeoutMs, internalPullup }`.
-- `i2c.scan()`
+- `bus.close()`
+  Close the bus handle. After closing, the `I2CBus` instance becomes stale and its other methods throw. If a caller forgets to close it, GC finalization will also release the native handle eventually, but explicit `close()` remains the intended lifecycle boundary.
+- `bus.scan()`
   Probe `0x03..0x77` and return an array of 7-bit device addresses.
-- `i2c.write(addr, data)`
+- `bus.write(addr, data)`
   Write an array-like sequence of bytes and return the number of bytes written.
-- `i2c.read(addr, length)`
+- `bus.read(addr, length)`
   Read `length` bytes and return them as a JavaScript array.
-- `i2c.writeRead(addr, writeData, readLength)`
+- `bus.writeRead(addr, writeData, readLength)`
   Write bytes, then read bytes in one transaction and return the read array.
 
 Example:
 
 ```js
-print(JSON.stringify(i2c.open({ sda: 5, scl: 6, freqHz: 400000 })));
-print(JSON.stringify(i2c.scan())); // [60] for an SSD1306 at 0x3c
-print(i2c.write(0x3c, [0x00, 0xAF])); // SSD1306 display on
+var bus = i2c.open({ sda: 5, scl: 6, freqHz: 400000 });
+print(JSON.stringify(bus.status()));
+print(JSON.stringify(bus.scan())); // [60] for an SSD1306 at 0x3c
+print(bus.write(0x3c, [0x00, 0xAF])); // SSD1306 display on
+bus.close();
+```
+
+## `spi` Module
+
+- `spi.HOST_2`
+  General-purpose SPI host `2`.
+- `spi.HOST_3`
+  General-purpose SPI host `3` when the target exposes a second GPSPI controller.
+- `spi.DEFAULT_HOST`
+  Default SPI host, currently `spi.HOST_2`.
+- `spi.DEFAULT_SCLK`
+  Board/profile default SCLK GPIO used by `spi.openBus()`.
+- `spi.DEFAULT_MOSI`
+  Board/profile default MOSI GPIO used by `spi.openBus()`. This can be `-1` for read-only buses.
+- `spi.DEFAULT_MISO`
+  Board/profile default MISO GPIO used by `spi.openBus()`. This can be `-1` for write-only buses.
+- `spi.DEFAULT_CS`
+  Board/profile default chip-select GPIO used by `SPIBus.openDevice()`. This can be `-1` when chip-select is managed manually or is device-specific.
+- `spi.DEFAULT_FREQ_HZ`
+  Default device clock, `1000000`.
+- `spi.DEFAULT_QUEUE_SIZE`
+  Default per-device queue size.
+- `spi.DEFAULT_MAX_TRANSFER_SIZE`
+  Default bus max transfer size in bytes.
+- `spi.openBus(options?)`
+  Open one SPI master bus and return an `SPIBus` instance. Without options it uses `DEFAULT_HOST`, `DEFAULT_SCLK`, `DEFAULT_MOSI`, and `DEFAULT_MISO`. `options` can override `{ host, sclk, mosi, miso, maxTransferSize }`. One JS `SPIBus` maps to one ESP-IDF SPI host; opening the same host twice throws.
+
+`SPIBus` methods:
+
+- `bus.status()`
+  Return `{ opened, host, sclk, mosi, miso, maxTransferSize, deviceCount }`.
+- `bus.close()`
+  Close the bus. Any `SPIDevice` objects opened from that bus become stale. If callers forget to close them, GC finalization still releases the native handles eventually, but explicit `close()` remains the intended lifecycle boundary.
+- `bus.openDevice(options?)`
+  Open an `SPIDevice` on the bus. `options` can include `{ cs, mode, freqHz, queueSize, csHigh, lsbFirst }`. `cs` defaults to `spi.DEFAULT_CS`, which can be `-1` when chip-select is managed manually in JS or external hardware.
+
+`SPIDevice` methods:
+
+- `device.status()`
+  Return `{ opened, host, cs, mode, freqHz, queueSize, csHigh, lsbFirst }`.
+- `device.close()`
+  Remove the device from its parent SPI bus and make the JS object stale.
+- `device.transfer(data)`
+  Perform one synchronous full-duplex transaction and return the received bytes as a JavaScript array.
+- `device.write(data)`
+  Perform one synchronous write-only transaction and return the number of transmitted bytes.
+- `device.read(length, fillByte = 0)`
+  Clock `length` bytes and return the bytes read from MISO. `fillByte` controls the dummy value shifted out on MOSI while reading.
+
+Example:
+
+```js
+var bus = spi.openBus();
+var device = bus.openDevice({
+  cs: spi.DEFAULT_CS,
+  mode: 0,
+  freqHz: spi.DEFAULT_FREQ_HZ,
+});
+
+print(JSON.stringify(device.transfer([0x9f])));
+device.close();
+bus.close();
+```
+
+For automated loopback validation, run `python scripts/remote.py test --scope js --module spi --loopback`.
+The loopback case is opt-in, uses `spi.DEFAULT_*` by default, and reads `testConfig.spiLoopback`
+only when you need to override selected fields. For example:
+
+```bash
+TEST_JS_CONFIG='{"spiLoopback":{"sclk":1,"mosi":2,"miso":2}}' \
+python scripts/remote.py test --scope js --module spi --loopback
 ```
 
 ## `gpio` Module
@@ -610,7 +686,7 @@ if (ref) {
 - `esp32.info()`
   Return board/chip identity plus memory/runtime fields:
   `{ board, chip, features, userLedPin, userLedActiveLow, scriptsDir, flashSize, psramEnabled, psramSize, freePsram, totalInternalHeap, freeInternalHeap, jsHeapSize, jsHeapRegion, littlefsMounted, autoRunIndexJs, formatLittlefsOnMountFail, freeHeap, jsTimeMs }`.
-  `features` is `{ fs, gpio, ledc, adc, dac, i2c, wifi, http, httpServer, staticFileHandler }` and is the stable way to discover which optional host modules or composite helpers were compiled into the firmware for the current board.
+  `features` is `{ fs, gpio, ledc, adc, dac, i2c, spi, wifi, http, httpServer, staticFileHandler }` and is the stable way to discover which optional host modules or composite helpers were compiled into the firmware for the current board.
 - `esp32.millis()`
   Return monotonic milliseconds from `esp_timer`.
 - `esp32.micros()`
