@@ -1,4 +1,5 @@
 #include "esp32_mquickjs_core.h"
+#include "utils/esp32_mquickjs_byte_source.h"
 #include "esp32_mquickjs_esp32.h"
 #include "esp32_mquickjs_adc.h"
 #include "esp32_mquickjs_dac.h"
@@ -63,6 +64,13 @@ struct esp32_mquickjs_timer_slot {
 };
 
 #define ESP32_MQUICKJS_MAX_ASYNC_POLLERS 8
+
+static void run_pending_external_gc(JSContext *ctx)
+{
+    if (ctx != NULL && esp32_mquickjs_byte_source_take_gc_request()) {
+        JS_GC(ctx);
+    }
+}
 
 static void note_console_output(void)
 {
@@ -990,6 +998,7 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
     output_generation = runtime->output_generation;
     if (state == NULL || state->queue == NULL || state->slots == NULL) {
         async_handled = esp32_mquickjs_poll_registered(ctx, runtime);
+        run_pending_external_gc(ctx);
         if (async_handled) {
             runtime->async_generation++;
             result |= ESP32_MQUICKJS_POLL_ASYNC;
@@ -1038,6 +1047,7 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
     }
 
     async_handled = esp32_mquickjs_poll_registered(ctx, runtime);
+    run_pending_external_gc(ctx);
     if (core_async_handled || async_handled) {
         runtime->async_generation++;
         result |= ESP32_MQUICKJS_POLL_ASYNC;

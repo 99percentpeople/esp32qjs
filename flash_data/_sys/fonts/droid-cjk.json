@@ -1,0 +1,42 @@
+{
+  "format": "eqf1-map",
+  "name": "droid-cjk",
+  "safeAscii": true,
+  "slotFirst": 32,
+  "fallback": "?",
+  "chars": " ?中文显示性能帧率延迟温度测试运行正常错误加载字体大小内存堆空闲毫秒刷新绘制平均最大",
+  "source": {
+    "family": "Droid Sans Fallback",
+    "path": "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+    "license": "Apache-2.0"
+  },
+  "sizes": {
+    "12": {
+      "path": "droid-cjk-12.eqf",
+      "width": 12,
+      "height": 12,
+      "advance": 12,
+      "lineHeight": 14,
+      "fontSize": 12,
+      "threshold": 88
+    },
+    "16": {
+      "path": "droid-cjk-16.eqf",
+      "width": 16,
+      "height": 16,
+      "advance": 16,
+      "lineHeight": 18,
+      "fontSize": 16,
+      "threshold": 96
+    },
+    "24": {
+      "path": "droid-cjk-24.eqf",
+      "width": 24,
+      "height": 24,
+      "advance": 24,
+      "lineHeight": 26,
+      "fontSize": 24,
+      "threshold": 104
+    }
+  }
+}

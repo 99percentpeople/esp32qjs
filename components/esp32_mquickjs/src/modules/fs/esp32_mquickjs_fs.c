@@ -5,7 +5,7 @@
 #include "esp32_mquickjs_fs.h"
 
 #include "esp32_mquickjs_core.h"
-#include "esp32_mquickjs_fs_path.h"
+#include "utils/esp32_mquickjs_fs_path.h"
 #include "esp32_mquickjs_stream.h"
 
 #include <dirent.h>

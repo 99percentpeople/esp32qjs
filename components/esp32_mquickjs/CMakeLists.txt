@@ -17,6 +17,7 @@ set(ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
+    CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
 )
 
 macro(esp32_mquickjs_load_feature_config)
@@ -202,6 +203,7 @@ endif()
 
 set(ESP32_MQUICKJS_SRCS
     "src/core/esp32_mquickjs.c"
+    "src/core/esp32_mquickjs_byte_source.c"
     "src/core/esp32_mquickjs_esp32.c"
     "src/core/esp32_mquickjs_stream.c"
     "src/core/esp32_mquickjs_request_response.c"
@@ -305,6 +307,12 @@ esp32_mquickjs_append_feature_component(
         esp_netif
         esp_wifi
         nvs_flash
+)
+
+esp32_mquickjs_append_feature_component(
+    CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
+    "src/modules/display_buffer/esp32_mquickjs_font.c"
+    "src/modules/display_buffer/esp32_mquickjs_display_buffer.c"
 )
 
 list(REMOVE_DUPLICATES ESP32_MQUICKJS_PRIV_REQUIRES)

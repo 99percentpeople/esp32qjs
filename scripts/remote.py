@@ -94,6 +94,14 @@ JS_TEST_MODULES = (
     JsTestModule("stream", (JsTestCase("modules/stream/stream.js"),)),
     JsTestModule("load", (JsTestCase("modules/load/load.js"),), required_features=("fs",)),
     JsTestModule(
+        "displayBuffer",
+        (
+            JsTestCase("modules/display_buffer/basic.js"),
+            JsTestCase("modules/display_buffer/font.js"),
+        ),
+        required_features=("displayBuffer",),
+    ),
+    JsTestModule(
         "wifi",
         (
             JsTestCase("modules/wifi/offline.js"),

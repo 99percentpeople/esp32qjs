@@ -1,73 +1,12 @@
 (function (global) {
   var owns = Object.prototype.hasOwnProperty;
-  var FONT_5X7 = {
-    " ": [0x00, 0x00, 0x00, 0x00, 0x00],
-    "!": [0x00, 0x00, 0x5f, 0x00, 0x00],
-    "\"": [0x00, 0x07, 0x00, 0x07, 0x00],
-    "#": [0x14, 0x7f, 0x14, 0x7f, 0x14],
-    "%": [0x23, 0x13, 0x08, 0x64, 0x62],
-    "&": [0x36, 0x49, 0x55, 0x22, 0x50],
-    "'": [0x00, 0x05, 0x03, 0x00, 0x00],
-    "(": [0x00, 0x1c, 0x22, 0x41, 0x00],
-    ")": [0x00, 0x41, 0x22, 0x1c, 0x00],
-    "*": [0x14, 0x08, 0x3e, 0x08, 0x14],
-    "+": [0x08, 0x08, 0x3e, 0x08, 0x08],
-    ",": [0x00, 0x50, 0x30, 0x00, 0x00],
-    "-": [0x08, 0x08, 0x08, 0x08, 0x08],
-    ".": [0x00, 0x60, 0x60, 0x00, 0x00],
-    "/": [0x20, 0x10, 0x08, 0x04, 0x02],
-    "0": [0x3e, 0x51, 0x49, 0x45, 0x3e],
-    "1": [0x00, 0x42, 0x7f, 0x40, 0x00],
-    "2": [0x42, 0x61, 0x51, 0x49, 0x46],
-    "3": [0x21, 0x41, 0x45, 0x4b, 0x31],
-    "4": [0x18, 0x14, 0x12, 0x7f, 0x10],
-    "5": [0x27, 0x45, 0x45, 0x45, 0x39],
-    "6": [0x3c, 0x4a, 0x49, 0x49, 0x30],
-    "7": [0x01, 0x71, 0x09, 0x05, 0x03],
-    "8": [0x36, 0x49, 0x49, 0x49, 0x36],
-    "9": [0x06, 0x49, 0x49, 0x29, 0x1e],
-    ":": [0x00, 0x36, 0x36, 0x00, 0x00],
-    ";": [0x00, 0x56, 0x36, 0x00, 0x00],
-    "<": [0x08, 0x14, 0x22, 0x41, 0x00],
-    "=": [0x14, 0x14, 0x14, 0x14, 0x14],
-    ">": [0x00, 0x41, 0x22, 0x14, 0x08],
-    "?": [0x02, 0x01, 0x51, 0x09, 0x06],
-    "@": [0x32, 0x49, 0x79, 0x41, 0x3e],
-    "A": [0x7e, 0x11, 0x11, 0x11, 0x7e],
-    "B": [0x7f, 0x49, 0x49, 0x49, 0x36],
-    "C": [0x3e, 0x41, 0x41, 0x41, 0x22],
-    "D": [0x7f, 0x41, 0x41, 0x22, 0x1c],
-    "E": [0x7f, 0x49, 0x49, 0x49, 0x41],
-    "F": [0x7f, 0x09, 0x09, 0x09, 0x01],
-    "G": [0x3e, 0x41, 0x49, 0x49, 0x7a],
-    "H": [0x7f, 0x08, 0x08, 0x08, 0x7f],
-    "I": [0x00, 0x41, 0x7f, 0x41, 0x00],
-    "J": [0x20, 0x40, 0x41, 0x3f, 0x01],
-    "K": [0x7f, 0x08, 0x14, 0x22, 0x41],
-    "L": [0x7f, 0x40, 0x40, 0x40, 0x40],
-    "M": [0x7f, 0x02, 0x0c, 0x02, 0x7f],
-    "N": [0x7f, 0x04, 0x08, 0x10, 0x7f],
-    "O": [0x3e, 0x41, 0x41, 0x41, 0x3e],
-    "P": [0x7f, 0x09, 0x09, 0x09, 0x06],
-    "Q": [0x3e, 0x41, 0x51, 0x21, 0x5e],
-    "R": [0x7f, 0x09, 0x19, 0x29, 0x46],
-    "S": [0x46, 0x49, 0x49, 0x49, 0x31],
-    "T": [0x01, 0x01, 0x7f, 0x01, 0x01],
-    "U": [0x3f, 0x40, 0x40, 0x40, 0x3f],
-    "V": [0x1f, 0x20, 0x40, 0x20, 0x1f],
-    "W": [0x7f, 0x20, 0x18, 0x20, 0x7f],
-    "X": [0x63, 0x14, 0x08, 0x14, 0x63],
-    "Y": [0x03, 0x04, 0x78, 0x04, 0x03],
-    "Z": [0x61, 0x51, 0x49, 0x45, 0x43],
-    "[": [0x00, 0x7f, 0x41, 0x41, 0x00],
-    "\\": [0x02, 0x04, 0x08, 0x10, 0x20],
-    "]": [0x00, 0x41, 0x41, 0x7f, 0x00],
-    "^": [0x04, 0x02, 0x01, 0x02, 0x04],
-    "_": [0x40, 0x40, 0x40, 0x40, 0x40]
-  };
+  var DEFAULT_FONT_PATH = "_sys/display/fonts/mono5x7.eqf";
+  var DEFAULT_FONT_NAME = "mono5x7";
   var system = global.__displaySystem;
   var drivers;
   var display;
+  var defaultFont;
+  var fontSetCache = {};
 
   if (system && system.coreLoaded) {
     return;
@@ -105,21 +44,215 @@
     return number;
   }
 
-  function normalizeChar(ch) {
+  function byteAt(data, index) {
+    return data.charCodeAt(index) & 0xff;
+  }
+
+  function readU32LE(data, index) {
+    return byteAt(data, index) |
+      (byteAt(data, index + 1) << 8) |
+      (byteAt(data, index + 2) << 16) |
+      (byteAt(data, index + 3) << 24);
+  }
+
+  function basename(path) {
+    var slash = String(path).lastIndexOf("/");
+
+    return slash < 0 ? String(path) : String(path).slice(slash + 1);
+  }
+
+  function dirname(path) {
+    var slash = String(path).lastIndexOf("/");
+
+    return slash < 0 ? "" : String(path).slice(0, slash);
+  }
+
+  function joinPath(base, path) {
+    path = String(path);
+    if (path.charAt(0) === "/" || base === "") {
+      return path;
+    }
+    return base + "/" + path;
+  }
+
+  function nextChar(str, index) {
+    var first = str.charCodeAt(index);
+    var second;
+
+    if (first >= 0xd800 && first <= 0xdbff && index + 1 < str.length) {
+      second = str.charCodeAt(index + 1);
+      if (second >= 0xdc00 && second <= 0xdfff) {
+        return {
+          ch: str.charAt(index) + str.charAt(index + 1),
+          next: index + 2
+        };
+      }
+    }
+    return {
+      ch: str.charAt(index),
+      next: index + 1
+    };
+  }
+
+  function uniqueChars(text) {
+    var str = String(text);
+    var chars = [];
+    var seen = {};
+    var item;
+    var i = 0;
+
+    while (i < str.length) {
+      item = nextChar(str, i);
+      i = item.next;
+      if (!own(seen, item.ch)) {
+        seen[item.ch] = true;
+        chars.push(item.ch);
+      }
+    }
+    return chars;
+  }
+
+  function makeCharMap(chars, slotFirst) {
+    var map = {};
+    var i;
+
+    for (i = 0; i < chars.length; i += 1) {
+      map[chars[i]] = slotFirst + i;
+    }
+    return map;
+  }
+
+  function encodeTextForFont(text, font) {
+    var str = String(text);
+    var out = "";
+    var item;
+    var code;
+    var i = 0;
+
+    if (!font || !font.map) {
+      return str;
+    }
+    while (i < str.length) {
+      item = nextChar(str, i);
+      i = item.next;
+      if (item.ch === "\n") {
+        out += "\n";
+        continue;
+      }
+      if (own(font.map, item.ch)) {
+        code = font.map[item.ch];
+      } else {
+        code = font.fallbackCode;
+      }
+      out += String.fromCharCode(code);
+    }
+    return out;
+  }
+
+  function parseEqfFont(data, name, nativeFont) {
+    var first;
+    var last;
+    var width;
+    var height;
+    var bytesPerColumn;
+    var glyphLength;
+
+    if (typeof data !== "string" || data.length < 16 ||
+        data.charAt(0) !== "E" || data.charAt(1) !== "Q" ||
+        data.charAt(2) !== "F" || data.charAt(3) !== "1" ||
+        byteAt(data, 4) !== 1 || byteAt(data, 5) !== 0) {
+      throw new Error("invalid EQF1 font: " + name);
+    }
+
+    first = byteAt(data, 6);
+    last = byteAt(data, 7);
+    width = byteAt(data, 8);
+    height = byteAt(data, 9);
+    bytesPerColumn = (height + 7) >> 3;
+    glyphLength = readU32LE(data, 12);
+    if (last < first || width <= 0 || height <= 0 ||
+        data.length < 16 + glyphLength ||
+        glyphLength !== (last - first + 1) * width * bytesPerColumn) {
+      throw new Error("invalid EQF1 metrics: " + name);
+    }
+
+    return {
+      name: name,
+      first: first,
+      last: last,
+      width: width,
+      height: height,
+      advance: byteAt(data, 10),
+      lineHeight: byteAt(data, 11),
+      bytesPerColumn: bytesPerColumn,
+      glyphData: data,
+      glyphOffset: 16,
+      native: nativeFont || null
+    };
+  }
+
+  function wrapNativeFont(nativeFont, name) {
+    return {
+      name: name || nativeFont.name || "font",
+      width: nativeFont.width,
+      height: nativeFont.height,
+      advance: nativeFont.advance,
+      lineHeight: nativeFont.lineHeight,
+      native: nativeFont
+    };
+  }
+
+  function resolveFont(font) {
+    if (!font) {
+      font = defaultFont;
+    }
+    if (font && (font.glyphData || font.native)) {
+      return font;
+    }
+    throw new Error("display font is not loaded");
+  }
+
+  function fontFromStyle(style) {
+    if (style && typeof style === "object" && own(style, "font")) {
+      return resolveFont(style.font);
+    }
+    return resolveFont(defaultFont);
+  }
+
+  function normalizeCode(font, ch) {
+    var code;
+
     if (!ch || ch.length === 0) {
-      return " ";
+      code = 32;
+    } else {
+      code = ch.charCodeAt(0) & 0xff;
     }
-    if (ch >= "a" && ch <= "z") {
-      return ch.toUpperCase();
+    if (code >= 97 && code <= 122) {
+      code -= 32;
     }
-    if (!own(FONT_5X7, ch)) {
-      return "?";
+    if (code < font.first || code > font.last) {
+      code = "?".charCodeAt(0);
     }
-    return ch;
+    if (code < font.first || code > font.last) {
+      code = font.first;
+    }
+    return code;
+  }
+
+  function glyphByte(font, ch, col, rowByte) {
+    var code = normalizeCode(font, ch);
+    var glyphIndex = code - font.first;
+    var offset = font.glyphOffset + ((glyphIndex * font.width + col) * font.bytesPerColumn) + rowByte;
+
+    if (!font.glyphData) {
+      throw new Error("display font glyph data is not available in JavaScript");
+    }
+    return byteAt(font.glyphData, offset);
   }
 
   function measureText(text, style) {
-    var str = String(text);
+    var font = fontFromStyle(style);
+    var str = encodeTextForFont(text, font);
     var spacing = style && own(style, "spacing") ? style.spacing : 0;
     var lineWidth = 0;
     var maxWidth = 0;
@@ -135,7 +268,7 @@
         lines += 1;
         continue;
       }
-      lineWidth += 6 + spacing;
+      lineWidth += font.advance + spacing;
     }
 
     if (lineWidth > maxWidth) {
@@ -147,9 +280,16 @@
 
     return {
       width: maxWidth,
-      height: lines * 8,
+      height: lines * font.lineHeight,
       lines: lines
     };
+  }
+
+  function spacingFromStyle(style, fallback) {
+    if (style && typeof style === "object") {
+      return own(style, "spacing") ? style.spacing : fallback;
+    }
+    return style === undefined ? fallback : style;
   }
 
   function Surface(options) {
@@ -328,16 +468,17 @@
   };
 
   MonoSurface.prototype.drawChar = function (x, y, ch, enabled) {
-    var glyph = FONT_5X7[normalizeChar(ch)];
+    var font = resolveFont(defaultFont);
+    var encoded = encodeTextForFont(String(ch).charAt(0), font);
     var col;
     var row;
     var bits;
 
-    this.fillRect(x, y, 6, 8, false);
-    for (col = 0; col < glyph.length; col += 1) {
-      bits = glyph[col];
-      for (row = 0; row < 7; row += 1) {
-        if ((bits & (1 << row)) !== 0) {
+    this.fillRect(x, y, font.advance, font.lineHeight, false);
+    for (col = 0; col < font.width; col += 1) {
+      for (row = 0; row < font.height; row += 1) {
+        bits = glyphByte(font, encoded.charAt(0), col, row >> 3);
+        if ((bits & (1 << (row & 7))) !== 0) {
           this.setPixel(x + col, y + row, enabled !== false);
         }
       }
@@ -346,22 +487,34 @@
   };
 
   MonoSurface.prototype.drawText = function (x, y, text, enabled, spacing) {
-    var str = String(text);
+    var font = fontFromStyle(spacing);
+    var str = encodeTextForFont(text, font);
     var cursorX = x | 0;
     var cursorY = y | 0;
-    var gap = spacing === undefined ? this.spacing : spacing;
-    var step = 6 + gap;
+    var gap = spacingFromStyle(spacing, this.spacing);
+    var step = font.advance + gap;
     var i;
     var ch;
+    var col;
+    var row;
+    var bits;
 
     for (i = 0; i < str.length; i += 1) {
       ch = str.charAt(i);
       if (ch === "\n") {
         cursorX = x | 0;
-        cursorY += 8;
+        cursorY += font.lineHeight;
         continue;
       }
-      this.drawChar(cursorX, cursorY, ch, enabled);
+      this.fillRect(cursorX, cursorY, font.advance, font.lineHeight, false);
+      for (col = 0; col < font.width; col += 1) {
+        for (row = 0; row < font.height; row += 1) {
+          bits = glyphByte(font, ch, col, row >> 3);
+          if ((bits & (1 << (row & 7))) !== 0) {
+            this.setPixel(cursorX + col, cursorY + row, enabled !== false);
+          }
+        }
+      }
       cursorX += step;
     }
     return this;
@@ -376,16 +529,130 @@
     inherit: inherit,
     toBool: toBool,
     toColor: toColor,
-    clampInt: clampInt,
-    normalizeChar: normalizeChar,
-    font5x7: FONT_5X7
+    clampInt: clampInt
   };
 
-  display.VERSION = "0.2.0";
-  display.FONT_5X7 = FONT_5X7;
+  display.VERSION = "0.3.0";
+  display.fonts = display.fonts || {};
   display.Surface = Surface;
   display.MonoSurface = MonoSurface;
   display.measureText = measureText;
+  display.encodeText = encodeTextForFont;
+  display.fontNeedsTextMapping = function (font) {
+    return !!(font && font.map);
+  };
+  display.registerFont = function (name, font) {
+    if (!name || typeof name !== "string") {
+      throw new Error("display.registerFont(name, font) expects a font name");
+    }
+    if (!font) {
+      throw new Error("display.registerFont(name, font) expects a font");
+    }
+    display.fonts[name] = font;
+    return font;
+  };
+  display.loadFont = function (path, name) {
+    var nativeFont = null;
+    var font;
+    var fontName = name === undefined || name === null ? basename(path) : String(name);
+
+    if (global.displayBuffer && typeof global.displayBuffer.loadFont === "function") {
+      nativeFont = global.displayBuffer.loadFont(path);
+      font = wrapNativeFont(nativeFont, fontName);
+      return display.registerFont(fontName, font);
+    }
+    if (!global.fs || typeof global.fs.readText !== "function") {
+      throw new Error("display.loadFont(path) requires fs.readText()");
+    }
+    font = parseEqfFont(global.fs.readText(path), fontName, nativeFont);
+    return display.registerFont(fontName, font);
+  };
+  display.loadFontSet = function (path) {
+    var manifest;
+    var chars;
+    var slotFirst;
+    var slotLast;
+    var map;
+    var fallback;
+    var fontSet;
+    var dir;
+
+    path = String(path);
+    if (fontSetCache[path]) {
+      return fontSetCache[path];
+    }
+    if (!global.fs || typeof global.fs.readText !== "function") {
+      throw new Error("display.loadFontSet(path) requires fs.readText()");
+    }
+    manifest = JSON.parse(global.fs.readText(path));
+    if (!manifest || manifest.format !== "eqf1-map" ||
+        typeof manifest.chars !== "string" ||
+        !manifest.sizes || typeof manifest.sizes !== "object") {
+      throw new Error("display.loadFontSet(path) expects an eqf1-map manifest");
+    }
+    chars = uniqueChars(manifest.chars);
+    slotFirst = own(manifest, "slotFirst") ? manifest.slotFirst | 0 : 32;
+    slotLast = slotFirst + chars.length - 1;
+    if (slotFirst < 0 || slotLast > 255) {
+      throw new Error("display font map slot range is outside EQF1");
+    }
+    map = makeCharMap(chars, slotFirst);
+    fallback = typeof manifest.fallback === "string" && own(map, manifest.fallback)
+      ? map[manifest.fallback]
+      : (own(map, "?") ? map["?"] : slotFirst);
+    dir = dirname(path);
+    fontSet = {
+      name: manifest.name || basename(path),
+      path: path,
+      dir: dir,
+      chars: chars.join(""),
+      slotFirst: slotFirst,
+      slotLast: slotLast,
+      map: map,
+      fallbackCode: fallback,
+      sizes: manifest.sizes,
+      loaded: {},
+      load: function (size, name) {
+        var key;
+        var entry;
+        var fontName;
+        var font;
+
+        if (size === undefined || size === null) {
+          size = manifest.defaultSize || Object.keys(manifest.sizes)[0];
+        }
+        key = String(size);
+        entry = manifest.sizes[key];
+        if (!entry || typeof entry.path !== "string") {
+          throw new Error("display font set has no size: " + key);
+        }
+        if (name === undefined && this.loaded[key]) {
+          return this.loaded[key];
+        }
+        fontName = name || (this.name + "-" + key);
+        font = display.loadFont(joinPath(this.dir, entry.path), fontName);
+        font.map = this.map;
+        font.fallbackCode = this.fallbackCode;
+        font.slotFirst = this.slotFirst;
+        font.slotLast = this.slotLast;
+        font.fontSet = this;
+        font.encodeText = function (text) {
+          return encodeTextForFont(text, font);
+        };
+        if (name === undefined) {
+          this.loaded[key] = font;
+        }
+        return font;
+      }
+    };
+    fontSetCache[path] = fontSet;
+    return fontSet;
+  };
+  display.loadMappedFont = function (path, size, name) {
+    return display.loadFontSet(path).load(size, name);
+  };
+  defaultFont = display.loadFont(DEFAULT_FONT_PATH, DEFAULT_FONT_NAME);
+  display.defaultFont = defaultFont;
   display.listDrivers = function () {
     return Object.keys(drivers);
   };

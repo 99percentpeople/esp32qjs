@@ -30,7 +30,13 @@
     if (value === undefined) {
       return fallback;
     }
-    return value === false || value === 0 || value === null ? 0 : 1;
+    if (value === false || value === 0 || value === null) {
+      return false;
+    }
+    if (value === true || value === 1) {
+      return true;
+    }
+    return value;
   }
 
   function isArray(value) {
@@ -256,12 +262,12 @@
     }
 
     if (own(props, "background")) {
-      backgroundColor = toColor(props.background, 0);
+      backgroundColor = toColor(props.background, false);
       surface.fillRect(frame.x, frame.y, frame.width, frame.height, backgroundColor);
     }
 
     if (own(props, "border") && props.border) {
-      borderColor = own(props, "borderColor") ? toColor(props.borderColor, 1) : 1;
+      borderColor = own(props, "borderColor") ? toColor(props.borderColor, true) : true;
       surface.drawRect(frame.x, frame.y, frame.width, frame.height, borderColor);
     }
   }
@@ -441,7 +447,7 @@
     }
 
     if (node.type === "text") {
-      color = own(props, "color") ? toColor(props.color, 1) : 1;
+      color = own(props, "color") ? toColor(props.color, true) : true;
       surface.drawText(frame.x, frame.y, props.text || "", color, own(props, "spacing") ? props.spacing : 0);
       return;
     }
@@ -511,7 +517,7 @@
   ui.render = function (surface, node, options) {
     var root;
     var settings = options || {};
-    var clearColor = own(settings, "clearColor") ? toColor(settings.clearColor, 0) : 0;
+    var clearColor = own(settings, "clearColor") ? toColor(settings.clearColor, false) : false;
 
     if (settings.clear !== false) {
       surface.clear(clearColor);

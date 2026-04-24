@@ -14,7 +14,9 @@
 #define JS_CLASS_I2C_BUS (JS_CLASS_USER + 7)
 #define JS_CLASS_SPI_BUS (JS_CLASS_USER + 8)
 #define JS_CLASS_SPI_DEVICE (JS_CLASS_USER + 9)
-#define JS_CLASS_COUNT (JS_CLASS_USER + 10)
+#define JS_CLASS_BYTE_VIEW (JS_CLASS_USER + 10)
+#define JS_CLASS_DISPLAY_BUFFER (JS_CLASS_USER + 11)
+#define JS_CLASS_COUNT (JS_CLASS_USER + 12)
 
 #define js_global_object js_global_object_base
 #define js_c_function_decl js_c_function_decl_base
@@ -93,6 +95,71 @@ static const JSPropDef js_stream_proto[] = {
 
 static const JSClassDef js_stream_class =
     JS_CLASS_DEF("Stream", 0, js_stream_constructor, JS_CLASS_STREAM, js_stream, js_stream_proto, NULL, NULL);
+
+static const JSPropDef js_byte_view_proto[] = {
+    JS_CGETSET_DEF("length", js_byte_view_get_length, NULL),
+    JS_CGETSET_DEF("byteLength", js_byte_view_get_length, NULL),
+    JS_CFUNC_DEF("toArray", 0, js_byte_view_to_array),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_byte_view_class =
+    JS_CLASS_DEF("ByteView", 0, js_byte_view_constructor, JS_CLASS_BYTE_VIEW, NULL, js_byte_view_proto, NULL, js_byte_view_finalizer);
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
+static const JSPropDef js_display_font_proto[] = {
+    JS_CGETSET_DEF("name", js_display_font_get_name, NULL),
+    JS_CGETSET_DEF("width", js_display_font_get_width, NULL),
+    JS_CGETSET_DEF("height", js_display_font_get_height, NULL),
+    JS_CGETSET_DEF("advance", js_display_font_get_advance, NULL),
+    JS_CGETSET_DEF("lineHeight", js_display_font_get_line_height, NULL),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_display_font_class =
+    JS_CLASS_DEF("DisplayFont", 0, js_display_font_constructor, JS_CLASS_DISPLAY_FONT, NULL, js_display_font_proto, NULL, js_display_font_finalizer);
+
+static const JSPropDef js_display_buffer_proto[] = {
+    JS_CGETSET_DEF("width", js_display_buffer_get_width, NULL),
+    JS_CGETSET_DEF("height", js_display_buffer_get_height, NULL),
+    JS_CGETSET_DEF("format", js_display_buffer_get_format, NULL),
+    JS_CGETSET_DEF("layout", js_display_buffer_get_layout, NULL),
+    JS_CGETSET_DEF("stride", js_display_buffer_get_stride, NULL),
+    JS_CGETSET_DEF("pageHeight", js_display_buffer_get_page_height, NULL),
+    JS_CGETSET_DEF("byteLength", js_display_buffer_get_byte_length, NULL),
+    JS_CFUNC_DEF("close", 0, js_display_buffer_close),
+    JS_CFUNC_DEF("clear", 1, js_display_buffer_clear),
+    JS_CFUNC_DEF("fill", 1, js_display_buffer_clear),
+    JS_CFUNC_DEF("setPixel", 3, js_display_buffer_set_pixel),
+    JS_CFUNC_DEF("getPixel", 2, js_display_buffer_get_pixel),
+    JS_CFUNC_DEF("fillRect", 5, js_display_buffer_fill_rect),
+    JS_CFUNC_DEF("drawRect", 5, js_display_buffer_draw_rect),
+    JS_CFUNC_DEF("drawLine", 5, js_display_buffer_draw_line),
+    JS_CFUNC_DEF("drawBitmap", 4, js_display_buffer_draw_bitmap),
+    JS_CFUNC_DEF("drawText", 5, js_display_buffer_draw_text),
+    JS_CFUNC_DEF("measureText", 2, js_display_buffer_measure_text),
+    JS_CFUNC_DEF("getDirty", 0, js_display_buffer_get_dirty),
+    JS_CFUNC_DEF("clearDirty", 0, js_display_buffer_clear_dirty),
+    JS_CFUNC_DEF("markDirty", 4, js_display_buffer_mark_dirty),
+    JS_CFUNC_DEF("readRect", 5, js_display_buffer_read_rect),
+    JS_CFUNC_DEF("readRectChunks", 5, js_display_buffer_read_rect_chunks),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_display_buffer_class =
+    JS_CLASS_DEF("DisplayBuffer", 0, js_display_buffer_constructor, JS_CLASS_DISPLAY_BUFFER, NULL, js_display_buffer_proto, NULL, js_display_buffer_finalizer);
+
+static const JSPropDef js_display_buffer[] = {
+    JS_PROP_STRING_DEF("MONO1", "mono1", 0),
+    JS_PROP_STRING_DEF("RGB565", "rgb565", 0),
+    JS_CFUNC_DEF("create", 1, js_display_buffer_create),
+    JS_CFUNC_DEF("loadFont", 1, js_display_buffer_load_font),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_display_buffer_obj =
+    JS_OBJECT_DEF("displayBuffer", js_display_buffer);
+#endif
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
 static const JSPropDef js_fs[] = {
@@ -418,6 +485,12 @@ static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("Response", &js_response_class),
     JS_PROP_CLASS_DEF("_Deferred", &js_deferred_class),
     JS_PROP_CLASS_DEF("Stream", &js_stream_class),
+    JS_PROP_CLASS_DEF("_ByteView", &js_byte_view_class),
+#if CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
+    JS_PROP_CLASS_DEF("DisplayFont", &js_display_font_class),
+    JS_PROP_CLASS_DEF("DisplayBuffer", &js_display_buffer_class),
+    JS_PROP_CLASS_DEF("displayBuffer", &js_display_buffer_obj),
+#endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
     JS_PROP_CLASS_DEF("fs", &js_fs_obj),
 #endif

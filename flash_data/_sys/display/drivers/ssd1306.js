@@ -18,6 +18,52 @@
     return system.toBool(value, fallback);
   }
 
+  function toEnabled(value) {
+    return !(value === false || value === 0 || value === null);
+  }
+
+  function textFontFromStyle(style) {
+    var font = display.defaultFont;
+
+    if (style && typeof style === "object" && own(style, "font")) {
+      font = style.font;
+    }
+    return font;
+  }
+
+  function nativeTextOptions(surface, style) {
+    var options = {};
+    var font = textFontFromStyle(style);
+
+    if (style && typeof style === "object") {
+      if (own(style, "spacing")) {
+        options.spacing = style.spacing;
+      }
+    } else if (style !== undefined) {
+      options.spacing = style;
+    }
+    if (font) {
+      options.font = font.native || font;
+    }
+    if (!own(options, "spacing")) {
+      options.spacing = surface.spacing;
+    }
+    return options;
+  }
+
+  function nativeText(text, style) {
+    if (display && typeof display.encodeText === "function") {
+      return display.encodeText(text, textFontFromStyle(style));
+    }
+    return String(text);
+  }
+
+  function hasNativeBuffer() {
+    return typeof displayBuffer === "object" &&
+      displayBuffer &&
+      typeof displayBuffer.create === "function";
+  }
+
   function busMatches(bus, desired) {
     var status;
 
@@ -89,6 +135,8 @@
   }
 
   function SSD1306Display(options) {
+    var useNativeBuffer;
+
     options = options || {};
 
     display.MonoSurface.call(this, {
@@ -97,6 +145,18 @@
       height: own(options, "height") ? options.height : DEFAULT_HEIGHT,
       spacing: own(options, "spacing") ? options.spacing : DEFAULT_SPACING
     });
+    useNativeBuffer = hasNativeBuffer();
+    this.nativeBuffer = useNativeBuffer
+      ? displayBuffer.create({
+          width: this.width,
+          height: this.height,
+          format: displayBuffer.MONO1,
+          layout: "page-y8",
+          storage: own(options, "storage") ? options.storage : "auto",
+          foreground: true,
+          background: false
+        })
+      : null;
     this.address = own(options, "address") ? options.address : DEFAULT_ADDRESS;
     this.busOptions = {
       sda: own(options, "sda") ? options.sda : i2c.DEFAULT_SDA,
@@ -108,6 +168,88 @@
   }
 
   system.inherit(SSD1306Display, display.MonoSurface);
+
+  SSD1306Display.prototype.clear = function (enabled) {
+    if (this.nativeBuffer) {
+      this.nativeBuffer.clear(toEnabled(enabled));
+      return this;
+    }
+    return display.MonoSurface.prototype.clear.call(this, enabled);
+  };
+
+  SSD1306Display.prototype.fill = function (enabled) {
+    return this.clear(enabled);
+  };
+
+  SSD1306Display.prototype.setPixel = function (x, y, enabled) {
+    if (this.nativeBuffer) {
+      this.nativeBuffer.setPixel(x, y, toEnabled(enabled));
+      return this;
+    }
+    return display.MonoSurface.prototype.setPixel.call(this, x, y, enabled);
+  };
+
+  SSD1306Display.prototype.getPixel = function (x, y) {
+    if (this.nativeBuffer) {
+      return !!this.nativeBuffer.getPixel(x, y);
+    }
+    return display.MonoSurface.prototype.getPixel.call(this, x, y);
+  };
+
+  SSD1306Display.prototype.fillRect = function (x, y, width, height, enabled) {
+    if (this.nativeBuffer) {
+      this.nativeBuffer.fillRect(x, y, width, height, toEnabled(enabled));
+      return this;
+    }
+    return display.MonoSurface.prototype.fillRect.call(this, x, y, width, height, enabled);
+  };
+
+  SSD1306Display.prototype.drawLine = function (x0, y0, x1, y1, enabled) {
+    if (this.nativeBuffer) {
+      this.nativeBuffer.drawLine(x0, y0, x1, y1, toEnabled(enabled));
+      return this;
+    }
+    return display.MonoSurface.prototype.drawLine.call(this, x0, y0, x1, y1, enabled);
+  };
+
+  SSD1306Display.prototype.drawRect = function (x, y, width, height, enabled) {
+    if (this.nativeBuffer) {
+      this.nativeBuffer.drawRect(x, y, width, height, toEnabled(enabled));
+      return this;
+    }
+    return display.MonoSurface.prototype.drawRect.call(this, x, y, width, height, enabled);
+  };
+
+  SSD1306Display.prototype.drawBitmap = function (x, y, bitmap, enabled) {
+    if (this.nativeBuffer) {
+      this.nativeBuffer.drawBitmap(x, y, bitmap, toEnabled(enabled));
+      return this;
+    }
+    return display.MonoSurface.prototype.drawBitmap.call(this, x, y, bitmap, enabled);
+  };
+
+  SSD1306Display.prototype.drawChar = function (x, y, ch, enabled) {
+    if (this.nativeBuffer) {
+      this.nativeBuffer.drawText(x, y, String(ch).charAt(0), toEnabled(enabled), nativeTextOptions(this));
+      return this;
+    }
+    return display.MonoSurface.prototype.drawChar.call(this, x, y, ch, enabled);
+  };
+
+  SSD1306Display.prototype.drawText = function (x, y, text, enabled, style) {
+    if (this.nativeBuffer) {
+      this.nativeBuffer.drawText(x, y, nativeText(text, style), toEnabled(enabled), nativeTextOptions(this, style));
+      return this;
+    }
+    return display.MonoSurface.prototype.drawText.call(this, x, y, text, enabled, style);
+  };
+
+  SSD1306Display.prototype.measureText = function (text, style) {
+    if (this.nativeBuffer) {
+      return this.nativeBuffer.measureText(nativeText(text, style), nativeTextOptions(this, style));
+    }
+    return display.MonoSurface.prototype.measureText.call(this, text, style);
+  };
 
   SSD1306Display.prototype.command = function (payload) {
     this.bus = ensureI2CBus(this.busOptions, this.bus);
@@ -163,13 +305,30 @@
   };
 
   SSD1306Display.prototype.flush = function () {
+    var buffer = this.nativeBuffer
+      ? this.nativeBuffer.readRect(0, 0, this.width, this.height).toArray()
+      : this.buffer;
+
     this.bus = ensureI2CBus(this.busOptions, this.bus);
     this.command([
       0x21, 0x00, this.width - 1,
       0x22, 0x00, this.pages - 1
     ]);
-    this.bus.write(this.address, makeDataPayload(this.buffer));
+    this.bus.write(this.address, makeDataPayload(buffer));
     return this;
+  };
+
+  SSD1306Display.prototype.close = function () {
+    if (this.nativeBuffer) {
+      this.nativeBuffer.close();
+      this.nativeBuffer = null;
+    }
+    if (this.bus) {
+      this.bus.close();
+      this.bus = null;
+    }
+    this.ready = false;
+    return true;
   };
 
   display.registerDriver("ssd1306", function (options) {

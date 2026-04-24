@@ -73,6 +73,8 @@ static JSValue esp32_make_features_object(JSContext *ctx)
         !esp32_mquickjs_set_property(ctx, *features, "staticFileHandler",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER &&
                                                 CONFIG_ESP32_MQUICKJS_FEATURE_FS)) ||
+        !esp32_mquickjs_set_property(ctx, *features, "displayBuffer",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER)) ||
         !esp32_mquickjs_set_property(ctx, *features, "http",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_HTTP))) {
         goto fail;

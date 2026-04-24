@@ -1,4 +1,4 @@
-#include "esp32_mquickjs_fs_path.h"
+#include "utils/esp32_mquickjs_fs_path.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
 

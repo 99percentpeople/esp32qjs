@@ -2,6 +2,7 @@
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_SPI
 
+#include "utils/esp32_mquickjs_byte_source.h"
 #include "esp32_mquickjs_core.h"
 
 #include <stdbool.h>
@@ -574,68 +575,6 @@ static JSValue spi_make_device_object(JSContext *ctx, const esp32_mquickjs_spi_d
     return JS_PopGCRef(ctx, &device_ref);
 }
 
-static bool js_value_to_byte_array(JSContext *ctx,
-                                   JSValue value,
-                                   const char *api_name,
-                                   uint8_t **out_bytes,
-                                   size_t *out_len,
-                                   JSValue *out_error)
-{
-    JSGCRef length_ref;
-    JSValue *length_value;
-    uint32_t length = 0;
-    uint8_t *bytes;
-    uint32_t i;
-
-    *out_bytes = NULL;
-    *out_len = 0;
-    *out_error = JS_UNDEFINED;
-
-    if (JS_GetClassID(ctx, value) < 0) {
-        *out_error = JS_ThrowTypeError(ctx, "%s expects an array-like object of byte values", api_name);
-        return false;
-    }
-
-    length_value = JS_PushGCRef(ctx, &length_ref);
-    *length_value = JS_GetPropertyStr(ctx, value, "length");
-    if (JS_IsException(*length_value) || !js_value_to_u32(ctx, *length_value, &length)) {
-        JS_PopGCRef(ctx, &length_ref);
-        *out_error = JS_ThrowTypeError(ctx, "%s expects an array-like object with a numeric length", api_name);
-        return false;
-    }
-    JS_PopGCRef(ctx, &length_ref);
-
-    if (length == 0) {
-        return true;
-    }
-
-    bytes = heap_caps_malloc(length, MALLOC_CAP_8BIT);
-    if (bytes == NULL) {
-        *out_error = JS_ThrowOutOfMemory(ctx);
-        return false;
-    }
-
-    for (i = 0; i < length; ++i) {
-        JSGCRef item_ref;
-        JSValue *item = JS_PushGCRef(ctx, &item_ref);
-        uint32_t raw_byte = 0;
-
-        *item = JS_GetPropertyUint32(ctx, value, i);
-        if (JS_IsException(*item) || !js_value_to_u32(ctx, *item, &raw_byte) || raw_byte > 0xffU) {
-            JS_PopGCRef(ctx, &item_ref);
-            heap_caps_free(bytes);
-            *out_error = JS_ThrowTypeError(ctx, "%s expects byte values in the range 0-255", api_name);
-            return false;
-        }
-        bytes[i] = (uint8_t)raw_byte;
-        JS_PopGCRef(ctx, &item_ref);
-    }
-
-    *out_bytes = bytes;
-    *out_len = length;
-    return true;
-}
-
 static JSValue js_bytes_to_array(JSContext *ctx, const uint8_t *bytes, size_t length)
 {
     JSGCRef array_ref;
@@ -1125,8 +1064,8 @@ JSValue js_spi_device_transfer(JSContext *ctx, JSValue *this_val, int argc, JSVa
     esp32_mquickjs_spi_device_ref_t device_ref;
     esp32_mquickjs_spi_device_slot_t *device_slot = NULL;
     esp32_mquickjs_spi_bus_slot_t *bus_slot = NULL;
-    uint8_t *bytes = NULL;
-    size_t length = 0;
+    esp32_mquickjs_byte_source_t source;
+    uint8_t *owned = NULL;
     JSValue error = JS_UNDEFINED;
     JSValue result;
 
@@ -1139,14 +1078,14 @@ JSValue js_spi_device_transfer(JSContext *ctx, JSValue *this_val, int argc, JSVa
         return JS_EXCEPTION;
     }
     if (argc < 1 ||
-        !js_value_to_byte_array(ctx, argv[0], "SPIDevice.transfer(data)", &bytes, &length, &error)) {
+        !esp32_mquickjs_get_byte_source(ctx, argv[0], "SPIDevice.transfer(data)", &source, &owned, &error)) {
         return JS_IsUndefined(error)
                    ? JS_ThrowTypeError(ctx, "SPIDevice.transfer(data) expects an array-like byte sequence")
                    : error;
     }
 
-    result = spi_transmit(ctx, bus_slot, device_slot, bytes, length, true);
-    heap_caps_free(bytes);
+    result = spi_transmit(ctx, bus_slot, device_slot, source.data, source.length, true);
+    esp32_mquickjs_release_byte_source(owned);
     return result;
 }
 
@@ -1155,8 +1094,8 @@ JSValue js_spi_device_write(JSContext *ctx, JSValue *this_val, int argc, JSValue
     esp32_mquickjs_spi_device_ref_t device_ref;
     esp32_mquickjs_spi_device_slot_t *device_slot = NULL;
     esp32_mquickjs_spi_bus_slot_t *bus_slot = NULL;
-    uint8_t *bytes = NULL;
-    size_t length = 0;
+    esp32_mquickjs_byte_source_t source;
+    uint8_t *owned = NULL;
     JSValue error = JS_UNDEFINED;
     JSValue result;
 
@@ -1169,14 +1108,14 @@ JSValue js_spi_device_write(JSContext *ctx, JSValue *this_val, int argc, JSValue
         return JS_EXCEPTION;
     }
     if (argc < 1 ||
-        !js_value_to_byte_array(ctx, argv[0], "SPIDevice.write(data)", &bytes, &length, &error)) {
+        !esp32_mquickjs_get_byte_source(ctx, argv[0], "SPIDevice.write(data)", &source, &owned, &error)) {
         return JS_IsUndefined(error)
                    ? JS_ThrowTypeError(ctx, "SPIDevice.write(data) expects an array-like byte sequence")
                    : error;
     }
 
-    result = spi_transmit(ctx, bus_slot, device_slot, bytes, length, false);
-    heap_caps_free(bytes);
+    result = spi_transmit(ctx, bus_slot, device_slot, source.data, source.length, false);
+    esp32_mquickjs_release_byte_source(owned);
     return result;
 }
 

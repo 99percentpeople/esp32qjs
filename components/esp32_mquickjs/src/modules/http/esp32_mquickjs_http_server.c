@@ -3,7 +3,7 @@
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
 
 #include "esp32_mquickjs_core.h"
-#include "esp32_mquickjs_request_response.h"
+#include "utils/esp32_mquickjs_request_response.h"
 #include "esp32_mquickjs_stream.h"
 
 #include <inttypes.h>

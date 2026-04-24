@@ -84,6 +84,13 @@ config ESP32_MQUICKJS_FEATURE_HTTP_SERVER
         helpers. Composite helpers such as staticFileHandler() may add
         further feature requirements such as fs.
 
+config ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
+    bool "Enable displayBuffer module"
+    default y
+    help
+        Enable the native displayBuffer module for C-backed mono1 and rgb565
+        pixel buffers, drawing primitives, dirty bounds, and byte-view exports.
+
 endmenu
 
 config ESP32_MQUICKJS_DEFAULT_EVAL_TIMEOUT_MS

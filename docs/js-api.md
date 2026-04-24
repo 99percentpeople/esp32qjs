@@ -18,7 +18,7 @@ The default startup script commonly does this from `/littlefs/index.js`.
 These helpers are implemented in JavaScript on top of the `i2c` module and live under `/littlefs/_sys/display/`.
 
 - `display.VERSION`
-  Current JS display layer version, `"0.2.0"`.
+  Current JS display layer version, `"0.3.0"`.
 - `display.Surface`
   Base surface contract.
 - `display.MonoSurface`
@@ -30,7 +30,7 @@ These helpers are implemented in JavaScript on top of the `i2c` module and live 
 - `display.listDrivers()`
   Return the registered driver names.
 
-The built-in driver name is `ssd1306`.
+Built-in driver names are `ssd1306`, `st7789`, and `wlk1501spi8p`.
 
 Supported `options` fields:
 
@@ -38,10 +38,23 @@ Supported `options` fields:
   Passed through to `i2c.open(...)` when the driver needs to configure or reopen its internal `I2CBus` handle.
 - `address`
   SSD1306 I2C address, default `0x3c`.
+- `host`, `sclk`, `mosi`, `miso`, `cs`, `dc`, `reset`, `backlight`, `freqHz`, `maxTransferSize`, `chunkBytes`
+  ST7789 SPI/GPIO options.
 - `width`, `height`
   Display size, default `128x64`.
 - `spacing`
   Extra inter-character spacing for `drawText()`.
+
+When the firmware exposes `esp32.info().features.displayBuffer`, the ST7789 driver uses a native RGB565 `displayBuffer` internally and flushes native byte views through `spi.write(...)`. If the feature is disabled, it falls back to the pure JavaScript mono surface path.
+
+The display stdlib loads `_sys/display/fonts/mono5x7.eqf` as `display.defaultFont`. Additional fonts can be loaded from LittleFS with `display.loadFont(path, name?)`. The file must use the EQF1 fixed bitmap format documented in the C API. Pass the returned font with `{ font }` to `drawText()` or `measureText()`.
+
+Mapped font sets can be loaded with `display.loadFontSet(path)` or directly with `display.loadMappedFont(path, size, name?)`. The manifest uses the same JSON file as `scripts/font_to_eqf.py --format manifest`, mapping input characters to safe EQF1 ASCII slots before drawing. This supports small Chinese UI strings without changing the native `displayBuffer` text API.
+
+```js
+var cjk16 = display.loadMappedFont("_sys/display/fonts/droid-cjk.json", "16");
+screen.drawText(8, 40, "中文显示", 0xffff, { font: cjk16 });
+```
 
 Display instance methods:
 
@@ -60,11 +73,11 @@ Display instance methods:
 - `drawBitmap(x, y, bitmap, enabled?)`
   Draw a bitmap shaped as `{ width, height, pixels }`.
 - `drawChar(x, y, ch, enabled)`
-  Draw one glyph using the built-in 5x7 font.
-- `drawText(x, y, text, enabled, spacing?)`
-  Draw text. Lowercase is normalized to uppercase in the built-in font.
+  Draw one glyph using the default EQF font.
+- `drawText(x, y, text, enabled, spacingOrStyle?)`
+  Draw text. Pass a number for spacing, or `{ spacing, font }` for a loaded EQF font.
 - `measureText(text, style?)`
-  Return `{ width, height, lines }` for the built-in 5x7 font.
+  Return `{ width, height, lines }` for the selected font.
 - `flush()`
   Write the framebuffer to the panel over I2C.
 - `on()` / `off()`
@@ -128,7 +141,7 @@ Supported common props:
 - `border`
   Draw a 1-pixel border around the node frame.
 - `color`
-  Text color for `ui.text(...)`.
+  Text color for `ui.text(...)`. Use `true`/`false` for the active surface foreground/background, or an RGB565 number on color surfaces.
 
 Example:
 

@@ -24,8 +24,9 @@ This document covers the APIs exported directly by the firmware runtime.
 Startup behavior:
 
 - If `/littlefs/index.js` exists, it is loaded automatically before the first `js>` prompt appears.
-- `index.js` is the single startup entry point. Use it to `load(...)` other scripts, drivers, and app code.
+- `index.js` is the single startup entry point. Keep it empty when you want the board to boot into the REPL, or use it to `load(...)` scripts, drivers, and app code.
 - This is the recommended place for board startup logic such as `load("_sys/display.js")`, `load("_sys/ui.js")`, and `wifi.connect(...)`.
+- Optional examples can live under `demo/` and be started manually, for example `load("demo/display_perf.js")`.
 
 Examples:
 
@@ -34,7 +35,7 @@ print("hello");
 gc();
 sleep(50);
 print(fetch("https://example.com").status);
-load("demo.js");
+load("demo/display_perf.js");
 print(waitFor(function (resolve) {
   setTimeout(function () { resolve(123); }, 50);
 }, 1000));
@@ -285,7 +286,7 @@ print(headers.get("content-type"));
 - `bus.scan()`
   Probe `0x03..0x77` and return an array of 7-bit device addresses.
 - `bus.write(addr, data)`
-  Write an array-like sequence of bytes and return the number of bytes written.
+  Write an array-like sequence of bytes or native byte view and return the number of bytes written.
 - `bus.read(addr, length)`
   Read `length` bytes and return them as a JavaScript array.
 - `bus.writeRead(addr, writeData, readLength)`
@@ -342,9 +343,9 @@ bus.close();
 - `device.close()`
   Remove the device from its parent SPI bus and make the JS object stale.
 - `device.transfer(data)`
-  Perform one synchronous full-duplex transaction and return the received bytes as a JavaScript array.
+  Perform one synchronous full-duplex transaction from an array-like sequence of bytes or native byte view and return the received bytes as a JavaScript array.
 - `device.write(data)`
-  Perform one synchronous write-only transaction and return the number of transmitted bytes.
+  Perform one synchronous write-only transaction from an array-like sequence of bytes or native byte view and return the number of transmitted bytes.
 - `device.read(length, fillByte = 0)`
   Clock `length` bytes and return the bytes read from MISO. `fillByte` controls the dummy value shifted out on MOSI while reading.
 
@@ -370,6 +371,145 @@ only when you need to override selected fields. For example:
 ```bash
 TEST_JS_CONFIG='{"spiLoopback":{"sclk":1,"mosi":2,"miso":2}}' \
 python scripts/remote.py test --scope js --module spi --loopback
+```
+
+## `displayBuffer` Module
+
+This module exposes native display buffers for heavy pixel work. It is registered only when `esp32.info().features.displayBuffer` is enabled. Display drivers still own SPI/I2C commands and flush policy; `displayBuffer` only owns pixels and export bytes.
+
+- `displayBuffer.MONO1`
+  Pixel format string `"mono1"`.
+- `displayBuffer.RGB565`
+  Pixel format string `"rgb565"`.
+- `displayBuffer.create(options)`
+  Create a native `DisplayBuffer`. Required options are `{ width, height, format }`. Optional fields are `{ layout, storage, stride, pageHeight, chunkBytes, foreground, background }`.
+- `displayBuffer.loadFont(path)`
+  Load an EQF1 fixed bitmap font from LittleFS and return a native `DisplayFont`.
+
+Formats and layouts:
+
+- `format: "mono1"`
+  One bit per pixel. Default layout is `"page-y8"` for SSD1306-style vertical pages. `"linear"` is also supported.
+- `format: "rgb565"`
+  16-bit RGB565 pixels. Layout must be `"linear"`.
+- `storage`
+  `"auto"`, `"internal"`, `"psram"`, or `"dma"`. `"auto"` uses internal RAM for small buffers and PSRAM for larger buffers when available.
+
+`DisplayBuffer` properties:
+
+- `width`, `height`
+- `format`, `layout`
+- `stride`, `pageHeight`
+- `byteLength`
+
+`DisplayBuffer` methods:
+
+- `close()`
+  Release native memory. Other methods throw after close.
+- `clear(color?)` / `fill(color?)`
+  Fill the whole buffer and mark it dirty.
+- `setPixel(x, y, color)` / `getPixel(x, y)`
+- `fillRect(x, y, width, height, color?)`
+- `drawRect(x, y, width, height, color?)`
+- `drawLine(x0, y0, x1, y1, color?)`
+- `drawBitmap(x, y, { width, height, pixels }, color?)`
+- `drawText(x, y, text, color?, options?)`
+  Draw text with `options.font`, a `DisplayFont` returned by `displayBuffer.loadFont(...)`. `options.spacing` controls extra inter-character pixels.
+- `measureText(text, options?)`
+  Return `{ width, height, lines }`.
+- `getDirty()`
+  Return `{ x, y, width, height }` for the current bounding dirty rectangle, or `null`.
+- `clearDirty()`
+- `markDirty(x, y, width, height)`
+- `readRect(x, y, width, height, options?)`
+  Return a native byte view for the clamped rectangle.
+- `readRectChunks(x, y, width, height, options?)`
+  Return an array of native byte views split by `options.chunkBytes` or the buffer's `chunkBytes`.
+
+`DisplayFont` properties:
+
+- `name`
+- `width`, `height`
+- `advance`, `lineHeight`
+
+EQF1 fixed bitmap font files use a 16-byte header followed by glyph bytes:
+
+- Bytes `0..3`: ASCII `EQF1`.
+- Byte `4`: format, currently `1` for fixed bitmap.
+- Byte `5`: flags, currently `0` for column-major, least-significant-bit first vertical pixels.
+- Bytes `6..11`: `first`, `last`, `width`, `height`, `advance`, `lineHeight`.
+- Bytes `12..15`: little-endian glyph byte length.
+- Glyph data: `(last - first + 1) * width * ceil(height / 8)` bytes.
+
+Use `scripts/font_to_eqf.py` to generate EQF1 files from BDF or a small JSON
+bitmap description:
+
+```sh
+python3 scripts/font_to_eqf.py input.bdf flash_data/_sys/display/fonts/my.eqf \
+  --first 0x20 --last 0x7f --missing question
+```
+
+For BDF input, the converter uses `FONTBOUNDINGBOX` as the fixed glyph cell and
+each glyph's `BBX` to place pixels inside that cell. Override `--width`,
+`--height`, `--advance`, and `--line-height` when the source BDF metrics do not
+match the desired display cell. EQF1 remains an 8-bit continuous range format,
+so the output range must be within `0x00..0xff`.
+
+For small Chinese UI strings, use an `eqf1-map` manifest. The same JSON file is
+used by the generator and by `display.loadMappedFont(...)` at runtime:
+
+```sh
+python3 scripts/font_to_eqf.py --format manifest flash_data/_sys/display/fonts/droid-cjk.json
+```
+
+The manifest maps source characters to safe printable ASCII EQF1 slots before
+calling the native text renderer. This is deliberate: JavaScript strings are
+passed to C as UTF-8, so mapped slots above `0x7f` are not single bytes at the C
+API boundary.
+
+The JSON input is useful for tiny hand-written fonts:
+
+```json
+{
+  "width": 1,
+  "height": 7,
+  "advance": 2,
+  "lineHeight": 8,
+  "glyphs": {
+    "0x41": ["1", "1", "1", "1", "1", "1", "0"],
+    "0x42": { "columns": [62] }
+  }
+}
+```
+
+Export options:
+
+- `byteOrder`
+  `"be"` or `"rgb565be"` for high byte first, `"le"` or `"rgb565le"` for low byte first. This affects `rgb565` exports.
+- `chunkBytes`
+  Positive preferred chunk size for `readRectChunks(...)`.
+
+Native byte views expose `length`, `byteLength`, and `toArray()`. They can be passed directly to `spi` and `i2c` writes without converting to a JavaScript array.
+
+Example:
+
+```js
+var fb = displayBuffer.create({
+  width: 240,
+  height: 240,
+  format: displayBuffer.RGB565,
+  storage: "auto",
+  chunkBytes: 4092,
+});
+var font = displayBuffer.loadFont("_sys/display/fonts/mono5x7.eqf");
+
+fb.clear(0x0000);
+fb.drawText(8, 8, "ESP32QJS", 0xffff, { font: font });
+
+var chunk = fb.readRect(0, 0, 240, 16, { byteOrder: "be" });
+device.write(chunk);
+fb.clearDirty();
+fb.close();
 ```
 
 ## `gpio` Module
@@ -686,7 +826,7 @@ if (ref) {
 - `esp32.info()`
   Return board/chip identity plus memory/runtime fields:
   `{ board, chip, features, userLedPin, userLedActiveLow, scriptsDir, flashSize, psramEnabled, psramSize, freePsram, totalInternalHeap, freeInternalHeap, jsHeapSize, jsHeapRegion, littlefsMounted, autoRunIndexJs, formatLittlefsOnMountFail, freeHeap, jsTimeMs }`.
-  `features` is `{ fs, gpio, ledc, adc, dac, i2c, spi, wifi, http, httpServer, staticFileHandler }` and is the stable way to discover which optional host modules or composite helpers were compiled into the firmware for the current board.
+  `features` is `{ fs, gpio, ledc, adc, dac, i2c, spi, displayBuffer, wifi, http, httpServer, staticFileHandler }` and is the stable way to discover which optional host modules or composite helpers were compiled into the firmware for the current board.
 - `esp32.millis()`
   Return monotonic milliseconds from `esp_timer`.
 - `esp32.micros()`

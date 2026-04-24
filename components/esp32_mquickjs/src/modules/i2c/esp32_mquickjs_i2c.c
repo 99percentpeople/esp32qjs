@@ -2,6 +2,7 @@
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_I2C
 
+#include "utils/esp32_mquickjs_byte_source.h"
 #include "esp32_mquickjs_core.h"
 
 #include <stdbool.h>
@@ -275,68 +276,6 @@ static bool js_value_to_i2c_address(JSContext *ctx, JSValue value, uint16_t *out
     return true;
 }
 
-static bool js_value_to_byte_array(JSContext *ctx,
-                                   JSValue value,
-                                   const char *api_name,
-                                   uint8_t **out_bytes,
-                                   size_t *out_len,
-                                   JSValue *out_error)
-{
-    JSGCRef length_ref;
-    JSValue *length_value;
-    uint32_t length = 0;
-    uint8_t *bytes;
-    uint32_t i;
-
-    *out_bytes = NULL;
-    *out_len = 0;
-    *out_error = JS_UNDEFINED;
-
-    if (JS_GetClassID(ctx, value) < 0) {
-        *out_error = JS_ThrowTypeError(ctx, "%s expects an array-like object of byte values", api_name);
-        return false;
-    }
-
-    length_value = JS_PushGCRef(ctx, &length_ref);
-    *length_value = JS_GetPropertyStr(ctx, value, "length");
-    if (JS_IsException(*length_value) || !js_value_to_u32(ctx, *length_value, &length)) {
-        JS_PopGCRef(ctx, &length_ref);
-        *out_error = JS_ThrowTypeError(ctx, "%s expects an array-like object with a numeric length", api_name);
-        return false;
-    }
-    JS_PopGCRef(ctx, &length_ref);
-
-    if (length == 0) {
-        return true;
-    }
-
-    bytes = heap_caps_malloc(length, MALLOC_CAP_8BIT);
-    if (bytes == NULL) {
-        *out_error = JS_ThrowOutOfMemory(ctx);
-        return false;
-    }
-
-    for (i = 0; i < length; ++i) {
-        JSGCRef item_ref;
-        JSValue *item = JS_PushGCRef(ctx, &item_ref);
-        uint32_t raw_byte = 0;
-
-        *item = JS_GetPropertyUint32(ctx, value, i);
-        if (JS_IsException(*item) || !js_value_to_u32(ctx, *item, &raw_byte) || raw_byte > 0xff) {
-            JS_PopGCRef(ctx, &item_ref);
-            heap_caps_free(bytes);
-            *out_error = JS_ThrowTypeError(ctx, "%s expects byte values in the range 0-255", api_name);
-            return false;
-        }
-        bytes[i] = (uint8_t)raw_byte;
-        JS_PopGCRef(ctx, &item_ref);
-    }
-
-    *out_bytes = bytes;
-    *out_len = length;
-    return true;
-}
-
 static JSValue js_bytes_to_array(JSContext *ctx, const uint8_t *bytes, size_t length)
 {
     JSGCRef array_ref;
@@ -419,29 +358,29 @@ static JSValue i2c_write(JSContext *ctx,
                          JSValue data_value)
 {
     i2c_master_dev_handle_t device_handle = NULL;
-    uint8_t *bytes = NULL;
-    size_t length = 0;
+    esp32_mquickjs_byte_source_t source;
+    uint8_t *owned = NULL;
     JSValue error = JS_UNDEFINED;
     esp_err_t err;
 
-    if (!js_value_to_byte_array(ctx, data_value, "I2CBus.write(addr, data)", &bytes, &length, &error)) {
+    if (!esp32_mquickjs_get_byte_source(ctx, data_value, "I2CBus.write(addr, data)", &source, &owned, &error)) {
         return error;
     }
 
     err = i2c_with_device(slot, address, &device_handle);
     if (err != ESP_OK) {
-        heap_caps_free(bytes);
+        esp32_mquickjs_release_byte_source(owned);
         return i2c_throw_error(ctx, err, "I2CBus.write() failed to add device");
     }
 
-    err = i2c_master_transmit(device_handle, bytes, length, (int)slot->timeout_ms);
+    err = i2c_master_transmit(device_handle, source.data, source.length, (int)slot->timeout_ms);
     i2c_master_bus_rm_device(device_handle);
-    heap_caps_free(bytes);
+    esp32_mquickjs_release_byte_source(owned);
     if (err != ESP_OK) {
         return i2c_throw_error(ctx, err, "I2CBus.write() failed");
     }
 
-    return JS_NewInt32(ctx, (int32_t)length);
+    return JS_NewInt32(ctx, (int32_t)source.length);
 }
 
 static JSValue i2c_read(JSContext *ctx,
@@ -488,26 +427,26 @@ static JSValue i2c_write_read(JSContext *ctx,
                               uint32_t read_length)
 {
     i2c_master_dev_handle_t device_handle = NULL;
-    uint8_t *write_bytes = NULL;
-    size_t write_length = 0;
+    esp32_mquickjs_byte_source_t write_source;
+    uint8_t *write_owned = NULL;
     uint8_t *read_bytes = NULL;
     JSValue error = JS_UNDEFINED;
     JSValue result;
     esp_err_t err;
 
-    if (!js_value_to_byte_array(ctx,
-                                write_value,
-                                "I2CBus.writeRead(addr, writeData, readLength)",
-                                &write_bytes,
-                                &write_length,
-                                &error)) {
+    if (!esp32_mquickjs_get_byte_source(ctx,
+                                        write_value,
+                                        "I2CBus.writeRead(addr, writeData, readLength)",
+                                        &write_source,
+                                        &write_owned,
+                                        &error)) {
         return error;
     }
 
     if (read_length > 0) {
         read_bytes = heap_caps_malloc(read_length, MALLOC_CAP_8BIT);
         if (read_bytes == NULL) {
-            heap_caps_free(write_bytes);
+            esp32_mquickjs_release_byte_source(write_owned);
             return JS_ThrowOutOfMemory(ctx);
         }
     }
@@ -515,18 +454,18 @@ static JSValue i2c_write_read(JSContext *ctx,
     err = i2c_with_device(slot, address, &device_handle);
     if (err != ESP_OK) {
         heap_caps_free(read_bytes);
-        heap_caps_free(write_bytes);
+        esp32_mquickjs_release_byte_source(write_owned);
         return i2c_throw_error(ctx, err, "I2CBus.writeRead() failed to add device");
     }
 
     err = i2c_master_transmit_receive(device_handle,
-                                      write_bytes,
-                                      write_length,
+                                      write_source.data,
+                                      write_source.length,
                                       read_bytes,
                                       read_length,
                                       (int)slot->timeout_ms);
     i2c_master_bus_rm_device(device_handle);
-    heap_caps_free(write_bytes);
+    esp32_mquickjs_release_byte_source(write_owned);
     if (err != ESP_OK) {
         heap_caps_free(read_bytes);
         return i2c_throw_error(ctx, err, "I2CBus.writeRead() failed");
