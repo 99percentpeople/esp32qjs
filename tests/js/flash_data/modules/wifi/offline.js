@@ -8,11 +8,17 @@ test("wifi/offline", function () {
   test.ok(status && typeof status === "object", "wifi.status() should return an object");
   test.ok(typeof wifi.DEFAULT_TIMEOUT_MS === "number", "wifi timeout constant");
   test.ok(typeof wifi.connect === "function", "wifi.connect should exist");
-  test.ok(typeof wifi.connectAsync === "function", "wifi.connectAsync should exist");
+  test.ok(typeof wifi.connectAsync === "undefined", "wifi.connectAsync should not exist");
   test.ok(typeof wifi.disconnect === "function", "wifi.disconnect should exist");
   test.ok(typeof wifi.scan === "function", "wifi.scan should exist");
-  test.ok(typeof wifi.scanAsync === "function", "wifi.scanAsync should exist");
-  test.ok(typeof wifi.async === "undefined", "wifi.async should not exist");
+  test.ok(typeof wifi.scanAsync === "undefined", "wifi.scanAsync should not exist");
+  test.ok(typeof wifi.async === "object", "wifi.async should exist");
+  test.ok(wifi.async === wifi.async, "wifi.async should be a stable object");
+  wifi.async.__probe = 7;
+  test.equal(wifi.async.__probe, 7, "wifi.async should preserve object properties");
+  delete wifi.async.__probe;
+  test.ok(typeof wifi.async.connect === "function", "wifi.async.connect should exist");
+  test.ok(typeof wifi.async.scan === "function", "wifi.async.scan should exist");
   test.ok(typeof status.initialized === "boolean", "initialized should be boolean");
   test.ok(typeof status.started === "boolean", "started should be boolean");
   test.ok(typeof status.connected === "boolean", "connected should be boolean");
@@ -27,14 +33,14 @@ test("wifi/offline", function () {
   } catch (scanFailure) {
     scanError = scanFailure && scanFailure.message ? scanFailure.message : String(scanFailure);
   }
-  test.ok(scanError.indexOf("wifi.scanAsync") >= 0, "wifi.scan(callback) should direct callers to wifi.scanAsync");
+  test.ok(scanError.indexOf("wifi.async.scan") >= 0, "wifi.scan(callback) should direct callers to wifi.async.scan");
 
   try {
     wifi.connect("ssid", "password", function () {});
   } catch (connectFailure) {
     connectError = connectFailure && connectFailure.message ? connectFailure.message : String(connectFailure);
   }
-  test.ok(connectError.indexOf("wifi.connectAsync") >= 0, "wifi.connect(callback) should direct callers to wifi.connectAsync");
+  test.ok(connectError.indexOf("wifi.async.connect") >= 0, "wifi.connect(callback) should direct callers to wifi.async.connect");
 
   disconnected = wifi.disconnect();
   test.ok(disconnected && typeof disconnected === "object", "wifi.disconnect should return a status object");

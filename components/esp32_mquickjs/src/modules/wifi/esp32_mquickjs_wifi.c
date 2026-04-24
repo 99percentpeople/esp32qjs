@@ -970,7 +970,7 @@ JSValue js_wifi_scan(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     }
     if (argc == 1 && JS_IsFunction(ctx, argv[0])) {
         return JS_ThrowTypeError(ctx,
-                                 "wifi.scan() no longer accepts a callback; use wifi.scanAsync(callback)");
+                                 "wifi.scan() no longer accepts a callback; use wifi.async.scan(callback)");
     }
 
     return JS_ThrowTypeError(ctx, "wifi.scan() expects no arguments");
@@ -988,7 +988,7 @@ JSValue js_wifi_connect(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
     (void)this_val;
     if ((argc >= 3 && JS_IsFunction(ctx, argv[2])) || (argc >= 4 && JS_IsFunction(ctx, argv[3]))) {
         return JS_ThrowTypeError(ctx,
-                                 "wifi.connect(...) no longer accepts a callback; use wifi.connectAsync(...)");
+                                 "wifi.connect(...) no longer accepts a callback; use wifi.async.connect(...)");
     }
     if (argc < 2 || argc > 3 || !JS_IsString(ctx, argv[0]) || !JS_IsString(ctx, argv[1])) {
         return JS_ThrowTypeError(ctx,

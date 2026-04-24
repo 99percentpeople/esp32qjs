@@ -497,7 +497,7 @@ What should be tightened:
 - `wifi.status()` should remain the single authoritative status shape.
 - Async callback result ordering should stay consistent across all methods:
   `callback(result, error)`.
-- Keep sync and async entrypoints intentionally separate. `wifi.scan()` and `wifi.connect(...)` should remain synchronous only, while `wifi.scanAsync(...)` and `wifi.connectAsync(...)` carry the callback-driven async behavior.
+- Keep sync and async entrypoints intentionally separate. `wifi.scan()` and `wifi.connect(...)` should remain synchronous only, while `wifi.async.scan(...)` and `wifi.async.connect(...)` carry the callback-driven async behavior.
 - Any future reconnect, AP mode, hostname mutation, or event subscription work should be introduced carefully, not mixed into the basic station API casually.
 
 Recommended stable baseline:
@@ -505,10 +505,10 @@ Recommended stable baseline:
 - `DEFAULT_TIMEOUT_MS`
 - `status()`
 - `scan()`
-- `scanAsync(callback)`
+- `async.scan(callback)`
 - `connect(ssid, password, timeoutMs?)`
-- `connectAsync(ssid, password, callback)`
-- `connectAsync(ssid, password, timeoutMs, callback)`
+- `async.connect(ssid, password, callback)`
+- `async.connect(ssid, password, timeoutMs, callback)`
 - `disconnect()`
 - Gate the module behind `FEATURE_WIFI`.
 
@@ -524,7 +524,7 @@ What is good:
 What should be tightened:
 
 - Keep the surface intentionally smaller than browser Fetch or Express.
-- Keep the embedded API explicitly split by function name: synchronous transport stays on `fetch(...)` / `http.fetch(...)`, and callback-driven async transport stays on `http.fetchAsync(...)`.
+- Keep the embedded API explicitly split by namespace: synchronous transport stays on `fetch(...)` / `http.fetch(...)`, and callback-driven async transport stays on `http.async.fetch(...)`.
 - Do not overload `fetch(...)` with an optional callback that changes its execution model.
 - Decide that this is a callback/sync embedded API, not a promise-based compatibility layer.
 - Server routing and static file helpers should remain explicit, not auto-magic.
@@ -533,7 +533,7 @@ Recommended stable baseline:
 
 - `fetch(url, init?)`
 - `http.fetch(...)` as the same transport primitive
-- `http.fetchAsync(input, callback)` / `http.fetchAsync(input, options, callback)`
+- `http.async.fetch(input, callback)` / `http.async.fetch(input, options, callback)`
 - `http.server(options?)`
 - `http.staticFileHandler(root)`
 - `HttpServer.start()`, `stop()`
@@ -588,6 +588,6 @@ Recommended implementation order from this plan:
 3. Refactor `i2c` to a bus-object model.
 4. Add `spi` with the same bus/device object model and explicit synchronous transaction methods.
 5. Tighten `ledc` status semantics so status objects never imply configuration that did not happen.
-6. Lock down the `wifi` and `http` sync/async split so callback-driven async behavior always uses distinct names such as `scanAsync`, `connectAsync`, and `fetchAsync`, while keeping `callback(result, error)` ordering consistent.
+6. Lock down the `wifi` and `http` sync/async split so callback-driven async behavior always uses distinct entrypoints such as `wifi.async.scan`, `wifi.async.connect`, and `http.async.fetch`, while keeping `callback(result, error)` ordering consistent.
 7. Tighten the `dac` status and lifecycle semantics only as needed, while keeping higher-level waveform helpers out of the native layer.
 8. Once those are done, refresh [docs/c-api.md](/home/zach/esp32qjs/docs/c-api.md) so the descriptive reference matches the stabilized design.

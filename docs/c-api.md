@@ -46,7 +46,7 @@ Example `index.js`:
 print("[startup] boot script running");
 load("_sys/display.js");
 load("_sys/ui.js");
-wifi.connectAsync("your-ssid", "your-password", function (status, error) {
+wifi.async.connect("your-ssid", "your-password", function (status, error) {
   print(error === undefined, status && status.ip);
 });
 ```
@@ -72,12 +72,12 @@ setTimeout(function () { d.resolve("ok"); }, 50);
 print(d.wait(1000));
 
 var aps = waitFor(function (resolve, reject, deferred) {
-  wifi.scanAsync(deferred.callback);
+  wifi.async.scan(deferred.callback);
 }, 10000);
 print(aps.length);
 
 var response = waitFor(function (resolve, reject, deferred) {
-  http.fetchAsync("https://example.com", deferred.callback);
+  http.async.fetch("https://example.com", deferred.callback);
 }, 10000);
 print(response.status);
 ```
@@ -715,13 +715,13 @@ Wi-Fi credentials are kept in RAM. Rebooting the board clears the active station
   Return `{ initialized, started, connected, scanning, ssid, hostname, ip, netmask, gateway, lastDisconnectReason, lastDisconnectReasonName }`.
 - `wifi.connect(ssid, password, timeoutMs = wifi.DEFAULT_TIMEOUT_MS)`
   Start station mode, connect to an AP, and return the updated status object.
-- `wifi.connectAsync(ssid, password, callback)` / `wifi.connectAsync(ssid, password, timeoutMs, callback)`
+- `wifi.async.connect(ssid, password, callback)` / `wifi.async.connect(ssid, password, timeoutMs, callback)`
   Start station mode without blocking the REPL and call `callback(status, error)` on completion.
 - `wifi.disconnect()`
   Disconnect the station and return the updated status object.
 - `wifi.scan()`
   Run a blocking AP scan and return an array of `{ ssid, bssid, rssi, channel, authMode, hidden }`.
-- `wifi.scanAsync(callback)`
+- `wifi.async.scan(callback)`
   Start a non-blocking scan and call `callback(results, error)` after the scan completes.
 
 Example:
@@ -730,11 +730,11 @@ Example:
 print(JSON.stringify(wifi.status()));
 const aps = wifi.scan();
 print(aps.length);
-wifi.scanAsync(function (results, error) {
+wifi.async.scan(function (results, error) {
   print(error === undefined, results.length);
 });
 wifi.connect("your-ssid", "your-password");
-wifi.connectAsync("your-ssid", "your-password", function (status, error) {
+wifi.async.connect("your-ssid", "your-password", function (status, error) {
   print(error === undefined, status && status.ip);
 });
 print(JSON.stringify(wifi.status()));
@@ -751,7 +751,7 @@ The `http` namespace is exposed when either the HTTP client feature or the HTTP 
   Create a lightweight HTTP server object backed by `esp_http_server`. Exposed only when `esp32.info().features.httpServer` is enabled.
 - `http.fetch(input, options?)`
   Alias of global `fetch(input, options?)`. Exposed only when `esp32.info().features.http` is enabled.
-- `http.fetchAsync(input, callback)` / `http.fetchAsync(input, options, callback)`
+- `http.async.fetch(input, callback)` / `http.async.fetch(input, options, callback)`
   Run an asynchronous HTTP request and call `callback(response, error)` on completion. Exposed only when `esp32.info().features.http` is enabled.
 
 Supported `fetch` options:
@@ -771,7 +771,7 @@ Examples:
 var response = fetch("http://example.com");
 print(response.status, response.ok, response.text().length);
 
-http.fetchAsync("https://example.com", function (response, error) {
+http.async.fetch("https://example.com", function (response, error) {
   print(error === undefined, response.status, response.text().length);
 });
 
@@ -786,7 +786,7 @@ Synchronous `fetch(...)` runs on the same JS thread as `http.server(...)`. If yo
 
 ```js
 var response = waitFor(function (resolve, reject, deferred) {
-  http.fetchAsync("http://" + wifi.status().ip + ":8080/ping", deferred.callback);
+  http.async.fetch("http://" + wifi.status().ip + ":8080/ping", deferred.callback);
 }, 10000);
 print(response.text());
 ```

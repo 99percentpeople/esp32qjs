@@ -142,7 +142,7 @@ static JSValue http_fetch_async(JSContext *ctx,
         return JS_ThrowOutOfMemory(ctx);
     }
     if (!JS_IsFunction(ctx, callback)) {
-        return JS_ThrowTypeError(ctx, "http.fetchAsync(..., callback) expects a function");
+        return JS_ThrowTypeError(ctx, "http.async.fetch(..., callback) expects a function");
     }
 
     http_lock();
@@ -208,12 +208,12 @@ JSValue js_http_async_fetch(JSContext *ctx, JSValue *this_val, int argc, JSValue
 
     if (argc < 2 || argc > 3) {
         return JS_ThrowTypeError(ctx,
-                                 "http.fetchAsync(input, callback) or http.fetchAsync(input, options, callback) expects a URL string or Request");
+                                 "http.async.fetch(input, callback) or http.async.fetch(input, options, callback) expects a URL string or Request");
     }
 
     callback = argv[argc - 1];
     if (!JS_IsFunction(ctx, callback)) {
-        return JS_ThrowTypeError(ctx, "http.fetchAsync(..., callback) expects a callback function");
+        return JS_ThrowTypeError(ctx, "http.async.fetch(..., callback) expects a callback function");
     }
 
     if (esp32_mquickjs_http_build_request_from_args(ctx, argc - 1, argv, &request) != 0) {

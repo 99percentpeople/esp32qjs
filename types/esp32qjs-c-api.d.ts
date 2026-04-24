@@ -825,27 +825,31 @@ declare namespace ESP32QJS {
    * @example
    * ```js
    * print(JSON.stringify(wifi.status()));
-   * wifi.scanAsync(function (results, error) { print(error === undefined, results.length); });
+   * wifi.async.scan(function (results, error) { print(error === undefined, results.length); });
    * ```
    */
-  interface WiFiModule {
-    readonly DEFAULT_TIMEOUT_MS: number;
-    status(): WiFiStatus;
-    connect(ssid: string, password: string, timeoutMs?: number): WiFiStatus;
-    connectAsync(
+  interface WiFiAsyncModule {
+    connect(
       ssid: string,
       password: string,
       callback: WiFiConnectCallback,
     ): void;
-    connectAsync(
+    connect(
       ssid: string,
       password: string,
       timeoutMs: number,
       callback: WiFiConnectCallback,
     ): void;
+    scan(callback: WiFiScanCallback): void;
+  }
+
+  interface WiFiModule {
+    readonly DEFAULT_TIMEOUT_MS: number;
+    status(): WiFiStatus;
+    connect(ssid: string, password: string, timeoutMs?: number): WiFiStatus;
     disconnect(): WiFiStatus;
     scan(): WiFiScanResult[];
-    scanAsync(callback: WiFiScanCallback): void;
+    async: WiFiAsyncModule;
   }
 
   /**
@@ -868,6 +872,15 @@ declare namespace ESP32QJS {
 
   interface HttpFetchFunction {
     (input: FetchInput, options?: FetchOptions): Response;
+  }
+
+  interface HttpAsyncModule {
+    fetch(input: FetchInput, callback: FetchCallback): void;
+    fetch(
+      input: FetchInput,
+      options: FetchOptions,
+      callback: FetchCallback,
+    ): void;
   }
 
   /**
@@ -949,12 +962,7 @@ declare namespace ESP32QJS {
   interface HttpModule {
     readonly DEFAULT_TIMEOUT_MS?: number;
     fetch?: HttpFetchFunction;
-    fetchAsync?(input: FetchInput, callback: FetchCallback): void;
-    fetchAsync?(
-      input: FetchInput,
-      options: FetchOptions,
-      callback: FetchCallback,
-    ): void;
+    async?: HttpAsyncModule;
     server?(options?: HttpServerOptions): HttpServer;
     staticFileHandler?(root: string): StaticFileHandler;
   }

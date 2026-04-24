@@ -23,7 +23,7 @@ static JSValue wifi_scan_async(JSContext *ctx, JSValue callback)
     esp_err_t err;
 
     if (!JS_IsFunction(ctx, callback)) {
-        return JS_ThrowTypeError(ctx, "wifi.scanAsync(callback) expects a function");
+        return JS_ThrowTypeError(ctx, "wifi.async.scan(callback) expects a function");
     }
 
     err = esp32_mquickjs_wifi_ensure_started();
@@ -71,7 +71,7 @@ static JSValue wifi_connect_async_js(JSContext *ctx,
     esp_err_t err;
 
     if (!JS_IsFunction(ctx, callback)) {
-        return JS_ThrowTypeError(ctx, "wifi.connectAsync(..., callback) expects a function");
+        return JS_ThrowTypeError(ctx, "wifi.async.connect(..., callback) expects a function");
     }
 
     err = esp32_mquickjs_wifi_ensure_started();
@@ -115,7 +115,7 @@ JSValue js_wifi_async_scan(JSContext *ctx, JSValue *this_val, int argc, JSValue 
     (void)this_val;
 
     if (argc != 1 || !JS_IsFunction(ctx, argv[0])) {
-        return JS_ThrowTypeError(ctx, "wifi.scanAsync(callback) expects a callback function");
+        return JS_ThrowTypeError(ctx, "wifi.async.scan(callback) expects a callback function");
     }
 
     return wifi_scan_async(ctx, argv[0]);
@@ -134,7 +134,7 @@ JSValue js_wifi_async_connect(JSContext *ctx, JSValue *this_val, int argc, JSVal
 
     if (argc < 3 || argc > 4 || !JS_IsString(ctx, argv[0]) || !JS_IsString(ctx, argv[1])) {
         return JS_ThrowTypeError(ctx,
-                                 "wifi.connectAsync(ssid, password, callback) or wifi.connectAsync(ssid, password, timeoutMs, callback) expects two strings, an optional timeout, and a callback");
+                                 "wifi.async.connect(ssid, password, callback) or wifi.async.connect(ssid, password, timeoutMs, callback) expects two strings, an optional timeout, and a callback");
     }
 
     if (argc == 3) {
@@ -144,13 +144,13 @@ JSValue js_wifi_async_connect(JSContext *ctx, JSValue *this_val, int argc, JSVal
                                                     argv[2],
                                                     ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS,
                                                     &timeout_ms) != 0) {
-            return JS_ThrowTypeError(ctx, "wifi.connectAsync(..., timeoutMs) expects a non-negative integer");
+            return JS_ThrowTypeError(ctx, "wifi.async.connect(..., timeoutMs) expects a non-negative integer");
         }
         callback = argv[3];
     }
 
     if (!JS_IsFunction(ctx, callback)) {
-        return JS_ThrowTypeError(ctx, "wifi.connectAsync(..., callback) expects a callback function");
+        return JS_ThrowTypeError(ctx, "wifi.async.connect(..., callback) expects a callback function");
     }
 
     ssid = JS_ToCString(ctx, argv[0], &ssid_buf);

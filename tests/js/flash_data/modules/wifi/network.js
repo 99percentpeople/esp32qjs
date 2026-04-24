@@ -8,7 +8,7 @@ test("wifi/network", function () {
   } catch (_) {}
 
   status = waitFor(function (resolve, reject) {
-    wifi.connectAsync(cfg.wifiSsid, cfg.wifiPassword, 15000, function (nextStatus, error) {
+    wifi.async.connect(cfg.wifiSsid, cfg.wifiPassword, 15000, function (nextStatus, error) {
       if (error) {
         reject(error);
         return;

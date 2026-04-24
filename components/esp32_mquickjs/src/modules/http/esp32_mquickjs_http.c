@@ -1024,7 +1024,7 @@ int esp32_mquickjs_http_build_request_from_args(JSContext *ctx,
     if (argc >= 2) {
         if (JS_IsFunction(ctx, argv[1])) {
             JS_ThrowTypeError(ctx,
-                              "fetch(input, options?) does not accept a callback; use http.fetchAsync(input, callback)");
+                              "fetch(input, options?) does not accept a callback; use http.async.fetch(input, callback)");
             return -1;
         }
         options = argv[1];
