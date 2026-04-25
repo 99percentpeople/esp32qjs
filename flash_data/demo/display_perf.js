@@ -92,6 +92,7 @@ var latest = {
 var MODES = [
   { name: "FULL", label: "FULL SCREEN", fullFlush: true },
   { name: "PART", label: "PARTIAL RECTS", fullFlush: false },
+  { name: "SHAPE", label: "VECTOR SHAPES", fullFlush: false },
   { name: "TEXT", label: "TEXT + CJK", fullFlush: false }
 ];
 
@@ -306,6 +307,70 @@ function drawTextScene(dirty) {
   rect(dirty, 8, y, width - 16, panelH);
 }
 
+function drawShapeScene(dirty) {
+  var areaX = 6;
+  var areaY = bodyY + 4;
+  var areaW = width - 12;
+  var areaH = graphY - areaY - 6;
+  var cx = areaX + areaW / 2 | 0;
+  var cy = areaY + areaH / 2 | 0;
+  var pulse = pingPong(frame * 2, 18);
+  var spin = frame % 96;
+  var star = [];
+  var i;
+  var angle;
+  var radius;
+  var px;
+  var py;
+
+  screen.fillRect(areaX, areaY, areaW, areaH, COLORS.bg);
+  screen.drawRoundRect(areaX, areaY, areaW, areaH, 10, COLORS.dim);
+  screen.fillRoundRect(areaX + 6, areaY + 6, 58, 22, 7, COLORS.panel2);
+  screen.drawText(areaX + 13, areaY + 13, "SHAPES", { color: COLORS.yellow, spacing: 0 });
+
+  screen.fillCircle(areaX + 34 + pulse, areaY + 58, 18, COLORS.blue);
+  screen.drawCircle(areaX + 34 + pulse, areaY + 58, 23, COLORS.cyan);
+  screen.fillEllipse(width - 48, areaY + 52 + pingPong(frame, 18), 30, 14, COLORS.magenta);
+  screen.drawEllipse(width - 48, areaY + 52 + pingPong(frame, 18), 38, 20, COLORS.text, { segments: 28 });
+
+  for (i = 0; i < 10; i += 1) {
+    angle = (Math.PI * 2 * (i * 9 + spin)) / 96;
+    radius = (i & 1) ? 18 : 36;
+    px = cx + Math.round(Math.cos(angle) * radius);
+    py = cy + Math.round(Math.sin(angle) * radius);
+    star.push([px, py]);
+  }
+  screen.fillPolygon(star, COLORS.green);
+  screen.drawPolygon(star, COLORS.text);
+
+  screen.drawQuadraticBezier(
+    areaX + 12,
+    graphY - 34,
+    cx,
+    areaY + 18 + pingPong(frame * 3, areaH - 44),
+    areaX + areaW - 12,
+    graphY - 34,
+    COLORS.orange,
+    { segments: 28 }
+  );
+  screen.drawCubicBezier(
+    areaX + 8,
+    graphY - 12,
+    areaX + 44,
+    areaY + 26,
+    areaX + areaW - 54,
+    graphY - 66,
+    areaX + areaW - 8,
+    graphY - 12,
+    COLORS.red,
+    { segments: 34 }
+  );
+
+  screen.fillTriangle(cx - 18, areaY + 18, cx + 20, areaY + 22, cx + 2, areaY + 52, COLORS.cyan);
+  screen.drawTriangle(cx - 18, areaY + 18, cx + 20, areaY + 22, cx + 2, areaY + 52, COLORS.bg);
+  rect(dirty, areaX, areaY, areaW, areaH);
+}
+
 function drawGraph(dirty) {
   var i;
   var sample;
@@ -427,6 +492,8 @@ function drawFrame() {
     drawFullScene();
   } else if (mode.name === "PART") {
     drawPartialScene(dirty);
+  } else if (mode.name === "SHAPE") {
+    drawShapeScene(dirty);
   } else {
     drawTextScene(dirty);
   }
@@ -494,6 +561,6 @@ globalThis.displayPerf = {
 
 print("[display:perf] running", width + "x" + height,
       "chunk=" + TRANSFER_BYTES,
-      "modes=FULL,PART,TEXT",
+      "modes=FULL,PART,SHAPE,TEXT",
       "next=displayPerf.next()",
       "stop=displayPerf.stop()");

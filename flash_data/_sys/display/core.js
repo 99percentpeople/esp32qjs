@@ -353,6 +353,89 @@
     return value;
   }
 
+  function flatPointList(points, apiName) {
+    var out = [];
+    var length;
+    var item;
+    var x;
+    var y;
+    var i;
+
+    if (!points || typeof points.length !== "number") {
+      throw new Error(apiName + " expects a point array");
+    }
+    length = points.length | 0;
+    if (length <= 0) {
+      return out;
+    }
+    if (typeof points[0] === "number") {
+      if ((length & 1) !== 0) {
+        throw new Error(apiName + " expects an even-length flat point array");
+      }
+      for (i = 0; i < length; i += 2) {
+        out.push(points[i] | 0, points[i + 1] | 0);
+      }
+      return out;
+    }
+    for (i = 0; i < length; i += 1) {
+      item = points[i];
+      if (!item || typeof item !== "object") {
+        throw new Error(apiName + " expects points shaped as [x, y] or { x, y }");
+      }
+      if (typeof item.length === "number") {
+        x = item[0];
+        y = item[1];
+      } else {
+        x = item.x;
+        y = item.y;
+      }
+      out.push(x | 0, y | 0);
+    }
+    return out;
+  }
+
+  function sortFirst(values, count) {
+    var i;
+    var j;
+    var value;
+
+    for (i = 1; i < count; i += 1) {
+      value = values[i];
+      j = i - 1;
+      while (j >= 0 && values[j] > value) {
+        values[j + 1] = values[j];
+        j -= 1;
+      }
+      values[j + 1] = value;
+    }
+  }
+
+  function curveSegments(options, fallback) {
+    var style = styleOptions(options, "curve options");
+    var segments = own(style, "segments") ? style.segments | 0 : fallback;
+
+    if (segments < 2) {
+      segments = 2;
+    }
+    if (segments > 128) {
+      segments = 128;
+    }
+    return segments;
+  }
+
+  function ellipseSegments(rx, ry, options) {
+    var longest = Math.max(Math.abs(rx | 0), Math.abs(ry | 0));
+    var fallback = longest * 2;
+
+    if (fallback < 16) {
+      fallback = 16;
+    }
+    if (fallback > 96) {
+      fallback = 96;
+    }
+    return curveSegments(options, fallback);
+  }
+
   function Surface(options) {
     options = options || {};
 
@@ -374,6 +457,336 @@
 
   Surface.prototype.measureText = function (text, style) {
     return measureText(text, style);
+  };
+
+  Surface.prototype.drawCircle = function (cx, cy, radius, color) {
+    var r = Math.abs(radius | 0);
+    var x = r;
+    var y = 0;
+    var err = 1 - x;
+
+    cx = cx | 0;
+    cy = cy | 0;
+    if (r === 0) {
+      return this.setPixel(cx, cy, color);
+    }
+    while (x >= y) {
+      this.setPixel(cx + x, cy + y, color);
+      this.setPixel(cx + y, cy + x, color);
+      this.setPixel(cx - y, cy + x, color);
+      this.setPixel(cx - x, cy + y, color);
+      this.setPixel(cx - x, cy - y, color);
+      this.setPixel(cx - y, cy - x, color);
+      this.setPixel(cx + y, cy - x, color);
+      this.setPixel(cx + x, cy - y, color);
+      y += 1;
+      if (err < 0) {
+        err += (y << 1) + 1;
+      } else {
+        x -= 1;
+        err += ((y - x) << 1) + 1;
+      }
+    }
+    return this;
+  };
+
+  Surface.prototype.fillCircle = function (cx, cy, radius, color) {
+    var r = Math.abs(radius | 0);
+    var rr = r * r;
+    var y;
+    var x;
+
+    cx = cx | 0;
+    cy = cy | 0;
+    for (y = -r; y <= r; y += 1) {
+      x = Math.sqrt(rr - y * y) | 0;
+      this.fillRect(cx - x, cy + y, x * 2 + 1, 1, color);
+    }
+    return this;
+  };
+
+  Surface.prototype.drawEllipse = function (cx, cy, rx, ry, color, options) {
+    var segments = ellipseSegments(rx, ry, options);
+    var prevX;
+    var prevY;
+    var x;
+    var y;
+    var angle;
+    var i;
+
+    cx = cx | 0;
+    cy = cy | 0;
+    rx = Math.abs(rx | 0);
+    ry = Math.abs(ry | 0);
+    if (rx === 0 && ry === 0) {
+      return this.setPixel(cx, cy, color);
+    }
+    if (rx === 0) {
+      return this.drawLine(cx, cy - ry, cx, cy + ry, color);
+    }
+    if (ry === 0) {
+      return this.drawLine(cx - rx, cy, cx + rx, cy, color);
+    }
+    prevX = cx + rx;
+    prevY = cy;
+    for (i = 1; i <= segments; i += 1) {
+      angle = Math.PI * 2 * i / segments;
+      x = cx + Math.round(Math.cos(angle) * rx);
+      y = cy + Math.round(Math.sin(angle) * ry);
+      this.drawLine(prevX, prevY, x, y, color);
+      prevX = x;
+      prevY = y;
+    }
+    return this;
+  };
+
+  Surface.prototype.fillEllipse = function (cx, cy, rx, ry, color) {
+    var y;
+    var span;
+    var ratio;
+
+    cx = cx | 0;
+    cy = cy | 0;
+    rx = Math.abs(rx | 0);
+    ry = Math.abs(ry | 0);
+    if (rx === 0 && ry === 0) {
+      return this.setPixel(cx, cy, color);
+    }
+    if (rx === 0) {
+      return this.drawLine(cx, cy - ry, cx, cy + ry, color);
+    }
+    if (ry === 0) {
+      return this.drawLine(cx - rx, cy, cx + rx, cy, color);
+    }
+    for (y = -ry; y <= ry; y += 1) {
+      ratio = y / ry;
+      span = Math.sqrt(1 - ratio * ratio) * rx | 0;
+      this.fillRect(cx - span, cy + y, span * 2 + 1, 1, color);
+    }
+    return this;
+  };
+
+  Surface.prototype.drawRoundRect = function (x, y, width, height, radius, color) {
+    var r;
+    var cx0;
+    var cx1;
+    var cy0;
+    var cy1;
+    var px;
+    var py;
+    var err;
+
+    x = x | 0;
+    y = y | 0;
+    width = width | 0;
+    height = height | 0;
+    if (width <= 0 || height <= 0) {
+      return this;
+    }
+    r = Math.abs(radius | 0);
+    r = Math.min(r, width >> 1, height >> 1);
+    if (r <= 0) {
+      return this.drawRect(x, y, width, height, color);
+    }
+    cx0 = x + r;
+    cx1 = x + width - r - 1;
+    cy0 = y + r;
+    cy1 = y + height - r - 1;
+    this.drawLine(cx0, y, cx1, y, color);
+    this.drawLine(cx0, y + height - 1, cx1, y + height - 1, color);
+    this.drawLine(x, cy0, x, cy1, color);
+    this.drawLine(x + width - 1, cy0, x + width - 1, cy1, color);
+    px = r;
+    py = 0;
+    err = 1 - px;
+    while (px >= py) {
+      this.setPixel(cx0 - px, cy0 - py, color);
+      this.setPixel(cx0 - py, cy0 - px, color);
+      this.setPixel(cx1 + px, cy0 - py, color);
+      this.setPixel(cx1 + py, cy0 - px, color);
+      this.setPixel(cx0 - px, cy1 + py, color);
+      this.setPixel(cx0 - py, cy1 + px, color);
+      this.setPixel(cx1 + px, cy1 + py, color);
+      this.setPixel(cx1 + py, cy1 + px, color);
+      py += 1;
+      if (err < 0) {
+        err += (py << 1) + 1;
+      } else {
+        px -= 1;
+        err += ((py - px) << 1) + 1;
+      }
+    }
+    return this;
+  };
+
+  Surface.prototype.fillRoundRect = function (x, y, width, height, radius, color) {
+    var r;
+    var dy;
+    var span;
+    var rowWidth;
+
+    x = x | 0;
+    y = y | 0;
+    width = width | 0;
+    height = height | 0;
+    if (width <= 0 || height <= 0) {
+      return this;
+    }
+    r = Math.abs(radius | 0);
+    r = Math.min(r, width >> 1, height >> 1);
+    if (r <= 0) {
+      return this.fillRect(x, y, width, height, color);
+    }
+    this.fillRect(x, y + r, width, height - r * 2, color);
+    for (dy = 0; dy < r; dy += 1) {
+      span = Math.sqrt(r * r - (r - dy) * (r - dy)) | 0;
+      rowWidth = width - r * 2 + span * 2;
+      this.fillRect(x + r - span, y + dy, rowWidth, 1, color);
+      this.fillRect(x + r - span, y + height - 1 - dy, rowWidth, 1, color);
+    }
+    return this;
+  };
+
+  Surface.prototype.drawPolyline = function (points, color) {
+    var flat = flatPointList(points, "drawPolyline(points, color)");
+    var i;
+
+    for (i = 2; i < flat.length; i += 2) {
+      this.drawLine(flat[i - 2], flat[i - 1], flat[i], flat[i + 1], color);
+    }
+    return this;
+  };
+
+  Surface.prototype.drawPolygon = function (points, color) {
+    var flat = flatPointList(points, "drawPolygon(points, color)");
+    var last = flat.length - 2;
+
+    if (flat.length < 4) {
+      return this;
+    }
+    this.drawPolyline(flat, color);
+    return this.drawLine(flat[last], flat[last + 1], flat[0], flat[1], color);
+  };
+
+  Surface.prototype.fillPolygon = function (points, color) {
+    var flat = flatPointList(points, "fillPolygon(points, color)");
+    var count = flat.length >> 1;
+    var intersections;
+    var minY;
+    var maxY;
+    var scanY;
+    var edge;
+    var next;
+    var x1;
+    var y1;
+    var x2;
+    var y2;
+    var n;
+    var i;
+    var y;
+    var xStart;
+    var xEnd;
+
+    if (count < 3) {
+      return this;
+    }
+    minY = flat[1];
+    maxY = flat[1];
+    for (i = 3; i < flat.length; i += 2) {
+      if (flat[i] < minY) {
+        minY = flat[i];
+      }
+      if (flat[i] > maxY) {
+        maxY = flat[i];
+      }
+    }
+    intersections = new Array(count);
+    for (y = minY; y <= maxY; y += 1) {
+      scanY = y + 0.5;
+      n = 0;
+      for (edge = 0; edge < count; edge += 1) {
+        next = edge === count - 1 ? 0 : edge + 1;
+        x1 = flat[edge * 2];
+        y1 = flat[edge * 2 + 1];
+        x2 = flat[next * 2];
+        y2 = flat[next * 2 + 1];
+        if ((y1 <= scanY && y2 > scanY) || (y2 <= scanY && y1 > scanY)) {
+          intersections[n] = x1 + ((scanY - y1) * (x2 - x1)) / (y2 - y1);
+          n += 1;
+        }
+      }
+      sortFirst(intersections, n);
+      for (i = 0; i + 1 < n; i += 2) {
+        xStart = Math.ceil(intersections[i]);
+        xEnd = Math.floor(intersections[i + 1]);
+        if (xEnd >= xStart) {
+          this.fillRect(xStart, y, xEnd - xStart + 1, 1, color);
+        }
+      }
+    }
+    return this;
+  };
+
+  Surface.prototype.drawTriangle = function (x0, y0, x1, y1, x2, y2, color) {
+    return this.drawPolygon([x0, y0, x1, y1, x2, y2], color);
+  };
+
+  Surface.prototype.fillTriangle = function (x0, y0, x1, y1, x2, y2, color) {
+    return this.fillPolygon([x0, y0, x1, y1, x2, y2], color);
+  };
+
+  Surface.prototype.drawQuadraticBezier = function (x0, y0, cx, cy, x1, y1, color, options) {
+    var segments = curveSegments(options, 24);
+    var prevX = x0 | 0;
+    var prevY = y0 | 0;
+    var t;
+    var mt;
+    var x;
+    var y;
+    var i;
+
+    for (i = 1; i <= segments; i += 1) {
+      t = i / segments;
+      mt = 1 - t;
+      x = Math.round(mt * mt * x0 + 2 * mt * t * cx + t * t * x1);
+      y = Math.round(mt * mt * y0 + 2 * mt * t * cy + t * t * y1);
+      this.drawLine(prevX, prevY, x, y, color);
+      prevX = x;
+      prevY = y;
+    }
+    return this;
+  };
+
+  Surface.prototype.drawCubicBezier = function (x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options) {
+    var segments = curveSegments(options, 32);
+    var prevX = x0 | 0;
+    var prevY = y0 | 0;
+    var t;
+    var mt;
+    var x;
+    var y;
+    var i;
+
+    for (i = 1; i <= segments; i += 1) {
+      t = i / segments;
+      mt = 1 - t;
+      x = Math.round(
+        mt * mt * mt * x0 +
+        3 * mt * mt * t * c1x +
+        3 * mt * t * t * c2x +
+        t * t * t * x1
+      );
+      y = Math.round(
+        mt * mt * mt * y0 +
+        3 * mt * mt * t * c1y +
+        3 * mt * t * t * c2y +
+        t * t * t * y1
+      );
+      this.drawLine(prevX, prevY, x, y, color);
+      prevX = x;
+      prevY = y;
+    }
+    return this;
   };
 
   function MonoSurface(options) {
@@ -626,7 +1039,7 @@
     clampInt: clampInt
   };
 
-  display.VERSION = "0.3.0";
+  display.VERSION = "0.4.0";
   display.mono1 = display.mono1 || mono1;
   display.gray4 = display.gray4 || gray4;
   display.gray8 = display.gray8 || gray8;

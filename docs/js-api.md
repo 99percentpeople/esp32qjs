@@ -18,7 +18,7 @@ The default startup script commonly does this from `/littlefs/index.js`.
 These helpers are implemented in JavaScript on top of the `i2c` module and live under `/littlefs/_sys/display/`.
 
 - `display.VERSION`
-  Current JS display layer version, `"0.3.0"`.
+  Current JS display layer version, `"0.4.0"`.
 - `display.Surface`
   Base surface contract.
 - `display.MonoSurface`
@@ -79,6 +79,20 @@ Display instance methods:
   Draw a line with Bresenham logic.
 - `drawRect(x, y, width, height, color)`
   Draw a rectangle outline.
+- `drawCircle(x, y, radius, color)` / `fillCircle(x, y, radius, color)`
+  Draw or fill a circle.
+- `drawEllipse(x, y, rx, ry, color, options?)` / `fillEllipse(x, y, rx, ry, color)`
+  Draw or fill an ellipse. `options.segments` controls outline tessellation.
+- `drawRoundRect(x, y, width, height, radius, color)` / `fillRoundRect(x, y, width, height, radius, color)`
+  Draw or fill a rounded rectangle.
+- `drawPolyline(points, color)` / `drawPolygon(points, color)` / `fillPolygon(points, color)`
+  Draw or fill point lists. Points can be `[[x, y], ...]`, `[{ x, y }, ...]`, or a flat `[x0, y0, x1, y1, ...]` array.
+- `drawTriangle(x0, y0, x1, y1, x2, y2, color)` / `fillTriangle(x0, y0, x1, y1, x2, y2, color)`
+  Convenience triangle helpers.
+- `drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color, options?)`
+  Draw a quadratic Bezier curve. `options.segments` defaults to `24`.
+- `drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options?)`
+  Draw a cubic Bezier curve. `options.segments` defaults to `32`.
 - `drawBitmap(x, y, bitmap, options?)`
   Draw a bitmap shaped as `{ width, height, pixels }` with `{ color, background }`.
 - `drawChar(x, y, ch, options?)`
