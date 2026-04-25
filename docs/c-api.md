@@ -389,7 +389,7 @@ This module exposes native display buffers for heavy pixel work. It is registere
 Formats and layouts:
 
 - `format: "mono1"`
-  One bit per pixel. Default layout is `"page-y8"` for SSD1306-style vertical pages. `"linear"` is also supported.
+  One bit per pixel. Default layout is `"page-y8"` for SSD1306-style vertical pages. `"linear"` is also supported. Colors are packed numeric values `0` or `1`; booleans are not accepted.
 - `format: "rgb565"`
   16-bit RGB565 pixels. Layout must be `"linear"`.
 - `storage`
@@ -409,12 +409,14 @@ Formats and layouts:
 - `clear(color?)` / `fill(color?)`
   Fill the whole buffer and mark it dirty.
 - `setPixel(x, y, color)` / `getPixel(x, y)`
+  Write or read one packed color. `mono1` returns `0` or `1`, not a boolean.
 - `fillRect(x, y, width, height, color?)`
 - `drawRect(x, y, width, height, color?)`
 - `drawLine(x0, y0, x1, y1, color?)`
-- `drawBitmap(x, y, { width, height, pixels }, color?)`
-- `drawText(x, y, text, color?, options?)`
-  Draw text with `options.font`, a `DisplayFont` returned by `displayBuffer.loadFont(...)`. `options.spacing` controls extra inter-character pixels.
+- `drawBitmap(x, y, { width, height, pixels }, options?)`
+  Draw a mask bitmap with `options.color`. `options.background` is transparent by default; pass a packed color to fill off pixels.
+- `drawText(x, y, text, options?)`
+  Draw text with `options.color` and `options.font`, a `DisplayFont` returned by `displayBuffer.loadFont(...)`. `options.spacing` controls extra inter-character pixels. Text background is transparent by default; pass `options.background` to fill each glyph cell before drawing, or `null` to keep it transparent explicitly.
 - `measureText(text, options?)`
   Return `{ width, height, lines }`.
 - `getDirty()`
@@ -504,7 +506,7 @@ var fb = displayBuffer.create({
 var font = displayBuffer.loadFont("_sys/display/fonts/mono5x7.eqf");
 
 fb.clear(0x0000);
-fb.drawText(8, 8, "ESP32QJS", 0xffff, { font: font });
+fb.drawText(8, 8, "ESP32QJS", { color: 0xffff, font: font });
 
 var chunk = fb.readRect(0, 0, 240, 16, { byteOrder: "be" });
 device.write(chunk);

@@ -87,10 +87,11 @@ var fb = displayBuffer.create({
   storage: "psram",
   chunkBytes: 32768
 });
+var font = displayBuffer.loadFont("_sys/display/fonts/mono5x7.eqf");
 
 fb.clear(0x0000);
 fb.fillRect(10, 10, 80, 24, 0xffff);
-fb.drawText(16, 18, "ESP32QJS", 0xffff);
+fb.drawText(16, 18, "ESP32QJS", { color: 0xffff, font: font });
 ```
 
 Paged example for small mono displays:
@@ -103,9 +104,10 @@ var mono = displayBuffer.create({
   layout: "page-y8",
   pageHeight: 8
 });
+var font = displayBuffer.loadFont("_sys/display/fonts/mono5x7.eqf");
 
-mono.clear(false);
-mono.drawText(0, 0, "ready", true);
+mono.clear(0);
+mono.drawText(0, 0, "ready", { color: 1, font: font });
 ```
 
 ## Creation Options
@@ -184,7 +186,7 @@ fb.fillRect(x, y, width, height, color)
 fb.drawRect(x, y, width, height, color)
 fb.drawLine(x0, y0, x1, y1, color)
 fb.drawBitmap(x, y, bitmap, options?)
-fb.drawText(x, y, text, color, options?)
+fb.drawText(x, y, text, options?)
 fb.measureText(text, options?)
 ```
 
@@ -208,9 +210,10 @@ JavaScript should create and manage multiple buffers when needed:
 ```js
 var front = displayBuffer.create({ width: 240, height: 240, format: "rgb565" });
 var back = displayBuffer.create({ width: 240, height: 240, format: "rgb565" });
+var font = displayBuffer.loadFont("_sys/display/fonts/mono5x7.eqf");
 
 back.clear(0x0000);
-back.drawText(10, 10, "frame", 0xffff);
+back.drawText(10, 10, "frame", { color: 0xffff, font: font });
 screen.flushBuffer(back);
 
 var tmp = front;

@@ -198,22 +198,22 @@ function drawHud(dirty) {
   var seconds = ((esp32.micros() - modeStartUs) / 1000000) | 0;
 
   screen.fillRect(0, 0, width, HUD_H, COLORS.panel);
-  screen.drawText(6, 4, "DISPLAY PERF " + mode.name, COLORS.yellow, 0);
-  screen.drawText(width - 70, 4, "F" + pad(frame, 5), COLORS.text, 0);
+  screen.drawText(6, 4, "DISPLAY PERF " + mode.name, { color: COLORS.yellow, spacing: 0 });
+  screen.drawText(width - 70, 4, "F" + pad(frame, 5), { color: COLORS.text, spacing: 0 });
   screen.drawText(6, 18,
                   "FPS " + fmt1(latest.fps) +
                   "  LAT " + ms(lastFrameUs) + "MS" +
                   "  T" + pad(seconds, 2),
-                  COLORS.text, 0);
+                  { color: COLORS.text, spacing: 0 });
   screen.drawText(6, 30,
                   "DRAW " + ms(lastDrawUs) +
                   "  FLUSH " + ms(lastFlushUs),
-                  COLORS.cyan, 0);
+                  { color: COLORS.cyan, spacing: 0 });
   screen.drawText(6, 42,
                   "AVG " + ms(latest.frameUs) +
                   "  MAX " + ms(latest.maxFrameUs) +
                   "  KB " + kb(latest.bytes),
-                  COLORS.green, 0);
+                  { color: COLORS.green, spacing: 0 });
   rect(dirty, 0, 0, width, HUD_H);
 }
 
@@ -252,15 +252,15 @@ function drawFullScene() {
   y2 = bodyY + 24 + pingPong(frame * 5 + 30, graphY - bodyY - 70);
   screen.fillRect(0, bodyY + ((frame * 4) % (graphY - bodyY - 8)), width, 2, COLORS.dim);
   screen.fillRect(x1, y1, 42, 22, COLORS.yellow);
-  screen.drawText(x1 + 10, y1 + 7, "JS", COLORS.bg, 0);
+  screen.drawText(x1 + 10, y1 + 7, "JS", { color: COLORS.bg, spacing: 0 });
   screen.fillRect(x2, y2, 54, 18, COLORS.magenta);
-  screen.drawText(x2 + 7, y2 + 5, "SPI", COLORS.text, 0);
+  screen.drawText(x2 + 7, y2 + 5, "SPI", { color: COLORS.text, spacing: 0 });
   screen.drawRect(x2 - 2, y2 - 2, 58, 22, COLORS.orange);
 
   if (cjk12 && cjk16 && cjk24) {
-    screen.drawText(10, bodyY + 8, "性能", COLORS.yellow, { font: cjk24 });
-    screen.drawText(70, bodyY + 10, "中文显示", COLORS.text, { font: cjk16 });
-    screen.drawText(70, bodyY + 30, "帧率 延迟 测试正常", COLORS.green, { font: cjk12 });
+    screen.drawText(10, bodyY + 8, "性能", { color: COLORS.yellow, font: cjk24 });
+    screen.drawText(70, bodyY + 10, "中文显示", { color: COLORS.text, font: cjk16 });
+    screen.drawText(70, bodyY + 30, "帧率 延迟 测试正常", { color: COLORS.green, font: cjk12 });
   }
 }
 
@@ -283,8 +283,8 @@ function drawPartialScene(dirty) {
   }
   screen.fillRect(x, y, box, box, COLORS.cyan);
   screen.drawRect(x + 4, y + 4, box - 8, box - 8, COLORS.text);
-  screen.drawText(x + 8, y + 13, "P", COLORS.bg, 0);
-  screen.drawText(areaX + 8, areaY + 8, "flushRect " + areaW + "x" + areaH, COLORS.text, 0);
+  screen.drawText(x + 8, y + 13, "P", { color: COLORS.bg, spacing: 0 });
+  screen.drawText(areaX + 8, areaY + 8, "flushRect " + areaW + "x" + areaH, { color: COLORS.text, spacing: 0 });
   rect(dirty, areaX, areaY, areaW, areaH);
 }
 
@@ -295,13 +295,13 @@ function drawTextScene(dirty) {
 
   screen.fillRect(8, y, width - 16, panelH, COLORS.bg);
   screen.drawRect(8, y, width - 16, panelH, COLORS.dim);
-  screen.drawText(16, y + 8, "TEXT STRESS " + pad(n, 3), COLORS.yellow, 0);
-  screen.drawText(16, y + 22, "ASCII 0123456789 ABCD", COLORS.text, 0);
-  screen.drawText(16, y + 36, "FRAME " + frame + " HEAP " + (esp32.freeHeap() / 1024 | 0) + "K", COLORS.cyan, 0);
+  screen.drawText(16, y + 8, "TEXT STRESS " + pad(n, 3), { color: COLORS.yellow, spacing: 0 });
+  screen.drawText(16, y + 22, "ASCII 0123456789 ABCD", { color: COLORS.text, spacing: 0 });
+  screen.drawText(16, y + 36, "FRAME " + frame + " HEAP " + (esp32.freeHeap() / 1024 | 0) + "K", { color: COLORS.cyan, spacing: 0 });
   if (cjk12 && cjk16 && cjk24) {
-    screen.drawText(16, y + 54, "中文显示", COLORS.green, { font: cjk16 });
-    screen.drawText(16, y + 76, "性能 测试 延迟", COLORS.orange, { font: cjk12 });
-    screen.drawText(118, y + 64, "帧率", COLORS.magenta, { font: cjk24 });
+    screen.drawText(16, y + 54, "中文显示", { color: COLORS.green, font: cjk16 });
+    screen.drawText(16, y + 76, "性能 测试 延迟", { color: COLORS.orange, font: cjk12 });
+    screen.drawText(118, y + 64, "帧率", { color: COLORS.magenta, font: cjk24 });
   }
   rect(dirty, 8, y, width - 16, panelH);
 }
@@ -336,7 +336,7 @@ function drawGraph(dirty) {
   if (range < 4000) {
     range = 4000;
   }
-  screen.drawText(graphX, graphY - 13, "LAT " + ms(min) + "-" + ms(max) + "MS", COLORS.text, 0);
+  screen.drawText(graphX, graphY - 13, "LAT " + ms(min) + "-" + ms(max) + "MS", { color: COLORS.text, spacing: 0 });
   for (i = 0; i < samples; i += 1) {
     sample = sampleAt(i);
     if (sample <= 0) {

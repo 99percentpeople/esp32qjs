@@ -164,25 +164,6 @@ static bool value_to_i32(JSContext *ctx, JSValue value, int32_t *out_value)
     return true;
 }
 
-static bool value_to_bool(JSContext *ctx, JSValue value, bool *out_value)
-{
-    int raw_value = 0;
-
-    if (JS_IsBool(value)) {
-        *out_value = value == JS_TRUE;
-        return true;
-    }
-    if (JS_IsUndefined(value) || JS_IsNull(value)) {
-        *out_value = false;
-        return true;
-    }
-    if (JS_ToInt32(ctx, &raw_value, value) != 0) {
-        return false;
-    }
-    *out_value = raw_value != 0;
-    return true;
-}
-
 static uint16_t normalize_color(JSContext *ctx,
                                 uint8_t format,
                                 JSValue value,
@@ -190,7 +171,6 @@ static uint16_t normalize_color(JSContext *ctx,
                                 bool *ok)
 {
     uint32_t raw = fallback;
-    bool enabled = false;
 
     if (ok != NULL) {
         *ok = true;
@@ -199,13 +179,13 @@ static uint16_t normalize_color(JSContext *ctx,
         return fallback;
     }
     if (format == DISPLAY_BUFFER_FORMAT_MONO1) {
-        if (!value_to_bool(ctx, value, &enabled)) {
+        if (JS_IsBool(value) || !value_to_u32(ctx, value, &raw) || raw > 1U) {
             if (ok != NULL) {
                 *ok = false;
             }
             return 0;
         }
-        return enabled ? 1U : 0U;
+        return (uint16_t)raw;
     }
     if (!value_to_u32(ctx, value, &raw) || raw > 0xffffU) {
         if (ok != NULL) {
@@ -841,6 +821,18 @@ static int text_spacing_from_options(JSContext *ctx, JSValue options, int defaul
     return (int)spacing;
 }
 
+static bool text_options_is_object(JSContext *ctx, JSValue options, const char *api_name)
+{
+    if (JS_IsUndefined(options) || JS_IsNull(options)) {
+        return true;
+    }
+    if (JS_GetClassID(ctx, options) < 0 || JS_GetClassID(ctx, options) == JS_CLASS_DISPLAY_FONT) {
+        JS_ThrowTypeError(ctx, "%s options must be an object", api_name);
+        return false;
+    }
+    return true;
+}
+
 static const esp32_mquickjs_bitmap_font_t *text_font_from_options(JSContext *ctx,
                                                                   JSValue options,
                                                                   const char *api_name,
@@ -855,14 +847,6 @@ static const esp32_mquickjs_bitmap_font_t *text_font_from_options(JSContext *ctx
         JS_ThrowTypeError(ctx, "%s requires a DisplayFont", api_name);
         *ok = false;
         return NULL;
-    }
-    if (JS_GetClassID(ctx, options) == JS_CLASS_DISPLAY_FONT) {
-        font = display_font_from_value(ctx, options, api_name);
-        if (font == NULL) {
-            *ok = false;
-            return NULL;
-        }
-        return &font->font;
     }
 
     property = JS_PushGCRef(ctx, &property_ref);
@@ -885,6 +869,44 @@ static const esp32_mquickjs_bitmap_font_t *text_font_from_options(JSContext *ctx
         return NULL;
     }
     return &font->font;
+}
+
+static bool text_background_from_options(JSContext *ctx,
+                                         uint8_t format,
+                                         JSValue options,
+                                         uint16_t fallback,
+                                         uint16_t *out_color,
+                                         bool *out_has_background)
+{
+    JSGCRef property_ref;
+    JSValue *property;
+    bool ok;
+
+    *out_color = fallback;
+    *out_has_background = false;
+
+    if (JS_IsUndefined(options) || JS_IsNull(options)) {
+        return true;
+    }
+
+    property = JS_PushGCRef(ctx, &property_ref);
+    *property = JS_GetPropertyStr(ctx, options, "background");
+    if (JS_IsException(*property)) {
+        JS_PopGCRef(ctx, &property_ref);
+        return false;
+    }
+    if (JS_IsUndefined(*property) || JS_IsNull(*property)) {
+        JS_PopGCRef(ctx, &property_ref);
+        return true;
+    }
+
+    *out_color = normalize_color(ctx, format, *property, fallback, &ok);
+    JS_PopGCRef(ctx, &property_ref);
+    if (!ok) {
+        return false;
+    }
+    *out_has_background = true;
+    return true;
 }
 
 static bool rect_from_args(JSContext *ctx,
@@ -1599,7 +1621,7 @@ JSValue js_display_buffer_get_pixel(JSContext *ctx, JSValue *this_val, int argc,
         return JS_ThrowTypeError(ctx, "DisplayBuffer.getPixel(x, y) expects x and y integers");
     }
     color = get_pixel_raw(buffer, x, y);
-    return buffer->format == DISPLAY_BUFFER_FORMAT_MONO1 ? JS_NewBool(color != 0) : JS_NewUint32(ctx, color);
+    return JS_NewUint32(ctx, color);
 }
 
 JSValue js_display_buffer_fill_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -1700,7 +1722,9 @@ JSValue js_display_buffer_draw_text(JSContext *ctx, JSValue *this_val, int argc,
     int32_t x;
     int32_t y;
     uint16_t color;
+    uint16_t background;
     bool ok;
+    bool has_background;
     JSCStringBuf text_buf;
     const char *text;
     int spacing;
@@ -1712,29 +1736,54 @@ JSValue js_display_buffer_draw_text(JSContext *ctx, JSValue *this_val, int argc,
     const char *cursor;
     const esp32_mquickjs_bitmap_font_t *font;
     bool font_ok;
+    JSValue options;
+    JSGCRef property_ref;
+    JSValue *property;
 
     buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.drawText()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
     if (argc < 3 || !value_to_i32(ctx, argv[0], &x) || !value_to_i32(ctx, argv[1], &y)) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawText(x, y, text, color?, options?) expects x, y, and text");
+        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawText(x, y, text, options?) expects x, y, and text");
     }
     text = JS_ToCString(ctx, argv[2], &text_buf);
     if (text == NULL) {
         return JS_EXCEPTION;
     }
-    color = normalize_color(ctx, buffer->format, argc >= 4 ? argv[3] : JS_UNDEFINED, buffer->foreground, &ok);
-    if (!ok) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawText(x, y, text, color?, options?) expects a valid color");
+    options = argc >= 4 ? argv[3] : JS_UNDEFINED;
+    if (!text_options_is_object(ctx, options, "DisplayBuffer.drawText()")) {
+        return JS_EXCEPTION;
     }
-    spacing = text_spacing_from_options(ctx, argc >= 5 ? argv[4] : JS_UNDEFINED, 0);
+    color = buffer->foreground;
+    if (!JS_IsUndefined(options) && !JS_IsNull(options)) {
+        property = JS_PushGCRef(ctx, &property_ref);
+        *property = JS_GetPropertyStr(ctx, options, "color");
+        if (JS_IsException(*property)) {
+            JS_PopGCRef(ctx, &property_ref);
+            return JS_EXCEPTION;
+        }
+        color = normalize_color(ctx, buffer->format, *property, buffer->foreground, &ok);
+        JS_PopGCRef(ctx, &property_ref);
+        if (!ok) {
+            return JS_ThrowTypeError(ctx, "DisplayBuffer.drawText() option 'color' expects a valid color");
+        }
+    }
+    spacing = text_spacing_from_options(ctx, options, 0);
     font = text_font_from_options(ctx,
-                                  argc >= 5 ? argv[4] : JS_UNDEFINED,
+                                  options,
                                   "DisplayBuffer.drawText() option 'font'",
                                   &font_ok);
     if (!font_ok || font == NULL) {
         return JS_EXCEPTION;
+    }
+    if (!text_background_from_options(ctx,
+                                      buffer->format,
+                                      options,
+                                      buffer->background,
+                                      &background,
+                                      &has_background)) {
+        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawText() option 'background' expects a valid color or null");
     }
     cursor_x = x;
     cursor_y = y;
@@ -1747,7 +1796,9 @@ JSValue js_display_buffer_draw_text(JSContext *ctx, JSValue *this_val, int argc,
             cursor_y += font->line_height;
             continue;
         }
-        fill_rect_raw(buffer, cursor_x, cursor_y, font->advance + spacing, font->line_height, buffer->background, false);
+        if (has_background) {
+            fill_rect_raw(buffer, cursor_x, cursor_y, font->advance + spacing, font->line_height, background, false);
+        }
         glyph = esp32_mquickjs_bitmap_font_glyph(font, *cursor);
         for (col = 0; col < font->width; ++col) {
             int row;
@@ -1788,6 +1839,9 @@ JSValue js_display_buffer_measure_text(JSContext *ctx, JSValue *this_val, int ar
     }
     text = JS_ToCString(ctx, argv[0], &text_buf);
     if (text == NULL) {
+        return JS_EXCEPTION;
+    }
+    if (!text_options_is_object(ctx, argc >= 2 ? argv[1] : JS_UNDEFINED, "DisplayBuffer.measureText()")) {
         return JS_EXCEPTION;
     }
     spacing = text_spacing_from_options(ctx, argc >= 2 ? argv[1] : JS_UNDEFINED, 0);
@@ -1998,7 +2052,9 @@ JSValue js_display_buffer_draw_bitmap(JSContext *ctx, JSValue *this_val, int arg
     JSValue pixels = JS_UNDEFINED;
     uint32_t index = 0;
     uint16_t color;
+    uint16_t background;
     bool ok;
+    bool has_background = false;
     uint32_t row;
 
     buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.drawBitmap()");
@@ -2007,7 +2063,7 @@ JSValue js_display_buffer_draw_bitmap(JSContext *ctx, JSValue *this_val, int arg
     }
     if (argc < 3 || !value_to_i32(ctx, argv[0], &x) || !value_to_i32(ctx, argv[1], &y) ||
         JS_GetClassID(ctx, argv[2]) < 0) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap(x, y, bitmap, color?) expects a bitmap object");
+        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap(x, y, bitmap, options?) expects a bitmap object");
     }
     property = JS_PushGCRef(ctx, &property_ref);
     *property = JS_GetPropertyStr(ctx, argv[2], "width");
@@ -2025,16 +2081,42 @@ JSValue js_display_buffer_draw_bitmap(JSContext *ctx, JSValue *this_val, int arg
         JS_PopGCRef(ctx, &property_ref);
         return JS_EXCEPTION;
     }
-    color = normalize_color(ctx, buffer->format, argc >= 4 ? argv[3] : JS_UNDEFINED, buffer->foreground, &ok);
-    if (!ok) {
-        JS_PopGCRef(ctx, &property_ref);
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() color must be valid");
+    color = buffer->foreground;
+    background = buffer->background;
+    if (argc >= 4 && !JS_IsUndefined(argv[3]) && !JS_IsNull(argv[3])) {
+        if (JS_GetClassID(ctx, argv[3]) < 0) {
+            JS_PopGCRef(ctx, &property_ref);
+            return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() options must be an object");
+        }
+        *property = JS_GetPropertyStr(ctx, argv[3], "color");
+        if (JS_IsException(*property)) {
+            JS_PopGCRef(ctx, &property_ref);
+            return JS_EXCEPTION;
+        }
+        color = normalize_color(ctx, buffer->format, *property, buffer->foreground, &ok);
+        if (!ok) {
+            JS_PopGCRef(ctx, &property_ref);
+            return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() option 'color' must be valid");
+        }
+        *property = JS_GetPropertyStr(ctx, argv[3], "background");
+        if (JS_IsException(*property)) {
+            JS_PopGCRef(ctx, &property_ref);
+            return JS_EXCEPTION;
+        }
+        if (!JS_IsUndefined(*property) && !JS_IsNull(*property)) {
+            background = normalize_color(ctx, buffer->format, *property, buffer->background, &ok);
+            if (!ok) {
+                JS_PopGCRef(ctx, &property_ref);
+                return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() option 'background' must be valid or null");
+            }
+            has_background = true;
+        }
     }
     for (row = 0; row < height; ++row) {
         uint32_t col;
 
         for (col = 0; col < width; ++col) {
-            uint32_t enabled = 0;
+            uint32_t mask_pixel = 0;
 
             *property = JS_GetPropertyUint32(ctx, pixels, index++);
             if (JS_IsException(*property)) {
@@ -2042,10 +2124,10 @@ JSValue js_display_buffer_draw_bitmap(JSContext *ctx, JSValue *this_val, int arg
                 return JS_EXCEPTION;
             }
             if (!JS_IsUndefined(*property) && !JS_IsNull(*property) &&
-                (!value_to_u32(ctx, *property, &enabled) || enabled != 0)) {
+                (!value_to_u32(ctx, *property, &mask_pixel) || mask_pixel != 0)) {
                 set_pixel_raw(buffer, x + (int32_t)col, y + (int32_t)row, color);
-            } else {
-                set_pixel_raw(buffer, x + (int32_t)col, y + (int32_t)row, buffer->background);
+            } else if (has_background) {
+                set_pixel_raw(buffer, x + (int32_t)col, y + (int32_t)row, background);
             }
         }
     }

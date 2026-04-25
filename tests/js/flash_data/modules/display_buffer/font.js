@@ -33,7 +33,7 @@ test("display_buffer/font", function () {
   test.equal(metrics.width, 2, "measureText should use dynamic font advance");
   test.equal(metrics.height, 9, "measureText should use dynamic font line height");
 
-  mono.clear(false).drawText(0, 0, "A", true, { font: font });
+  mono.clear(0).drawText(0, 0, "A", { color: 1, font: font });
   bytes = mono.readRect(0, 0, 1, 8).toArray();
   test.equal(bytes[0], 0x7e, "drawText should render dynamic font glyph bytes");
 });

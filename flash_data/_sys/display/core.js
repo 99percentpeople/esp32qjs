@@ -28,10 +28,6 @@
     return !!value;
   }
 
-  function toColor(value) {
-    return value === false || value === 0 || value === null ? 0 : 1;
-  }
-
   function clampInt(value, minValue, maxValue) {
     var number = value | 0;
 
@@ -42,6 +38,48 @@
       return maxValue;
     }
     return number;
+  }
+
+  function assertNumber(value, apiName) {
+    if (typeof value !== "number" || value !== value) {
+      throw new Error(apiName + " expects a number");
+    }
+    return value;
+  }
+
+  function mono1(value) {
+    return clampInt(assertNumber(value, "display.mono1(value)") | 0, 0, 1);
+  }
+
+  function gray4(value) {
+    return clampInt(assertNumber(value, "display.gray4(value)") | 0, 0, 15);
+  }
+
+  function gray8(value) {
+    return clampInt(assertNumber(value, "display.gray8(value)") | 0, 0, 255);
+  }
+
+  function rgb565(red, green, blue) {
+    red = clampInt(assertNumber(red, "display.rgb565(red, green, blue)") | 0, 0, 255);
+    green = clampInt(assertNumber(green, "display.rgb565(red, green, blue)") | 0, 0, 255);
+    blue = clampInt(assertNumber(blue, "display.rgb565(red, green, blue)") | 0, 0, 255);
+    return ((red & 0xf8) << 8) | ((green & 0xfc) << 3) | (blue >> 3);
+  }
+
+  function normalizeMonoColor(value, fallback, apiName) {
+    var color;
+
+    if (value === undefined || value === null) {
+      return fallback;
+    }
+    if (typeof value !== "number" || value !== value) {
+      throw new Error(apiName + " expects a display.mono1(...) color");
+    }
+    color = value | 0;
+    if (color < 0 || color > 1) {
+      throw new Error(apiName + " expects a display.mono1(...) color");
+    }
+    return color;
   }
 
   function byteAt(data, index) {
@@ -292,6 +330,29 @@
     return style === undefined ? fallback : style;
   }
 
+  function backgroundFromStyle(style) {
+    if (style && typeof style === "object" && own(style, "background") && style.background !== null) {
+      return {
+        hasColor: true,
+        color: normalizeMonoColor(style.background, 0, "text background")
+      };
+    }
+    return {
+      hasColor: false,
+      color: 0
+    };
+  }
+
+  function styleOptions(value, apiName) {
+    if (value === undefined || value === null) {
+      return {};
+    }
+    if (typeof value !== "object") {
+      throw new Error(apiName + " expects an options object");
+    }
+    return value;
+  }
+
   function Surface(options) {
     options = options || {};
 
@@ -326,14 +387,16 @@
     });
     this.pages = Math.ceil(this.height / 8);
     this.spacing = own(options, "spacing") ? options.spacing : 0;
+    this.foreground = normalizeMonoColor(options.foreground, mono1(1), "MonoSurface foreground");
+    this.background = normalizeMonoColor(options.background, mono1(0), "MonoSurface background");
     this.buffer = new Array(this.width * this.pages);
-    this.clear(false);
+    this.clear();
   }
 
   inherit(MonoSurface, Surface);
 
-  MonoSurface.prototype.clear = function (enabled) {
-    var fillByte = toColor(enabled) ? 0xff : 0x00;
+  MonoSurface.prototype.clear = function (color) {
+    var fillByte = normalizeMonoColor(color, this.background, "MonoSurface.clear(color)") ? 0xff : 0x00;
     var i;
 
     for (i = 0; i < this.buffer.length; i += 1) {
@@ -342,15 +405,15 @@
     return this;
   };
 
-  MonoSurface.prototype.fill = function (enabled) {
-    return this.clear(enabled);
+  MonoSurface.prototype.fill = function (color) {
+    return this.clear(color);
   };
 
   MonoSurface.prototype._indexFor = function (x, y) {
     return x + (this.width * (y >> 3));
   };
 
-  MonoSurface.prototype.setPixel = function (x, y, enabled) {
+  MonoSurface.prototype._setPixelRaw = function (x, y, color) {
     var index;
     var mask;
 
@@ -362,12 +425,16 @@
 
     index = this._indexFor(x, y);
     mask = 1 << (y & 7);
-    if (toColor(enabled)) {
+    if (color !== 0) {
       this.buffer[index] |= mask;
     } else {
       this.buffer[index] &= (0xff ^ mask);
     }
     return this;
+  };
+
+  MonoSurface.prototype.setPixel = function (x, y, color) {
+    return this._setPixelRaw(x, y, normalizeMonoColor(color, this.foreground, "MonoSurface.setPixel(x, y, color)"));
   };
 
   MonoSurface.prototype.getPixel = function (x, y) {
@@ -382,10 +449,11 @@
 
     index = this._indexFor(x, y);
     mask = 1 << (y & 7);
-    return (this.buffer[index] & mask) !== 0;
+    return (this.buffer[index] & mask) !== 0 ? mono1(1) : mono1(0);
   };
 
-  MonoSurface.prototype.fillRect = function (x, y, width, height, enabled) {
+  MonoSurface.prototype.fillRect = function (x, y, width, height, color) {
+    var pixel = normalizeMonoColor(color, this.foreground, "MonoSurface.fillRect(x, y, width, height, color)");
     var xx;
     var yy;
 
@@ -399,13 +467,14 @@
 
     for (yy = y; yy < y + height; yy += 1) {
       for (xx = x; xx < x + width; xx += 1) {
-        this.setPixel(xx, yy, enabled);
+        this._setPixelRaw(xx, yy, pixel);
       }
     }
     return this;
   };
 
-  MonoSurface.prototype.drawLine = function (x0, y0, x1, y1, enabled) {
+  MonoSurface.prototype.drawLine = function (x0, y0, x1, y1, color) {
+    var pixel = normalizeMonoColor(color, this.foreground, "MonoSurface.drawLine(x0, y0, x1, y1, color)");
     var dx = Math.abs(x1 - x0);
     var sx = x0 < x1 ? 1 : -1;
     var dy = -Math.abs(y1 - y0);
@@ -414,7 +483,7 @@
     var e2;
 
     while (true) {
-      this.setPixel(x0, y0, enabled);
+      this._setPixelRaw(x0, y0, pixel);
       if (x0 === x1 && y0 === y1) {
         break;
       }
@@ -431,22 +500,28 @@
     return this;
   };
 
-  MonoSurface.prototype.drawRect = function (x, y, width, height, enabled) {
+  MonoSurface.prototype.drawRect = function (x, y, width, height, color) {
+    var pixel = normalizeMonoColor(color, this.foreground, "MonoSurface.drawRect(x, y, width, height, color)");
+
     if ((width | 0) <= 0 || (height | 0) <= 0) {
       return this;
     }
 
-    this.drawLine(x, y, x + width - 1, y, enabled);
-    this.drawLine(x, y + height - 1, x + width - 1, y + height - 1, enabled);
-    this.drawLine(x, y, x, y + height - 1, enabled);
-    this.drawLine(x + width - 1, y, x + width - 1, y + height - 1, enabled);
+    this.drawLine(x, y, x + width - 1, y, pixel);
+    this.drawLine(x, y + height - 1, x + width - 1, y + height - 1, pixel);
+    this.drawLine(x, y, x, y + height - 1, pixel);
+    this.drawLine(x + width - 1, y, x + width - 1, y + height - 1, pixel);
     return this;
   };
 
-  MonoSurface.prototype.drawBitmap = function (x, y, bitmap, enabled) {
+  MonoSurface.prototype.drawBitmap = function (x, y, bitmap, options) {
+    var style = styleOptions(options, "MonoSurface.drawBitmap(x, y, bitmap, options)");
     var pixels;
     var width;
     var height;
+    var color = own(style, "color") ? style.color : undefined;
+    var foreground = normalizeMonoColor(color, this.foreground, "MonoSurface.drawBitmap(x, y, bitmap, options).color");
+    var background = backgroundFromStyle(style);
     var row;
     var col;
     var index = 0;
@@ -460,38 +535,50 @@
     pixels = bitmap.pixels;
     for (row = 0; row < height; row += 1) {
       for (col = 0; col < width; col += 1) {
-        this.setPixel(x + col, y + row, pixels[index] ? enabled !== false : false);
+        if (pixels[index]) {
+          this._setPixelRaw(x + col, y + row, foreground);
+        } else if (background.hasColor) {
+          this._setPixelRaw(x + col, y + row, background.color);
+        }
         index += 1;
       }
     }
     return this;
   };
 
-  MonoSurface.prototype.drawChar = function (x, y, ch, enabled) {
-    var font = resolveFont(defaultFont);
+  MonoSurface.prototype.drawChar = function (x, y, ch, options) {
+    var style = styleOptions(options, "MonoSurface.drawChar(x, y, ch, options)");
+    var font = fontFromStyle(style);
     var encoded = encodeTextForFont(String(ch).charAt(0), font);
+    var color = normalizeMonoColor(style.color, this.foreground, "MonoSurface.drawChar(x, y, ch, options).color");
+    var background = backgroundFromStyle(style);
     var col;
     var row;
     var bits;
 
-    this.fillRect(x, y, font.advance, font.lineHeight, false);
+    if (background.hasColor) {
+      this.fillRect(x, y, font.advance, font.lineHeight, background.color);
+    }
     for (col = 0; col < font.width; col += 1) {
       for (row = 0; row < font.height; row += 1) {
         bits = glyphByte(font, encoded.charAt(0), col, row >> 3);
         if ((bits & (1 << (row & 7))) !== 0) {
-          this.setPixel(x + col, y + row, enabled !== false);
+          this._setPixelRaw(x + col, y + row, color);
         }
       }
     }
     return this;
   };
 
-  MonoSurface.prototype.drawText = function (x, y, text, enabled, spacing) {
-    var font = fontFromStyle(spacing);
+  MonoSurface.prototype.drawText = function (x, y, text, options) {
+    var style = styleOptions(options, "MonoSurface.drawText(x, y, text, options)");
+    var font = fontFromStyle(style);
     var str = encodeTextForFont(text, font);
     var cursorX = x | 0;
     var cursorY = y | 0;
-    var gap = spacingFromStyle(spacing, this.spacing);
+    var gap = spacingFromStyle(style, this.spacing);
+    var color = normalizeMonoColor(style.color, this.foreground, "MonoSurface.drawText(x, y, text, options).color");
+    var background = backgroundFromStyle(style);
     var step = font.advance + gap;
     var i;
     var ch;
@@ -506,12 +593,14 @@
         cursorY += font.lineHeight;
         continue;
       }
-      this.fillRect(cursorX, cursorY, font.advance, font.lineHeight, false);
+      if (background.hasColor) {
+        this.fillRect(cursorX, cursorY, font.advance + gap, font.lineHeight, background.color);
+      }
       for (col = 0; col < font.width; col += 1) {
         for (row = 0; row < font.height; row += 1) {
           bits = glyphByte(font, ch, col, row >> 3);
           if ((bits & (1 << (row & 7))) !== 0) {
-            this.setPixel(cursorX + col, cursorY + row, enabled !== false);
+            this._setPixelRaw(cursorX + col, cursorY + row, color);
           }
         }
       }
@@ -528,11 +617,20 @@
     own: own,
     inherit: inherit,
     toBool: toBool,
-    toColor: toColor,
+    mono1: mono1,
+    gray4: gray4,
+    gray8: gray8,
+    rgb565: rgb565,
+    normalizeMonoColor: normalizeMonoColor,
+    styleOptions: styleOptions,
     clampInt: clampInt
   };
 
   display.VERSION = "0.3.0";
+  display.mono1 = display.mono1 || mono1;
+  display.gray4 = display.gray4 || gray4;
+  display.gray8 = display.gray8 || gray8;
+  display.rgb565 = display.rgb565 || rgb565;
   display.fonts = display.fonts || {};
   display.Surface = Surface;
   display.MonoSurface = MonoSurface;

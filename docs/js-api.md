@@ -29,6 +29,12 @@ These helpers are implemented in JavaScript on top of the `i2c` module and live 
   Create or initialize a display by driver name. `options.driver` is required.
 - `display.listDrivers()`
   Return the registered driver names.
+- `display.mono1(value)`
+  Return a packed 1-bit color, `0` or `1`.
+- `display.gray4(value)` / `display.gray8(value)`
+  Return packed grayscale colors for future gray display drivers.
+- `display.rgb565(red, green, blue)`
+  Return a packed RGB565 color.
 
 Built-in driver names are `ssd1306`, `st7789`, and `wlk1501spi8p`.
 
@@ -53,29 +59,32 @@ Mapped font sets can be loaded with `display.loadFontSet(path)` or directly with
 
 ```js
 var cjk16 = display.loadMappedFont("_sys/display/fonts/droid-cjk.json", "16");
-screen.drawText(8, 40, "中文显示", 0xffff, { font: cjk16 });
+screen.drawText(8, 40, "中文显示", {
+  color: display.rgb565(255, 255, 255),
+  font: cjk16
+});
 ```
 
 Display instance methods:
 
 - `init()`
   Initialize the panel and clear the framebuffer.
-- `clear(enabled = false)` / `fill(enabled)`
-  Fill the local framebuffer with off/on pixels.
-- `setPixel(x, y, enabled)` / `getPixel(x, y)`
-  Read or write one pixel in the framebuffer.
-- `fillRect(x, y, width, height, enabled)`
+- `clear(color?)` / `fill(color?)`
+  Fill the local framebuffer with a packed color. Defaults to the surface background color.
+- `setPixel(x, y, color)` / `getPixel(x, y)`
+  Write or read one packed pixel color.
+- `fillRect(x, y, width, height, color)`
   Fill a rectangle in the framebuffer.
-- `drawLine(x0, y0, x1, y1, enabled)`
+- `drawLine(x0, y0, x1, y1, color)`
   Draw a line with Bresenham logic.
-- `drawRect(x, y, width, height, enabled)`
+- `drawRect(x, y, width, height, color)`
   Draw a rectangle outline.
-- `drawBitmap(x, y, bitmap, enabled?)`
-  Draw a bitmap shaped as `{ width, height, pixels }`.
-- `drawChar(x, y, ch, enabled)`
+- `drawBitmap(x, y, bitmap, options?)`
+  Draw a bitmap shaped as `{ width, height, pixels }` with `{ color, background }`.
+- `drawChar(x, y, ch, options?)`
   Draw one glyph using the default EQF font.
-- `drawText(x, y, text, enabled, spacingOrStyle?)`
-  Draw text. Pass a number for spacing, or `{ spacing, font }` for a loaded EQF font.
+- `drawText(x, y, text, options?)`
+  Draw text with `{ color, spacing, font, background }`. Text background is transparent by default; set `background` to explicitly fill each glyph cell, or `null` to keep it transparent.
 - `measureText(text, style?)`
   Return `{ width, height, lines }` for the selected font.
 - `flush()`
@@ -92,8 +101,8 @@ Example:
 ```js
 var oled = display.open({ driver: "ssd1306", sda: 5, scl: 6, address: 0x3c });
 oled.clear();
-oled.drawText(0, 0, "HELLO");
-oled.drawRect(0, 10, 64, 18, true);
+oled.drawText(0, 0, "HELLO", { color: display.mono1(1) });
+oled.drawRect(0, 10, 64, 18, display.mono1(1));
 oled.flush();
 ```
 
@@ -137,11 +146,13 @@ Supported common props:
 - `justify`
   Main-axis alignment for rows and columns: `"start"`, `"center"`, `"end"`, or `"space-between"`.
 - `background`
-  Fill the node frame before painting children.
+  Fill the node frame before painting children with a packed display color.
 - `border`
   Draw a 1-pixel border around the node frame.
+- `borderColor`
+  Packed border color. Defaults to the surface foreground color.
 - `color`
-  Text color for `ui.text(...)`. Use `true`/`false` for the active surface foreground/background, or an RGB565 number on color surfaces.
+  Packed text color for `ui.text(...)`, for example `display.mono1(1)` or `display.rgb565(255, 255, 255)`.
 
 Example:
 

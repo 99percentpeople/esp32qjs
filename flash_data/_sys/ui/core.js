@@ -26,17 +26,37 @@
     return number;
   }
 
-  function toColor(value, fallback) {
-    if (value === undefined) {
+  function surfaceForeground(surface) {
+    if (own(surface, "foreground")) {
+      return surface.foreground;
+    }
+    return surface.pixelFormat === "rgb565" ? display.rgb565(255, 255, 255) : display.mono1(1);
+  }
+
+  function surfaceBackground(surface) {
+    if (own(surface, "background")) {
+      return surface.background;
+    }
+    return surface.pixelFormat === "rgb565" ? display.rgb565(0, 0, 0) : display.mono1(0);
+  }
+
+  function packedColor(surface, value, fallback, apiName) {
+    var color;
+
+    if (value === undefined || value === null) {
       return fallback;
     }
-    if (value === false || value === 0 || value === null) {
-      return false;
+    if (typeof value !== "number" || value !== value) {
+      throw new Error(apiName + " expects a packed display color");
     }
-    if (value === true || value === 1) {
-      return true;
+    color = value | 0;
+    if (surface.pixelFormat === "mono1" && (color < 0 || color > 1)) {
+      throw new Error(apiName + " expects a display.mono1(...) color");
     }
-    return value;
+    if (surface.pixelFormat === "rgb565" && (color < 0 || color > 0xffff)) {
+      throw new Error(apiName + " expects a display.rgb565(...) color");
+    }
+    return color;
   }
 
   function isArray(value) {
@@ -262,12 +282,14 @@
     }
 
     if (own(props, "background")) {
-      backgroundColor = toColor(props.background, false);
+      backgroundColor = packedColor(surface, props.background, surfaceBackground(surface), "ui background");
       surface.fillRect(frame.x, frame.y, frame.width, frame.height, backgroundColor);
     }
 
     if (own(props, "border") && props.border) {
-      borderColor = own(props, "borderColor") ? toColor(props.borderColor, true) : true;
+      borderColor = own(props, "borderColor")
+        ? packedColor(surface, props.borderColor, surfaceForeground(surface), "ui borderColor")
+        : surfaceForeground(surface);
       surface.drawRect(frame.x, frame.y, frame.width, frame.height, borderColor);
     }
   }
@@ -447,8 +469,13 @@
     }
 
     if (node.type === "text") {
-      color = own(props, "color") ? toColor(props.color, true) : true;
-      surface.drawText(frame.x, frame.y, props.text || "", color, own(props, "spacing") ? props.spacing : 0);
+      color = own(props, "color")
+        ? packedColor(surface, props.color, surfaceForeground(surface), "ui text color")
+        : surfaceForeground(surface);
+      surface.drawText(frame.x, frame.y, props.text || "", {
+        color: color,
+        spacing: own(props, "spacing") ? props.spacing : 0
+      });
       return;
     }
 
@@ -517,7 +544,9 @@
   ui.render = function (surface, node, options) {
     var root;
     var settings = options || {};
-    var clearColor = own(settings, "clearColor") ? toColor(settings.clearColor, false) : false;
+    var clearColor = own(settings, "clearColor")
+      ? packedColor(surface, settings.clearColor, surfaceBackground(surface), "ui render clearColor")
+      : surfaceBackground(surface);
 
     if (settings.clear !== false) {
       surface.clear(clearColor);

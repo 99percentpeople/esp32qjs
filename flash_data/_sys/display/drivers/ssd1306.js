@@ -18,8 +18,12 @@
     return system.toBool(value, fallback);
   }
 
-  function toEnabled(value) {
-    return !(value === false || value === 0 || value === null);
+  function monoColor(value, fallback, apiName) {
+    return system.normalizeMonoColor(value, fallback, apiName);
+  }
+
+  function styleOptions(value, apiName) {
+    return system.styleOptions(value, apiName);
   }
 
   function textFontFromStyle(style) {
@@ -38,6 +42,11 @@
     if (style && typeof style === "object") {
       if (own(style, "spacing")) {
         options.spacing = style.spacing;
+      }
+      if (own(style, "background")) {
+        options.background = style.background === null
+          ? null
+          : monoColor(style.background, surface.background, "SSD1306 text background");
       }
     } else if (style !== undefined) {
       options.spacing = style;
@@ -153,10 +162,12 @@
           format: displayBuffer.MONO1,
           layout: "page-y8",
           storage: own(options, "storage") ? options.storage : "auto",
-          foreground: true,
-          background: false
+          foreground: display.mono1(1),
+          background: display.mono1(0)
         })
       : null;
+    this.foreground = display.mono1(1);
+    this.background = display.mono1(0);
     this.address = own(options, "address") ? options.address : DEFAULT_ADDRESS;
     this.busOptions = {
       sda: own(options, "sda") ? options.sda : i2c.DEFAULT_SDA,
@@ -169,79 +180,108 @@
 
   system.inherit(SSD1306Display, display.MonoSurface);
 
-  SSD1306Display.prototype.clear = function (enabled) {
+  SSD1306Display.prototype.clear = function (color) {
+    color = monoColor(color, this.background, "SSD1306.clear(color)");
     if (this.nativeBuffer) {
-      this.nativeBuffer.clear(toEnabled(enabled));
+      this.nativeBuffer.clear(color);
       return this;
     }
-    return display.MonoSurface.prototype.clear.call(this, enabled);
+    return display.MonoSurface.prototype.clear.call(this, color);
   };
 
-  SSD1306Display.prototype.fill = function (enabled) {
-    return this.clear(enabled);
+  SSD1306Display.prototype.fill = function (color) {
+    return this.clear(color);
   };
 
-  SSD1306Display.prototype.setPixel = function (x, y, enabled) {
+  SSD1306Display.prototype.setPixel = function (x, y, color) {
+    color = monoColor(color, this.foreground, "SSD1306.setPixel(x, y, color)");
     if (this.nativeBuffer) {
-      this.nativeBuffer.setPixel(x, y, toEnabled(enabled));
+      this.nativeBuffer.setPixel(x, y, color);
       return this;
     }
-    return display.MonoSurface.prototype.setPixel.call(this, x, y, enabled);
+    return display.MonoSurface.prototype.setPixel.call(this, x, y, color);
   };
 
   SSD1306Display.prototype.getPixel = function (x, y) {
     if (this.nativeBuffer) {
-      return !!this.nativeBuffer.getPixel(x, y);
+      return this.nativeBuffer.getPixel(x, y);
     }
     return display.MonoSurface.prototype.getPixel.call(this, x, y);
   };
 
-  SSD1306Display.prototype.fillRect = function (x, y, width, height, enabled) {
+  SSD1306Display.prototype.fillRect = function (x, y, width, height, color) {
+    color = monoColor(color, this.foreground, "SSD1306.fillRect(x, y, width, height, color)");
     if (this.nativeBuffer) {
-      this.nativeBuffer.fillRect(x, y, width, height, toEnabled(enabled));
+      this.nativeBuffer.fillRect(x, y, width, height, color);
       return this;
     }
-    return display.MonoSurface.prototype.fillRect.call(this, x, y, width, height, enabled);
+    return display.MonoSurface.prototype.fillRect.call(this, x, y, width, height, color);
   };
 
-  SSD1306Display.prototype.drawLine = function (x0, y0, x1, y1, enabled) {
+  SSD1306Display.prototype.drawLine = function (x0, y0, x1, y1, color) {
+    color = monoColor(color, this.foreground, "SSD1306.drawLine(x0, y0, x1, y1, color)");
     if (this.nativeBuffer) {
-      this.nativeBuffer.drawLine(x0, y0, x1, y1, toEnabled(enabled));
+      this.nativeBuffer.drawLine(x0, y0, x1, y1, color);
       return this;
     }
-    return display.MonoSurface.prototype.drawLine.call(this, x0, y0, x1, y1, enabled);
+    return display.MonoSurface.prototype.drawLine.call(this, x0, y0, x1, y1, color);
   };
 
-  SSD1306Display.prototype.drawRect = function (x, y, width, height, enabled) {
+  SSD1306Display.prototype.drawRect = function (x, y, width, height, color) {
+    color = monoColor(color, this.foreground, "SSD1306.drawRect(x, y, width, height, color)");
     if (this.nativeBuffer) {
-      this.nativeBuffer.drawRect(x, y, width, height, toEnabled(enabled));
+      this.nativeBuffer.drawRect(x, y, width, height, color);
       return this;
     }
-    return display.MonoSurface.prototype.drawRect.call(this, x, y, width, height, enabled);
+    return display.MonoSurface.prototype.drawRect.call(this, x, y, width, height, color);
   };
 
-  SSD1306Display.prototype.drawBitmap = function (x, y, bitmap, enabled) {
+  SSD1306Display.prototype.drawBitmap = function (x, y, bitmap, options) {
+    var style = styleOptions(options, "SSD1306.drawBitmap(x, y, bitmap, options)");
+    var color = monoColor(style.color, this.foreground, "SSD1306.drawBitmap(x, y, bitmap, options).color");
+    var nativeOptions = {
+      color: color
+    };
+
+    if (style.background !== undefined) {
+      nativeOptions.background = style.background === null
+        ? null
+        : monoColor(style.background, this.background, "SSD1306 bitmap background");
+    }
+
     if (this.nativeBuffer) {
-      this.nativeBuffer.drawBitmap(x, y, bitmap, toEnabled(enabled));
+      this.nativeBuffer.drawBitmap(x, y, bitmap, nativeOptions);
       return this;
     }
-    return display.MonoSurface.prototype.drawBitmap.call(this, x, y, bitmap, enabled);
+    return display.MonoSurface.prototype.drawBitmap.call(this, x, y, bitmap, style);
   };
 
-  SSD1306Display.prototype.drawChar = function (x, y, ch, enabled) {
+  SSD1306Display.prototype.drawChar = function (x, y, ch, options) {
+    var style = styleOptions(options, "SSD1306.drawChar(x, y, ch, options)");
+    var color = monoColor(style.color, this.foreground, "SSD1306.drawChar(x, y, ch, options).color");
+    var nativeOptions;
+
     if (this.nativeBuffer) {
-      this.nativeBuffer.drawText(x, y, String(ch).charAt(0), toEnabled(enabled), nativeTextOptions(this));
+      nativeOptions = nativeTextOptions(this, style);
+      nativeOptions.color = color;
+      this.nativeBuffer.drawText(x, y, String(ch).charAt(0), nativeOptions);
       return this;
     }
-    return display.MonoSurface.prototype.drawChar.call(this, x, y, ch, enabled);
+    return display.MonoSurface.prototype.drawChar.call(this, x, y, ch, style);
   };
 
-  SSD1306Display.prototype.drawText = function (x, y, text, enabled, style) {
+  SSD1306Display.prototype.drawText = function (x, y, text, options) {
+    var style = styleOptions(options, "SSD1306.drawText(x, y, text, options)");
+    var color = monoColor(style.color, this.foreground, "SSD1306.drawText(x, y, text, options).color");
+    var nativeOptions;
+
     if (this.nativeBuffer) {
-      this.nativeBuffer.drawText(x, y, nativeText(text, style), toEnabled(enabled), nativeTextOptions(this, style));
+      nativeOptions = nativeTextOptions(this, style);
+      nativeOptions.color = color;
+      this.nativeBuffer.drawText(x, y, nativeText(text, style), nativeOptions);
       return this;
     }
-    return display.MonoSurface.prototype.drawText.call(this, x, y, text, enabled, style);
+    return display.MonoSurface.prototype.drawText.call(this, x, y, text, style);
   };
 
   SSD1306Display.prototype.measureText = function (text, style) {
@@ -283,7 +323,7 @@
     ]);
 
     this.ready = true;
-    return this.clear(false).flush();
+    return this.clear().flush();
   };
 
   SSD1306Display.prototype.on = function () {

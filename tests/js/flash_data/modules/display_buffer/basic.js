@@ -16,10 +16,10 @@ test("display_buffer/basic", function () {
   test.equal(mono.pageHeight, 8, "mono page height should be 8");
   test.equal(mono.byteLength, 8, "mono byteLength should match one 8-pixel page");
 
-  mono.clear(false).clearDirty().setPixel(0, 0, true).setPixel(1, 7, true);
-  test.equal(mono.getPixel(0, 0), true, "mono getPixel should read set pixels");
-  test.equal(mono.getPixel(1, 7), true, "mono getPixel should read page-y8 high bits");
-  test.equal(mono.getPixel(2, 0), false, "mono getPixel should read cleared pixels");
+  mono.clear(0).clearDirty().setPixel(0, 0, 1).setPixel(1, 7, 1);
+  test.equal(mono.getPixel(0, 0), 1, "mono getPixel should read set pixels");
+  test.equal(mono.getPixel(1, 7), 1, "mono getPixel should read page-y8 high bits");
+  test.equal(mono.getPixel(2, 0), 0, "mono getPixel should read cleared pixels");
   bytes = mono.readRect(0, 0, 8, 8).toArray();
   test.equal(bytes.length, 8, "mono readRect should return a ByteView with array conversion");
   test.equal(bytes[0], 0x01, "mono readRect should pack y=0 in bit 0");
@@ -32,13 +32,13 @@ test("display_buffer/basic", function () {
   test.equal(dirty.height, 8, "dirty height should include y=7");
   mono.clearDirty();
   test.equal(mono.getDirty(), null, "clearDirty should reset dirty bounds");
-  mono.fillRect(2, 1, 2, 2, true);
+  mono.fillRect(2, 1, 2, 2, 1);
   dirty = mono.getDirty();
   test.equal(dirty.x, 2, "fillRect should mark dirty x");
   test.equal(dirty.y, 1, "fillRect should mark dirty y");
   test.equal(dirty.width, 2, "fillRect should mark dirty width");
   test.equal(dirty.height, 2, "fillRect should mark dirty height");
-  mono.clear(false).drawLine(0, 0, 7, 5, true);
+  mono.clear(0).drawLine(0, 0, 7, 5, 1);
   bytes = mono.readRect(0, 0, 8, 8).toArray();
   test.equal(bytes[0], 0x01, "diagonal drawLine should set the first point");
   test.equal(bytes[3], 0x04, "diagonal drawLine should advance both axes");
@@ -46,9 +46,39 @@ test("display_buffer/basic", function () {
 
   test.equal(mono.measureText("A", { font: font }).width, 6, "measureText should use default EQF glyph advance");
   test.equal(mono.measureText("A", { font: font }).height, 8, "measureText should report line height");
-  mono.clear(false).drawText(0, 0, "A", true, { font: font });
+  try {
+    mono.drawText(0, 0, "A", 1);
+  } catch (textOptionsError) {
+    closeError = String(textOptionsError);
+  }
+  test.ok(closeError.indexOf("options must be an object") >= 0, "drawText should reject positional colors");
+  closeError = "";
+  mono.clear(0).drawText(0, 0, "A", { color: 1, font: font });
   bytes = mono.readRect(0, 0, 8, 8).toArray();
   test.equal(bytes[0], 0x7e, "drawText should render the default EQF font");
+  mono.clear(1).drawText(0, 0, "A", { color: 0, font: font });
+  bytes = mono.readRect(0, 0, 8, 8).toArray();
+  test.equal(bytes[0], 0x81, "drawText should keep non-glyph pixels transparent by default");
+  test.equal(bytes[5], 0xff, "drawText should keep the advance gap transparent by default");
+  mono.clear(1).drawText(0, 0, "A", { color: 1, font: font, background: 0 });
+  bytes = mono.readRect(0, 0, 8, 8).toArray();
+  test.equal(bytes[0], 0x7e, "drawText should fill an explicit background before glyph pixels");
+  test.equal(bytes[5], 0x00, "drawText explicit background should cover the advance gap");
+  mono.clear(1).drawBitmap(0, 0, { width: 2, height: 1, pixels: [1, 0] }, { color: 0 });
+  bytes = mono.readRect(0, 0, 8, 8).toArray();
+  test.equal(bytes[0], 0xfe, "drawBitmap should draw mask pixels with an options color");
+  test.equal(bytes[1], 0xff, "drawBitmap should keep off pixels transparent by default");
+  mono.clear(1).drawBitmap(0, 0, { width: 2, height: 1, pixels: [1, 0] }, { color: 1, background: 0 });
+  bytes = mono.readRect(0, 0, 8, 8).toArray();
+  test.equal(bytes[0], 0xff, "drawBitmap should draw on pixels with an options color");
+  test.equal(bytes[1], 0xfe, "drawBitmap should fill explicit background pixels");
+  try {
+    mono.setPixel(0, 0, true);
+  } catch (colorError) {
+    closeError = String(colorError);
+  }
+  test.ok(closeError.indexOf("valid color") >= 0, "mono colors should reject boolean values");
+  closeError = "";
 
   rgb = displayBuffer.create({ width: 2, height: 2, format: "rgb565", chunkBytes: 4 });
   test.equal(rgb.layout, "linear", "rgb565 default layout should be linear");
@@ -80,8 +110,8 @@ test("display_buffer/basic", function () {
   test.equal(rgb.close(), true, "close should release the native buffer");
   try {
     rgb.clear(0);
-  } catch (error) {
-    closeError = String(error);
+  } catch (closedError) {
+    closeError = String(closedError);
   }
   test.ok(closeError.indexOf("closed") >= 0, "methods should fail clearly after close");
   mono.close();
