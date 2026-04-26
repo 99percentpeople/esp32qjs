@@ -20,9 +20,7 @@ These helpers are implemented in JavaScript on top of the `i2c` module and live 
 - `display.VERSION`
   Current JS display layer version, `"0.4.0"`.
 - `display.Surface`
-  Base surface contract.
-- `display.MonoSurface`
-  Generic 1-bit framebuffer surface.
+  Base surface contract. It provides metadata and text measurement helpers only; drawing methods must be implemented by the concrete driver.
 - `display.registerDriver(name, factory)`
   Register a hardware driver factory.
 - `display.create(options)` / `display.open(options)`
@@ -44,14 +42,14 @@ Supported `options` fields:
   Passed through to `i2c.open(...)` when the driver needs to configure or reopen its internal `I2CBus` handle.
 - `address`
   SSD1306 I2C address, default `0x3c`.
-- `host`, `sclk`, `mosi`, `miso`, `cs`, `dc`, `reset`, `backlight`, `freqHz`, `maxTransferSize`, `chunkBytes`
+- `host`, `sclk`, `mosi`, `miso`, `cs`, `dc`, `reset`, `backlight`, `freqHz`, `maxTransferSize`, `chunkBytes`, `storage`
   ST7789 SPI/GPIO options.
 - `width`, `height`
   Display size, default `128x64`.
 - `spacing`
   Extra inter-character spacing for `drawText()`.
 
-When the firmware exposes `esp32.info().features.displayBuffer`, the ST7789 driver uses a native RGB565 `displayBuffer` internally and flushes native byte views through `spi.write(...)`. If the feature is disabled, it falls back to the pure JavaScript mono surface path.
+The built-in display drivers require the native `displayBuffer` module. Drawing primitives are forwarded to the native buffer, while JavaScript manages fonts, colors, dirty/flush policy, and panel command sequencing. ST7789 uses a native RGB565 buffer and flushes `readRectChunks(...)` byte-source chunks through SPI `writeChunks(...)`. SSD1306 uses a native mono buffer and can flush chunks through I2C `writeChunks(...)` when needed.
 
 The display stdlib loads `_sys/display/fonts/mono5x7.eqf` as `display.defaultFont`. Additional fonts can be loaded from LittleFS with `display.loadFont(path, name?)`. The file must use the EQF1 fixed bitmap format documented in the C API. Pass the returned font with `{ font }` to `drawText()` or `measureText()`.
 
@@ -103,6 +101,10 @@ Display instance methods:
   Return `{ width, height, lines }` for the selected font.
 - `flush()`
   Write the framebuffer to the panel over I2C.
+- `flushRect(x, y, width, height)`
+  Write one framebuffer rectangle to drivers that support partial refresh, such as ST7789.
+- `flushRects(rects, options?)`
+  Write multiple rectangles on drivers that support partial refresh. ST7789 accepts `{ x, y, width, height }`, `{ x, y, w, h }`, or `[x, y, width, height]` entries, and may merge high-coverage regions into one transfer to reduce panel window-command overhead. Pass `{ merge: false }` to force separate transfers.
 - `on()` / `off()`
   Turn the panel on or off.
 - `invert(enabled)`

@@ -13,6 +13,7 @@
 #include "driver/i2c_master.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "soc/soc_caps.h"
 
 typedef struct {
@@ -383,6 +384,96 @@ static JSValue i2c_write(JSContext *ctx,
     return JS_NewInt32(ctx, (int32_t)source.length);
 }
 
+static JSValue i2c_make_write_chunks_stats(JSContext *ctx,
+                                           uint32_t chunks,
+                                           size_t bytes,
+                                           uint64_t total_us)
+{
+    JSGCRef stats_ref;
+    JSValue *stats;
+
+    stats = JS_PushGCRef(ctx, &stats_ref);
+    *stats = JS_NewObject(ctx);
+    if (JS_IsException(*stats)) {
+        JS_PopGCRef(ctx, &stats_ref);
+        return JS_EXCEPTION;
+    }
+
+    if (!esp32_mquickjs_set_property(ctx, *stats, "chunks", JS_NewUint32(ctx, chunks)) ||
+        !esp32_mquickjs_set_property(ctx, *stats, "bytes", JS_NewInt64(ctx, (int64_t)bytes)) ||
+        !esp32_mquickjs_set_property(ctx, *stats, "totalUs", JS_NewInt64(ctx, (int64_t)total_us))) {
+        JS_PopGCRef(ctx, &stats_ref);
+        return JS_EXCEPTION;
+    }
+
+    return JS_PopGCRef(ctx, &stats_ref);
+}
+
+static JSValue i2c_write_chunks(JSContext *ctx,
+                                const esp32_mquickjs_i2c_slot_t *slot,
+                                uint16_t address,
+                                JSValue chunks_value)
+{
+    i2c_master_dev_handle_t device_handle = NULL;
+    uint32_t chunk_count = 0;
+    uint32_t chunks = 0;
+    uint32_t index;
+    size_t bytes = 0;
+    int64_t total_start;
+    JSValue error = JS_UNDEFINED;
+    esp_err_t err;
+
+    if (!esp32_mquickjs_get_byte_source_array_length(ctx,
+                                                     chunks_value,
+                                                     "I2CBus.writeChunks(addr, chunks)",
+                                                     &chunk_count,
+                                                     &error)) {
+        return JS_IsUndefined(error)
+                   ? JS_ThrowTypeError(ctx, "I2CBus.writeChunks(addr, chunks) expects an array-like object")
+                   : error;
+    }
+
+    err = i2c_with_device(slot, address, &device_handle);
+    if (err != ESP_OK) {
+        return i2c_throw_error(ctx, err, "I2CBus.writeChunks() failed to add device");
+    }
+
+    total_start = esp_timer_get_time();
+    for (index = 0; index < chunk_count; ++index) {
+        esp32_mquickjs_byte_source_chunk_t chunk;
+
+        if (!esp32_mquickjs_get_byte_source_chunk(ctx,
+                                                  chunks_value,
+                                                  index,
+                                                  "I2CBus.writeChunks(addr, chunks)",
+                                                  &chunk,
+                                                  &error)) {
+            i2c_master_bus_rm_device(device_handle);
+            return JS_IsUndefined(error)
+                       ? JS_ThrowTypeError(ctx, "I2CBus.writeChunks(addr, chunks) expects byte-source chunks")
+                       : error;
+        }
+        if (chunk.source.length == 0) {
+            esp32_mquickjs_release_byte_source_chunk(ctx, &chunk);
+            continue;
+        }
+        err = i2c_master_transmit(device_handle, chunk.source.data, chunk.source.length, (int)slot->timeout_ms);
+        bytes += chunk.source.length;
+        chunks++;
+        esp32_mquickjs_release_byte_source_chunk(ctx, &chunk);
+        if (err != ESP_OK) {
+            i2c_master_bus_rm_device(device_handle);
+            return i2c_throw_error(ctx, err, "I2CBus.writeChunks() failed");
+        }
+    }
+
+    i2c_master_bus_rm_device(device_handle);
+    return i2c_make_write_chunks_stats(ctx,
+                                       chunks,
+                                       bytes,
+                                       (uint64_t)(esp_timer_get_time() - total_start));
+}
+
 static JSValue i2c_read(JSContext *ctx,
                         const esp32_mquickjs_i2c_slot_t *slot,
                         uint16_t address,
@@ -693,6 +784,21 @@ JSValue js_i2c_bus_write(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
         return JS_ThrowTypeError(ctx, "I2CBus.write(addr, data) expects a 7-bit address and byte array");
     }
     return i2c_write(ctx, slot, address, argv[1]);
+}
+
+JSValue js_i2c_bus_write_chunks(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    esp32_mquickjs_i2c_bus_ref_t bus_ref;
+    esp32_mquickjs_i2c_slot_t *slot = NULL;
+    uint16_t address = 0;
+
+    if (i2c_get_this_slot(ctx, *this_val, "I2CBus.writeChunks()", &bus_ref, &slot) != 0) {
+        return JS_EXCEPTION;
+    }
+    if (argc < 2 || !js_value_to_i2c_address(ctx, argv[0], &address)) {
+        return JS_ThrowTypeError(ctx, "I2CBus.writeChunks(addr, chunks) expects a 7-bit address and byte-source chunks");
+    }
+    return i2c_write_chunks(ctx, slot, address, argv[1]);
 }
 
 JSValue js_i2c_bus_read(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

@@ -4,6 +4,7 @@ test("display_buffer/basic", function () {
   var bytes;
   var rgb;
   var chunks;
+  var wide;
   var closeError = "";
   var font = displayBuffer.loadFont("_sys/display/fonts/mono5x7.eqf");
 
@@ -38,11 +39,71 @@ test("display_buffer/basic", function () {
   test.equal(dirty.y, 1, "fillRect should mark dirty y");
   test.equal(dirty.width, 2, "fillRect should mark dirty width");
   test.equal(dirty.height, 2, "fillRect should mark dirty height");
+  mono.clear(0).clearDirty().fillCircle(3, 3, 2, 1);
+  test.equal(mono.getPixel(3, 3), 1, "fillCircle should fill the center pixel");
+  test.equal(mono.getPixel(3, 1), 1, "fillCircle should fill the top pixel");
+  test.equal(mono.getPixel(1, 1), 0, "fillCircle should leave outside pixels clear");
+  dirty = mono.getDirty();
+  test.equal(dirty.x, 1, "fillCircle should mark dirty x");
+  test.equal(dirty.y, 1, "fillCircle should mark dirty y");
+  test.equal(dirty.width, 5, "fillCircle should mark dirty width");
+  test.equal(dirty.height, 5, "fillCircle should mark dirty height");
+  mono.clear(0).clearDirty().drawCircle(3, 3, 2, 1);
+  test.equal(mono.getPixel(3, 3), 0, "drawCircle should leave the center pixel clear");
+  test.equal(mono.getPixel(3, 1), 1, "drawCircle should draw the top outline pixel");
+  test.equal(mono.getPixel(5, 3), 1, "drawCircle should draw the right outline pixel");
+  mono.clear(0).clearDirty().fillEllipse(4, 4, 3, 1, 1);
+  test.equal(mono.getPixel(1, 4), 1, "fillEllipse should fill the major axis");
+  test.equal(mono.getPixel(4, 3), 1, "fillEllipse should fill the minor axis endpoint");
+  test.equal(mono.getPixel(1, 3), 0, "fillEllipse should leave outside pixels clear");
+  mono.clear(0).clearDirty().drawEllipse(4, 4, 3, 1, 1);
+  test.equal(mono.getPixel(1, 4), 1, "drawEllipse should draw the left endpoint");
+  test.equal(mono.getPixel(7, 4), 1, "drawEllipse should draw the right endpoint");
+  test.equal(mono.getPixel(4, 4), 0, "drawEllipse should leave the center clear");
+  wide = displayBuffer.create({ width: 21, height: 9, format: "mono1" });
+  wide.clear(0).drawEllipse(10, 4, 6, 2, 1);
+  test.equal(wide.getPixel(8, 3), 1, "drawEllipse should connect a shallow top arc");
+  test.equal(wide.getPixel(12, 5), 1, "drawEllipse should connect a shallow bottom arc");
+  test.equal(wide.getPixel(10, 4), 0, "drawEllipse should keep the shallow ellipse center clear");
+  mono.clear(0).clearDirty().drawRoundRect(1, 1, 6, 5, 2, 1);
+  test.equal(mono.getPixel(3, 1), 1, "drawRoundRect should draw the top edge");
+  test.equal(mono.getPixel(1, 3), 1, "drawRoundRect should draw the left edge");
+  test.equal(mono.getPixel(3, 3), 0, "drawRoundRect should leave the interior clear");
+  mono.clear(0).clearDirty().fillRoundRect(1, 1, 6, 5, 2, 1);
+  test.equal(mono.getPixel(3, 3), 1, "fillRoundRect should fill the interior");
+  test.equal(mono.getPixel(1, 1), 0, "fillRoundRect should keep clipped rounded corners clear");
   mono.clear(0).drawLine(0, 0, 7, 5, 1);
   bytes = mono.readRect(0, 0, 8, 8).toArray();
   test.equal(bytes[0], 0x01, "diagonal drawLine should set the first point");
   test.equal(bytes[3], 0x04, "diagonal drawLine should advance both axes");
   test.equal(bytes[7], 0x20, "diagonal drawLine should reach the last point");
+  mono.clear(0).drawPolyline([0, 6, 2, 6, 2, 4], 1);
+  test.equal(mono.getPixel(1, 6), 1, "drawPolyline should draw native line segments");
+  test.equal(mono.getPixel(2, 5), 1, "drawPolyline should connect segment endpoints");
+  mono.clear(0).drawPolygon([{ x: 1, y: 1 }, { x: 4, y: 1 }, { x: 4, y: 3 }], 1);
+  test.equal(mono.getPixel(2, 1), 1, "drawPolygon should draw the top edge");
+  test.equal(mono.getPixel(2, 2), 1, "drawPolygon should close the final edge");
+  mono.clear(0).clearDirty().fillTriangle(1, 1, 5, 1, 3, 5, 1);
+  test.equal(mono.getPixel(3, 3), 1, "fillTriangle should fill the triangle interior");
+  test.equal(mono.getPixel(1, 1), 0, "fillTriangle should use scanline fill rules for edge pixels");
+  dirty = mono.getDirty();
+  test.equal(dirty.x, 2, "fillTriangle should mark clipped dirty x");
+  test.equal(dirty.y, 1, "fillTriangle should mark clipped dirty y");
+  test.equal(dirty.width, 3, "fillTriangle should mark clipped dirty width");
+  test.equal(dirty.height, 4, "fillTriangle should mark clipped dirty height");
+  mono.clear(0).drawTriangle(1, 1, 5, 1, 3, 5, 1);
+  test.equal(mono.getPixel(3, 1), 1, "drawTriangle should draw the top edge");
+  test.equal(mono.getPixel(2, 3), 1, "drawTriangle should draw a side edge");
+  mono.clear(0).fillPolygon([{ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 2, y: 2 }, { x: 0, y: 2 }], 1);
+  test.equal(mono.getPixel(0, 0), 1, "fillPolygon should accept object points");
+  test.equal(mono.getPixel(2, 1), 1, "fillPolygon should fill polygon rows");
+  test.equal(mono.getPixel(0, 2), 0, "fillPolygon should follow half-pixel scanline bounds");
+  mono.clear(0).drawQuadraticBezier(0, 0, 3, 6, 7, 0, 1, { segments: 4 });
+  test.equal(mono.getPixel(0, 0), 1, "drawQuadraticBezier should draw the first point");
+  test.equal(mono.getPixel(7, 0), 1, "drawQuadraticBezier should draw the last point");
+  mono.clear(0).drawCubicBezier(0, 7, 0, 0, 7, 0, 7, 7, 1, { segments: 4 });
+  test.equal(mono.getPixel(0, 7), 1, "drawCubicBezier should draw the first point");
+  test.equal(mono.getPixel(7, 7), 1, "drawCubicBezier should draw the last point");
 
   test.equal(mono.measureText("A", { font: font }).width, 6, "measureText should use default EQF glyph advance");
   test.equal(mono.measureText("A", { font: font }).height, 8, "measureText should report line height");
@@ -97,12 +158,27 @@ test("display_buffer/basic", function () {
   chunks = rgb.readRectChunks(0, 0, 2, 2);
   test.equal(chunks.length, 2, "readRectChunks should split by configured chunkBytes");
   test.equal(chunks[0].length, 4, "readRectChunks should return ByteView chunks");
+  var reusedChunks = rgb.readRectChunks(0, 0, 2, 2, { byteOrder: "be", reuse: true });
+  var reusedFirst = reusedChunks[0];
+
+  rgb.setPixel(0, 0, 0x0001);
+  var reusedAgain = rgb.readRectChunks(0, 0, 2, 2, { byteOrder: "be", reuse: true });
+  test.equal(reusedAgain, reusedChunks, "readRectChunks reuse should keep the chunk array stable");
+  test.equal(reusedAgain[0], reusedFirst, "readRectChunks reuse should keep ByteView wrappers stable");
+  test.equal(reusedAgain[0].toArray()[1], 0x01, "reused ByteView should point at updated pixel data");
 
   if (esp32.info().features.spi && typeof spi === "object") {
     var bus = spi.openBus();
     var device = bus.openDevice();
 
     test.equal(device.write(rgb.readRect(0, 0, 1, 1)), 2, "spi.write should accept native ByteView values");
+    if (typeof device.writeChunks === "function") {
+      var stats = device.writeChunks(chunks, { queueDepth: 2 });
+
+      test.equal(stats.bytes, 8, "spi.writeChunks should report transmitted bytes");
+      test.equal(stats.chunks, 2, "spi.writeChunks should transmit byte-source chunks");
+      test.equal(typeof stats.direct, "boolean", "spi.writeChunks should report whether direct DMA was used");
+    }
     device.close();
     bus.close();
   }
@@ -114,6 +190,7 @@ test("display_buffer/basic", function () {
     closeError = String(closedError);
   }
   test.ok(closeError.indexOf("closed") >= 0, "methods should fail clearly after close");
+  wide.close();
   mono.close();
 
   return {

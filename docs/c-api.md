@@ -287,6 +287,8 @@ print(headers.get("content-type"));
   Probe `0x03..0x77` and return an array of 7-bit device addresses.
 - `bus.write(addr, data)`
   Write an array-like sequence of bytes or native byte view and return the number of bytes written.
+- `bus.writeChunks(addr, chunks)`
+  Write an array-like list of byte-source chunks to one I2C device while reusing the same device handle. This is intended for data already split by producers such as `displayBuffer.readRectChunks(...)`. It returns `{ chunks, bytes, totalUs }`.
 - `bus.read(addr, length)`
   Read `length` bytes and return them as a JavaScript array.
 - `bus.writeRead(addr, writeData, readLength)`
@@ -346,6 +348,8 @@ bus.close();
   Perform one synchronous full-duplex transaction from an array-like sequence of bytes or native byte view and return the received bytes as a JavaScript array.
 - `device.write(data)`
   Perform one synchronous write-only transaction from an array-like sequence of bytes or native byte view and return the number of transmitted bytes.
+- `device.writeChunks(chunks, options?)`
+  Queue an array-like list of byte-source chunks for write-only SPI transfers. `options.queueDepth` defaults to `2` and is capped by the device queue size. DMA-capable chunks are queued directly; other chunks are copied into DMA-capable staging buffers. The method returns `{ chunks, bytes, prepUs, queueUs, waitUs, transferUs, totalUs, queueDepth, direct }`.
 - `device.read(length, fillByte = 0)`
   Clock `length` bytes and return the bytes read from MISO. `fillByte` controls the dummy value shifted out on MOSI while reading.
 
@@ -393,7 +397,7 @@ Formats and layouts:
 - `format: "rgb565"`
   16-bit RGB565 pixels. Layout must be `"linear"`.
 - `storage`
-  `"auto"`, `"internal"`, `"psram"`, or `"dma"`. `"auto"` uses internal RAM for small buffers and PSRAM for larger buffers when available.
+  `"auto"`, `"internal"`, `"psram"`, or `"dma"`. `"auto"` uses internal RAM for small buffers and PSRAM for larger buffers when available. `"dma"` is required for zero-copy RGB565 SPI flushes.
 
 `DisplayBuffer` properties:
 
@@ -411,8 +415,23 @@ Formats and layouts:
 - `setPixel(x, y, color)` / `getPixel(x, y)`
   Write or read one packed color. `mono1` returns `0` or `1`, not a boolean.
 - `fillRect(x, y, width, height, color?)`
+- `drawCircle(cx, cy, radius, color?)`
+- `fillCircle(cx, cy, radius, color?)`
+- `drawEllipse(cx, cy, rx, ry, color?)`
+- `fillEllipse(cx, cy, rx, ry, color?)`
 - `drawRect(x, y, width, height, color?)`
+- `drawRoundRect(x, y, width, height, radius, color?)`
+- `fillRoundRect(x, y, width, height, radius, color?)`
 - `drawLine(x0, y0, x1, y1, color?)`
+- `drawPolyline(points, color?)`
+- `drawPolygon(points, color?)`
+- `fillPolygon(points, color?)`
+  Draw or fill point lists shaped as `[[x, y], ...]`, `[{ x, y }, ...]`, or flat `[x0, y0, x1, y1, ...]`.
+- `drawTriangle(x0, y0, x1, y1, x2, y2, color?)`
+- `fillTriangle(x0, y0, x1, y1, x2, y2, color?)`
+- `drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color?, options?)`
+- `drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color?, options?)`
+  Draw native Bezier curves. `options.segments` is clamped to `2..128`.
 - `drawBitmap(x, y, { width, height, pixels }, options?)`
   Draw a mask bitmap with `options.color`. `options.background` is transparent by default; pass a packed color to fill off pixels.
 - `drawText(x, y, text, options?)`
@@ -426,7 +445,7 @@ Formats and layouts:
 - `readRect(x, y, width, height, options?)`
   Return a native byte view for the clamped rectangle.
 - `readRectChunks(x, y, width, height, options?)`
-  Return an array of native byte views split by `options.chunkBytes` or the buffer's `chunkBytes`.
+  Return an array of native byte views split by `options.chunkBytes` or the buffer's `chunkBytes`. Passing `options.reuse: true` lets direct full-row exports reuse an internal chunk array and ByteView wrappers, which avoids per-frame wrapper allocation in display flush loops.
 
 `DisplayFont` properties:
 
@@ -490,8 +509,11 @@ Export options:
   `"be"` or `"rgb565be"` for high byte first, `"le"` or `"rgb565le"` for low byte first. This affects `rgb565` exports.
 - `chunkBytes`
   Positive preferred chunk size for `readRectChunks(...)`.
+- `reuse`
+  Boolean hint for `readRectChunks(...)`. When true and the rectangle can be exported as direct full rows, the returned chunk array and ByteView wrappers may be reused by the same `DisplayBuffer` on later calls. Use this only for immediate synchronous writes; do not keep old reused chunk arrays as snapshots.
 
 Native byte views expose `length`, `byteLength`, and `toArray()`. They can be passed directly to `spi` and `i2c` writes without converting to a JavaScript array.
+For display flushes, use `displayBuffer.readRectChunks(...)` and pass those chunks to `SPIDevice.writeChunks(...)` or `I2CBus.writeChunks(...)`. Transport modules consume only generic byte sources and do not inspect display buffer objects.
 
 Example:
 

@@ -17,6 +17,7 @@ test("i2c/status", function () {
   test.ok(typeof bus.status === "function", "I2CBus.status should exist");
   test.ok(typeof bus.scan === "function", "I2CBus.scan should exist");
   test.ok(typeof bus.write === "function", "I2CBus.write should exist");
+  test.ok(typeof bus.writeChunks === "function", "I2CBus.writeChunks should exist");
   test.ok(typeof bus.read === "function", "I2CBus.read should exist");
   test.ok(typeof bus.writeRead === "function", "I2CBus.writeRead should exist");
 

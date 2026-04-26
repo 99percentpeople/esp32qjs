@@ -205,6 +205,86 @@ bool esp32_mquickjs_get_byte_source(JSContext *ctx,
     return js_value_to_array_bytes(ctx, value, api_name, out, out_owned, out_error);
 }
 
+bool esp32_mquickjs_get_byte_source_array_length(JSContext *ctx,
+                                                 JSValue value,
+                                                 const char *api_name,
+                                                 uint32_t *out_length,
+                                                 JSValue *out_error)
+{
+    JSGCRef length_ref;
+    JSValue *length_value;
+
+    if (out_length == NULL || out_error == NULL) {
+        return false;
+    }
+    *out_length = 0;
+    *out_error = JS_UNDEFINED;
+
+    if (JS_GetClassID(ctx, value) < 0) {
+        *out_error = JS_ThrowTypeError(ctx, "%s expects an array-like object", api_name);
+        return false;
+    }
+
+    length_value = JS_PushGCRef(ctx, &length_ref);
+    *length_value = JS_GetPropertyStr(ctx, value, "length");
+    if (JS_IsException(*length_value) || !js_value_to_u32(ctx, *length_value, out_length)) {
+        JS_PopGCRef(ctx, &length_ref);
+        *out_error = JS_ThrowTypeError(ctx, "%s expects an array-like object with a numeric length", api_name);
+        return false;
+    }
+    JS_PopGCRef(ctx, &length_ref);
+    return true;
+}
+
+bool esp32_mquickjs_get_byte_source_chunk(JSContext *ctx,
+                                          JSValue chunks,
+                                          uint32_t index,
+                                          const char *api_name,
+                                          esp32_mquickjs_byte_source_chunk_t *out,
+                                          JSValue *out_error)
+{
+    JSValue *value;
+
+    if (out == NULL || out_error == NULL) {
+        return false;
+    }
+    memset(out, 0, sizeof(*out));
+    out->source.owner = JS_UNDEFINED;
+    *out_error = JS_UNDEFINED;
+
+    value = JS_AddGCRef(ctx, &out->value_ref);
+    out->rooted = true;
+    *value = JS_GetPropertyUint32(ctx, chunks, index);
+    if (JS_IsException(*value)) {
+        esp32_mquickjs_release_byte_source_chunk(ctx, out);
+        *out_error = JS_EXCEPTION;
+        return false;
+    }
+
+    if (!esp32_mquickjs_get_byte_source(ctx, *value, api_name, &out->source, &out->owned, out_error)) {
+        esp32_mquickjs_release_byte_source_chunk(ctx, out);
+        return false;
+    }
+    return true;
+}
+
+void esp32_mquickjs_release_byte_source_chunk(JSContext *ctx,
+                                              esp32_mquickjs_byte_source_chunk_t *chunk)
+{
+    if (chunk == NULL) {
+        return;
+    }
+    esp32_mquickjs_release_byte_source(chunk->owned);
+    chunk->owned = NULL;
+    if (chunk->rooted) {
+        JS_DeleteGCRef(ctx, &chunk->value_ref);
+        chunk->rooted = false;
+    }
+    chunk->source.data = NULL;
+    chunk->source.length = 0;
+    chunk->source.owner = JS_UNDEFINED;
+}
+
 JSValue esp32_mquickjs_new_byte_view(JSContext *ctx,
                                      JSValue owner,
                                      const uint8_t *data,

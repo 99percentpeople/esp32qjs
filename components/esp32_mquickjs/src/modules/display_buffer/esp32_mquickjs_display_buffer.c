@@ -1,131 +1,21 @@
-#include "esp32_mquickjs_display_buffer.h"
+#include "esp32_mquickjs_display_buffer_internal.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
 
-#include "utils/esp32_mquickjs_font.h"
 #include "utils/esp32_mquickjs_byte_source.h"
-#include "esp32_mquickjs_core.h"
-#include "utils/esp32_mquickjs_fs_path.h"
 
-#include <errno.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 
 #include "esp_heap_caps.h"
 #include "esp_psram.h"
 
-#define DISPLAY_BUFFER_MAX_DIMENSION 4096U
 #define DISPLAY_BUFFER_SMALL_INTERNAL_LIMIT 8192U
-#define DISPLAY_BUFFER_DEFAULT_CHUNK_BYTES 4096U
 #define DISPLAY_BUFFER_STAGED_VIEW_KEY "__esp32qjsDisplayBufferStagedView"
-#define DISPLAY_FONT_HEADER_SIZE 16U
-#define DISPLAY_FONT_MAGIC0 'E'
-#define DISPLAY_FONT_MAGIC1 'Q'
-#define DISPLAY_FONT_MAGIC2 'F'
-#define DISPLAY_FONT_MAGIC3 '1'
-#define DISPLAY_FONT_FORMAT_BITMAP_FIXED 1U
-
-typedef enum {
-    DISPLAY_BUFFER_FORMAT_MONO1 = 1,
-    DISPLAY_BUFFER_FORMAT_RGB565 = 2,
-} display_buffer_format_t;
-
-typedef enum {
-    DISPLAY_BUFFER_LAYOUT_LINEAR = 1,
-    DISPLAY_BUFFER_LAYOUT_PAGE_Y8 = 2,
-} display_buffer_layout_t;
-
-typedef enum {
-    DISPLAY_BUFFER_STORAGE_AUTO = 1,
-    DISPLAY_BUFFER_STORAGE_INTERNAL = 2,
-    DISPLAY_BUFFER_STORAGE_PSRAM = 3,
-    DISPLAY_BUFFER_STORAGE_DMA = 4,
-} display_buffer_storage_t;
-
-typedef struct {
-    uint16_t width;
-    uint16_t height;
-    uint16_t stride;
-    uint16_t page_height;
-    uint8_t format;
-    uint8_t layout;
-    uint8_t storage;
-    uint8_t closed;
-    size_t byte_length;
-    uint8_t *data;
-    uint8_t *chunk;
-    size_t chunk_size;
-    size_t chunk_capacity;
-    uint16_t foreground;
-    uint16_t background;
-    int dirty_x0;
-    int dirty_y0;
-    int dirty_x1;
-    int dirty_y1;
-} esp32_mquickjs_display_buffer_t;
-
-typedef struct {
-    esp32_mquickjs_bitmap_font_t font;
-    uint8_t *glyphs;
-    char *name;
-} esp32_mquickjs_display_font_t;
-
-static uint32_t read_u32_le(const uint8_t *bytes)
-{
-    return (uint32_t)bytes[0] |
-           ((uint32_t)bytes[1] << 8) |
-           ((uint32_t)bytes[2] << 16) |
-           ((uint32_t)bytes[3] << 24);
-}
-
-static char *display_font_copy_name(const char *name)
-{
-    size_t length;
-    char *copy;
-
-    if (name == NULL || name[0] == '\0') {
-        name = "font";
-    }
-    length = strlen(name);
-    copy = heap_caps_malloc(length + 1, MALLOC_CAP_8BIT);
-    if (copy == NULL) {
-        return NULL;
-    }
-    memcpy(copy, name, length + 1);
-    return copy;
-}
-
-static void display_font_free(esp32_mquickjs_display_font_t *font)
-{
-    if (font == NULL) {
-        return;
-    }
-    heap_caps_free(font->glyphs);
-    heap_caps_free(font->name);
-    heap_caps_free(font);
-}
-
-static esp32_mquickjs_display_font_t *display_font_from_value(JSContext *ctx,
-                                                              JSValue value,
-                                                              const char *api_name)
-{
-    esp32_mquickjs_display_font_t *font;
-
-    if (JS_GetClassID(ctx, value) != JS_CLASS_DISPLAY_FONT) {
-        JS_ThrowTypeError(ctx, "%s expects a DisplayFont", api_name);
-        return NULL;
-    }
-    font = JS_GetOpaque(ctx, value);
-    if (font == NULL || font->font.glyphs == NULL) {
-        JS_ThrowReferenceError(ctx, "%s failed because the DisplayFont is closed", api_name);
-        return NULL;
-    }
-    return font;
-}
+#define DISPLAY_BUFFER_STAGED_CHUNKS_KEY "__esp32qjsDisplayBufferStagedChunks"
 
 static const char *format_name(uint8_t format)
 {
@@ -142,7 +32,7 @@ static bool string_equals(const char *value, const char *expected)
     return value != NULL && strcmp(value, expected) == 0;
 }
 
-static bool value_to_u32(JSContext *ctx, JSValue value, uint32_t *out_value)
+bool value_to_u32(JSContext *ctx, JSValue value, uint32_t *out_value)
 {
     int raw_value = 0;
 
@@ -153,7 +43,7 @@ static bool value_to_u32(JSContext *ctx, JSValue value, uint32_t *out_value)
     return true;
 }
 
-static bool value_to_i32(JSContext *ctx, JSValue value, int32_t *out_value)
+bool value_to_i32(JSContext *ctx, JSValue value, int32_t *out_value)
 {
     int raw_value = 0;
 
@@ -164,11 +54,11 @@ static bool value_to_i32(JSContext *ctx, JSValue value, int32_t *out_value)
     return true;
 }
 
-static uint16_t normalize_color(JSContext *ctx,
-                                uint8_t format,
-                                JSValue value,
-                                uint16_t fallback,
-                                bool *ok)
+uint16_t normalize_color(JSContext *ctx,
+                         uint8_t format,
+                         JSValue value,
+                         uint16_t fallback,
+                         bool *ok)
 {
     uint32_t raw = fallback;
 
@@ -261,153 +151,6 @@ static bool get_string_option(JSContext *ctx,
     JS_PopGCRef(ctx, &property_ref);
     return ok;
 }
-
-static JSValue display_font_make(JSContext *ctx,
-                                 const uint8_t *bytes,
-                                 size_t length,
-                                 const char *name)
-{
-    uint8_t first;
-    uint8_t last;
-    uint8_t width;
-    uint8_t height;
-    uint8_t bytes_per_column;
-    uint8_t advance;
-    uint8_t line_height;
-    uint32_t glyph_length;
-    size_t glyph_count;
-    size_t glyph_stride;
-    esp32_mquickjs_display_font_t *font = NULL;
-    JSGCRef object_ref;
-    JSValue *object;
-
-    if (bytes == NULL || length < DISPLAY_FONT_HEADER_SIZE) {
-        return JS_ThrowTypeError(ctx, "displayBuffer.loadFont(path) found an invalid font file");
-    }
-    if (bytes[0] != DISPLAY_FONT_MAGIC0 || bytes[1] != DISPLAY_FONT_MAGIC1 ||
-        bytes[2] != DISPLAY_FONT_MAGIC2 || bytes[3] != DISPLAY_FONT_MAGIC3 ||
-        bytes[4] != DISPLAY_FONT_FORMAT_BITMAP_FIXED || bytes[5] != 0) {
-        return JS_ThrowTypeError(ctx, "displayBuffer.loadFont(path) expects EQF1 bitmap-fixed font data");
-    }
-
-    first = bytes[6];
-    last = bytes[7];
-    width = bytes[8];
-    height = bytes[9];
-    advance = bytes[10];
-    line_height = bytes[11];
-    glyph_length = read_u32_le(bytes + 12);
-    if (last < first || width == 0 || height == 0 || height > 64 ||
-        advance == 0 || line_height == 0 || line_height < height) {
-        return JS_ThrowTypeError(ctx, "displayBuffer.loadFont(path) found invalid font metrics");
-    }
-
-    bytes_per_column = (uint8_t)((height + 7U) / 8U);
-    glyph_count = (size_t)last - (size_t)first + 1U;
-    glyph_stride = (size_t)width * bytes_per_column;
-    if (glyph_stride == 0 || glyph_count > SIZE_MAX / glyph_stride ||
-        glyph_length != glyph_count * glyph_stride ||
-        (size_t)glyph_length > length - DISPLAY_FONT_HEADER_SIZE) {
-        return JS_ThrowTypeError(ctx, "displayBuffer.loadFont(path) found invalid glyph data length");
-    }
-
-    font = heap_caps_malloc(sizeof(*font), MALLOC_CAP_8BIT);
-    if (font == NULL) {
-        return JS_ThrowOutOfMemory(ctx);
-    }
-    memset(font, 0, sizeof(*font));
-    font->name = display_font_copy_name(name);
-    font->glyphs = heap_caps_malloc(glyph_length == 0 ? 1U : (size_t)glyph_length, MALLOC_CAP_8BIT);
-    if (font->name == NULL || font->glyphs == NULL) {
-        display_font_free(font);
-        return JS_ThrowOutOfMemory(ctx);
-    }
-    memcpy(font->glyphs, bytes + DISPLAY_FONT_HEADER_SIZE, glyph_length);
-    font->font.name = font->name;
-    font->font.glyphs = font->glyphs;
-    font->font.first = first;
-    font->font.last = last;
-    font->font.width = width;
-    font->font.height = height;
-    font->font.bytes_per_column = bytes_per_column;
-    font->font.advance = advance;
-    font->font.line_height = line_height;
-
-    object = JS_PushGCRef(ctx, &object_ref);
-    *object = JS_NewObjectClassUser(ctx, JS_CLASS_DISPLAY_FONT);
-    if (JS_IsException(*object)) {
-        JS_PopGCRef(ctx, &object_ref);
-        display_font_free(font);
-        return JS_EXCEPTION;
-    }
-    JS_SetOpaque(ctx, *object, font);
-    return JS_PopGCRef(ctx, &object_ref);
-}
-
-#if CONFIG_ESP32_MQUICKJS_FEATURE_FS
-static uint8_t *display_font_read_file(JSContext *ctx,
-                                       const char *script_path,
-                                       char *resolved_path,
-                                       size_t resolved_path_size,
-                                       size_t *out_length)
-{
-    FILE *file;
-    long file_size;
-    uint8_t *bytes;
-    size_t read_len;
-
-    if (!esp32_mquickjs_fs_resolve_path(ESP32_MQUICKJS_LITTLEFS_BASE_PATH,
-                                        script_path,
-                                        resolved_path,
-                                        resolved_path_size)) {
-        JS_ThrowTypeError(ctx, "displayBuffer.loadFont(path) expects a path under %s",
-                          ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
-        return NULL;
-    }
-
-    file = fopen(resolved_path, "rb");
-    if (file == NULL) {
-        JS_ThrowReferenceError(ctx,
-                               "displayBuffer.loadFont(path) failed for %s (%s)",
-                               resolved_path,
-                               strerror(errno));
-        return NULL;
-    }
-    if (fseek(file, 0, SEEK_END) != 0) {
-        fclose(file);
-        JS_ThrowInternalError(ctx, "displayBuffer.loadFont(path) failed to seek %s", resolved_path);
-        return NULL;
-    }
-    file_size = ftell(file);
-    if (file_size < 0 || fseek(file, 0, SEEK_SET) != 0) {
-        fclose(file);
-        JS_ThrowInternalError(ctx, "displayBuffer.loadFont(path) failed to size %s", resolved_path);
-        return NULL;
-    }
-    if (file_size < (long)DISPLAY_FONT_HEADER_SIZE) {
-        fclose(file);
-        JS_ThrowTypeError(ctx, "displayBuffer.loadFont(path) found a truncated font file: %s", resolved_path);
-        return NULL;
-    }
-
-    bytes = heap_caps_malloc((size_t)file_size, MALLOC_CAP_8BIT);
-    if (bytes == NULL) {
-        fclose(file);
-        JS_ThrowOutOfMemory(ctx);
-        return NULL;
-    }
-    read_len = fread(bytes, 1, (size_t)file_size, file);
-    fclose(file);
-    if (read_len != (size_t)file_size) {
-        heap_caps_free(bytes);
-        JS_ThrowInternalError(ctx, "displayBuffer.loadFont(path) failed to read %s", resolved_path);
-        return NULL;
-    }
-
-    *out_length = read_len;
-    return bytes;
-}
-#endif
 
 static bool parse_format(const char *name, uint8_t *out_format)
 {
@@ -572,7 +315,7 @@ static uint8_t *ensure_export_chunk(esp32_mquickjs_display_buffer_t *buffer, siz
     return buffer->chunk;
 }
 
-static esp32_mquickjs_display_buffer_t *display_buffer_from_value(JSContext *ctx,
+esp32_mquickjs_display_buffer_t *display_buffer_from_value(JSContext *ctx,
                                                                   JSValue value,
                                                                   const char *api_name)
 {
@@ -590,6 +333,13 @@ static esp32_mquickjs_display_buffer_t *display_buffer_from_value(JSContext *ctx
     return buffer;
 }
 
+esp32_mquickjs_display_buffer_t *esp32_mquickjs_display_buffer_from_value(JSContext *ctx,
+                                                                          JSValue value,
+                                                                          const char *api_name)
+{
+    return display_buffer_from_value(ctx, value, api_name);
+}
+
 static void clear_dirty(esp32_mquickjs_display_buffer_t *buffer)
 {
     buffer->dirty_x0 = 0;
@@ -598,7 +348,7 @@ static void clear_dirty(esp32_mquickjs_display_buffer_t *buffer)
     buffer->dirty_y1 = 0;
 }
 
-static void mark_dirty(esp32_mquickjs_display_buffer_t *buffer, int x, int y, int width, int height)
+void mark_dirty(esp32_mquickjs_display_buffer_t *buffer, int x, int y, int width, int height)
 {
     int x1;
     int y1;
@@ -658,7 +408,7 @@ static size_t pixel_offset(const esp32_mquickjs_display_buffer_t *buffer, int x,
     return (size_t)y * buffer->stride + ((size_t)x >> 3U);
 }
 
-static void set_pixel_raw(esp32_mquickjs_display_buffer_t *buffer, int x, int y, uint16_t color)
+void set_pixel_raw(esp32_mquickjs_display_buffer_t *buffer, int x, int y, uint16_t color)
 {
     size_t offset;
     uint8_t mask;
@@ -683,6 +433,47 @@ static void set_pixel_raw(esp32_mquickjs_display_buffer_t *buffer, int x, int y,
     }
 }
 
+static void fill_rgb565_bytes(uint8_t *dst, size_t pixels, uint16_t color)
+{
+    size_t byte_length = pixels * 2U;
+    size_t filled;
+    uint8_t high;
+    uint8_t low;
+
+    if (pixels == 0) {
+        return;
+    }
+    high = (uint8_t)((color >> 8U) & 0xffU);
+    low = (uint8_t)(color & 0xffU);
+    if (high == low) {
+        memset(dst, high, byte_length);
+        return;
+    }
+
+    dst[0] = high;
+    dst[1] = low;
+    filled = 2U;
+    while (filled < byte_length) {
+        size_t copy_length = filled;
+        size_t remaining = byte_length - filled;
+
+        if (copy_length > remaining) {
+            copy_length = remaining;
+        }
+        memcpy(dst + filled, dst, copy_length);
+        filled += copy_length;
+    }
+}
+
+static void fill_rgb565_span_raw(esp32_mquickjs_display_buffer_t *buffer,
+                                 int x,
+                                 int y,
+                                 int width,
+                                 uint16_t color)
+{
+    fill_rgb565_bytes(buffer->data + pixel_offset(buffer, x, y), (size_t)width, color);
+}
+
 static uint16_t get_pixel_raw(const esp32_mquickjs_display_buffer_t *buffer, int x, int y)
 {
     size_t offset;
@@ -702,7 +493,7 @@ static uint16_t get_pixel_raw(const esp32_mquickjs_display_buffer_t *buffer, int
     return (buffer->data[offset] & mask) != 0 ? 1U : 0U;
 }
 
-static void fill_rect_raw(esp32_mquickjs_display_buffer_t *buffer,
+void fill_rect_raw(esp32_mquickjs_display_buffer_t *buffer,
                           int x,
                           int y,
                           int width,
@@ -736,15 +527,17 @@ static void fill_rect_raw(esp32_mquickjs_display_buffer_t *buffer,
     }
 
     if (buffer->format == DISPLAY_BUFFER_FORMAT_RGB565) {
-        uint8_t high = (uint8_t)((color >> 8U) & 0xffU);
-        uint8_t low = (uint8_t)(color & 0xffU);
-        for (yy = y0; yy < y1; ++yy) {
-            size_t offset = pixel_offset(buffer, x0, yy);
-            int xx;
+        int clipped_width = x1 - x0;
+        int clipped_height = y1 - y0;
+        size_t row_bytes = (size_t)clipped_width * 2U;
 
-            for (xx = x0; xx < x1; ++xx) {
-                buffer->data[offset++] = high;
-                buffer->data[offset++] = low;
+        if (x0 == 0 && row_bytes == buffer->stride) {
+            fill_rgb565_bytes(buffer->data + pixel_offset(buffer, x0, y0),
+                              (size_t)clipped_width * (size_t)clipped_height,
+                              color);
+        } else {
+            for (yy = y0; yy < y1; ++yy) {
+                fill_rgb565_span_raw(buffer, x0, yy, clipped_width, color);
             }
         }
     } else {
@@ -762,154 +555,7 @@ static void fill_rect_raw(esp32_mquickjs_display_buffer_t *buffer,
     }
 }
 
-static void draw_line_raw(esp32_mquickjs_display_buffer_t *buffer,
-                          int x0,
-                          int y0,
-                          int x1,
-                          int y1,
-                          uint16_t color)
-{
-    int dx = x1 >= x0 ? x1 - x0 : x0 - x1;
-    int sx = x0 < x1 ? 1 : -1;
-    int dy_abs = y1 >= y0 ? y1 - y0 : y0 - y1;
-    int dy = -dy_abs;
-    int sy = y0 < y1 ? 1 : -1;
-    int err = dx + dy;
-
-    while (true) {
-        int e2;
-
-        set_pixel_raw(buffer, x0, y0, color);
-        if (x0 == x1 && y0 == y1) {
-            break;
-        }
-        e2 = err << 1;
-        if (e2 >= dy) {
-            err += dy;
-            x0 += sx;
-        }
-        if (e2 <= dx) {
-            err += dx;
-            y0 += sy;
-        }
-    }
-}
-
-static int text_spacing_from_options(JSContext *ctx, JSValue options, int default_spacing)
-{
-    JSGCRef property_ref;
-    JSValue *property;
-    int32_t spacing = default_spacing;
-
-    if (JS_IsUndefined(options) || JS_IsNull(options)) {
-        return default_spacing;
-    }
-    property = JS_PushGCRef(ctx, &property_ref);
-    *property = JS_GetPropertyStr(ctx, options, "spacing");
-    if (!JS_IsException(*property) && !JS_IsUndefined(*property) && !JS_IsNull(*property)) {
-        if (!value_to_i32(ctx, *property, &spacing)) {
-            spacing = default_spacing;
-        }
-    }
-    JS_PopGCRef(ctx, &property_ref);
-    if (spacing < 0) {
-        spacing = 0;
-    }
-    if (spacing > 32) {
-        spacing = 32;
-    }
-    return (int)spacing;
-}
-
-static bool text_options_is_object(JSContext *ctx, JSValue options, const char *api_name)
-{
-    if (JS_IsUndefined(options) || JS_IsNull(options)) {
-        return true;
-    }
-    if (JS_GetClassID(ctx, options) < 0 || JS_GetClassID(ctx, options) == JS_CLASS_DISPLAY_FONT) {
-        JS_ThrowTypeError(ctx, "%s options must be an object", api_name);
-        return false;
-    }
-    return true;
-}
-
-static const esp32_mquickjs_bitmap_font_t *text_font_from_options(JSContext *ctx,
-                                                                  JSValue options,
-                                                                  const char *api_name,
-                                                                  bool *ok)
-{
-    JSGCRef property_ref;
-    JSValue *property;
-    esp32_mquickjs_display_font_t *font;
-
-    *ok = true;
-    if (JS_IsUndefined(options) || JS_IsNull(options)) {
-        JS_ThrowTypeError(ctx, "%s requires a DisplayFont", api_name);
-        *ok = false;
-        return NULL;
-    }
-
-    property = JS_PushGCRef(ctx, &property_ref);
-    *property = JS_GetPropertyStr(ctx, options, "font");
-    if (JS_IsException(*property)) {
-        JS_PopGCRef(ctx, &property_ref);
-        *ok = false;
-        return NULL;
-    }
-    if (JS_IsUndefined(*property) || JS_IsNull(*property)) {
-        JS_PopGCRef(ctx, &property_ref);
-        JS_ThrowTypeError(ctx, "%s requires a DisplayFont", api_name);
-        *ok = false;
-        return NULL;
-    }
-    font = display_font_from_value(ctx, *property, api_name);
-    JS_PopGCRef(ctx, &property_ref);
-    if (font == NULL) {
-        *ok = false;
-        return NULL;
-    }
-    return &font->font;
-}
-
-static bool text_background_from_options(JSContext *ctx,
-                                         uint8_t format,
-                                         JSValue options,
-                                         uint16_t fallback,
-                                         uint16_t *out_color,
-                                         bool *out_has_background)
-{
-    JSGCRef property_ref;
-    JSValue *property;
-    bool ok;
-
-    *out_color = fallback;
-    *out_has_background = false;
-
-    if (JS_IsUndefined(options) || JS_IsNull(options)) {
-        return true;
-    }
-
-    property = JS_PushGCRef(ctx, &property_ref);
-    *property = JS_GetPropertyStr(ctx, options, "background");
-    if (JS_IsException(*property)) {
-        JS_PopGCRef(ctx, &property_ref);
-        return false;
-    }
-    if (JS_IsUndefined(*property) || JS_IsNull(*property)) {
-        JS_PopGCRef(ctx, &property_ref);
-        return true;
-    }
-
-    *out_color = normalize_color(ctx, format, *property, fallback, &ok);
-    JS_PopGCRef(ctx, &property_ref);
-    if (!ok) {
-        return false;
-    }
-    *out_has_background = true;
-    return true;
-}
-
-static bool rect_from_args(JSContext *ctx,
+bool rect_from_args(JSContext *ctx,
                            int argc,
                            JSValue *argv,
                            int32_t *x,
@@ -958,7 +604,11 @@ static bool rect_clamp(const esp32_mquickjs_display_buffer_t *buffer,
     return *width > 0 && *height > 0;
 }
 
-static bool read_rect_options(JSContext *ctx, JSValue options, bool *out_little_endian, uint32_t *out_chunk_bytes)
+static bool read_rect_options(JSContext *ctx,
+                              JSValue options,
+                              bool *out_little_endian,
+                              uint32_t *out_chunk_bytes,
+                              bool *out_reuse)
 {
     JSGCRef property_ref;
     JSValue *property;
@@ -967,6 +617,9 @@ static bool read_rect_options(JSContext *ctx, JSValue options, bool *out_little_
     *out_little_endian = false;
     if (out_chunk_bytes != NULL) {
         *out_chunk_bytes = 0;
+    }
+    if (out_reuse != NULL) {
+        *out_reuse = false;
     }
     if (JS_IsUndefined(options) || JS_IsNull(options)) {
         return true;
@@ -1013,6 +666,24 @@ static bool read_rect_options(JSContext *ctx, JSValue options, bool *out_little_
         }
     }
 
+    if (out_reuse != NULL) {
+        int reuse = 0;
+
+        *property = JS_GetPropertyStr(ctx, options, "reuse");
+        if (JS_IsException(*property)) {
+            ok = false;
+            goto done;
+        }
+        if (!JS_IsUndefined(*property) && !JS_IsNull(*property)) {
+            if (JS_ToInt32(ctx, &reuse, *property) != 0) {
+                JS_ThrowTypeError(ctx, "readRectChunks option 'reuse' expects a boolean");
+                ok = false;
+                goto done;
+            }
+            *out_reuse = reuse != 0;
+        }
+    }
+
 done:
     JS_PopGCRef(ctx, &property_ref);
     return ok;
@@ -1041,6 +712,20 @@ static void read_rect_fill(const esp32_mquickjs_display_buffer_t *buffer,
 
     if (buffer->format == DISPLAY_BUFFER_FORMAT_RGB565) {
         size_t out_offset = 0;
+
+        if (!little_endian) {
+            size_t row_bytes = (size_t)width * 2U;
+
+            if ((size_t)width * 2U == buffer->stride) {
+                memcpy(out, buffer->data + pixel_offset(buffer, x, y), row_bytes * (size_t)height);
+                return;
+            }
+            for (yy = y; yy < y + height; ++yy) {
+                memcpy(out + out_offset, buffer->data + pixel_offset(buffer, x, yy), row_bytes);
+                out_offset += row_bytes;
+            }
+            return;
+        }
 
         for (yy = y; yy < y + height; ++yy) {
             int xx;
@@ -1095,6 +780,152 @@ static void read_rect_fill(const esp32_mquickjs_display_buffer_t *buffer,
     }
 }
 
+static bool direct_read_rect_data(const esp32_mquickjs_display_buffer_t *buffer,
+                                  int x,
+                                  int y,
+                                  int width,
+                                  int height,
+                                  bool little_endian,
+                                  const uint8_t **out_data,
+                                  size_t *out_length)
+{
+    if (buffer == NULL || out_data == NULL || out_length == NULL ||
+        buffer->closed || little_endian || x != 0 || width <= 0 || height <= 0) {
+        return false;
+    }
+
+    if (buffer->format == DISPLAY_BUFFER_FORMAT_RGB565 &&
+        buffer->layout == DISPLAY_BUFFER_LAYOUT_LINEAR) {
+        size_t row_length = (size_t)width * 2U;
+
+        if (row_length != buffer->stride) {
+            return false;
+        }
+        *out_data = buffer->data + pixel_offset(buffer, x, y);
+        *out_length = row_length * (size_t)height;
+        return true;
+    }
+
+    if (buffer->format == DISPLAY_BUFFER_FORMAT_MONO1 &&
+        buffer->layout == DISPLAY_BUFFER_LAYOUT_PAGE_Y8) {
+        size_t page_count;
+
+        if ((y & 7) != 0 || (height & 7) != 0 || (size_t)width != buffer->stride) {
+            return false;
+        }
+        page_count = (size_t)height >> 3U;
+        *out_data = buffer->data + pixel_offset(buffer, x, y);
+        *out_length = page_count * buffer->stride;
+        return true;
+    }
+
+    if (buffer->format == DISPLAY_BUFFER_FORMAT_MONO1 &&
+        buffer->layout == DISPLAY_BUFFER_LAYOUT_LINEAR) {
+        size_t row_length = ((size_t)width + 7U) / 8U;
+
+        if (row_length != buffer->stride) {
+            return false;
+        }
+        *out_data = buffer->data + pixel_offset(buffer, x, y);
+        *out_length = row_length * (size_t)height;
+        return true;
+    }
+
+    return false;
+}
+
+bool esp32_mquickjs_display_buffer_normalize_rect(const esp32_mquickjs_display_buffer_t *buffer,
+                                                  esp32_mquickjs_display_buffer_rect_t *rect)
+{
+    int x;
+    int y;
+    int width;
+    int height;
+
+    if (buffer == NULL || rect == NULL || buffer->closed) {
+        return false;
+    }
+    x = (int)rect->x;
+    y = (int)rect->y;
+    width = (int)rect->width;
+    height = (int)rect->height;
+    if (!rect_clamp(buffer, &x, &y, &width, &height)) {
+        return false;
+    }
+    rect->x = x;
+    rect->y = y;
+    rect->width = width;
+    rect->height = height;
+    return true;
+}
+
+size_t esp32_mquickjs_display_buffer_rect_length(const esp32_mquickjs_display_buffer_t *buffer,
+                                                 int32_t width,
+                                                 int32_t height)
+{
+    if (buffer == NULL || buffer->closed || width <= 0 || height <= 0) {
+        return 0;
+    }
+    return read_rect_length(buffer, width, height);
+}
+
+size_t esp32_mquickjs_display_buffer_row_length(const esp32_mquickjs_display_buffer_t *buffer,
+                                                int32_t width)
+{
+    return esp32_mquickjs_display_buffer_rect_length(buffer, width, 1);
+}
+
+uint32_t esp32_mquickjs_display_buffer_chunk_bytes(const esp32_mquickjs_display_buffer_t *buffer)
+{
+    if (buffer == NULL || buffer->closed || buffer->chunk_size == 0) {
+        return DISPLAY_BUFFER_DEFAULT_CHUNK_BYTES;
+    }
+    return (uint32_t)buffer->chunk_size;
+}
+
+bool esp32_mquickjs_display_buffer_direct_rect(const esp32_mquickjs_display_buffer_t *buffer,
+                                               const esp32_mquickjs_display_buffer_rect_t *rect,
+                                               const uint8_t **out_data,
+                                               size_t *out_length)
+{
+    if (rect == NULL) {
+        return false;
+    }
+    return direct_read_rect_data(buffer,
+                                 rect->x,
+                                 rect->y,
+                                 rect->width,
+                                 rect->height,
+                                 rect->byte_order == ESP32_MQUICKJS_DISPLAY_BUFFER_BYTE_ORDER_LE,
+                                 out_data,
+                                 out_length);
+}
+
+bool esp32_mquickjs_display_buffer_export_rect(const esp32_mquickjs_display_buffer_t *buffer,
+                                               const esp32_mquickjs_display_buffer_rect_t *rect,
+                                               uint8_t *out,
+                                               size_t out_length)
+{
+    size_t length;
+
+    if (buffer == NULL || rect == NULL || out == NULL || buffer->closed ||
+        rect->width <= 0 || rect->height <= 0) {
+        return false;
+    }
+    length = read_rect_length(buffer, rect->width, rect->height);
+    if (length == 0 || out_length < length) {
+        return false;
+    }
+    read_rect_fill(buffer,
+                   rect->x,
+                   rect->y,
+                   rect->width,
+                   rect->height,
+                   rect->byte_order == ESP32_MQUICKJS_DISPLAY_BUFFER_BYTE_ORDER_LE,
+                   out);
+    return true;
+}
+
 static uint8_t *read_rect_alloc(const esp32_mquickjs_display_buffer_t *buffer,
                                 int x,
                                 int y,
@@ -1132,10 +963,14 @@ static JSValue make_staged_rect_byte_view(JSContext *ctx,
                                           bool little_endian)
 {
     uint8_t *data;
+    const uint8_t *direct_data;
     size_t length = 0;
     JSValue staged_view;
 
     if (rect_clamp(buffer, &x, &y, &width, &height)) {
+        if (direct_read_rect_data(buffer, x, y, width, height, little_endian, &direct_data, &length)) {
+            return esp32_mquickjs_new_byte_view(ctx, owner, direct_data, length);
+        }
         length = read_rect_length(buffer, width, height);
     }
 
@@ -1175,18 +1010,20 @@ static JSValue make_staged_rect_byte_view(JSContext *ctx,
     }
 }
 
-static JSValue make_owned_rect_byte_view(JSContext *ctx,
-                                         const esp32_mquickjs_display_buffer_t *buffer,
-                                         int x,
-                                         int y,
-                                         int width,
-                                         int height,
-                                         bool little_endian)
+static JSValue make_rect_byte_view(JSContext *ctx,
+                                   JSValue owner,
+                                   const esp32_mquickjs_display_buffer_t *buffer,
+                                   int x,
+                                   int y,
+                                   int width,
+                                   int height,
+                                   bool little_endian)
 {
     int clamped_x = x;
     int clamped_y = y;
     int clamped_width = width;
     int clamped_height = height;
+    const uint8_t *direct_data;
     uint8_t *data;
     size_t length = 0;
 
@@ -1198,11 +1035,147 @@ static JSValue make_owned_rect_byte_view(JSContext *ctx,
         return esp32_mquickjs_new_owned_byte_view(ctx, data, 0);
     }
 
+    if (direct_read_rect_data(buffer,
+                              clamped_x,
+                              clamped_y,
+                              clamped_width,
+                              clamped_height,
+                              little_endian,
+                              &direct_data,
+                              &length)) {
+        return esp32_mquickjs_new_byte_view(ctx, owner, direct_data, length);
+    }
+
     data = read_rect_alloc(buffer, clamped_x, clamped_y, clamped_width, clamped_height, little_endian, &length);
     if (data == NULL) {
         return JS_ThrowOutOfMemory(ctx);
     }
     return esp32_mquickjs_new_owned_byte_view(ctx, data, length);
+}
+
+static bool js_array_length(JSContext *ctx, JSValue value, uint32_t *out_length)
+{
+    JSGCRef length_ref;
+    JSValue *length_value;
+    bool ok;
+
+    if (out_length == NULL || JS_GetClassID(ctx, value) != JS_CLASS_ARRAY) {
+        return false;
+    }
+
+    length_value = JS_PushGCRef(ctx, &length_ref);
+    *length_value = JS_GetPropertyStr(ctx, value, "length");
+    ok = !JS_IsException(*length_value) && value_to_u32(ctx, *length_value, out_length);
+    JS_PopGCRef(ctx, &length_ref);
+    return ok;
+}
+
+static bool rect_chunks_are_direct(const esp32_mquickjs_display_buffer_t *buffer,
+                                   int x,
+                                   int y,
+                                   int width,
+                                   int height,
+                                   bool little_endian)
+{
+    const uint8_t *data;
+    size_t length;
+
+    return direct_read_rect_data(buffer, x, y, width, height, little_endian, &data, &length);
+}
+
+static JSValue make_reused_direct_rect_chunks(JSContext *ctx,
+                                              JSValue owner,
+                                              const esp32_mquickjs_display_buffer_t *buffer,
+                                              int x,
+                                              int y,
+                                              int width,
+                                              int height,
+                                              bool little_endian,
+                                              int rows_per_chunk,
+                                              uint32_t chunk_count)
+{
+    JSGCRef array_ref;
+    JSValue *array;
+    uint32_t existing_length = 0;
+    bool reuse_existing = false;
+    bool must_cache_array = false;
+    int end_y;
+    uint32_t index = 0;
+
+    if (!rect_chunks_are_direct(buffer, x, y, width, height, little_endian)) {
+        return JS_UNDEFINED;
+    }
+
+    array = JS_PushGCRef(ctx, &array_ref);
+    *array = JS_GetPropertyStr(ctx, owner, DISPLAY_BUFFER_STAGED_CHUNKS_KEY);
+    if (JS_IsException(*array)) {
+        JS_PopGCRef(ctx, &array_ref);
+        return JS_EXCEPTION;
+    }
+    reuse_existing = js_array_length(ctx, *array, &existing_length) && existing_length == chunk_count;
+    if (!reuse_existing) {
+        *array = JS_NewArray(ctx, 0);
+        must_cache_array = true;
+        if (JS_IsException(*array)) {
+            JS_PopGCRef(ctx, &array_ref);
+            return JS_EXCEPTION;
+        }
+    }
+
+    end_y = y + height;
+    while (y < end_y) {
+        int rows = rows_per_chunk;
+        const uint8_t *direct_data;
+        size_t length = 0;
+        JSValue chunk = JS_UNDEFINED;
+
+        if (rows > end_y - y) {
+            rows = end_y - y;
+        }
+        if (!direct_read_rect_data(buffer, x, y, width, rows, little_endian, &direct_data, &length)) {
+            JS_PopGCRef(ctx, &array_ref);
+            return JS_UNDEFINED;
+        }
+
+        if (reuse_existing) {
+            JSGCRef item_ref;
+            JSValue *item = JS_PushGCRef(ctx, &item_ref);
+
+            *item = JS_GetPropertyUint32(ctx, *array, index);
+            if (JS_IsException(*item)) {
+                JS_PopGCRef(ctx, &item_ref);
+                JS_PopGCRef(ctx, &array_ref);
+                return JS_EXCEPTION;
+            }
+            if (JS_GetClassID(ctx, *item) == JS_CLASS_BYTE_VIEW) {
+                if (!esp32_mquickjs_update_byte_view(ctx, *item, direct_data, length)) {
+                    JS_PopGCRef(ctx, &item_ref);
+                    JS_PopGCRef(ctx, &array_ref);
+                    return JS_EXCEPTION;
+                }
+                JS_PopGCRef(ctx, &item_ref);
+                y += rows;
+                index++;
+                continue;
+            }
+            JS_PopGCRef(ctx, &item_ref);
+        }
+
+        chunk = esp32_mquickjs_new_byte_view(ctx, owner, direct_data, length);
+        if (JS_IsException(chunk) || JS_IsException(JS_SetPropertyUint32(ctx, *array, index, chunk))) {
+            JS_PopGCRef(ctx, &array_ref);
+            return JS_EXCEPTION;
+        }
+        y += rows;
+        index++;
+    }
+
+    if (must_cache_array &&
+        JS_IsException(JS_SetPropertyStr(ctx, owner, DISPLAY_BUFFER_STAGED_CHUNKS_KEY, *array))) {
+        JS_PopGCRef(ctx, &array_ref);
+        return JS_EXCEPTION;
+    }
+    return JS_PopGCRef(ctx, &array_ref);
 }
 
 JSValue js_display_buffer_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -1211,14 +1184,6 @@ JSValue js_display_buffer_constructor(JSContext *ctx, JSValue *this_val, int arg
     (void)argc;
     (void)argv;
     return JS_ThrowTypeError(ctx, "DisplayBuffer cannot be constructed directly; use displayBuffer.create(options)");
-}
-
-JSValue js_display_font_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    (void)this_val;
-    (void)argc;
-    (void)argv;
-    return JS_ThrowTypeError(ctx, "DisplayFont cannot be constructed directly; use displayBuffer.loadFont(path)");
 }
 
 void js_display_buffer_finalizer(JSContext *ctx, void *opaque)
@@ -1233,65 +1198,6 @@ void js_display_buffer_finalizer(JSContext *ctx, void *opaque)
     heap_caps_free(buffer->data);
     heap_caps_free(buffer->chunk);
     heap_caps_free(buffer);
-}
-
-void js_display_font_finalizer(JSContext *ctx, void *opaque)
-{
-    (void)ctx;
-    display_font_free(opaque);
-}
-
-JSValue js_display_font_get_name(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    esp32_mquickjs_display_font_t *font;
-
-    (void)argc;
-    (void)argv;
-    font = display_font_from_value(ctx, *this_val, "DisplayFont.name");
-    if (font == NULL) {
-        return JS_EXCEPTION;
-    }
-    return JS_NewString(ctx, font->name != NULL ? font->name : "");
-}
-
-JSValue js_display_font_get_width(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    esp32_mquickjs_display_font_t *font;
-
-    (void)argc;
-    (void)argv;
-    font = display_font_from_value(ctx, *this_val, "DisplayFont.width");
-    return font == NULL ? JS_EXCEPTION : JS_NewUint32(ctx, font->font.width);
-}
-
-JSValue js_display_font_get_height(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    esp32_mquickjs_display_font_t *font;
-
-    (void)argc;
-    (void)argv;
-    font = display_font_from_value(ctx, *this_val, "DisplayFont.height");
-    return font == NULL ? JS_EXCEPTION : JS_NewUint32(ctx, font->font.height);
-}
-
-JSValue js_display_font_get_advance(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    esp32_mquickjs_display_font_t *font;
-
-    (void)argc;
-    (void)argv;
-    font = display_font_from_value(ctx, *this_val, "DisplayFont.advance");
-    return font == NULL ? JS_EXCEPTION : JS_NewUint32(ctx, font->font.advance);
-}
-
-JSValue js_display_font_get_line_height(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    esp32_mquickjs_display_font_t *font;
-
-    (void)argc;
-    (void)argv;
-    font = display_font_from_value(ctx, *this_val, "DisplayFont.lineHeight");
-    return font == NULL ? JS_EXCEPTION : JS_NewUint32(ctx, font->font.line_height);
 }
 
 JSValue js_display_buffer_create(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -1430,40 +1336,6 @@ JSValue js_display_buffer_create(JSContext *ctx, JSValue *this_val, int argc, JS
     }
     JS_SetOpaque(ctx, *object, buffer);
     return JS_PopGCRef(ctx, &object_ref);
-}
-
-JSValue js_display_buffer_load_font(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    (void)this_val;
-
-    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
-        return JS_ThrowTypeError(ctx, "displayBuffer.loadFont(path) expects a font path");
-    }
-
-#if CONFIG_ESP32_MQUICKJS_FEATURE_FS
-    {
-        JSCStringBuf path_buf;
-        const char *path;
-        char resolved_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
-        uint8_t *bytes;
-        size_t length = 0;
-        JSValue result;
-
-        path = JS_ToCString(ctx, argv[0], &path_buf);
-        if (path == NULL) {
-            return JS_EXCEPTION;
-        }
-        bytes = display_font_read_file(ctx, path, resolved_path, sizeof(resolved_path), &length);
-        if (bytes == NULL) {
-            return JS_EXCEPTION;
-        }
-        result = display_font_make(ctx, bytes, length, esp32_mquickjs_fs_path_basename(resolved_path));
-        heap_caps_free(bytes);
-        return result;
-    }
-#else
-    return JS_ThrowInternalError(ctx, "displayBuffer.loadFont(path) requires the fs feature");
-#endif
 }
 
 JSValue js_display_buffer_get_width(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -1649,226 +1521,6 @@ JSValue js_display_buffer_fill_rect(JSContext *ctx, JSValue *this_val, int argc,
     return *this_val;
 }
 
-JSValue js_display_buffer_draw_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    esp32_mquickjs_display_buffer_t *buffer;
-    int32_t x;
-    int32_t y;
-    int32_t width;
-    int32_t height;
-    uint16_t color;
-    bool ok;
-
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.drawRect()");
-    if (buffer == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (!rect_from_args(ctx, argc, argv, &x, &y, &width, &height, "DisplayBuffer.drawRect()")) {
-        return JS_EXCEPTION;
-    }
-    if (width <= 0 || height <= 0) {
-        return *this_val;
-    }
-    color = normalize_color(ctx, buffer->format, argc >= 5 ? argv[4] : JS_UNDEFINED, buffer->foreground, &ok);
-    if (!ok) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawRect(x, y, width, height, color) expects a valid color");
-    }
-    draw_line_raw(buffer, x, y, x + width - 1, y, color);
-    draw_line_raw(buffer, x, y + height - 1, x + width - 1, y + height - 1, color);
-    draw_line_raw(buffer, x, y, x, y + height - 1, color);
-    draw_line_raw(buffer, x + width - 1, y, x + width - 1, y + height - 1, color);
-    mark_dirty(buffer, x, y, width, height);
-    return *this_val;
-}
-
-JSValue js_display_buffer_draw_line(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    esp32_mquickjs_display_buffer_t *buffer;
-    int32_t x0;
-    int32_t y0;
-    int32_t x1;
-    int32_t y1;
-    uint16_t color;
-    bool ok;
-    int min_x;
-    int min_y;
-    int max_x;
-    int max_y;
-
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.drawLine()");
-    if (buffer == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (argc < 4 || !value_to_i32(ctx, argv[0], &x0) || !value_to_i32(ctx, argv[1], &y0) ||
-        !value_to_i32(ctx, argv[2], &x1) || !value_to_i32(ctx, argv[3], &y1)) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawLine(x0, y0, x1, y1, color) expects integer coordinates");
-    }
-    color = normalize_color(ctx, buffer->format, argc >= 5 ? argv[4] : JS_UNDEFINED, buffer->foreground, &ok);
-    if (!ok) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawLine(x0, y0, x1, y1, color) expects a valid color");
-    }
-    draw_line_raw(buffer, x0, y0, x1, y1, color);
-    min_x = x0 < x1 ? x0 : x1;
-    min_y = y0 < y1 ? y0 : y1;
-    max_x = x0 > x1 ? x0 : x1;
-    max_y = y0 > y1 ? y0 : y1;
-    mark_dirty(buffer, min_x, min_y, max_x - min_x + 1, max_y - min_y + 1);
-    return *this_val;
-}
-
-JSValue js_display_buffer_draw_text(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    esp32_mquickjs_display_buffer_t *buffer;
-    int32_t x;
-    int32_t y;
-    uint16_t color;
-    uint16_t background;
-    bool ok;
-    bool has_background;
-    JSCStringBuf text_buf;
-    const char *text;
-    int spacing;
-    int cursor_x;
-    int cursor_y;
-    int measured_width;
-    int measured_height;
-    int measured_lines;
-    const char *cursor;
-    const esp32_mquickjs_bitmap_font_t *font;
-    bool font_ok;
-    JSValue options;
-    JSGCRef property_ref;
-    JSValue *property;
-
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.drawText()");
-    if (buffer == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (argc < 3 || !value_to_i32(ctx, argv[0], &x) || !value_to_i32(ctx, argv[1], &y)) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawText(x, y, text, options?) expects x, y, and text");
-    }
-    text = JS_ToCString(ctx, argv[2], &text_buf);
-    if (text == NULL) {
-        return JS_EXCEPTION;
-    }
-    options = argc >= 4 ? argv[3] : JS_UNDEFINED;
-    if (!text_options_is_object(ctx, options, "DisplayBuffer.drawText()")) {
-        return JS_EXCEPTION;
-    }
-    color = buffer->foreground;
-    if (!JS_IsUndefined(options) && !JS_IsNull(options)) {
-        property = JS_PushGCRef(ctx, &property_ref);
-        *property = JS_GetPropertyStr(ctx, options, "color");
-        if (JS_IsException(*property)) {
-            JS_PopGCRef(ctx, &property_ref);
-            return JS_EXCEPTION;
-        }
-        color = normalize_color(ctx, buffer->format, *property, buffer->foreground, &ok);
-        JS_PopGCRef(ctx, &property_ref);
-        if (!ok) {
-            return JS_ThrowTypeError(ctx, "DisplayBuffer.drawText() option 'color' expects a valid color");
-        }
-    }
-    spacing = text_spacing_from_options(ctx, options, 0);
-    font = text_font_from_options(ctx,
-                                  options,
-                                  "DisplayBuffer.drawText() option 'font'",
-                                  &font_ok);
-    if (!font_ok || font == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (!text_background_from_options(ctx,
-                                      buffer->format,
-                                      options,
-                                      buffer->background,
-                                      &background,
-                                      &has_background)) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawText() option 'background' expects a valid color or null");
-    }
-    cursor_x = x;
-    cursor_y = y;
-    for (cursor = text; *cursor != '\0'; ++cursor) {
-        const uint8_t *glyph;
-        int col;
-
-        if (*cursor == '\n') {
-            cursor_x = x;
-            cursor_y += font->line_height;
-            continue;
-        }
-        if (has_background) {
-            fill_rect_raw(buffer, cursor_x, cursor_y, font->advance + spacing, font->line_height, background, false);
-        }
-        glyph = esp32_mquickjs_bitmap_font_glyph(font, *cursor);
-        for (col = 0; col < font->width; ++col) {
-            int row;
-
-            for (row = 0; row < font->height; ++row) {
-                uint8_t bits = glyph[((size_t)col * font->bytes_per_column) + ((size_t)row >> 3U)];
-
-                if ((bits & (1U << (row & 7))) != 0) {
-                    set_pixel_raw(buffer, cursor_x + col, cursor_y + row, color);
-                }
-            }
-        }
-        cursor_x += font->advance + spacing;
-    }
-    esp32_mquickjs_bitmap_font_measure(font, text, spacing, &measured_width, &measured_height, &measured_lines);
-    (void)measured_lines;
-    mark_dirty(buffer, x, y, measured_width, measured_height);
-    return *this_val;
-}
-
-JSValue js_display_buffer_measure_text(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    JSCStringBuf text_buf;
-    const char *text;
-    int spacing;
-    int width;
-    int height;
-    int lines;
-    const esp32_mquickjs_bitmap_font_t *font;
-    bool font_ok;
-    JSGCRef object_ref;
-    JSValue *object;
-
-    (void)this_val;
-
-    if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.measureText(text, options?) expects text");
-    }
-    text = JS_ToCString(ctx, argv[0], &text_buf);
-    if (text == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (!text_options_is_object(ctx, argc >= 2 ? argv[1] : JS_UNDEFINED, "DisplayBuffer.measureText()")) {
-        return JS_EXCEPTION;
-    }
-    spacing = text_spacing_from_options(ctx, argc >= 2 ? argv[1] : JS_UNDEFINED, 0);
-    font = text_font_from_options(ctx,
-                                  argc >= 2 ? argv[1] : JS_UNDEFINED,
-                                  "DisplayBuffer.measureText() option 'font'",
-                                  &font_ok);
-    if (!font_ok || font == NULL) {
-        return JS_EXCEPTION;
-    }
-    esp32_mquickjs_bitmap_font_measure(font, text, spacing, &width, &height, &lines);
-
-    object = JS_PushGCRef(ctx, &object_ref);
-    *object = JS_NewObject(ctx);
-    if (JS_IsException(*object)) {
-        JS_PopGCRef(ctx, &object_ref);
-        return JS_EXCEPTION;
-    }
-    if (!esp32_mquickjs_set_property(ctx, *object, "width", JS_NewUint32(ctx, (uint32_t)width)) ||
-        !esp32_mquickjs_set_property(ctx, *object, "height", JS_NewUint32(ctx, (uint32_t)height)) ||
-        !esp32_mquickjs_set_property(ctx, *object, "lines", JS_NewUint32(ctx, (uint32_t)lines))) {
-        JS_PopGCRef(ctx, &object_ref);
-        return JS_EXCEPTION;
-    }
-    return JS_PopGCRef(ctx, &object_ref);
-}
-
 JSValue js_display_buffer_get_dirty(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     esp32_mquickjs_display_buffer_t *buffer;
@@ -1951,7 +1603,7 @@ JSValue js_display_buffer_read_rect(JSContext *ctx, JSValue *this_val, int argc,
     if (!rect_from_args(ctx, argc, argv, &x, &y, &width, &height, "DisplayBuffer.readRect()")) {
         return JS_EXCEPTION;
     }
-    if (!read_rect_options(ctx, argc >= 5 ? argv[4] : JS_UNDEFINED, &little_endian, NULL)) {
+    if (!read_rect_options(ctx, argc >= 5 ? argv[4] : JS_UNDEFINED, &little_endian, NULL, NULL)) {
         return JS_EXCEPTION;
     }
     return make_staged_rect_byte_view(ctx, *this_val, buffer, x, y, width, height, little_endian);
@@ -1965,10 +1617,12 @@ JSValue js_display_buffer_read_rect_chunks(JSContext *ctx, JSValue *this_val, in
     int32_t width;
     int32_t height;
     bool little_endian = false;
+    bool reuse = false;
     uint32_t chunk_bytes = 0;
     size_t row_bytes;
     int rows_per_chunk;
     int end_y;
+    uint32_t chunk_count;
     uint32_t index = 0;
     JSGCRef array_ref;
     JSValue *array;
@@ -1980,7 +1634,7 @@ JSValue js_display_buffer_read_rect_chunks(JSContext *ctx, JSValue *this_val, in
     if (!rect_from_args(ctx, argc, argv, &x, &y, &width, &height, "DisplayBuffer.readRectChunks()")) {
         return JS_EXCEPTION;
     }
-    if (!read_rect_options(ctx, argc >= 5 ? argv[4] : JS_UNDEFINED, &little_endian, &chunk_bytes)) {
+    if (!read_rect_options(ctx, argc >= 5 ? argv[4] : JS_UNDEFINED, &little_endian, &chunk_bytes, &reuse)) {
         return JS_EXCEPTION;
     }
     {
@@ -2014,6 +1668,26 @@ JSValue js_display_buffer_read_rect_chunks(JSContext *ctx, JSValue *this_val, in
             rows_per_chunk = 8;
         }
     }
+    chunk_count = (uint32_t)((height + rows_per_chunk - 1) / rows_per_chunk);
+
+    if (reuse) {
+        JSValue reused = make_reused_direct_rect_chunks(ctx,
+                                                       *this_val,
+                                                       buffer,
+                                                       x,
+                                                       y,
+                                                       width,
+                                                       height,
+                                                       little_endian,
+                                                       rows_per_chunk,
+                                                       chunk_count);
+        if (JS_IsException(reused)) {
+            return JS_EXCEPTION;
+        }
+        if (!JS_IsUndefined(reused)) {
+            return reused;
+        }
+    }
 
     array = JS_PushGCRef(ctx, &array_ref);
     *array = JS_NewArray(ctx, 0);
@@ -2030,7 +1704,7 @@ JSValue js_display_buffer_read_rect_chunks(JSContext *ctx, JSValue *this_val, in
         if (rows > end_y - y) {
             rows = end_y - y;
         }
-        chunk = make_owned_rect_byte_view(ctx, buffer, x, y, width, rows, little_endian);
+        chunk = make_rect_byte_view(ctx, *this_val, buffer, x, y, width, rows, little_endian);
         if (JS_IsException(chunk) || JS_IsException(JS_SetPropertyUint32(ctx, *array, index++, chunk))) {
             JS_PopGCRef(ctx, &array_ref);
             return JS_EXCEPTION;
@@ -2040,100 +1714,5 @@ JSValue js_display_buffer_read_rect_chunks(JSContext *ctx, JSValue *this_val, in
     return JS_PopGCRef(ctx, &array_ref);
 }
 
-JSValue js_display_buffer_draw_bitmap(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    esp32_mquickjs_display_buffer_t *buffer;
-    int32_t x;
-    int32_t y;
-    uint32_t width = 0;
-    uint32_t height = 0;
-    JSGCRef property_ref;
-    JSValue *property;
-    JSValue pixels = JS_UNDEFINED;
-    uint32_t index = 0;
-    uint16_t color;
-    uint16_t background;
-    bool ok;
-    bool has_background = false;
-    uint32_t row;
-
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.drawBitmap()");
-    if (buffer == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (argc < 3 || !value_to_i32(ctx, argv[0], &x) || !value_to_i32(ctx, argv[1], &y) ||
-        JS_GetClassID(ctx, argv[2]) < 0) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap(x, y, bitmap, options?) expects a bitmap object");
-    }
-    property = JS_PushGCRef(ctx, &property_ref);
-    *property = JS_GetPropertyStr(ctx, argv[2], "width");
-    if (JS_IsException(*property) || !value_to_u32(ctx, *property, &width)) {
-        JS_PopGCRef(ctx, &property_ref);
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() bitmap.width must be numeric");
-    }
-    *property = JS_GetPropertyStr(ctx, argv[2], "height");
-    if (JS_IsException(*property) || !value_to_u32(ctx, *property, &height)) {
-        JS_PopGCRef(ctx, &property_ref);
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() bitmap.height must be numeric");
-    }
-    pixels = JS_GetPropertyStr(ctx, argv[2], "pixels");
-    if (JS_IsException(pixels)) {
-        JS_PopGCRef(ctx, &property_ref);
-        return JS_EXCEPTION;
-    }
-    color = buffer->foreground;
-    background = buffer->background;
-    if (argc >= 4 && !JS_IsUndefined(argv[3]) && !JS_IsNull(argv[3])) {
-        if (JS_GetClassID(ctx, argv[3]) < 0) {
-            JS_PopGCRef(ctx, &property_ref);
-            return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() options must be an object");
-        }
-        *property = JS_GetPropertyStr(ctx, argv[3], "color");
-        if (JS_IsException(*property)) {
-            JS_PopGCRef(ctx, &property_ref);
-            return JS_EXCEPTION;
-        }
-        color = normalize_color(ctx, buffer->format, *property, buffer->foreground, &ok);
-        if (!ok) {
-            JS_PopGCRef(ctx, &property_ref);
-            return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() option 'color' must be valid");
-        }
-        *property = JS_GetPropertyStr(ctx, argv[3], "background");
-        if (JS_IsException(*property)) {
-            JS_PopGCRef(ctx, &property_ref);
-            return JS_EXCEPTION;
-        }
-        if (!JS_IsUndefined(*property) && !JS_IsNull(*property)) {
-            background = normalize_color(ctx, buffer->format, *property, buffer->background, &ok);
-            if (!ok) {
-                JS_PopGCRef(ctx, &property_ref);
-                return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() option 'background' must be valid or null");
-            }
-            has_background = true;
-        }
-    }
-    for (row = 0; row < height; ++row) {
-        uint32_t col;
-
-        for (col = 0; col < width; ++col) {
-            uint32_t mask_pixel = 0;
-
-            *property = JS_GetPropertyUint32(ctx, pixels, index++);
-            if (JS_IsException(*property)) {
-                JS_PopGCRef(ctx, &property_ref);
-                return JS_EXCEPTION;
-            }
-            if (!JS_IsUndefined(*property) && !JS_IsNull(*property) &&
-                (!value_to_u32(ctx, *property, &mask_pixel) || mask_pixel != 0)) {
-                set_pixel_raw(buffer, x + (int32_t)col, y + (int32_t)row, color);
-            } else if (has_background) {
-                set_pixel_raw(buffer, x + (int32_t)col, y + (int32_t)row, background);
-            }
-        }
-    }
-    JS_PopGCRef(ctx, &property_ref);
-    mark_dirty(buffer, x, y, (int)width, (int)height);
-    return *this_val;
-}
 
 #endif

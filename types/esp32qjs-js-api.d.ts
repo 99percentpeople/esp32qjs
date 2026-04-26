@@ -22,6 +22,19 @@ declare namespace ESP32QJS {
     lines: number;
   }
 
+  interface DisplayFont {
+    name: string;
+    width: number;
+    height: number;
+    advance: number;
+    lineHeight: number;
+    native?: unknown;
+  }
+
+  interface DisplayFontSet {
+    load(size: string | number, name?: string): DisplayFont;
+  }
+
   /**
    * Base display surface options.
    */
@@ -36,7 +49,15 @@ declare namespace ESP32QJS {
    * Text measurement and drawing style.
    */
   interface TextStyle {
+    color?: ColorValue;
+    background?: ColorValue;
+    font?: DisplayFont;
     spacing?: number;
+  }
+
+  interface BitmapStyle {
+    color?: ColorValue;
+    background?: ColorValue;
   }
 
   /**
@@ -48,8 +69,15 @@ declare namespace ESP32QJS {
     pixels: ArrayLike<number | boolean>;
   }
 
+  type PointInput = Point | [number, number];
+  type PointList = ArrayLike<number> | ArrayLike<PointInput>;
+
+  interface CurveOptions {
+    segments?: number;
+  }
+
   /**
-   * Base display surface.
+   * Base display surface. Concrete drivers implement drawing methods.
    */
   class Surface {
     constructor(options?: SurfaceOptions);
@@ -58,65 +86,118 @@ declare namespace ESP32QJS {
     height: number;
     pixelFormat: string;
     ready: boolean;
-    init(): this;
-    flush(): this;
-    measureText(text: string, style?: TextStyle): TextMetrics;
-  }
-
-  interface MonoSurfaceOptions extends SurfaceOptions {
-    spacing?: number;
-  }
-
-  /**
-   * Generic 1-bit framebuffer surface.
-   *
-   * @example
-   * ```js
-   * var oled = display.open({ driver: "ssd1306", sda: 5, scl: 6, address: 0x3c });
-   * oled.clear();
-   * oled.drawText(0, 0, "HELLO");
-   * oled.flush();
-   * ```
-   */
-  class MonoSurface extends Surface {
-    constructor(options?: MonoSurfaceOptions);
-    pages: number;
-    spacing: number;
-    buffer: number[];
-    clear(enabled?: boolean): this;
-    fill(enabled?: boolean): this;
-    setPixel(x: number, y: number, enabled: boolean): this;
-    getPixel(x: number, y: number): boolean;
+    clear(color?: ColorValue): this;
+    fill(color?: ColorValue): this;
+    setPixel(x: number, y: number, color: ColorValue): this;
+    getPixel(x: number, y: number): number;
     fillRect(
       x: number,
       y: number,
       width: number,
       height: number,
-      enabled: boolean,
+      color: ColorValue,
     ): this;
     drawLine(
       x0: number,
       y0: number,
       x1: number,
       y1: number,
-      enabled: boolean,
+      color: ColorValue,
     ): this;
     drawRect(
       x: number,
       y: number,
       width: number,
       height: number,
-      enabled: boolean,
+      color: ColorValue,
     ): this;
-    drawBitmap(x: number, y: number, bitmap: Bitmap, enabled?: boolean): this;
-    drawChar(x: number, y: number, ch: string, enabled: boolean): this;
-    drawText(
+    drawCircle(cx: number, cy: number, radius: number, color: ColorValue): this;
+    fillCircle(cx: number, cy: number, radius: number, color: ColorValue): this;
+    drawEllipse(
+      cx: number,
+      cy: number,
+      rx: number,
+      ry: number,
+      color: ColorValue,
+      options?: CurveOptions,
+    ): this;
+    fillEllipse(
+      cx: number,
+      cy: number,
+      rx: number,
+      ry: number,
+      color: ColorValue,
+    ): this;
+    drawRoundRect(
       x: number,
       y: number,
-      text: string,
-      enabled?: boolean,
-      spacing?: number,
+      width: number,
+      height: number,
+      radius: number,
+      color: ColorValue,
     ): this;
+    fillRoundRect(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      radius: number,
+      color: ColorValue,
+    ): this;
+    drawPolyline(points: PointList, color: ColorValue): this;
+    drawPolygon(points: PointList, color: ColorValue): this;
+    fillPolygon(points: PointList, color: ColorValue): this;
+    drawTriangle(
+      x0: number,
+      y0: number,
+      x1: number,
+      y1: number,
+      x2: number,
+      y2: number,
+      color: ColorValue,
+    ): this;
+    fillTriangle(
+      x0: number,
+      y0: number,
+      x1: number,
+      y1: number,
+      x2: number,
+      y2: number,
+      color: ColorValue,
+    ): this;
+    drawQuadraticBezier(
+      x0: number,
+      y0: number,
+      cx: number,
+      cy: number,
+      x1: number,
+      y1: number,
+      color: ColorValue,
+      options?: CurveOptions,
+    ): this;
+    drawCubicBezier(
+      x0: number,
+      y0: number,
+      c1x: number,
+      c1y: number,
+      c2x: number,
+      c2y: number,
+      x1: number,
+      y1: number,
+      color: ColorValue,
+      options?: CurveOptions,
+    ): this;
+    drawBitmap(x: number, y: number, bitmap: Bitmap, options?: BitmapStyle): this;
+    drawChar(x: number, y: number, ch: string, options?: TextStyle): this;
+    drawText(x: number, y: number, text: string, options?: TextStyle): this;
+    init(): this;
+    flush(): this;
+    flushRect?(x: number, y: number, width: number, height: number): this;
+    flushRects?(
+      rects: ArrayLike<Rect | [number, number, number, number]>,
+      options?: { merge?: boolean },
+    ): this;
+    measureText(text: string, style?: TextStyle): TextMetrics;
   }
 
   /**
@@ -148,10 +229,20 @@ declare namespace ESP32QJS {
    */
   interface DisplayModule {
     readonly VERSION: string;
-    readonly FONT_5X7: Record<string, number[]>;
     readonly Surface: typeof Surface;
-    readonly MonoSurface: typeof MonoSurface;
+    readonly fonts: Record<string, DisplayFont>;
+    readonly defaultFont: DisplayFont;
+    mono1(value: number): number;
+    gray4(value: number): number;
+    gray8(value: number): number;
+    rgb565(red: number, green: number, blue: number): number;
     measureText(text: string, style?: TextStyle): TextMetrics;
+    encodeText(text: string, font?: DisplayFont): string;
+    fontNeedsTextMapping(font?: DisplayFont): boolean;
+    registerFont(name: string, font: DisplayFont): DisplayFont;
+    loadFont(path: string, name?: string): DisplayFont;
+    loadFontSet(path: string): DisplayFontSet;
+    loadMappedFont(path: string, size: string | number, name?: string): DisplayFont;
     listDrivers(): string[];
     registerDriver<T extends Surface = Surface>(
       name: string,

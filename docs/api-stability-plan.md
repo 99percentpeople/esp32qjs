@@ -6,7 +6,8 @@ It is intentionally more opinionated than [docs/c-api.md](/home/zach/esp32qjs/do
 This plan covers:
 
 - built-in C-side host APIs exported by the firmware runtime
-- board/peripheral bindings such as `gpio`, `ledc`, `adc`, `i2c`, and `spi`
+- board/peripheral bindings such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, and `spi`
+- low-level native helpers such as `displayBuffer`
 - transport/runtime helpers such as `wifi`, `http`, timers, and `load(...)`
 
 It does not treat JS-side LittleFS libraries such as `display` and `ui` as firmware ABI. Those should remain versioned JS libraries layered on top of the built-in host APIs.
@@ -26,10 +27,12 @@ The stable API should satisfy these rules:
 
 ## Stability Levels
 
-This document uses three levels:
+This document uses four levels:
 
 - `Stable now`
   The current API shape is already close to what should be frozen.
+- `Candidate for freeze`
+  The module has already been adjusted to the intended shape, but should still receive focused tests and reference-doc cleanup before being declared stable.
 - `Adjust before freeze`
   The module is useful, but one or more design choices should be corrected before calling it stable.
 - `Planned`
@@ -62,9 +65,11 @@ Recommended feature symbols:
 - `CONFIG_ESP32_MQUICKJS_FEATURE_ADC`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_DAC`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_I2C`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_SPI`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_WIFI`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_HTTP`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER`
 
 Recommended dependency rules:
 
@@ -72,9 +77,11 @@ Recommended dependency rules:
 - `FEATURE_DAC` depends on `SOC_DAC_SUPPORTED`
 - `FEATURE_I2C` depends on `SOC_I2C_SUPPORTED`
 - `FEATURE_LEDC` depends on `SOC_LEDC_SUPPORTED`
+- `FEATURE_SPI` depends on `SOC_GPSPI_SUPPORTED`
 - `FEATURE_WIFI` depends on `SOC_WIFI_SUPPORTED`
 - `FEATURE_HTTP` depends on `FEATURE_WIFI` in the current firmware, unless another network backend is introduced later
 - `FEATURE_HTTP_SERVER` depends on `FEATURE_WIFI` in the current firmware
+- `FEATURE_DISPLAY_BUFFER` has no direct peripheral dependency, but full-frame RGB buffers should be enabled per board with memory budget in mind
 - `staticFileHandler` is a composite capability that depends on `FEATURE_HTTP_SERVER && FEATURE_FS`
 - `FEATURE_FS` stays enabled on most boards because `load(...)`, LittleFS startup, and static file serving depend on it
 
@@ -92,8 +99,12 @@ print(JSON.stringify(esp32.info().features));
 //   adc: true,
 //   dac: false,
 //   i2c: true,
+//   spi: true,
+//   displayBuffer: true,
 //   wifi: true,
-//   http: true
+//   http: true,
+//   httpServer: true,
+//   staticFileHandler: true
 // }
 ```
 
@@ -123,6 +134,8 @@ Recommended examples for current boards:
 - `FEATURE_ADC=y`
 - `FEATURE_DAC=n`
 - `FEATURE_I2C=y`
+- `FEATURE_SPI=y`
+- `FEATURE_DISPLAY_BUFFER=y`
 - `FEATURE_WIFI=y`
 - `FEATURE_HTTP=y`
 - `FEATURE_HTTP_SERVER=y`
@@ -135,6 +148,8 @@ Recommended examples for current boards:
 - `FEATURE_ADC=y`
 - `FEATURE_DAC=n`
 - `FEATURE_I2C=y`
+- `FEATURE_SPI=y`
+- `FEATURE_DISPLAY_BUFFER=y`
 - `FEATURE_WIFI=y`
 - `FEATURE_HTTP=y`
 - `FEATURE_HTTP_SERVER=y`
@@ -156,10 +171,11 @@ Built-in modules and types currently in scope:
 - Data/runtime types: `Headers`, `Request`, `Response`, `Stream`
 - Filesystem/runtime modules: `fs`, `esp32`
 - Peripheral modules: `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`
+- Low-level graphics buffer modules: `displayBuffer`
 - Connectivity modules: `wifi`, `http`, `HttpServer`, `StaticFileHandler`
 - JS-side libraries outside the firmware ABI: `display`, `ui`
 
-In the long-term plan, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `wifi`, and `http` should all be treated as optional host features rather than unconditional globals.
+In the long-term plan, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `displayBuffer`, `wifi`, `http`, and `httpServer` should all be treated as optional host features rather than unconditional globals.
 
 ## Freeze Principles By Area
 
@@ -273,7 +289,7 @@ Intentional non-goals:
 
 ### `ledc`
 
-Status: `Adjusted`
+Status: `Adjust before freeze`
 
 The module is correctly placed as a low-level PWM timer/channel binding, but two parts should be tightened before it is considered frozen.
 
@@ -337,20 +353,22 @@ Intentional non-goals:
 
 ### `i2c`
 
-Status: `Adjust before freeze`
+Status: `Candidate for freeze`
 
-The current API is useful, but it is still the most obviously first-pass peripheral module.
+The bus-object model is now in place and is close to the intended long-term shape.
 
 What is already good:
 
 - Small and understandable surface.
 - Raw address + read/write operations are enough for JS-side device drivers.
 - `scan()` is practical for REPL debugging.
+- Generic `writeChunks(...)` accepts byte-source chunks without tying I2C to a display-specific object model.
 
 What should stay intentional:
 
 - The runtime now uses a bus-object model instead of a single global singleton, and future transport modules should follow that direction.
 - The current `add device -> transact -> remove device` flow on every call is still acceptable for the first stable raw I2C surface, but it should remain an internal detail rather than leaking into the JS API shape.
+- Display drivers may pass native byte chunks through this module, but I2C should not inspect `displayBuffer` internals.
 
 Recommended stable target:
 
@@ -381,8 +399,14 @@ Recommended stable `I2CBus` methods:
 - `close()`
 - `scan()`
 - `write(addr, data)`
+- `writeChunks(addr, chunks)`
 - `read(addr, length)`
 - `writeRead(addr, writeData, readLength)`
+
+Remaining freeze work:
+
+- Add or keep focused JS tests for stale-handle behavior, chunk writes, and feature-disabled boards.
+- Keep [docs/c-api.md](/home/zach/esp32qjs/docs/c-api.md) and [types/esp32qjs-js-api.d.ts](/home/zach/esp32qjs/types/esp32qjs-js-api.d.ts) aligned with the bus-object surface.
 
 Intentional non-goals:
 
@@ -392,9 +416,9 @@ Intentional non-goals:
 
 ### `spi`
 
-Status: `Adjust before freeze`
+Status: `Candidate for freeze`
 
-The first version should deliberately mirror the I2C direction: one top-level factory module, one bus object, and one device object. That keeps the transport layer consistent before higher-level device protocols are added in JS.
+The bus/device object model is now in place and deliberately mirrors I2C before higher-level device protocols are added in JS.
 
 Recommended stable target:
 
@@ -403,15 +427,49 @@ Recommended stable target:
 - Let `SPIBus.openDevice(...)` return an `SPIDevice`.
 - Keep the first stable surface synchronous and explicit:
   `SPIDevice.transfer(...)`, `SPIDevice.write(...)`, `SPIDevice.read(...)`
+- Keep `SPIDevice.writeChunks(...)` as the generic bulk-write path for byte-source chunks.
 - Keep explicit `close()` as the primary lifecycle boundary on both `SPIBus` and `SPIDevice`, even if the runtime also uses GC finalizers as a fallback.
 - Gate the module behind `FEATURE_SPI`.
 - Keep same-board loopback test coverage available through the remote test harness so SPI data-path regressions are caught without requiring a dedicated SPI peripheral.
+- Keep display flushes layered above SPI. Native display helpers may produce byte chunks, but SPI should only consume generic byte sources.
 
 Intentional non-goals for the first stable SPI layer:
 
 - no command/address phase helpers
 - no queued async transactions
 - no protocol-specific flash/display helpers in the native layer
+
+Remaining freeze work:
+
+- Keep loopback coverage for `transfer`, `write`, and `read`.
+- Keep display flush coverage for `writeChunks(...)` because it exercises the high-throughput byte-source path.
+- Document any DMA staging behavior as implementation detail, not as a JS-visible display shortcut.
+
+### `displayBuffer`
+
+Status: `Candidate for freeze`
+
+The old display buffer plan has been implemented and the remaining active surface is now part of the host API reference.
+
+What is already good:
+
+- `displayBuffer` is feature-gated and reported through `esp32.info().features.displayBuffer`.
+- The module exposes native `mono1` and `rgb565` buffers, dirty bounds, drawing primitives, EQF1 fixed bitmap font loading, and byte-view rectangle export.
+- `readRect(...)` and `readRectChunks(...)` return generic native byte sources that SPI and I2C can consume without display-specific coupling.
+- JavaScript display drivers still own panel command sequencing, flush policy, color helpers, font mapping, and UI composition.
+
+Recommended stable target:
+
+- Keep `displayBuffer` as a low-level pixel buffer and byte-export primitive, not a panel driver.
+- Keep JS libraries responsible for ST7789, SSD1306, double-buffer policy, animation timing, and widget behavior.
+- Keep the native text API intentionally simple. UTF-8 or Chinese display should continue to use JS-side mapped fonts unless a measured workload proves a native text shaper is needed.
+- Treat storage and DMA behavior as buffer/export options, not as SPI-specific shortcuts.
+
+Remaining freeze work:
+
+- Keep tests for close/finalizer behavior, dirty bounds, drawing primitives, font loading, and byte-source chunk exports.
+- Add future formats such as grayscale only when a concrete display driver needs them.
+- Consider `copyFrom(...)`, `blitFrom(...)`, multi-rect dirty tracking, or native clipping only after profiling shows the current bounding-rect path is limiting real UI workloads.
 
 ### `dac`
 
@@ -484,7 +542,7 @@ If those are needed later, they should be added as separate explicit surfaces ra
 
 ### `wifi`
 
-Status: `Adjust before freeze`
+Status: `Candidate for freeze`
 
 What is good:
 
@@ -492,7 +550,7 @@ What is good:
 - Both sync and callback-driven async forms are useful on embedded JS runtimes.
 - Async callbacks are already bridged properly to the JS thread.
 
-What should be tightened:
+What should stay intentional:
 
 - `wifi.status()` should remain the single authoritative status shape.
 - Async callback result ordering should stay consistent across all methods:
@@ -514,14 +572,14 @@ Recommended stable baseline:
 
 ### `http`
 
-Status: `Adjust before freeze`
+Status: `Candidate for freeze`
 
 What is good:
 
 - `fetch(...)` and `http.server(...)` are now separately gateable instead of being forced behind one feature.
 - `Request`, `Response`, `Headers`, `HttpServer`, and `StaticFileHandler` already compose well.
 
-What should be tightened:
+What should stay intentional:
 
 - Keep the surface intentionally smaller than browser Fetch or Express.
 - Keep the embedded API explicitly split by namespace: synchronous transport stays on `fetch(...)` / `http.fetch(...)`, and callback-driven async transport stays on `http.async.fetch(...)`.
@@ -576,18 +634,18 @@ Recommended order for stabilization:
 
 1. Freeze now:
    `help/load/defer/waitFor/timers`, `fs`, `Stream`, `Headers`, `Request`, `Response`, `esp32`, `gpio`, `adc`
-2. Adjust before freeze:
-   `ledc`, `dac`, `i2c`, `spi`, `wifi`, `http`
+2. Candidate for freeze after focused validation:
+   `i2c`, `spi`, `displayBuffer`, `wifi`, `http`
+3. Adjust before freeze:
+   `ledc`, `dac`
 
 ## Immediate Next Steps
 
 Recommended implementation order from this plan:
 
-1. Add feature `Kconfig` switches for all optional modules and wire board defaults through `configs/boards/<board>/sdkconfig.defaults`.
-2. Extend `esp32.info()` with a stable `features` object.
-3. Refactor `i2c` to a bus-object model.
-4. Add `spi` with the same bus/device object model and explicit synchronous transaction methods.
-5. Tighten `ledc` status semantics so status objects never imply configuration that did not happen.
-6. Lock down the `wifi` and `http` sync/async split so callback-driven async behavior always uses distinct entrypoints such as `wifi.async.scan`, `wifi.async.connect`, and `http.async.fetch`, while keeping `callback(result, error)` ordering consistent.
-7. Tighten the `dac` status and lifecycle semantics only as needed, while keeping higher-level waveform helpers out of the native layer.
-8. Once those are done, refresh [docs/c-api.md](/home/zach/esp32qjs/docs/c-api.md) so the descriptive reference matches the stabilized design.
+1. Tighten `ledc` status semantics so status objects never imply configuration that did not happen, then decide whether low-speed mode is intentionally fixed for the first stable API.
+2. Validate `dac` lifecycle and status on an `esp32` or `esp32s2` board before calling the module stable.
+3. Finish freeze coverage for the current byte-source path: `displayBuffer.readRectChunks(...)`, `SPIDevice.writeChunks(...)`, and `I2CBus.writeChunks(...)`.
+4. Keep `i2c`, `spi`, `displayBuffer`, `wifi`, and `http` reference docs and TypeScript definitions aligned with their current implementation before marking them stable.
+5. Improve JS display demo smoke coverage so native drawing, mapped fonts, transparent text, dirty bounds, and chunked flushes are exercised together.
+6. Consider `displayBuffer` follow-up features only when a measured workload needs them: grayscale formats, `copyFrom(...)`, `blitFrom(...)`, multi-rect dirty tracking, or native clipping.

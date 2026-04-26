@@ -4,7 +4,6 @@
   var DEFAULT_WIDTH = 240;
   var DEFAULT_HEIGHT = 240;
   var DEFAULT_FREQ_HZ = 20000000;
-  var DEFAULT_MAX_TRANSFER_SIZE = 4092;
   var DEFAULT_NATIVE_MAX_TRANSFER_SIZE = 16384;
 
   if (!system || system.st7789Loaded) {
@@ -42,10 +41,6 @@
       return fallback;
     }
     return normalizeColor(value, fallback, apiName);
-  }
-
-  function monoMaskColor(surface, color) {
-    return display.mono1(color === surface.background ? 0 : 1);
   }
 
   function styleOptions(value, apiName) {
@@ -95,10 +90,35 @@
     return String(text);
   }
 
-  function hasNativeBuffer() {
-    return typeof displayBuffer === "object" &&
-      displayBuffer &&
-      typeof displayBuffer.create === "function";
+  function requireDisplayBuffer() {
+    if (typeof displayBuffer !== "object" ||
+        !displayBuffer ||
+        typeof displayBuffer.create !== "function") {
+      throw new Error("st7789 display driver requires the displayBuffer module");
+    }
+  }
+
+  function createNativeBuffer(surface, options, chunkBytes) {
+    var storage = own(options, "storage") ? options.storage : "dma";
+    var config = {
+      width: surface.width,
+      height: surface.height,
+      format: "rgb565",
+      storage: storage,
+      chunkBytes: chunkBytes,
+      foreground: surface.foreground,
+      background: surface.background
+    };
+
+    try {
+      return displayBuffer.create(config);
+    } catch (error) {
+      if (own(options, "storage") || storage === "auto") {
+        throw error;
+      }
+      config.storage = "auto";
+      return displayBuffer.create(config);
+    }
   }
 
   function writeGpio(pin, value) {
@@ -153,23 +173,6 @@
     return new Array(length);
   }
 
-  function sliceByteBuffer(buffer, length) {
-    var out;
-    var i;
-
-    if (buffer.length === length) {
-      return buffer;
-    }
-    if (buffer.subarray) {
-      return buffer.subarray(0, length);
-    }
-    out = new Array(length);
-    for (i = 0; i < length; i += 1) {
-      out[i] = buffer[i];
-    }
-    return out;
-  }
-
   function nowUs() {
     if (typeof esp32 !== "undefined" && esp32 && typeof esp32.micros === "function") {
       return esp32.micros();
@@ -186,7 +189,8 @@
       totalFlushUs: 0,
       windowUs: 0,
       pixelUs: 0,
-      dataUs: 0
+      dataUs: 0,
+      directFlushes: 0
     };
   }
 
@@ -201,6 +205,42 @@
       }
     }
     return target;
+  }
+
+  function flushRectFromValue(surface, value) {
+    var x;
+    var y;
+    var width;
+    var height;
+
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+    if (value.length >= 4) {
+      x = value[0];
+      y = value[1];
+      width = value[2];
+      height = value[3];
+    } else {
+      x = value.x;
+      y = value.y;
+      width = own(value, "width") ? value.width : value.w;
+      height = own(value, "height") ? value.height : value.h;
+    }
+    x = system.clampInt(x, 0, surface.width);
+    y = system.clampInt(y, 0, surface.height);
+    width = system.clampInt(width, 0, surface.width - x);
+    height = system.clampInt(height, 0, surface.height - y);
+    if (width <= 0 || height <= 0) {
+      return null;
+    }
+    return {
+      x: x,
+      y: y,
+      width: width,
+      height: height,
+      area: width * height
+    };
   }
 
   function rotationMadctl(rotation, bgr) {
@@ -222,26 +262,24 @@
   function ST7789Display(options) {
     var maxTransferSize;
     var chunkBytes;
-    var useNativeBuffer;
 
     if (typeof spi === "undefined" || typeof gpio === "undefined") {
       throw new Error("st7789 display driver requires spi and gpio modules");
     }
+    requireDisplayBuffer();
 
     options = options || {};
-    display.MonoSurface.call(this, {
+    display.Surface.call(this, {
       driver: own(options, "driverName") ? options.driverName : "st7789",
       width: own(options, "width") ? options.width : DEFAULT_WIDTH,
       height: own(options, "height") ? options.height : DEFAULT_HEIGHT,
-      spacing: own(options, "spacing") ? options.spacing : 0
+      pixelFormat: "rgb565"
     });
-    useNativeBuffer = hasNativeBuffer();
+    this.spacing = own(options, "spacing") ? options.spacing : 0;
 
     maxTransferSize = own(options, "maxTransferSize")
       ? options.maxTransferSize
-      : (useNativeBuffer
-          ? DEFAULT_NATIVE_MAX_TRANSFER_SIZE
-          : (typeof spi.DEFAULT_MAX_TRANSFER_SIZE === "number" ? spi.DEFAULT_MAX_TRANSFER_SIZE : DEFAULT_MAX_TRANSFER_SIZE));
+      : DEFAULT_NATIVE_MAX_TRANSFER_SIZE;
     if (maxTransferSize < this.width * 2) {
       maxTransferSize = this.width * 2;
     }
@@ -268,17 +306,7 @@
     this.rowsPerChunk = Math.max(1, (chunkBytes / (this.width * 2)) | 0);
     this.chunkBytes = chunkBytes;
     this.payload = null;
-    this.nativeBuffer = useNativeBuffer
-      ? displayBuffer.create({
-          width: this.width,
-          height: this.height,
-          format: "rgb565",
-          storage: own(options, "storage") ? options.storage : "auto",
-          chunkBytes: chunkBytes,
-          foreground: this.foreground,
-          background: this.background
-        })
-      : null;
+    this.nativeBuffer = createNativeBuffer(this, options, chunkBytes);
     this.perfEnabled = toBool(options.perf, false);
     this.perfStats = newPerfStats();
     this.commandByte = makeByteBuffer(1);
@@ -294,21 +322,18 @@
       cs: own(options, "cs") ? options.cs : spi.DEFAULT_CS,
       mode: own(options, "mode") ? options.mode : 0,
       freqHz: own(options, "freqHz") ? options.freqHz : DEFAULT_FREQ_HZ,
-      queueSize: own(options, "queueSize") ? options.queueSize : 1
+      queueSize: own(options, "queueSize") ? options.queueSize : 2
     };
   }
 
-  system.inherit(ST7789Display, display.MonoSurface);
+  system.inherit(ST7789Display, display.Surface);
 
   ST7789Display.rgb565 = rgb565;
 
   ST7789Display.prototype.clear = function (color) {
     color = nativeDrawColor(this, color, this.background, "ST7789.clear(color)");
-    if (this.nativeBuffer) {
-      this.nativeBuffer.clear(color);
-      return this;
-    }
-    return display.MonoSurface.prototype.clear.call(this, monoMaskColor(this, color));
+    this.nativeBuffer.clear(color);
+    return this;
   };
 
   ST7789Display.prototype.fill = function (color) {
@@ -317,45 +342,108 @@
 
   ST7789Display.prototype.setPixel = function (x, y, color) {
     color = nativeDrawColor(this, color, this.foreground, "ST7789.setPixel(x, y, color)");
-    if (this.nativeBuffer) {
-      this.nativeBuffer.setPixel(x, y, color);
-      return this;
-    }
-    return display.MonoSurface.prototype.setPixel.call(this, x, y, monoMaskColor(this, color));
+    this.nativeBuffer.setPixel(x, y, color);
+    return this;
   };
 
   ST7789Display.prototype.getPixel = function (x, y) {
-    if (this.nativeBuffer) {
-      return this.nativeBuffer.getPixel(x, y);
-    }
-    return display.MonoSurface.prototype.getPixel.call(this, x, y);
+    return this.nativeBuffer.getPixel(x, y);
   };
 
   ST7789Display.prototype.fillRect = function (x, y, width, height, color) {
     color = nativeDrawColor(this, color, this.foreground, "ST7789.fillRect(x, y, width, height, color)");
-    if (this.nativeBuffer) {
-      this.nativeBuffer.fillRect(x, y, width, height, color);
-      return this;
-    }
-    return display.MonoSurface.prototype.fillRect.call(this, x, y, width, height, monoMaskColor(this, color));
+    this.nativeBuffer.fillRect(x, y, width, height, color);
+    return this;
+  };
+
+  ST7789Display.prototype.drawCircle = function (cx, cy, radius, color) {
+    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawCircle(cx, cy, radius, color)");
+    this.nativeBuffer.drawCircle(cx, cy, radius, color);
+    return this;
+  };
+
+  ST7789Display.prototype.fillCircle = function (cx, cy, radius, color) {
+    color = nativeDrawColor(this, color, this.foreground, "ST7789.fillCircle(cx, cy, radius, color)");
+    this.nativeBuffer.fillCircle(cx, cy, radius, color);
+    return this;
+  };
+
+  ST7789Display.prototype.drawEllipse = function (cx, cy, rx, ry, color, options) {
+    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawEllipse(cx, cy, rx, ry, color)");
+    this.nativeBuffer.drawEllipse(cx, cy, rx, ry, color, options);
+    return this;
+  };
+
+  ST7789Display.prototype.fillEllipse = function (cx, cy, rx, ry, color) {
+    color = nativeDrawColor(this, color, this.foreground, "ST7789.fillEllipse(cx, cy, rx, ry, color)");
+    this.nativeBuffer.fillEllipse(cx, cy, rx, ry, color);
+    return this;
   };
 
   ST7789Display.prototype.drawLine = function (x0, y0, x1, y1, color) {
     color = nativeDrawColor(this, color, this.foreground, "ST7789.drawLine(x0, y0, x1, y1, color)");
-    if (this.nativeBuffer) {
-      this.nativeBuffer.drawLine(x0, y0, x1, y1, color);
-      return this;
-    }
-    return display.MonoSurface.prototype.drawLine.call(this, x0, y0, x1, y1, monoMaskColor(this, color));
+    this.nativeBuffer.drawLine(x0, y0, x1, y1, color);
+    return this;
   };
 
   ST7789Display.prototype.drawRect = function (x, y, width, height, color) {
     color = nativeDrawColor(this, color, this.foreground, "ST7789.drawRect(x, y, width, height, color)");
-    if (this.nativeBuffer) {
-      this.nativeBuffer.drawRect(x, y, width, height, color);
-      return this;
-    }
-    return display.MonoSurface.prototype.drawRect.call(this, x, y, width, height, monoMaskColor(this, color));
+    this.nativeBuffer.drawRect(x, y, width, height, color);
+    return this;
+  };
+
+  ST7789Display.prototype.drawRoundRect = function (x, y, width, height, radius, color) {
+    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawRoundRect(x, y, width, height, radius, color)");
+    this.nativeBuffer.drawRoundRect(x, y, width, height, radius, color);
+    return this;
+  };
+
+  ST7789Display.prototype.fillRoundRect = function (x, y, width, height, radius, color) {
+    color = nativeDrawColor(this, color, this.foreground, "ST7789.fillRoundRect(x, y, width, height, radius, color)");
+    this.nativeBuffer.fillRoundRect(x, y, width, height, radius, color);
+    return this;
+  };
+
+  ST7789Display.prototype.fillPolygon = function (points, color) {
+    color = nativeDrawColor(this, color, this.foreground, "ST7789.fillPolygon(points, color)");
+    this.nativeBuffer.fillPolygon(points, color);
+    return this;
+  };
+
+  ST7789Display.prototype.fillTriangle = function (x0, y0, x1, y1, x2, y2, color) {
+    color = nativeDrawColor(this, color, this.foreground, "ST7789.fillTriangle(x0, y0, x1, y1, x2, y2, color)");
+    this.nativeBuffer.fillTriangle(x0, y0, x1, y1, x2, y2, color);
+    return this;
+  };
+
+  ST7789Display.prototype.drawPolyline = function (points, color) {
+    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawPolyline(points, color)");
+    this.nativeBuffer.drawPolyline(points, color);
+    return this;
+  };
+
+  ST7789Display.prototype.drawPolygon = function (points, color) {
+    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawPolygon(points, color)");
+    this.nativeBuffer.drawPolygon(points, color);
+    return this;
+  };
+
+  ST7789Display.prototype.drawTriangle = function (x0, y0, x1, y1, x2, y2, color) {
+    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawTriangle(x0, y0, x1, y1, x2, y2, color)");
+    this.nativeBuffer.drawTriangle(x0, y0, x1, y1, x2, y2, color);
+    return this;
+  };
+
+  ST7789Display.prototype.drawQuadraticBezier = function (x0, y0, cx, cy, x1, y1, color, options) {
+    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color)");
+    this.nativeBuffer.drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color, options);
+    return this;
+  };
+
+  ST7789Display.prototype.drawCubicBezier = function (x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options) {
+    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color)");
+    this.nativeBuffer.drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options);
+    return this;
   };
 
   ST7789Display.prototype.drawBitmap = function (x, y, bitmap, options) {
@@ -364,77 +452,40 @@
     var nativeOptions = {
       color: color
     };
-    var monoStyle = {
-      color: monoMaskColor(this, color)
-    };
 
     if (style.background !== undefined && style.background !== null) {
       nativeOptions.background = nativeDrawColor(this, style.background, this.background, "ST7789 bitmap background");
-      monoStyle.background = monoMaskColor(this, nativeOptions.background);
     } else if (style.background === null) {
       nativeOptions.background = null;
-      monoStyle.background = null;
     }
-    if (this.nativeBuffer) {
-      this.nativeBuffer.drawBitmap(x, y, bitmap, nativeOptions);
-      return this;
-    }
-    return display.MonoSurface.prototype.drawBitmap.call(this, x, y, bitmap, monoStyle);
+    this.nativeBuffer.drawBitmap(x, y, bitmap, nativeOptions);
+    return this;
   };
 
   ST7789Display.prototype.drawChar = function (x, y, ch, options) {
     var style = styleOptions(options, "ST7789.drawChar(x, y, ch, options)");
     var color = nativeDrawColor(this, style.color, this.foreground, "ST7789.drawChar(x, y, ch, options).color");
     var nativeOptions;
-    var monoStyle = {
-      color: monoMaskColor(this, color),
-      font: textFontFromStyle(style),
-      spacing: style.spacing
-    };
 
-    if (style.background !== undefined) {
-      monoStyle.background = style.background === null
-        ? null
-        : monoMaskColor(this, nativeDrawColor(this, style.background, this.background, "ST7789 text background"));
-    }
-    if (this.nativeBuffer) {
-      nativeOptions = nativeTextOptions(this, style);
-      nativeOptions.color = color;
-      this.nativeBuffer.drawText(x, y, String(ch).charAt(0), nativeOptions);
-      return this;
-    }
-    return display.MonoSurface.prototype.drawChar.call(this, x, y, ch, monoStyle);
+    nativeOptions = nativeTextOptions(this, style);
+    nativeOptions.color = color;
+    this.nativeBuffer.drawText(x, y, String(ch).charAt(0), nativeOptions);
+    return this;
   };
 
   ST7789Display.prototype.drawText = function (x, y, text, options) {
     var style = styleOptions(options, "ST7789.drawText(x, y, text, options)");
     var color = nativeDrawColor(this, style.color, this.foreground, "ST7789.drawText(x, y, text, options).color");
     var nativeOptions;
-    var monoStyle = {
-      color: monoMaskColor(this, color),
-      font: textFontFromStyle(style),
-      spacing: style.spacing
-    };
 
-    if (style.background !== undefined) {
-      monoStyle.background = style.background === null
-        ? null
-        : monoMaskColor(this, nativeDrawColor(this, style.background, this.background, "ST7789 text background"));
-    }
-    if (this.nativeBuffer) {
-      nativeOptions = nativeTextOptions(this, style);
-      nativeOptions.color = color;
-      this.nativeBuffer.drawText(x, y, nativeText(text, style), nativeOptions);
-      return this;
-    }
-    return display.MonoSurface.prototype.drawText.call(this, x, y, text, monoStyle);
+    nativeOptions = nativeTextOptions(this, style);
+    nativeOptions.color = color;
+    this.nativeBuffer.drawText(x, y, nativeText(text, style), nativeOptions);
+    return this;
   };
 
   ST7789Display.prototype.measureText = function (text, style) {
-    if (this.nativeBuffer) {
-      return this.nativeBuffer.measureText(nativeText(text, style), nativeTextOptions(this, style));
-    }
-    return display.MonoSurface.prototype.measureText.call(this, text, style);
+    return this.nativeBuffer.measureText(nativeText(text, style), nativeTextOptions(this, style));
   };
 
   ST7789Display.prototype._writeCommand = function (command) {
@@ -496,39 +547,8 @@
     return this;
   };
 
-  ST7789Display.prototype._payloadBuffer = function (length) {
-    if (!this.payload || this.payload.length < length) {
-      this.payload = makeByteBuffer(length);
-    }
-    return this.payload;
-  };
-
   ST7789Display.prototype._makePixelPayload = function (x, y, width, rows) {
-    var length = width * rows * 2;
-    var payload;
-    var out = 0;
-    var yy;
-    var xx;
-    var page;
-    var bit;
-    var color;
-
-    if (this.nativeBuffer) {
-      return this.nativeBuffer.readRect(x, y, width, rows, { byteOrder: "be" });
-    }
-
-    payload = this._payloadBuffer(length);
-    for (yy = y; yy < y + rows; yy += 1) {
-      page = yy >> 3;
-      bit = 1 << (yy & 7);
-      for (xx = x; xx < x + width; xx += 1) {
-        color = (this.buffer[xx + (this.width * page)] & bit) !== 0 ? this.foreground : this.background;
-        payload[out] = (color >> 8) & 0xff;
-        payload[out + 1] = color & 0xff;
-        out += 2;
-      }
-    }
-    return sliceByteBuffer(payload, length);
+    return this.nativeBuffer.readRect(x, y, width, rows, { byteOrder: "be" });
   };
 
   ST7789Display.prototype.init = function () {
@@ -561,14 +581,93 @@
     return this.flushRect(0, 0, this.width, this.height);
   };
 
+  ST7789Display.prototype.flushRects = function (rects, options) {
+    var list = [];
+    var rect;
+    var i;
+    var x0 = this.width;
+    var y0 = this.height;
+    var x1 = 0;
+    var y1 = 0;
+    var totalArea = 0;
+    var boundsArea;
+    var screenArea = this.width * this.height;
+    var merge = true;
+    var mergeCoverage = 0.72;
+    var mergeAreaRatio = 1.22;
+    var mergePixelBudget = this.width * 24;
+
+    if (!rects || typeof rects.length !== "number") {
+      return this.flush();
+    }
+    options = options || {};
+    if (own(options, "merge")) {
+      merge = options.merge !== false;
+    }
+    if (own(options, "mergeCoverage")) {
+      mergeCoverage = +options.mergeCoverage;
+    }
+    if (own(options, "mergeAreaRatio")) {
+      mergeAreaRatio = +options.mergeAreaRatio;
+    }
+    if (own(options, "mergePixelBudget")) {
+      mergePixelBudget = options.mergePixelBudget | 0;
+    }
+
+    for (i = 0; i < rects.length; i += 1) {
+      rect = flushRectFromValue(this, rects[i]);
+      if (!rect) {
+        continue;
+      }
+      list.push(rect);
+      totalArea += rect.area;
+      if (rect.x < x0) {
+        x0 = rect.x;
+      }
+      if (rect.y < y0) {
+        y0 = rect.y;
+      }
+      if (rect.x + rect.width > x1) {
+        x1 = rect.x + rect.width;
+      }
+      if (rect.y + rect.height > y1) {
+        y1 = rect.y + rect.height;
+      }
+    }
+
+    if (list.length === 0) {
+      return this;
+    }
+    if (list.length === 1) {
+      rect = list[0];
+      return this.flushRect(rect.x, rect.y, rect.width, rect.height);
+    }
+
+    boundsArea = (x1 - x0) * (y1 - y0);
+    if (merge &&
+        (totalArea >= screenArea * mergeCoverage ||
+         boundsArea <= totalArea * mergeAreaRatio ||
+         boundsArea - totalArea <= mergePixelBudget * (list.length - 1))) {
+      return this.flushRect(x0, y0, x1 - x0, y1 - y0);
+    }
+
+    for (i = 0; i < list.length; i += 1) {
+      rect = list[i];
+      this.flushRect(rect.x, rect.y, rect.width, rect.height);
+    }
+    return this;
+  };
+
   ST7789Display.prototype.flushRect = function (x, y, width, height) {
     var perf = this.perfEnabled ? this.perfStats : null;
     var flushStartUs = 0;
     var stepStartUs = 0;
     var payload;
+    var chunks;
     var rows;
     var rowsPerChunk;
     var endY;
+    var chunkStats;
 
     if (!this.ready) {
       return this;
@@ -587,6 +686,40 @@
     if (perf) {
       flushStartUs = nowUs();
       perf.flushCalls += 1;
+    }
+    if (this.device && typeof this.device.writeChunks === "function") {
+      if (perf) {
+        stepStartUs = nowUs();
+      }
+      this._setWindow(x, y, width, height);
+      if (perf) {
+        perf.windowUs += nowUs() - stepStartUs;
+        stepStartUs = nowUs();
+      }
+      chunks = this.nativeBuffer.readRectChunks(x, y, width, height, {
+        byteOrder: "be",
+        chunkBytes: this.chunkBytes,
+        reuse: true
+      });
+      if (perf) {
+        perf.pixelUs += nowUs() - stepStartUs;
+        stepStartUs = nowUs();
+      }
+      writeGpio(this.dc, true);
+      chunkStats = this.device.writeChunks(chunks, {
+        queueDepth: this.deviceOptions.queueSize
+      });
+      if (perf) {
+        perf.dataUs += nowUs() - stepStartUs;
+        perf.chunks += chunkStats.chunks || chunks.length || 0;
+        perf.pixels += width * height;
+        perf.bytes += chunkStats.bytes || width * height * 2;
+        if (chunkStats.direct) {
+          perf.directFlushes += 1;
+        }
+        perf.totalFlushUs += nowUs() - flushStartUs;
+      }
+      return this;
     }
     for (; y < endY; y += rows) {
       rows = Math.min(rowsPerChunk, endY - y);
@@ -634,7 +767,8 @@
       totalFlushUs: stats.totalFlushUs,
       windowUs: stats.windowUs,
       pixelUs: stats.pixelUs,
-      dataUs: stats.dataUs
+      dataUs: stats.dataUs,
+      directFlushes: stats.directFlushes
     };
   };
 

@@ -1,11 +1,11 @@
 load("_sys/display.js");
 
 var PERF = globalThis.displayPerfConfig || {};
-var TRANSFER_BYTES = PERF.transferBytes || 16384;
+var TRANSFER_BYTES = PERF.transferBytes || 32768;
 var HUD_H = 58;
 var GRAPH_H = 36;
 var MODE_SECONDS = PERF.modeSeconds || 12;
-var FRAME_DELAY_MS = PERF.frameDelayMs === undefined ? 1 : PERF.frameDelayMs;
+var FRAME_DELAY_MS = PERF.frameDelayMs === undefined ? 0 : PERF.frameDelayMs;
 
 var COLORS = {
   bg: display.rgb565(3, 12, 26),
@@ -32,24 +32,35 @@ var BAR_COLORS = [
   COLORS.blue
 ];
 
-var displayConfig = globalThis.displayConfig || PERF.display || {
-  driver: "wlk1501spi8p",
-  sclk: spi.DEFAULT_SCLK,
-  mosi: spi.DEFAULT_MOSI,
-  miso: -1,
-  cs: spi.DEFAULT_CS >= 0 ? spi.DEFAULT_CS : 2,
-  dc: 4,
-  reset: 5,
-  backlight: 6,
-  freqHz: 40000000,
-  maxTransferSize: TRANSFER_BYTES,
-  chunkBytes: TRANSFER_BYTES,
-  perf: true,
-  foreground: COLORS.text,
-  background: COLORS.bg
-};
+function makeDisplayOptions() {
+  var base = PERF.display || globalThis.displayConfig || {};
+  var options = {
+    driver: "wlk1501spi8p",
+    sclk: spi.DEFAULT_SCLK,
+    mosi: spi.DEFAULT_MOSI,
+    miso: -1,
+    cs: spi.DEFAULT_CS >= 0 ? spi.DEFAULT_CS : 2,
+    dc: 4,
+    reset: 5,
+    backlight: 6,
+    freqHz: PERF.freqHz || 80000000,
+    maxTransferSize: TRANSFER_BYTES,
+    chunkBytes: TRANSFER_BYTES,
+    perf: true,
+    foreground: COLORS.text,
+    background: COLORS.bg
+  };
+  var key;
 
-var screen = display.open(displayConfig);
+  for (key in base) {
+    if (Object.prototype.hasOwnProperty.call(base, key)) {
+      options[key] = base[key];
+    }
+  }
+  return options;
+}
+
+var screen = display.open(makeDisplayOptions());
 var info = esp32.info();
 var width = screen.width | 0;
 var height = screen.height | 0;
@@ -78,15 +89,34 @@ var reportFrameUs = 0;
 var reportDrawUs = 0;
 var reportFlushUs = 0;
 var reportMaxFrameUs = 0;
+var reportShapeBgUs = 0;
+var reportShapeOvalUs = 0;
+var reportShapePolygonUs = 0;
+var reportShapeCurveUs = 0;
+var reportShapeTriangleUs = 0;
 var latest = {
   fps: 0,
   frameUs: 0,
   drawUs: 0,
   flushUs: 0,
   maxFrameUs: 0,
+  flushCalls: 0,
+  flushTotalUs: 0,
+  windowUs: 0,
+  pixelUs: 0,
+  dataUs: 0,
+  directFlushes: 0,
   chunks: 0,
+  pixels: 0,
   bytes: 0,
   heap: 0
+};
+var latestShape = {
+  bgUs: 0,
+  ovalUs: 0,
+  polygonUs: 0,
+  curveUs: 0,
+  triangleUs: 0
 };
 
 var MODES = [
@@ -133,6 +163,22 @@ function ms(us) {
 
 function kb(bytes) {
   return ((bytes / 102.4 + 0.5) | 0) / 10;
+}
+
+function addShapeTime(name, startedUs) {
+  var elapsed = esp32.micros() - startedUs;
+
+  if (name === "bg") {
+    reportShapeBgUs += elapsed;
+  } else if (name === "oval") {
+    reportShapeOvalUs += elapsed;
+  } else if (name === "polygon") {
+    reportShapePolygonUs += elapsed;
+  } else if (name === "curve") {
+    reportShapeCurveUs += elapsed;
+  } else if (name === "triangle") {
+    reportShapeTriangleUs += elapsed;
+  }
 }
 
 function pingPong(value, maxValue) {
@@ -322,17 +368,23 @@ function drawShapeScene(dirty) {
   var radius;
   var px;
   var py;
+  var stageUs;
 
+  stageUs = esp32.micros();
   screen.fillRect(areaX, areaY, areaW, areaH, COLORS.bg);
   screen.drawRoundRect(areaX, areaY, areaW, areaH, 10, COLORS.dim);
   screen.fillRoundRect(areaX + 6, areaY + 6, 58, 22, 7, COLORS.panel2);
   screen.drawText(areaX + 13, areaY + 13, "SHAPES", { color: COLORS.yellow, spacing: 0 });
+  addShapeTime("bg", stageUs);
 
+  stageUs = esp32.micros();
   screen.fillCircle(areaX + 34 + pulse, areaY + 58, 18, COLORS.blue);
   screen.drawCircle(areaX + 34 + pulse, areaY + 58, 23, COLORS.cyan);
   screen.fillEllipse(width - 48, areaY + 52 + pingPong(frame, 18), 30, 14, COLORS.magenta);
   screen.drawEllipse(width - 48, areaY + 52 + pingPong(frame, 18), 38, 20, COLORS.text, { segments: 28 });
+  addShapeTime("oval", stageUs);
 
+  stageUs = esp32.micros();
   for (i = 0; i < 10; i += 1) {
     angle = (Math.PI * 2 * (i * 9 + spin)) / 96;
     radius = (i & 1) ? 18 : 36;
@@ -342,7 +394,9 @@ function drawShapeScene(dirty) {
   }
   screen.fillPolygon(star, COLORS.green);
   screen.drawPolygon(star, COLORS.text);
+  addShapeTime("polygon", stageUs);
 
+  stageUs = esp32.micros();
   screen.drawQuadraticBezier(
     areaX + 12,
     graphY - 34,
@@ -365,9 +419,12 @@ function drawShapeScene(dirty) {
     COLORS.red,
     { segments: 34 }
   );
+  addShapeTime("curve", stageUs);
 
+  stageUs = esp32.micros();
   screen.fillTriangle(cx - 18, areaY + 18, cx + 20, areaY + 22, cx + 2, areaY + 52, COLORS.cyan);
   screen.drawTriangle(cx - 18, areaY + 18, cx + 20, areaY + 22, cx + 2, areaY + 52, COLORS.bg);
+  addShapeTime("triangle", stageUs);
   rect(dirty, areaX, areaY, areaW, areaH);
 }
 
@@ -429,6 +486,10 @@ function flushRects(dirty, fullFlush) {
     screen.flush();
     return;
   }
+  if (typeof screen.flushRects === "function") {
+    screen.flushRects(dirty);
+    return;
+  }
   for (i = 0; i < dirty.length; i += 1) {
     screen.flushRect(dirty[i].x, dirty[i].y, dirty[i].w, dirty[i].h);
   }
@@ -444,9 +505,21 @@ function publish(nowUs) {
   latest.drawUs = reportDrawUs / frames;
   latest.flushUs = reportFlushUs / frames;
   latest.maxFrameUs = reportMaxFrameUs;
+  latest.flushCalls = stats ? stats.flushCalls : 0;
+  latest.flushTotalUs = stats ? stats.totalFlushUs / frames : 0;
+  latest.windowUs = stats ? stats.windowUs / frames : 0;
+  latest.pixelUs = stats ? stats.pixelUs / frames : 0;
+  latest.dataUs = stats ? stats.dataUs / frames : 0;
+  latest.directFlushes = stats ? stats.directFlushes : 0;
   latest.chunks = stats ? stats.chunks : 0;
+  latest.pixels = stats ? stats.pixels : 0;
   latest.bytes = stats ? stats.bytes : 0;
   latest.heap = esp32.freeHeap();
+  latestShape.bgUs = reportShapeBgUs / frames;
+  latestShape.ovalUs = reportShapeOvalUs / frames;
+  latestShape.polygonUs = reportShapePolygonUs / frames;
+  latestShape.curveUs = reportShapeCurveUs / frames;
+  latestShape.triangleUs = reportShapeTriangleUs / frames;
 
   print("[display:perf]",
         "mode=" + activeMode().name,
@@ -455,16 +528,37 @@ function publish(nowUs) {
         "last_ms=" + ms(lastFrameUs),
         "draw_ms=" + ms(latest.drawUs),
         "flush_ms=" + ms(latest.flushUs),
+        "flush_core_ms=" + ms(latest.flushTotalUs),
+        "win_ms=" + ms(latest.windowUs),
+        "prep_ms=" + ms(latest.pixelUs),
+        "spi_ms=" + ms(latest.dataUs),
         "max_ms=" + ms(latest.maxFrameUs),
+        "calls=" + latest.flushCalls,
+        "direct=" + latest.directFlushes,
         "chunks=" + latest.chunks,
+        "pixels=" + latest.pixels,
         "bytes=" + latest.bytes,
         "heap=" + latest.heap);
+
+  if (activeMode().name === "SHAPE") {
+    print("[display:shape]",
+          "bg_ms=" + ms(latestShape.bgUs),
+          "oval_ms=" + ms(latestShape.ovalUs),
+          "poly_ms=" + ms(latestShape.polygonUs),
+          "curve_ms=" + ms(latestShape.curveUs),
+          "tri_ms=" + ms(latestShape.triangleUs));
+  }
 
   reportFrames = 0;
   reportFrameUs = 0;
   reportDrawUs = 0;
   reportFlushUs = 0;
   reportMaxFrameUs = 0;
+  reportShapeBgUs = 0;
+  reportShapeOvalUs = 0;
+  reportShapePolygonUs = 0;
+  reportShapeCurveUs = 0;
+  reportShapeTriangleUs = 0;
   reportLastUs = nowUs;
   if (screen.resetPerf) {
     screen.resetPerf();
@@ -561,6 +655,7 @@ globalThis.displayPerf = {
 
 print("[display:perf] running", width + "x" + height,
       "chunk=" + TRANSFER_BYTES,
+      "storage=dma-auto",
       "modes=FULL,PART,SHAPE,TEXT",
       "next=displayPerf.next()",
       "stop=displayPerf.stop()");

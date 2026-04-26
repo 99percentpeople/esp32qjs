@@ -18,6 +18,7 @@ JSValue js_spi_device_close(JSContext *ctx, JSValue *this_val, int argc, JSValue
 JSValue js_spi_device_status(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_spi_device_transfer(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_spi_device_write(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_spi_device_write_chunks(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_spi_device_read(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 
 JSValue js_spi_open_bus(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

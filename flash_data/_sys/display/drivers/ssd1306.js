@@ -67,10 +67,12 @@
     return String(text);
   }
 
-  function hasNativeBuffer() {
-    return typeof displayBuffer === "object" &&
-      displayBuffer &&
-      typeof displayBuffer.create === "function";
+  function requireDisplayBuffer() {
+    if (typeof displayBuffer !== "object" ||
+        !displayBuffer ||
+        typeof displayBuffer.create !== "function") {
+      throw new Error("ssd1306 display driver requires the displayBuffer module");
+    }
   }
 
   function busMatches(bus, desired) {
@@ -144,28 +146,26 @@
   }
 
   function SSD1306Display(options) {
-    var useNativeBuffer;
-
     options = options || {};
+    requireDisplayBuffer();
 
-    display.MonoSurface.call(this, {
+    display.Surface.call(this, {
       driver: "ssd1306",
       width: own(options, "width") ? options.width : DEFAULT_WIDTH,
       height: own(options, "height") ? options.height : DEFAULT_HEIGHT,
-      spacing: own(options, "spacing") ? options.spacing : DEFAULT_SPACING
+      pixelFormat: "mono1"
     });
-    useNativeBuffer = hasNativeBuffer();
-    this.nativeBuffer = useNativeBuffer
-      ? displayBuffer.create({
-          width: this.width,
-          height: this.height,
-          format: displayBuffer.MONO1,
-          layout: "page-y8",
-          storage: own(options, "storage") ? options.storage : "auto",
-          foreground: display.mono1(1),
-          background: display.mono1(0)
-        })
-      : null;
+    this.pages = Math.ceil(this.height / 8);
+    this.spacing = own(options, "spacing") ? options.spacing : DEFAULT_SPACING;
+    this.nativeBuffer = displayBuffer.create({
+      width: this.width,
+      height: this.height,
+      format: displayBuffer.MONO1,
+      layout: "page-y8",
+      storage: own(options, "storage") ? options.storage : "auto",
+      foreground: display.mono1(1),
+      background: display.mono1(0)
+    });
     this.foreground = display.mono1(1);
     this.background = display.mono1(0);
     this.address = own(options, "address") ? options.address : DEFAULT_ADDRESS;
@@ -178,15 +178,12 @@
     };
   }
 
-  system.inherit(SSD1306Display, display.MonoSurface);
+  system.inherit(SSD1306Display, display.Surface);
 
   SSD1306Display.prototype.clear = function (color) {
     color = monoColor(color, this.background, "SSD1306.clear(color)");
-    if (this.nativeBuffer) {
-      this.nativeBuffer.clear(color);
-      return this;
-    }
-    return display.MonoSurface.prototype.clear.call(this, color);
+    this.nativeBuffer.clear(color);
+    return this;
   };
 
   SSD1306Display.prototype.fill = function (color) {
@@ -195,45 +192,108 @@
 
   SSD1306Display.prototype.setPixel = function (x, y, color) {
     color = monoColor(color, this.foreground, "SSD1306.setPixel(x, y, color)");
-    if (this.nativeBuffer) {
-      this.nativeBuffer.setPixel(x, y, color);
-      return this;
-    }
-    return display.MonoSurface.prototype.setPixel.call(this, x, y, color);
+    this.nativeBuffer.setPixel(x, y, color);
+    return this;
   };
 
   SSD1306Display.prototype.getPixel = function (x, y) {
-    if (this.nativeBuffer) {
-      return this.nativeBuffer.getPixel(x, y);
-    }
-    return display.MonoSurface.prototype.getPixel.call(this, x, y);
+    return this.nativeBuffer.getPixel(x, y);
   };
 
   SSD1306Display.prototype.fillRect = function (x, y, width, height, color) {
     color = monoColor(color, this.foreground, "SSD1306.fillRect(x, y, width, height, color)");
-    if (this.nativeBuffer) {
-      this.nativeBuffer.fillRect(x, y, width, height, color);
-      return this;
-    }
-    return display.MonoSurface.prototype.fillRect.call(this, x, y, width, height, color);
+    this.nativeBuffer.fillRect(x, y, width, height, color);
+    return this;
+  };
+
+  SSD1306Display.prototype.drawCircle = function (cx, cy, radius, color) {
+    color = monoColor(color, this.foreground, "SSD1306.drawCircle(cx, cy, radius, color)");
+    this.nativeBuffer.drawCircle(cx, cy, radius, color);
+    return this;
+  };
+
+  SSD1306Display.prototype.fillCircle = function (cx, cy, radius, color) {
+    color = monoColor(color, this.foreground, "SSD1306.fillCircle(cx, cy, radius, color)");
+    this.nativeBuffer.fillCircle(cx, cy, radius, color);
+    return this;
+  };
+
+  SSD1306Display.prototype.drawEllipse = function (cx, cy, rx, ry, color, options) {
+    color = monoColor(color, this.foreground, "SSD1306.drawEllipse(cx, cy, rx, ry, color)");
+    this.nativeBuffer.drawEllipse(cx, cy, rx, ry, color, options);
+    return this;
+  };
+
+  SSD1306Display.prototype.fillEllipse = function (cx, cy, rx, ry, color) {
+    color = monoColor(color, this.foreground, "SSD1306.fillEllipse(cx, cy, rx, ry, color)");
+    this.nativeBuffer.fillEllipse(cx, cy, rx, ry, color);
+    return this;
   };
 
   SSD1306Display.prototype.drawLine = function (x0, y0, x1, y1, color) {
     color = monoColor(color, this.foreground, "SSD1306.drawLine(x0, y0, x1, y1, color)");
-    if (this.nativeBuffer) {
-      this.nativeBuffer.drawLine(x0, y0, x1, y1, color);
-      return this;
-    }
-    return display.MonoSurface.prototype.drawLine.call(this, x0, y0, x1, y1, color);
+    this.nativeBuffer.drawLine(x0, y0, x1, y1, color);
+    return this;
   };
 
   SSD1306Display.prototype.drawRect = function (x, y, width, height, color) {
     color = monoColor(color, this.foreground, "SSD1306.drawRect(x, y, width, height, color)");
-    if (this.nativeBuffer) {
-      this.nativeBuffer.drawRect(x, y, width, height, color);
-      return this;
-    }
-    return display.MonoSurface.prototype.drawRect.call(this, x, y, width, height, color);
+    this.nativeBuffer.drawRect(x, y, width, height, color);
+    return this;
+  };
+
+  SSD1306Display.prototype.drawRoundRect = function (x, y, width, height, radius, color) {
+    color = monoColor(color, this.foreground, "SSD1306.drawRoundRect(x, y, width, height, radius, color)");
+    this.nativeBuffer.drawRoundRect(x, y, width, height, radius, color);
+    return this;
+  };
+
+  SSD1306Display.prototype.fillRoundRect = function (x, y, width, height, radius, color) {
+    color = monoColor(color, this.foreground, "SSD1306.fillRoundRect(x, y, width, height, radius, color)");
+    this.nativeBuffer.fillRoundRect(x, y, width, height, radius, color);
+    return this;
+  };
+
+  SSD1306Display.prototype.fillPolygon = function (points, color) {
+    color = monoColor(color, this.foreground, "SSD1306.fillPolygon(points, color)");
+    this.nativeBuffer.fillPolygon(points, color);
+    return this;
+  };
+
+  SSD1306Display.prototype.fillTriangle = function (x0, y0, x1, y1, x2, y2, color) {
+    color = monoColor(color, this.foreground, "SSD1306.fillTriangle(x0, y0, x1, y1, x2, y2, color)");
+    this.nativeBuffer.fillTriangle(x0, y0, x1, y1, x2, y2, color);
+    return this;
+  };
+
+  SSD1306Display.prototype.drawPolyline = function (points, color) {
+    color = monoColor(color, this.foreground, "SSD1306.drawPolyline(points, color)");
+    this.nativeBuffer.drawPolyline(points, color);
+    return this;
+  };
+
+  SSD1306Display.prototype.drawPolygon = function (points, color) {
+    color = monoColor(color, this.foreground, "SSD1306.drawPolygon(points, color)");
+    this.nativeBuffer.drawPolygon(points, color);
+    return this;
+  };
+
+  SSD1306Display.prototype.drawTriangle = function (x0, y0, x1, y1, x2, y2, color) {
+    color = monoColor(color, this.foreground, "SSD1306.drawTriangle(x0, y0, x1, y1, x2, y2, color)");
+    this.nativeBuffer.drawTriangle(x0, y0, x1, y1, x2, y2, color);
+    return this;
+  };
+
+  SSD1306Display.prototype.drawQuadraticBezier = function (x0, y0, cx, cy, x1, y1, color, options) {
+    color = monoColor(color, this.foreground, "SSD1306.drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color)");
+    this.nativeBuffer.drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color, options);
+    return this;
+  };
+
+  SSD1306Display.prototype.drawCubicBezier = function (x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options) {
+    color = monoColor(color, this.foreground, "SSD1306.drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color)");
+    this.nativeBuffer.drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options);
+    return this;
   };
 
   SSD1306Display.prototype.drawBitmap = function (x, y, bitmap, options) {
@@ -249,11 +309,8 @@
         : monoColor(style.background, this.background, "SSD1306 bitmap background");
     }
 
-    if (this.nativeBuffer) {
-      this.nativeBuffer.drawBitmap(x, y, bitmap, nativeOptions);
-      return this;
-    }
-    return display.MonoSurface.prototype.drawBitmap.call(this, x, y, bitmap, style);
+    this.nativeBuffer.drawBitmap(x, y, bitmap, nativeOptions);
+    return this;
   };
 
   SSD1306Display.prototype.drawChar = function (x, y, ch, options) {
@@ -261,13 +318,10 @@
     var color = monoColor(style.color, this.foreground, "SSD1306.drawChar(x, y, ch, options).color");
     var nativeOptions;
 
-    if (this.nativeBuffer) {
-      nativeOptions = nativeTextOptions(this, style);
-      nativeOptions.color = color;
-      this.nativeBuffer.drawText(x, y, String(ch).charAt(0), nativeOptions);
-      return this;
-    }
-    return display.MonoSurface.prototype.drawChar.call(this, x, y, ch, style);
+    nativeOptions = nativeTextOptions(this, style);
+    nativeOptions.color = color;
+    this.nativeBuffer.drawText(x, y, String(ch).charAt(0), nativeOptions);
+    return this;
   };
 
   SSD1306Display.prototype.drawText = function (x, y, text, options) {
@@ -275,20 +329,14 @@
     var color = monoColor(style.color, this.foreground, "SSD1306.drawText(x, y, text, options).color");
     var nativeOptions;
 
-    if (this.nativeBuffer) {
-      nativeOptions = nativeTextOptions(this, style);
-      nativeOptions.color = color;
-      this.nativeBuffer.drawText(x, y, nativeText(text, style), nativeOptions);
-      return this;
-    }
-    return display.MonoSurface.prototype.drawText.call(this, x, y, text, style);
+    nativeOptions = nativeTextOptions(this, style);
+    nativeOptions.color = color;
+    this.nativeBuffer.drawText(x, y, nativeText(text, style), nativeOptions);
+    return this;
   };
 
   SSD1306Display.prototype.measureText = function (text, style) {
-    if (this.nativeBuffer) {
-      return this.nativeBuffer.measureText(nativeText(text, style), nativeTextOptions(this, style));
-    }
-    return display.MonoSurface.prototype.measureText.call(this, text, style);
+    return this.nativeBuffer.measureText(nativeText(text, style), nativeTextOptions(this, style));
   };
 
   SSD1306Display.prototype.command = function (payload) {
@@ -345,9 +393,7 @@
   };
 
   SSD1306Display.prototype.flush = function () {
-    var buffer = this.nativeBuffer
-      ? this.nativeBuffer.readRect(0, 0, this.width, this.height).toArray()
-      : this.buffer;
+    var buffer = this.nativeBuffer.readRect(0, 0, this.width, this.height).toArray();
 
     this.bus = ensureI2CBus(this.busOptions, this.bus);
     this.command([
