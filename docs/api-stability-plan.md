@@ -427,11 +427,11 @@ Recommended stable target:
 - Let `SPIBus.openDevice(...)` return an `SPIDevice`.
 - Keep the first stable surface synchronous and explicit:
   `SPIDevice.transfer(...)`, `SPIDevice.write(...)`, `SPIDevice.read(...)`
-- Keep `SPIDevice.writeChunks(...)` as the generic bulk-write path for byte-source chunks.
+- Keep `SPIDevice.writeChunks(...)` for byte-source chunk arrays and `SPIDevice.writeSource(...)` for retained native byte span sources.
 - Keep explicit `close()` as the primary lifecycle boundary on both `SPIBus` and `SPIDevice`, even if the runtime also uses GC finalizers as a fallback.
 - Gate the module behind `FEATURE_SPI`.
 - Keep same-board loopback test coverage available through the remote test harness so SPI data-path regressions are caught without requiring a dedicated SPI peripheral.
-- Keep display flushes layered above SPI. Native display helpers may produce byte chunks, but SPI should only consume generic byte sources.
+- Keep display flushes layered above SPI. Native display helpers may produce byte chunks or byte span sources, but SPI should only consume generic byte payload abstractions.
 
 Intentional non-goals for the first stable SPI layer:
 
@@ -442,7 +442,7 @@ Intentional non-goals for the first stable SPI layer:
 Remaining freeze work:
 
 - Keep loopback coverage for `transfer`, `write`, and `read`.
-- Keep display flush coverage for `writeChunks(...)` because it exercises the high-throughput byte-source path.
+- Keep display flush coverage for `writeSource(...)` and compatibility coverage for `writeChunks(...)`.
 - Document any DMA staging behavior as implementation detail, not as a JS-visible display shortcut.
 
 ### `displayBuffer`
@@ -455,7 +455,7 @@ What is already good:
 
 - `displayBuffer` is feature-gated and reported through `esp32.info().features.displayBuffer`.
 - The module exposes native `mono1` and `rgb565` buffers, dirty bounds, drawing primitives, EQF1 fixed bitmap font loading, and byte-view rectangle export.
-- `readRect(...)` and `readRectChunks(...)` return generic native byte sources that SPI and I2C can consume without display-specific coupling.
+- `readRect(...)` and `readRectChunks(...)` return generic native byte sources; `createSpanSource(...)` returns a retained native span source for high-frequency SPI flushes without display-specific coupling.
 - JavaScript display drivers still own panel command sequencing, flush policy, color helpers, font mapping, and UI composition.
 
 Recommended stable target:
@@ -468,6 +468,10 @@ Recommended stable target:
 Remaining freeze work:
 
 - Keep tests for close/finalizer behavior, dirty bounds, drawing primitives, font loading, and byte-source chunk exports.
+- Generalize the public byte-span source surface before freeze so
+  `ByteSpanSource` stays transport-oriented and display-only rectangle controls
+  live on a display-buffer span source. See
+  [docs/byte-span-source-generalization-plan.md](/home/zach/esp32qjs/docs/byte-span-source-generalization-plan.md).
 - Add future formats such as grayscale only when a concrete display driver needs them.
 - Consider `copyFrom(...)`, `blitFrom(...)`, multi-rect dirty tracking, or native clipping only after profiling shows the current bounding-rect path is limiting real UI workloads.
 
@@ -645,7 +649,8 @@ Recommended implementation order from this plan:
 
 1. Tighten `ledc` status semantics so status objects never imply configuration that did not happen, then decide whether low-speed mode is intentionally fixed for the first stable API.
 2. Validate `dac` lifecycle and status on an `esp32` or `esp32s2` board before calling the module stable.
-3. Finish freeze coverage for the current byte-source path: `displayBuffer.readRectChunks(...)`, `SPIDevice.writeChunks(...)`, and `I2CBus.writeChunks(...)`.
-4. Keep `i2c`, `spi`, `displayBuffer`, `wifi`, and `http` reference docs and TypeScript definitions aligned with their current implementation before marking them stable.
-5. Improve JS display demo smoke coverage so native drawing, mapped fonts, transparent text, dirty bounds, and chunked flushes are exercised together.
-6. Consider `displayBuffer` follow-up features only when a measured workload needs them: grayscale formats, `copyFrom(...)`, `blitFrom(...)`, multi-rect dirty tracking, or native clipping.
+3. Complete the ByteSpanSource generalization cleanup so display-specific `setRect(...)` behavior belongs to `DisplayBufferSpanSource`, not the generic transport source.
+4. Finish freeze coverage for the current byte payload paths: `DisplayBuffer.createSpanSource(...)`, `SPIDevice.writeSource(...)`, `displayBuffer.readRectChunks(...)`, `SPIDevice.writeChunks(...)`, and `I2CBus.writeChunks(...)`.
+5. Keep `i2c`, `spi`, `displayBuffer`, `wifi`, and `http` reference docs and TypeScript definitions aligned with their current implementation before marking them stable.
+6. Improve JS display demo smoke coverage so native drawing, mapped fonts, transparent text, dirty bounds, and chunked flushes are exercised together.
+7. Consider `displayBuffer` follow-up features only when a measured workload needs them: grayscale formats, `copyFrom(...)`, `blitFrom(...)`, multi-rect dirty tracking, or native clipping.

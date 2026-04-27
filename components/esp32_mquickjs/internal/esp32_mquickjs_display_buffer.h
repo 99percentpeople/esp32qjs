@@ -93,5 +93,6 @@ JSValue js_display_buffer_clear_dirty(JSContext *ctx, JSValue *this_val, int arg
 JSValue js_display_buffer_mark_dirty(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_display_buffer_read_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_display_buffer_read_rect_chunks(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_display_buffer_create_span_source(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 
 #endif

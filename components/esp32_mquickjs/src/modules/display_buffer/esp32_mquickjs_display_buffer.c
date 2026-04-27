@@ -17,6 +17,18 @@
 #define DISPLAY_BUFFER_STAGED_VIEW_KEY "__esp32qjsDisplayBufferStagedView"
 #define DISPLAY_BUFFER_STAGED_CHUNKS_KEY "__esp32qjsDisplayBufferStagedChunks"
 
+typedef struct {
+    esp32_mquickjs_display_buffer_t *buffer;
+    esp32_mquickjs_display_buffer_rect_t rect;
+    uint32_t chunk_bytes;
+    uint8_t *scratch;
+    size_t scratch_capacity;
+    int iter_y;
+    int iter_remaining;
+    JSValue owner;
+    bool iterating;
+} display_buffer_span_source_t;
+
 static const char *format_name(uint8_t format)
 {
     return format == DISPLAY_BUFFER_FORMAT_RGB565 ? "rgb565" : "mono1";
@@ -689,6 +701,65 @@ done:
     return ok;
 }
 
+static bool span_source_options(JSContext *ctx,
+                                JSValue options,
+                                bool *out_little_endian,
+                                uint32_t *out_chunk_bytes)
+{
+    JSGCRef property_ref;
+    JSValue *property;
+    bool ok = true;
+
+    *out_little_endian = false;
+    *out_chunk_bytes = 0;
+    if (JS_IsUndefined(options) || JS_IsNull(options)) {
+        return true;
+    }
+    if (JS_GetClassID(ctx, options) < 0) {
+        JS_ThrowTypeError(ctx, "DisplayBuffer.createSpanSource(options?) expects an object");
+        return false;
+    }
+
+    property = JS_PushGCRef(ctx, &property_ref);
+    *property = JS_GetPropertyStr(ctx, options, "byteOrder");
+    if (JS_IsException(*property)) {
+        ok = false;
+        goto done;
+    }
+    if (!JS_IsUndefined(*property) && !JS_IsNull(*property)) {
+        JSCStringBuf order_buf;
+        const char *order = JS_ToCString(ctx, *property, &order_buf);
+
+        if (order == NULL) {
+            ok = false;
+            goto done;
+        }
+        if (string_equals(order, "le") || string_equals(order, "rgb565le")) {
+            *out_little_endian = true;
+        } else if (!string_equals(order, "be") && !string_equals(order, "rgb565be")) {
+            JS_ThrowTypeError(ctx, "DisplayBuffer.createSpanSource() option 'byteOrder' expects 'be' or 'le'");
+            ok = false;
+            goto done;
+        }
+    }
+
+    *property = JS_GetPropertyStr(ctx, options, "chunkBytes");
+    if (JS_IsException(*property)) {
+        ok = false;
+        goto done;
+    }
+    if (!JS_IsUndefined(*property) && !JS_IsNull(*property) &&
+        (!value_to_u32(ctx, *property, out_chunk_bytes) || *out_chunk_bytes == 0)) {
+        JS_ThrowTypeError(ctx, "DisplayBuffer.createSpanSource() option 'chunkBytes' expects a positive integer");
+        ok = false;
+        goto done;
+    }
+
+done:
+    JS_PopGCRef(ctx, &property_ref);
+    return ok;
+}
+
 static size_t read_rect_length(const esp32_mquickjs_display_buffer_t *buffer, int width, int height)
 {
     if (buffer->format == DISPLAY_BUFFER_FORMAT_RGB565) {
@@ -925,6 +996,226 @@ bool esp32_mquickjs_display_buffer_export_rect(const esp32_mquickjs_display_buff
                    out);
     return true;
 }
+
+static int display_span_source_rows_per_chunk(const esp32_mquickjs_display_buffer_t *buffer,
+                                              int32_t width,
+                                              uint32_t chunk_bytes)
+{
+    size_t row_bytes = esp32_mquickjs_display_buffer_row_length(buffer, width);
+    int rows_per_chunk;
+
+    if (row_bytes == 0) {
+        return 1;
+    }
+    rows_per_chunk = (int)(chunk_bytes / row_bytes);
+    if (rows_per_chunk < 1) {
+        rows_per_chunk = 1;
+    }
+    if (buffer->format == DISPLAY_BUFFER_FORMAT_MONO1 && buffer->layout == DISPLAY_BUFFER_LAYOUT_PAGE_Y8) {
+        rows_per_chunk *= 8;
+        if (rows_per_chunk < 8) {
+            rows_per_chunk = 8;
+        }
+    }
+    return rows_per_chunk;
+}
+
+static bool display_span_source_rect_direct(const display_buffer_span_source_t *source,
+                                            const esp32_mquickjs_display_buffer_rect_t *rect)
+{
+    const uint8_t *data;
+    size_t length;
+
+    return source != NULL &&
+           source->buffer != NULL &&
+           esp32_mquickjs_display_buffer_direct_rect(source->buffer, rect, &data, &length);
+}
+
+static bool display_span_source_ensure_scratch(display_buffer_span_source_t *source, size_t length)
+{
+    uint8_t *scratch;
+    size_t capacity = length == 0 ? 1U : length;
+
+    if (source->scratch != NULL && source->scratch_capacity >= capacity) {
+        return true;
+    }
+    scratch = alloc_export_bytes(capacity);
+    if (scratch == NULL) {
+        return false;
+    }
+    heap_caps_free(source->scratch);
+    source->scratch = scratch;
+    source->scratch_capacity = capacity;
+    return true;
+}
+
+static bool display_span_source_prepare_rect(JSContext *ctx,
+                                             display_buffer_span_source_t *source,
+                                             int32_t x,
+                                             int32_t y,
+                                             int32_t width,
+                                             int32_t height)
+{
+    esp32_mquickjs_display_buffer_rect_t rect;
+
+    if (source == NULL) {
+        JS_ThrowInternalError(ctx, "ByteSpanSource.setRect() received invalid source state");
+        return false;
+    }
+    rect.x = x;
+    rect.y = y;
+    rect.width = width;
+    rect.height = height;
+    rect.byte_order = source->rect.byte_order;
+
+    if (source->buffer == NULL || source->buffer->closed) {
+        JS_ThrowReferenceError(ctx, "ByteSpanSource.setRect() failed because the DisplayBuffer is closed");
+        return false;
+    }
+    if (!esp32_mquickjs_display_buffer_normalize_rect(source->buffer, &rect)) {
+        source->rect.x = 0;
+        source->rect.y = 0;
+        source->rect.width = 0;
+        source->rect.height = 0;
+        source->iterating = false;
+        return true;
+    }
+    source->rect = rect;
+    source->iterating = false;
+
+    if (!display_span_source_rect_direct(source, &source->rect)) {
+        int rows = display_span_source_rows_per_chunk(source->buffer, source->rect.width, source->chunk_bytes);
+        size_t length;
+
+        if (rows > source->rect.height) {
+            rows = source->rect.height;
+        }
+        length = esp32_mquickjs_display_buffer_rect_length(source->buffer, source->rect.width, rows);
+        if (!display_span_source_ensure_scratch(source, length)) {
+            JS_ThrowOutOfMemory(ctx);
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool display_span_source_set_rect(JSContext *ctx,
+                                         void *opaque,
+                                         int32_t x,
+                                         int32_t y,
+                                         int32_t width,
+                                         int32_t height)
+{
+    return display_span_source_prepare_rect(ctx, opaque, x, y, width, height);
+}
+
+static bool display_span_source_next(JSContext *ctx, void *opaque, esp32_mquickjs_byte_span_t *out);
+static void display_span_source_close(JSContext *ctx, void *opaque);
+
+static bool display_span_source_open(JSContext *ctx,
+                                     JSValue source_value,
+                                     void *opaque,
+                                     esp32_mquickjs_byte_span_source_t *out,
+                                     JSValue *out_error)
+{
+    display_buffer_span_source_t *source = opaque;
+
+    if (source == NULL || source->buffer == NULL || source->buffer->closed) {
+        *out_error = JS_ThrowReferenceError(ctx, "SPIDevice.writeSource(source) failed because the DisplayBuffer is closed");
+        return false;
+    }
+    source->owner = source_value;
+    source->iter_y = source->rect.y;
+    source->iter_remaining = source->rect.height;
+    source->iterating = true;
+
+    out->opaque = source;
+    out->next = display_span_source_next;
+    out->close = display_span_source_close;
+    return true;
+}
+
+static bool display_span_source_next(JSContext *ctx, void *opaque, esp32_mquickjs_byte_span_t *out)
+{
+    display_buffer_span_source_t *source = opaque;
+    esp32_mquickjs_display_buffer_rect_t rect;
+    const uint8_t *direct_data = NULL;
+    size_t length = 0;
+    int rows;
+
+    if (source == NULL || !source->iterating || source->iter_remaining <= 0) {
+        return false;
+    }
+    if (source->buffer == NULL || source->buffer->closed) {
+        JS_ThrowReferenceError(ctx, "ByteSpanSource iteration failed because the DisplayBuffer is closed");
+        return false;
+    }
+
+    rows = display_span_source_rows_per_chunk(source->buffer, source->rect.width, source->chunk_bytes);
+    if (rows > source->iter_remaining) {
+        rows = source->iter_remaining;
+    }
+
+    rect = source->rect;
+    rect.y = source->iter_y;
+    rect.height = rows;
+
+    if (esp32_mquickjs_display_buffer_direct_rect(source->buffer, &rect, &direct_data, &length)) {
+        out->data = direct_data;
+        out->length = length;
+        out->owner = source->owner;
+        out->dma_capable = true;
+    } else {
+        length = esp32_mquickjs_display_buffer_rect_length(source->buffer, rect.width, rect.height);
+        if (!display_span_source_ensure_scratch(source, length)) {
+            JS_ThrowOutOfMemory(ctx);
+            return false;
+        }
+        if (length > 0 &&
+            !esp32_mquickjs_display_buffer_export_rect(source->buffer, &rect, source->scratch, source->scratch_capacity)) {
+            JS_ThrowInternalError(ctx, "ByteSpanSource failed to export display buffer span");
+            return false;
+        }
+        out->data = source->scratch;
+        out->length = length;
+        out->owner = source->owner;
+        out->dma_capable = false;
+    }
+
+    source->iter_y += rows;
+    source->iter_remaining -= rows;
+    return true;
+}
+
+static void display_span_source_close(JSContext *ctx, void *opaque)
+{
+    display_buffer_span_source_t *source = opaque;
+
+    (void)ctx;
+    if (source == NULL) {
+        return;
+    }
+    source->iterating = false;
+    source->owner = JS_UNDEFINED;
+}
+
+static void display_span_source_destroy(JSContext *ctx, void *opaque)
+{
+    display_buffer_span_source_t *source = opaque;
+
+    (void)ctx;
+    if (source == NULL) {
+        return;
+    }
+    heap_caps_free(source->scratch);
+    heap_caps_free(source);
+}
+
+static const esp32_mquickjs_byte_span_source_object_ops_t display_span_source_ops = {
+    .open = display_span_source_open,
+    .set_rect = display_span_source_set_rect,
+    .destroy = display_span_source_destroy,
+};
 
 static uint8_t *read_rect_alloc(const esp32_mquickjs_display_buffer_t *buffer,
                                 int x,
@@ -1585,6 +1876,42 @@ JSValue js_display_buffer_mark_dirty(JSContext *ctx, JSValue *this_val, int argc
     }
     mark_dirty(buffer, x, y, width, height);
     return *this_val;
+}
+
+JSValue js_display_buffer_create_span_source(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    esp32_mquickjs_display_buffer_t *buffer;
+    display_buffer_span_source_t *source;
+    bool little_endian = false;
+    uint32_t chunk_bytes = 0;
+
+    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.createSpanSource()");
+    if (buffer == NULL) {
+        return JS_EXCEPTION;
+    }
+    if (!span_source_options(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, &little_endian, &chunk_bytes)) {
+        return JS_EXCEPTION;
+    }
+    if (chunk_bytes == 0) {
+        chunk_bytes = buffer->chunk_size > 0 ? (uint32_t)buffer->chunk_size : DISPLAY_BUFFER_DEFAULT_CHUNK_BYTES;
+    }
+
+    source = heap_caps_malloc(sizeof(*source), MALLOC_CAP_8BIT);
+    if (source == NULL) {
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    memset(source, 0, sizeof(*source));
+    source->buffer = buffer;
+    source->chunk_bytes = chunk_bytes;
+    source->owner = JS_UNDEFINED;
+    source->rect.byte_order = little_endian ? ESP32_MQUICKJS_DISPLAY_BUFFER_BYTE_ORDER_LE
+                                            : ESP32_MQUICKJS_DISPLAY_BUFFER_BYTE_ORDER_BE;
+
+    if (!display_span_source_prepare_rect(ctx, source, 0, 0, buffer->width, buffer->height)) {
+        display_span_source_destroy(ctx, source);
+        return JS_EXCEPTION;
+    }
+    return esp32_mquickjs_new_byte_span_source(ctx, *this_val, &display_span_source_ops, source);
 }
 
 JSValue js_display_buffer_read_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

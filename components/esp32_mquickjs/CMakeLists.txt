@@ -203,6 +203,7 @@ endif()
 
 set(ESP32_MQUICKJS_SRCS
     "src/core/esp32_mquickjs.c"
+    "src/core/esp32_mquickjs_byte_span.c"
     "src/core/esp32_mquickjs_byte_source.c"
     "src/core/esp32_mquickjs_esp32.c"
     "src/core/esp32_mquickjs_stream.c"

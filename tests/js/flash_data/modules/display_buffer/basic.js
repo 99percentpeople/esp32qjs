@@ -4,6 +4,7 @@ test("display_buffer/basic", function () {
   var bytes;
   var rgb;
   var chunks;
+  var source;
   var wide;
   var closeError = "";
   var font = displayBuffer.loadFont("_sys/display/fonts/mono5x7.eqf");
@@ -158,6 +159,10 @@ test("display_buffer/basic", function () {
   chunks = rgb.readRectChunks(0, 0, 2, 2);
   test.equal(chunks.length, 2, "readRectChunks should split by configured chunkBytes");
   test.equal(chunks[0].length, 4, "readRectChunks should return ByteView chunks");
+  source = rgb.createSpanSource({ byteOrder: "be", chunkBytes: 4 });
+  test.ok(source && typeof source.setRect === "function", "createSpanSource should return a reusable span source");
+  test.equal(source.setRect(-1, -1, 2, 2), source, "span source setRect should return the source");
+  test.equal(source.setRect(0, 0, 2, 2), source, "span source setRect should allow repeated updates");
   var reusedChunks = rgb.readRectChunks(0, 0, 2, 2, { byteOrder: "be", reuse: true });
   var reusedFirst = reusedChunks[0];
 
@@ -178,6 +183,18 @@ test("display_buffer/basic", function () {
       test.equal(stats.bytes, 8, "spi.writeChunks should report transmitted bytes");
       test.equal(stats.chunks, 2, "spi.writeChunks should transmit byte-source chunks");
       test.equal(typeof stats.direct, "boolean", "spi.writeChunks should report whether direct DMA was used");
+    }
+    if (typeof device.writeSource === "function") {
+      var sourceStats = device.writeSource(source, { queueDepth: 2 });
+
+      test.equal(sourceStats.bytes, 8, "spi.writeSource should report transmitted bytes");
+      test.equal(sourceStats.chunks, 2, "spi.writeSource should transmit source spans");
+      test.equal(typeof sourceStats.direct, "boolean", "spi.writeSource should report whether direct DMA was used");
+
+      source.setRect(-1, -1, 2, 2);
+      sourceStats = device.writeSource(source, { queueDepth: 2 });
+      test.equal(sourceStats.bytes, 2, "spi.writeSource should use the clamped source rectangle");
+      test.equal(sourceStats.chunks, 1, "spi.writeSource should emit one clamped span");
     }
     device.close();
     bus.close();

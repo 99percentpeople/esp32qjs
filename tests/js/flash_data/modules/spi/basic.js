@@ -44,6 +44,7 @@ test("spi/basic", function () {
   test.ok(typeof device.transfer === "function", "SPIDevice.transfer should exist");
   test.ok(typeof device.write === "function", "SPIDevice.write should exist");
   test.ok(typeof device.writeChunks === "function", "SPIDevice.writeChunks should exist");
+  test.ok(typeof device.writeSource === "function", "SPIDevice.writeSource should exist");
   test.ok(typeof device.read === "function", "SPIDevice.read should exist");
 
   deviceStatus = device.status();
@@ -52,6 +53,13 @@ test("spi/basic", function () {
   test.equal(deviceStatus.cs, spi.DEFAULT_CS, "SPIDevice.status().cs should use DEFAULT_CS");
   test.equal(device.write([]), 0, "SPIDevice.write([]) should succeed");
   test.equal(device.writeChunks([]).chunks, 0, "SPIDevice.writeChunks([]) should succeed");
+  var writeSourceRejected = false;
+  try {
+    device.writeSource([]);
+  } catch (writeSourceError) {
+    writeSourceRejected = String(writeSourceError).indexOf("ByteSpanSource") >= 0;
+  }
+  test.ok(writeSourceRejected, "SPIDevice.writeSource should reject non-source inputs");
   test.equal(device.transfer([]).length, 0, "SPIDevice.transfer([]) should return an empty array");
   test.equal(device.read(0).length, 0, "SPIDevice.read(0) should return an empty array");
 

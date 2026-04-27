@@ -15,8 +15,10 @@
 #define JS_CLASS_SPI_BUS (JS_CLASS_USER + 8)
 #define JS_CLASS_SPI_DEVICE (JS_CLASS_USER + 9)
 #define JS_CLASS_BYTE_VIEW (JS_CLASS_USER + 10)
-#define JS_CLASS_DISPLAY_BUFFER (JS_CLASS_USER + 11)
-#define JS_CLASS_COUNT (JS_CLASS_USER + 12)
+#define JS_CLASS_BYTE_SPAN_SOURCE (JS_CLASS_USER + 11)
+#define JS_CLASS_DISPLAY_BUFFER (JS_CLASS_USER + 12)
+#define JS_CLASS_DISPLAY_FONT (JS_CLASS_USER + 13)
+#define JS_CLASS_COUNT (JS_CLASS_USER + 14)
 
 #define js_global_object js_global_object_base
 #define js_c_function_decl js_c_function_decl_base
@@ -106,6 +108,14 @@ static const JSPropDef js_byte_view_proto[] = {
 static const JSClassDef js_byte_view_class =
     JS_CLASS_DEF("ByteView", 0, js_byte_view_constructor, JS_CLASS_BYTE_VIEW, NULL, js_byte_view_proto, NULL, js_byte_view_finalizer);
 
+static const JSPropDef js_byte_span_source_proto[] = {
+    JS_CFUNC_DEF("setRect", 4, js_byte_span_source_set_rect),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_byte_span_source_class =
+    JS_CLASS_DEF("ByteSpanSource", 0, js_byte_span_source_constructor, JS_CLASS_BYTE_SPAN_SOURCE, NULL, js_byte_span_source_proto, NULL, js_byte_span_source_finalizer);
+
 #if CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
 static const JSPropDef js_display_font_proto[] = {
     JS_CGETSET_DEF("name", js_display_font_get_name, NULL),
@@ -156,6 +166,7 @@ static const JSPropDef js_display_buffer_proto[] = {
     JS_CFUNC_DEF("markDirty", 4, js_display_buffer_mark_dirty),
     JS_CFUNC_DEF("readRect", 5, js_display_buffer_read_rect),
     JS_CFUNC_DEF("readRectChunks", 5, js_display_buffer_read_rect_chunks),
+    JS_CFUNC_DEF("createSpanSource", 1, js_display_buffer_create_span_source),
     JS_PROP_END,
 };
 
@@ -383,6 +394,7 @@ static const JSPropDef js_spi_device_proto[] = {
     JS_CFUNC_DEF("transfer", 1, js_spi_device_transfer),
     JS_CFUNC_DEF("write", 1, js_spi_device_write),
     JS_CFUNC_DEF("writeChunks", 2, js_spi_device_write_chunks),
+    JS_CFUNC_DEF("writeSource", 2, js_spi_device_write_source),
     JS_CFUNC_DEF("read", 2, js_spi_device_read),
     JS_PROP_END,
 };
@@ -501,6 +513,7 @@ static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("_Deferred", &js_deferred_class),
     JS_PROP_CLASS_DEF("Stream", &js_stream_class),
     JS_PROP_CLASS_DEF("_ByteView", &js_byte_view_class),
+    JS_PROP_CLASS_DEF("_ByteSpanSource", &js_byte_span_source_class),
 #if CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
     JS_PROP_CLASS_DEF("DisplayFont", &js_display_font_class),
     JS_PROP_CLASS_DEF("DisplayBuffer", &js_display_buffer_class),

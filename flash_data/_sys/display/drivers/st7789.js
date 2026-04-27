@@ -307,6 +307,12 @@
     this.chunkBytes = chunkBytes;
     this.payload = null;
     this.nativeBuffer = createNativeBuffer(this, options, chunkBytes);
+    this.flushSource = typeof this.nativeBuffer.createSpanSource === "function"
+      ? this.nativeBuffer.createSpanSource({
+          byteOrder: "be",
+          chunkBytes: this.chunkBytes
+        })
+      : null;
     this.perfEnabled = toBool(options.perf, false);
     this.perfStats = newPerfStats();
     this.commandByte = makeByteBuffer(1);
@@ -687,6 +693,36 @@
       flushStartUs = nowUs();
       perf.flushCalls += 1;
     }
+    if (this.device && this.flushSource && typeof this.device.writeSource === "function") {
+      if (perf) {
+        stepStartUs = nowUs();
+      }
+      this._setWindow(x, y, width, height);
+      if (perf) {
+        perf.windowUs += nowUs() - stepStartUs;
+        stepStartUs = nowUs();
+      }
+      this.flushSource.setRect(x, y, width, height);
+      if (perf) {
+        perf.pixelUs += nowUs() - stepStartUs;
+        stepStartUs = nowUs();
+      }
+      writeGpio(this.dc, true);
+      chunkStats = this.device.writeSource(this.flushSource, {
+        queueDepth: this.deviceOptions.queueSize
+      });
+      if (perf) {
+        perf.dataUs += nowUs() - stepStartUs;
+        perf.chunks += chunkStats.chunks || 0;
+        perf.pixels += width * height;
+        perf.bytes += chunkStats.bytes || width * height * 2;
+        if (chunkStats.direct) {
+          perf.directFlushes += 1;
+        }
+        perf.totalFlushUs += nowUs() - flushStartUs;
+      }
+      return this;
+    }
     if (this.device && typeof this.device.writeChunks === "function") {
       if (perf) {
         stepStartUs = nowUs();
@@ -801,6 +837,7 @@
       this.bus = null;
     }
     if (this.nativeBuffer) {
+      this.flushSource = null;
       this.nativeBuffer.close();
       this.nativeBuffer = null;
     }

@@ -10,12 +10,12 @@ The API is split into two parts:
   JavaScript-side APIs loaded from LittleFS, currently including `display` and `ui`.
 - [docs/api-stability-plan.md](/home/zach/esp32qjs/docs/api-stability-plan.md)
   Draft long-term API plan covering freeze targets, modules that still need adjustment, and current next-step candidates.
-- [docs/display-zero-allocation-flush-plan.md](/home/zach/esp32qjs/docs/display-zero-allocation-flush-plan.md)
-  Proposed display flush design that avoids per-frame JS-visible chunk and `ByteView` allocation.
+- [docs/byte-span-source-generalization-plan.md](/home/zach/esp32qjs/docs/byte-span-source-generalization-plan.md)
+  Follow-up plan for keeping generic byte-span transport sources separate from display-specific span-source controls.
 
 Recommended reading order:
 
 1. `c-api.md` for the built-in runtime and transport APIs.
 2. `api-stability-plan.md` for the proposed long-term API direction and active roadmap.
-3. `display-zero-allocation-flush-plan.md` for the next display performance and memory-safety direction.
+3. `byte-span-source-generalization-plan.md` for the next transport-source cleanup before API freeze.
 4. `js-api.md` for higher-level JS helpers layered on top of the built-ins.

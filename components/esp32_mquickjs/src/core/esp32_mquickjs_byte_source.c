@@ -6,6 +6,7 @@
 #include "esp_heap_caps.h"
 
 #define ESP32_MQUICKJS_BYTE_VIEW_OWNER_KEY "__esp32qjsByteViewOwner"
+#define ESP32_MQUICKJS_BYTE_SPAN_SOURCE_OWNER_KEY "__esp32qjsByteSpanSourceOwner"
 #define ESP32_MQUICKJS_BYTE_VIEW_GC_PRESSURE_THRESHOLD 1024U
 
 typedef struct {
@@ -13,6 +14,12 @@ typedef struct {
     size_t length;
     uint8_t *owned_data;
 } esp32_mquickjs_byte_view_t;
+
+typedef struct {
+    const esp32_mquickjs_byte_span_source_object_ops_t *ops;
+    void *opaque;
+    bool closed;
+} esp32_mquickjs_byte_span_source_object_t;
 
 static size_t s_byte_view_gc_pressure;
 
@@ -48,6 +55,17 @@ static bool js_value_to_u32(JSContext *ctx, JSValue value, uint32_t *out_value)
     return true;
 }
 
+static bool js_value_to_i32(JSContext *ctx, JSValue value, int32_t *out_value)
+{
+    int raw_value = 0;
+
+    if (JS_ToInt32(ctx, &raw_value, value) != 0) {
+        return false;
+    }
+    *out_value = (int32_t)raw_value;
+    return true;
+}
+
 static esp32_mquickjs_byte_view_t *byte_view_from_value(JSContext *ctx,
                                                         JSValue value,
                                                         const char *api_name)
@@ -64,6 +82,24 @@ static esp32_mquickjs_byte_view_t *byte_view_from_value(JSContext *ctx,
         return NULL;
     }
     return view;
+}
+
+static esp32_mquickjs_byte_span_source_object_t *byte_span_source_from_value(JSContext *ctx,
+                                                                            JSValue value,
+                                                                            const char *api_name)
+{
+    esp32_mquickjs_byte_span_source_object_t *source;
+
+    if (JS_GetClassID(ctx, value) != JS_CLASS_BYTE_SPAN_SOURCE) {
+        JS_ThrowTypeError(ctx, "%s expects a ByteSpanSource", api_name);
+        return NULL;
+    }
+    source = JS_GetOpaque(ctx, value);
+    if (source == NULL || source->closed) {
+        JS_ThrowReferenceError(ctx, "%s failed because the ByteSpanSource is closed", api_name);
+        return NULL;
+    }
+    return source;
 }
 
 static JSValue byte_view_make(JSContext *ctx,
@@ -285,6 +321,85 @@ void esp32_mquickjs_release_byte_source_chunk(JSContext *ctx,
     chunk->source.owner = JS_UNDEFINED;
 }
 
+bool esp32_mquickjs_open_byte_span_source(JSContext *ctx,
+                                          JSValue value,
+                                          const char *api_name,
+                                          esp32_mquickjs_byte_span_source_t *out,
+                                          JSValue *out_error)
+{
+    esp32_mquickjs_byte_span_source_object_t *source;
+
+    if (out == NULL || out_error == NULL) {
+        return false;
+    }
+    memset(out, 0, sizeof(*out));
+    *out_error = JS_UNDEFINED;
+
+    source = byte_span_source_from_value(ctx, value, api_name);
+    if (source == NULL) {
+        *out_error = JS_EXCEPTION;
+        return false;
+    }
+    if (source->ops == NULL || source->ops->open == NULL) {
+        *out_error = JS_ThrowTypeError(ctx, "%s received a ByteSpanSource without an opener", api_name);
+        return false;
+    }
+    return source->ops->open(ctx, value, source->opaque, out, out_error);
+}
+
+JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx,
+                                            JSValue owner,
+                                            const esp32_mquickjs_byte_span_source_object_ops_t *ops,
+                                            void *opaque)
+{
+    JSGCRef object_ref;
+    JSValue *object;
+    esp32_mquickjs_byte_span_source_object_t *source;
+
+    if (ops == NULL || ops->open == NULL) {
+        if (ops != NULL && ops->destroy != NULL) {
+            ops->destroy(ctx, opaque);
+        }
+        return JS_ThrowInternalError(ctx, "ByteSpanSource requires an open callback");
+    }
+
+    object = JS_PushGCRef(ctx, &object_ref);
+    *object = JS_NewObjectClassUser(ctx, JS_CLASS_BYTE_SPAN_SOURCE);
+    if (JS_IsException(*object)) {
+        if (ops->destroy != NULL) {
+            ops->destroy(ctx, opaque);
+        }
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_EXCEPTION;
+    }
+
+    source = heap_caps_malloc(sizeof(*source), MALLOC_CAP_8BIT);
+    if (source == NULL) {
+        if (ops->destroy != NULL) {
+            ops->destroy(ctx, opaque);
+        }
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    source->ops = ops;
+    source->opaque = opaque;
+    source->closed = false;
+    JS_SetOpaque(ctx, *object, source);
+
+    if (!JS_IsUndefined(owner) &&
+        JS_IsException(JS_SetPropertyStr(ctx, *object, ESP32_MQUICKJS_BYTE_SPAN_SOURCE_OWNER_KEY, owner))) {
+        JS_SetOpaque(ctx, *object, NULL);
+        if (ops->destroy != NULL) {
+            ops->destroy(ctx, opaque);
+        }
+        heap_caps_free(source);
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_EXCEPTION;
+    }
+
+    return JS_PopGCRef(ctx, &object_ref);
+}
+
 JSValue esp32_mquickjs_new_byte_view(JSContext *ctx,
                                      JSValue owner,
                                      const uint8_t *data,
@@ -340,6 +455,14 @@ JSValue js_byte_view_constructor(JSContext *ctx, JSValue *this_val, int argc, JS
     return JS_ThrowTypeError(ctx, "ByteView cannot be constructed directly");
 }
 
+JSValue js_byte_span_source_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_ThrowTypeError(ctx, "ByteSpanSource cannot be constructed directly");
+}
+
 void js_byte_view_finalizer(JSContext *ctx, void *opaque)
 {
     esp32_mquickjs_byte_view_t *view = opaque;
@@ -351,6 +474,20 @@ void js_byte_view_finalizer(JSContext *ctx, void *opaque)
     }
     heap_caps_free(view->owned_data);
     heap_caps_free(view);
+}
+
+void js_byte_span_source_finalizer(JSContext *ctx, void *opaque)
+{
+    esp32_mquickjs_byte_span_source_object_t *source = opaque;
+
+    if (source == NULL) {
+        return;
+    }
+    source->closed = true;
+    if (source->ops != NULL && source->ops->destroy != NULL) {
+        source->ops->destroy(ctx, source->opaque);
+    }
+    heap_caps_free(source);
 }
 
 JSValue js_byte_view_get_length(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -397,4 +534,32 @@ JSValue js_byte_view_to_array(JSContext *ctx, JSValue *this_val, int argc, JSVal
     }
 
     return JS_PopGCRef(ctx, &array_ref);
+}
+
+JSValue js_byte_span_source_set_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    esp32_mquickjs_byte_span_source_object_t *source;
+    int32_t x;
+    int32_t y;
+    int32_t width;
+    int32_t height;
+
+    source = byte_span_source_from_value(ctx, *this_val, "ByteSpanSource.setRect()");
+    if (source == NULL) {
+        return JS_EXCEPTION;
+    }
+    if (argc < 4 ||
+        !js_value_to_i32(ctx, argv[0], &x) ||
+        !js_value_to_i32(ctx, argv[1], &y) ||
+        !js_value_to_i32(ctx, argv[2], &width) ||
+        !js_value_to_i32(ctx, argv[3], &height)) {
+        return JS_ThrowTypeError(ctx, "ByteSpanSource.setRect(x, y, width, height) expects integers");
+    }
+    if (source->ops == NULL || source->ops->set_rect == NULL) {
+        return JS_ThrowTypeError(ctx, "ByteSpanSource.setRect() is not supported by this source");
+    }
+    if (!source->ops->set_rect(ctx, source->opaque, x, y, width, height)) {
+        return JS_EXCEPTION;
+    }
+    return *this_val;
 }

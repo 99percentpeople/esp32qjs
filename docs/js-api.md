@@ -49,7 +49,7 @@ Supported `options` fields:
 - `spacing`
   Extra inter-character spacing for `drawText()`.
 
-The built-in display drivers require the native `displayBuffer` module. Drawing primitives are forwarded to the native buffer, while JavaScript manages fonts, colors, dirty/flush policy, and panel command sequencing. ST7789 uses a native RGB565 buffer and flushes `readRectChunks(...)` byte-source chunks through SPI `writeChunks(...)`. SSD1306 uses a native mono buffer and can flush chunks through I2C `writeChunks(...)` when needed.
+The built-in display drivers require the native `displayBuffer` module. Drawing primitives are forwarded to the native buffer, while JavaScript manages fonts, colors, dirty/flush policy, and panel command sequencing. ST7789 uses a retained RGB565 span source from `createSpanSource(...)` and flushes it through SPI `writeSource(...)`. SSD1306 uses a native mono buffer and can flush chunks through I2C `writeChunks(...)` when needed.
 
 The display stdlib loads `_sys/display/fonts/mono5x7.eqf` as `display.defaultFont`. Additional fonts can be loaded from LittleFS with `display.loadFont(path, name?)`. The file must use the EQF1 fixed bitmap format documented in the C API. Pass the returned font with `{ font }` to `drawText()` or `measureText()`.
 

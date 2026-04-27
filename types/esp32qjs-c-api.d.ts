@@ -11,6 +11,121 @@ declare namespace ESP32QJS {
   type RoutePattern = string | RegExp;
 
   /**
+   * Byte payload accepted by low-level transports.
+   *
+   * Plain array-like values are copied by the transport. Native `ByteView`
+   * values returned by modules such as `displayBuffer.readRect(...)` can be
+   * passed directly without first converting them to JavaScript arrays.
+   */
+  type ByteSource = ArrayLike<number> | ByteView;
+
+  /**
+   * Native byte view with a read-only JavaScript surface.
+   *
+   * The view keeps its native owner alive while synchronous transports consume
+   * it. Some producers reuse their backing storage on later exports, so keep a
+   * view only for immediate synchronous use unless the producer documents a
+   * snapshot. Use `toArray()` for inspection, compatibility code, or when a
+   * stable JavaScript copy is required.
+   */
+  interface ByteView {
+    readonly length: number;
+    readonly byteLength: number;
+    toArray(): number[];
+  }
+
+  /**
+   * Retained native byte span source.
+   *
+   * Producers such as `DisplayBuffer.createSpanSource(...)` expose this to let
+   * transports open byte spans on demand. `setRect(...)` updates the source's
+   * clamped export rectangle and returns the same source for reuse in flush
+   * loops.
+   */
+  interface ByteSpanSource {
+    setRect(x: number, y: number, width: number, height: number): ByteSpanSource;
+  }
+
+  type DisplayBufferFormat = "mono1" | "rgb565";
+  type DisplayBufferLayout = "linear" | "page-y8";
+  type DisplayBufferStorage = "auto" | "internal" | "psram" | "dma";
+  type DisplayByteOrder = "be" | "le" | "rgb565be" | "rgb565le";
+  type DisplayColor = number;
+  type DisplayPoint = { x: number; y: number } | readonly [number, number];
+  type DisplayPointList = ArrayLike<number> | ArrayLike<DisplayPoint>;
+
+  interface DisplayDirtyRect {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }
+
+  interface DisplayTextMetrics {
+    width: number;
+    height: number;
+    lines: number;
+  }
+
+  interface DisplayBufferCreateOptions {
+    width: number;
+    height: number;
+    format: DisplayBufferFormat;
+    layout?: DisplayBufferLayout;
+    storage?: DisplayBufferStorage;
+    stride?: number;
+    pageHeight?: number;
+    chunkBytes?: number;
+    foreground?: DisplayColor;
+    background?: DisplayColor;
+  }
+
+  interface DisplayBufferReadRectOptions {
+    byteOrder?: DisplayByteOrder;
+  }
+
+  interface DisplayBufferReadRectChunksOptions
+    extends DisplayBufferReadRectOptions {
+    chunkBytes?: number;
+    /**
+     * Let direct full-row exports reuse the internal chunk array and ByteView
+     * wrappers. Use only for immediate synchronous writes; reused chunks are not
+     * snapshots.
+     */
+    reuse?: boolean;
+  }
+
+  interface DisplaySpanSourceOptions extends DisplayBufferReadRectOptions {
+    chunkBytes?: number;
+  }
+
+  interface DisplayBezierOptions {
+    /** Segment count is clamped by the runtime to the supported range. */
+    segments?: number;
+  }
+
+  interface DisplayBitmap {
+    width: number;
+    height: number;
+    pixels: ArrayLike<number>;
+  }
+
+  interface DisplayBitmapOptions {
+    color?: DisplayColor;
+    /** Omit or pass `null` to keep off pixels transparent. */
+    background?: DisplayColor | null;
+  }
+
+  interface DisplayTextOptions {
+    /** Native font returned by `displayBuffer.loadFont(path)`. */
+    font: DisplayFont;
+    color?: DisplayColor;
+    /** Omit or pass `null` to keep glyph backgrounds transparent. */
+    background?: DisplayColor | null;
+    spacing?: number;
+  }
+
+  /**
    * Deferred helper created by the global `defer()` helper.
    *
    * @example
@@ -550,6 +665,197 @@ declare namespace ESP32QJS {
   }
 
   /**
+   * Native EQF1 fixed bitmap font loaded by `displayBuffer.loadFont(...)`.
+   */
+  interface DisplayFont {
+    name: string;
+    width: number;
+    height: number;
+    advance: number;
+    lineHeight: number;
+  }
+
+  /**
+   * Runtime class value for native fonts. Direct construction throws; use
+   * `displayBuffer.loadFont(path)`.
+   */
+  interface DisplayFontConstructor {
+    readonly prototype: DisplayFont;
+  }
+
+  /**
+   * Native pixel buffer for low-level display drivers.
+   *
+   * Pixel colors are packed numeric values: `mono1` uses `0` or `1`, while
+   * `rgb565` uses 16-bit RGB565 values. Drawing methods mutate the buffer, mark
+   * the affected dirty rectangle, and return the same buffer for chaining.
+   */
+  class DisplayBuffer {
+    private constructor();
+    readonly width: number;
+    readonly height: number;
+    readonly format: DisplayBufferFormat;
+    readonly layout: DisplayBufferLayout;
+    readonly stride: number;
+    readonly pageHeight: number;
+    readonly byteLength: number;
+
+    close(): boolean;
+    clear(color?: DisplayColor): this;
+    fill(color?: DisplayColor): this;
+    setPixel(x: number, y: number, color: DisplayColor): this;
+    getPixel(x: number, y: number): DisplayColor;
+    fillRect(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      color?: DisplayColor,
+    ): this;
+    drawCircle(
+      cx: number,
+      cy: number,
+      radius: number,
+      color?: DisplayColor,
+    ): this;
+    fillCircle(
+      cx: number,
+      cy: number,
+      radius: number,
+      color?: DisplayColor,
+    ): this;
+    drawEllipse(
+      cx: number,
+      cy: number,
+      rx: number,
+      ry: number,
+      color?: DisplayColor,
+    ): this;
+    fillEllipse(
+      cx: number,
+      cy: number,
+      rx: number,
+      ry: number,
+      color?: DisplayColor,
+    ): this;
+    drawRect(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      color?: DisplayColor,
+    ): this;
+    drawRoundRect(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      radius: number,
+      color?: DisplayColor,
+    ): this;
+    fillRoundRect(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      radius: number,
+      color?: DisplayColor,
+    ): this;
+    drawLine(
+      x0: number,
+      y0: number,
+      x1: number,
+      y1: number,
+      color?: DisplayColor,
+    ): this;
+    drawPolyline(points: DisplayPointList, color?: DisplayColor): this;
+    drawPolygon(points: DisplayPointList, color?: DisplayColor): this;
+    fillPolygon(points: DisplayPointList, color?: DisplayColor): this;
+    drawTriangle(
+      x0: number,
+      y0: number,
+      x1: number,
+      y1: number,
+      x2: number,
+      y2: number,
+      color?: DisplayColor,
+    ): this;
+    fillTriangle(
+      x0: number,
+      y0: number,
+      x1: number,
+      y1: number,
+      x2: number,
+      y2: number,
+      color?: DisplayColor,
+    ): this;
+    drawQuadraticBezier(
+      x0: number,
+      y0: number,
+      cx: number,
+      cy: number,
+      x1: number,
+      y1: number,
+      color?: DisplayColor,
+      options?: DisplayBezierOptions,
+    ): this;
+    drawCubicBezier(
+      x0: number,
+      y0: number,
+      c1x: number,
+      c1y: number,
+      c2x: number,
+      c2y: number,
+      x1: number,
+      y1: number,
+      color?: DisplayColor,
+      options?: DisplayBezierOptions,
+    ): this;
+    drawBitmap(
+      x: number,
+      y: number,
+      bitmap: DisplayBitmap,
+      options?: DisplayBitmapOptions,
+    ): this;
+    drawText(
+      x: number,
+      y: number,
+      text: string,
+      options: DisplayTextOptions,
+    ): this;
+    measureText(text: string, options: DisplayTextOptions): DisplayTextMetrics;
+    getDirty(): DisplayDirtyRect | null;
+    clearDirty(): this;
+    markDirty(x: number, y: number, width: number, height: number): this;
+    readRect(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      options?: DisplayBufferReadRectOptions,
+    ): ByteView;
+    readRectChunks(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      options?: DisplayBufferReadRectChunksOptions,
+    ): ByteView[];
+    createSpanSource(options?: DisplaySpanSourceOptions): ByteSpanSource;
+  }
+
+  /**
+   * Native display-buffer module. Exposed only when
+   * `esp32.info().features.displayBuffer` is enabled.
+   */
+  interface DisplayBufferModule {
+    readonly MONO1: "mono1";
+    readonly RGB565: "rgb565";
+    create(options: DisplayBufferCreateOptions): DisplayBuffer;
+    loadFont(path: string): DisplayFont;
+  }
+
+  /**
    * Runtime information returned by `esp32.info()`.
    */
   interface Esp32Features {
@@ -560,6 +866,7 @@ declare namespace ESP32QJS {
     dac: boolean;
     i2c: boolean;
     spi: boolean;
+    displayBuffer: boolean;
     wifi: boolean;
     http: boolean;
     httpServer: boolean;
@@ -631,6 +938,12 @@ declare namespace ESP32QJS {
     internalPullup?: boolean;
   }
 
+  interface I2CWriteChunksStats {
+    chunks: number;
+    bytes: number;
+    totalUs: number;
+  }
+
   /**
    * Open I2C bus handle.
    *
@@ -644,11 +957,22 @@ declare namespace ESP32QJS {
     close(): boolean;
     status(): I2CStatus;
     scan(): number[];
-    write(addr: number, data: ArrayLike<number>): number;
+    /** Write one byte source to a 7-bit device address. */
+    write(addr: number, data: ByteSource): number;
+    /**
+     * Write byte-source chunks with one temporary device handle.
+     *
+     * This is useful for chunks returned by `DisplayBuffer.readRectChunks(...)`
+     * and for other producers that already split payloads.
+     */
+    writeChunks(
+      addr: number,
+      chunks: ArrayLike<ByteSource>,
+    ): I2CWriteChunksStats;
     read(addr: number, length: number): number[];
     writeRead(
       addr: number,
-      writeData: ArrayLike<number>,
+      writeData: ByteSource,
       readLength: number,
     ): number[];
   }
@@ -714,6 +1038,26 @@ declare namespace ESP32QJS {
     lsbFirst?: boolean;
   }
 
+  interface SPIWriteOptions {
+    /** Number of queued transactions to keep in flight. */
+    queueDepth?: number;
+  }
+
+  /**
+   * Timing and transfer counters returned by SPI bulk-write helpers.
+   */
+  interface SPIWriteStats {
+    chunks: number;
+    bytes: number;
+    prepUs: number;
+    queueUs: number;
+    waitUs: number;
+    transferUs: number;
+    totalUs: number;
+    queueDepth: number;
+    direct: boolean;
+  }
+
   /**
    * Open SPI bus handle.
    *
@@ -738,8 +1082,24 @@ declare namespace ESP32QJS {
   interface SPIDevice {
     close(): boolean;
     status(): SPIDeviceStatus;
-    transfer(data: ArrayLike<number>): number[];
-    write(data: ArrayLike<number>): number;
+    transfer(data: ByteSource): number[];
+    write(data: ByteSource): number;
+    /**
+     * Write an array-like list of byte sources, reusing queued SPI
+     * transactions for larger display flushes.
+     */
+    writeChunks(
+      chunks: ArrayLike<ByteSource>,
+      options?: SPIWriteOptions,
+    ): SPIWriteStats;
+    /**
+     * Write spans opened from a retained native source without materializing a
+     * JavaScript chunk array in the flush loop.
+     */
+    writeSource(
+      source: ByteSpanSource,
+      options?: SPIWriteOptions,
+    ): SPIWriteStats;
     read(length: number, fillByte?: number): number[];
   }
 
@@ -975,6 +1335,8 @@ declare global {
   const Stream: typeof ESP32QJS.Stream;
   const HttpServer: typeof ESP32QJS.HttpServer;
   const StaticFileHandler: typeof ESP32QJS.StaticFileHandler;
+  const DisplayFont: ESP32QJS.DisplayFontConstructor;
+  const DisplayBuffer: typeof ESP32QJS.DisplayBuffer;
 
   /** LittleFS script root exposed to JavaScript when `esp32.info().features.fs` is enabled. */
   const SCRIPTS_DIR: string;
@@ -1062,6 +1424,8 @@ declare global {
   const i2c: ESP32QJS.I2CModule;
   /** SPI master bus/device helpers. */
   const spi: ESP32QJS.SPIModule;
+  /** Native display-buffer helpers. Exposed only when `esp32.info().features.displayBuffer` is enabled. */
+  const displayBuffer: ESP32QJS.DisplayBufferModule;
   /** Wi-Fi station helpers. */
   const wifi: ESP32QJS.WiFiModule;
   /** HTTP client/server namespace. Exposed when either `esp32.info().features.http` or `.httpServer` is enabled. */
