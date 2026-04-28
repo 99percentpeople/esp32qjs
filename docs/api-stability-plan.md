@@ -6,7 +6,7 @@ It is intentionally more opinionated than [docs/c-api.md](/home/zach/esp32qjs/do
 This plan covers:
 
 - built-in C-side host APIs exported by the firmware runtime
-- board/peripheral bindings such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, and `spi`
+- board/peripheral bindings such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, and `uart`
 - low-level native helpers such as `displayBuffer`
 - transport/runtime helpers such as `wifi`, `http`, timers, and `load(...)`
 
@@ -16,7 +16,7 @@ It does not treat JS-side LittleFS libraries such as `display` and `ui` as firmw
 
 The stable API should satisfy these rules:
 
-- Module names stay small and literal. Prefer raw ESP-IDF or platform names such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `wifi`, `http`, `esp32`, `fs`.
+- Module names stay small and literal. Prefer raw ESP-IDF or platform names such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `wifi`, `http`, `esp32`, `fs`.
 - Built-in host APIs stay low-level. Board-independent drivers, widgets, protocol stacks, debounce logic, animation helpers, and other policy belong in JavaScript.
 - Additive change is preferred. Once a module shape is frozen, new fields and methods may be added, but existing names and semantics should not be renamed or weakened.
 - Host modules should be board-selectable features. Each optional module should be enabled or disabled by a `CONFIG_...` feature macro and chosen per board profile under `configs/boards/<board>/sdkconfig.defaults`.
@@ -66,6 +66,7 @@ Recommended feature symbols:
 - `CONFIG_ESP32_MQUICKJS_FEATURE_DAC`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_I2C`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_SPI`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_UART`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_WIFI`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_HTTP`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER`
@@ -78,6 +79,7 @@ Recommended dependency rules:
 - `FEATURE_I2C` depends on `SOC_I2C_SUPPORTED`
 - `FEATURE_LEDC` depends on `SOC_LEDC_SUPPORTED`
 - `FEATURE_SPI` depends on `SOC_GPSPI_SUPPORTED`
+- `FEATURE_UART` depends on `SOC_UART_SUPPORTED`
 - `FEATURE_WIFI` depends on `SOC_WIFI_SUPPORTED`
 - `FEATURE_HTTP` depends on `FEATURE_WIFI` in the current firmware, unless another network backend is introduced later
 - `FEATURE_HTTP_SERVER` depends on `FEATURE_WIFI` in the current firmware
@@ -100,6 +102,7 @@ print(JSON.stringify(esp32.info().features));
 //   dac: false,
 //   i2c: true,
 //   spi: true,
+//   uart: true,
 //   displayBuffer: true,
 //   wifi: true,
 //   http: true,
@@ -170,12 +173,12 @@ Built-in modules and types currently in scope:
 - Global helpers: `help`, `load`, `defer`, `waitFor`, `sleep`, `delay`, `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`, `gc`
 - Data/runtime types: `Headers`, `Request`, `Response`, `Stream`
 - Filesystem/runtime modules: `fs`, `esp32`
-- Peripheral modules: `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`
+- Peripheral modules: `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`
 - Low-level graphics buffer modules: `displayBuffer`
 - Connectivity modules: `wifi`, `http`, `HttpServer`, `StaticFileHandler`
 - JS-side libraries outside the firmware ABI: `display`, `ui`
 
-In the long-term plan, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `displayBuffer`, `wifi`, `http`, and `httpServer` should all be treated as optional host features rather than unconditional globals.
+In the long-term plan, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `displayBuffer`, `wifi`, `http`, and `httpServer` should all be treated as optional host features rather than unconditional globals.
 
 ## Freeze Principles By Area
 
@@ -445,6 +448,29 @@ Remaining freeze work:
 - Keep display flush coverage for `writeSource(...)` and compatibility coverage for `writeChunks(...)`.
 - Document any DMA staging behavior as implementation detail, not as a JS-visible display shortcut.
 
+### `uart`
+
+Status: `Candidate for freeze`
+
+UART follows the same object-handle direction as I2C and SPI, but remains a synchronous TTL peripheral API rather than a `Stream`.
+
+Recommended stable target:
+
+- Keep the top-level `uart` module as the factory and constants container.
+- Let `uart.open(options?)` return a `UARTPort`, using board/profile default `port`, `tx`, `rx`, and `baud` values when no override is supplied.
+- Keep the first stable surface synchronous and explicit:
+  `UARTPort.write(...)`, `UARTPort.writeChunks(...)`, `UARTPort.writeSource(...)`, `UARTPort.read(...)`, `UARTPort.available()`, `UARTPort.flush(...)`, and `UARTPort.clearRx()`.
+- Keep `write(...)` on `ByteSource`, `writeChunks(...)` on chunk arrays, and `writeSource(...)` on generic `ByteSpanSource`; UART should not inspect display-buffer internals.
+- Keep explicit `close()` as the primary lifecycle boundary and stale-handle errors after close.
+- Gate the module behind `FEATURE_UART`.
+
+Intentional non-goals for the first stable UART layer:
+
+- no Stream adapter yet
+- no hardware RTS/CTS flow control
+- no RS485 mode
+- no pattern detection or event queue surface
+
 ### `displayBuffer`
 
 Status: `Candidate for freeze`
@@ -635,7 +661,7 @@ Recommended order for stabilization:
 1. Freeze now:
    `help/load/defer/waitFor/timers`, `fs`, `Stream`, `Headers`, `Request`, `Response`, `esp32`, `gpio`, `adc`
 2. Candidate for freeze after focused validation:
-   `i2c`, `spi`, `displayBuffer`, `wifi`, `http`
+   `i2c`, `spi`, `uart`, `displayBuffer`, `wifi`, `http`
 3. Adjust before freeze:
    `ledc`, `dac`
 
@@ -646,6 +672,6 @@ Recommended implementation order from this plan:
 1. Tighten `ledc` status semantics so status objects never imply configuration that did not happen, then decide whether low-speed mode is intentionally fixed for the first stable API.
 2. Validate `dac` lifecycle and status on an `esp32` or `esp32s2` board before calling the module stable.
 3. Finish freeze coverage for the current byte payload paths: `DisplayBuffer.createSpanSource(...)`, `SPIDevice.writeSource(...)`, `displayBuffer.readRectChunks(...)`, `SPIDevice.writeChunks(...)`, and `I2CBus.writeChunks(...)`.
-4. Keep `i2c`, `spi`, `displayBuffer`, `wifi`, and `http` reference docs and TypeScript definitions aligned with their current implementation before marking them stable.
+4. Keep `i2c`, `spi`, `uart`, `displayBuffer`, `wifi`, and `http` reference docs and TypeScript definitions aligned with their current implementation before marking them stable.
 5. Improve JS display demo smoke coverage so native drawing, mapped fonts, transparent text, dirty bounds, and chunked flushes are exercised together.
 6. Consider `displayBuffer` follow-up features only when a measured workload needs them: grayscale formats, `copyFrom(...)`, `blitFrom(...)`, multi-rect dirty tracking, or native clipping.

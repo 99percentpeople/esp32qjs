@@ -89,6 +89,14 @@ JS_TEST_MODULES = (
         ),
         required_features=("spi",),
     ),
+    JsTestModule(
+        "uart",
+        (
+            JsTestCase("modules/uart/basic.js"),
+            JsTestCase("modules/uart/loopback.js", required_capabilities=("loopback",)),
+        ),
+        required_features=("uart",),
+    ),
     JsTestModule("timers", (JsTestCase("modules/timers/runtime.js"),)),
     JsTestModule("fs", (JsTestCase("modules/fs/filesystem.js"),), required_features=("fs",)),
     JsTestModule("stream", (JsTestCase("modules/stream/stream.js"),)),
@@ -2026,7 +2034,7 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, Board
     test.add_argument(
         "--loopback",
         action="store_true",
-        help="Enable JS cases that require physical loopback wiring, such as SPI MOSI-to-MISO validation.",
+        help="Enable JS cases that require physical loopback wiring, such as SPI MOSI-to-MISO or UART TX-to-RX validation.",
     )
     test.add_argument(
         "--no-flash-firmware",

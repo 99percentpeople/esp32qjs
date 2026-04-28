@@ -379,6 +379,71 @@ TEST_JS_CONFIG='{"spiLoopback":{"sclk":1,"mosi":2,"miso":2}}' \
 python scripts/remote.py test --scope js --module spi --loopback
 ```
 
+## `uart` Module
+
+This module exposes synchronous TTL UART ports. It is intended for bounded peripheral exchanges and byte handoff; `Stream` remains the async/file/http-style IO abstraction.
+
+- `uart.DEFAULT_PORT`
+  Board/profile default UART peripheral.
+- `uart.DEFAULT_TX`
+  Board/profile default TX GPIO. This can be `-1` when TX must be supplied explicitly.
+- `uart.DEFAULT_RX`
+  Board/profile default RX GPIO. This can be `-1` when RX must be supplied explicitly.
+- `uart.DEFAULT_BAUD`
+  Default baud rate, `115200`.
+- `uart.DEFAULT_RX_BUFFER_SIZE`
+  Default UART driver RX buffer size.
+- `uart.DEFAULT_TX_BUFFER_SIZE`
+  Default UART driver TX buffer size.
+- `uart.DEFAULT_TIMEOUT_MS`
+  Default timeout for `read()` and `flush()`.
+- `uart.open(options?)`
+  Open one UART port and return a `UARTPort`. `options` can include `{ port, tx, rx, baud, dataBits, parity, stopBits, rxBufferSize, txBufferSize, timeoutMs }`. `parity` is `"none"`, `"even"`, or `"odd"`; `stopBits` is `1`, `1.5`, or `2`. Opening an already-open UART port throws.
+
+`UARTPort` methods:
+
+- `port.status()`
+  Return `{ opened, port, tx, rx, baud, dataBits, parity, stopBits, rxBufferSize, txBufferSize, timeoutMs }`.
+- `port.close()`
+  Close the driver and make the JS object stale. GC finalization also releases forgotten ports eventually, but explicit `close()` remains the intended lifecycle boundary.
+- `port.write(data)`
+  Write an array-like sequence of bytes or native byte view and return the number of bytes accepted by the UART driver.
+- `port.writeChunks(chunks)`
+  Write an array-like list of byte-source chunks and return `{ chunks, bytes, totalUs }`.
+- `port.writeSource(source)`
+  Write spans from a generic `ByteSpanSource`, such as `DisplayBuffer.createSpanSource(...)`, and return `{ chunks, bytes, totalUs }`.
+- `port.read(length, timeoutMs = uart.DEFAULT_TIMEOUT_MS)`
+  Read up to `length` bytes and return the bytes actually received as a JavaScript array.
+- `port.available()`
+  Return the number of bytes currently buffered for reading.
+- `port.flush(timeoutMs = uart.DEFAULT_TIMEOUT_MS)`
+  Wait for pending TX bytes to leave the UART driver and hardware FIFO.
+- `port.clearRx()`
+  Discard buffered RX bytes.
+
+Example:
+
+```js
+var port = uart.open({
+  port: uart.DEFAULT_PORT,
+  tx: uart.DEFAULT_TX,
+  rx: uart.DEFAULT_RX,
+  baud: 115200,
+});
+
+port.write([0x41, 0x54, 0x0d, 0x0a]);
+port.flush();
+print(JSON.stringify(port.read(64, 500)));
+port.close();
+```
+
+For automated loopback validation, wire TX to RX and run:
+
+```bash
+TEST_JS_CONFIG='{"uartLoopback":{"port":1,"tx":43,"rx":44}}' \
+python scripts/remote.py test --scope js --module uart --loopback
+```
+
 ## `displayBuffer` Module
 
 This module exposes native display buffers for heavy pixel work. It is registered only when `esp32.info().features.displayBuffer` is enabled. Display drivers still own SPI/I2C commands and flush policy; `displayBuffer` only owns pixels and export bytes.
@@ -521,7 +586,7 @@ Export options:
 - `reuse`
   Boolean hint for `readRectChunks(...)`. When true and the rectangle can be exported as direct full rows, the returned chunk array and ByteView wrappers may be reused by the same `DisplayBuffer` on later calls. Use this only for immediate synchronous writes; do not keep old reused chunk arrays as snapshots.
 
-Native byte views expose `length`, `byteLength`, and `toArray()`. They can be passed directly to `spi` and `i2c` writes without converting to a JavaScript array.
+Native byte views expose `length`, `byteLength`, and `toArray()`. They can be passed directly to `spi`, `i2c`, and `uart` writes without converting to a JavaScript array.
 For high-frequency SPI display flushes, prefer `DisplayBuffer.createSpanSource(...)` with `SPIDevice.writeSource(...)`. `readRect(...)` and `readRectChunks(...)` remain useful for inspection, diagnostics, compatibility, and I2C chunk writes. Transport modules consume generic byte sources or span sources and do not inspect display buffer objects.
 
 Example:
@@ -859,7 +924,7 @@ if (ref) {
 - `esp32.info()`
   Return board/chip identity plus memory/runtime fields:
   `{ board, chip, features, userLedPin, userLedActiveLow, scriptsDir, flashSize, psramEnabled, psramSize, freePsram, totalInternalHeap, freeInternalHeap, jsHeapSize, jsHeapRegion, littlefsMounted, autoRunIndexJs, formatLittlefsOnMountFail, freeHeap, jsTimeMs }`.
-  `features` is `{ fs, gpio, ledc, adc, dac, i2c, spi, displayBuffer, wifi, http, httpServer, staticFileHandler }` and is the stable way to discover which optional host modules or composite helpers were compiled into the firmware for the current board.
+  `features` is `{ fs, gpio, ledc, adc, dac, i2c, spi, uart, displayBuffer, wifi, http, httpServer, staticFileHandler }` and is the stable way to discover which optional host modules or composite helpers were compiled into the firmware for the current board.
 - `esp32.millis()`
   Return monotonic milliseconds from `esp_timer`.
 - `esp32.micros()`

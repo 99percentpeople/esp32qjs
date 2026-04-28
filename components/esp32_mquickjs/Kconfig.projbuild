@@ -59,6 +59,14 @@ config ESP32_MQUICKJS_FEATURE_SPI
         Enable SPI master bus/device bindings such as spi.openBus() and
         SPIDevice.transfer().
 
+config ESP32_MQUICKJS_FEATURE_UART
+    bool "Enable uart module"
+    default y if SOC_UART_SUPPORTED
+    depends on SOC_UART_SUPPORTED
+    help
+        Enable synchronous UART port bindings such as uart.open(),
+        UARTPort.write(), and UARTPort.read().
+
 config ESP32_MQUICKJS_FEATURE_WIFI
     bool "Enable wifi module"
     default y if SOC_WIFI_SUPPORTED
@@ -250,6 +258,65 @@ config ESP32_MQUICKJS_SPI_MAX_DEVICES_PER_BUS
     depends on ESP32_MQUICKJS_FEATURE_SPI
     help
         Maximum concurrently opened SPIDevice handles tracked per SPI bus.
+
+config ESP32_MQUICKJS_UART_DEFAULT_PORT
+    int "Default UART port"
+    range 0 2
+    default 1
+    depends on ESP32_MQUICKJS_FEATURE_UART
+    help
+        Default UART peripheral number used by uart.open().
+
+config ESP32_MQUICKJS_UART_DEFAULT_TX_PIN
+    int "Default UART TX GPIO"
+    range -1 48
+    default -1
+    depends on ESP32_MQUICKJS_FEATURE_UART
+    help
+        Default TX pin used by uart.open(). Use -1 when TX must be supplied
+        explicitly.
+
+config ESP32_MQUICKJS_UART_DEFAULT_RX_PIN
+    int "Default UART RX GPIO"
+    range -1 48
+    default -1
+    depends on ESP32_MQUICKJS_FEATURE_UART
+    help
+        Default RX pin used by uart.open(). Use -1 when RX must be supplied
+        explicitly.
+
+config ESP32_MQUICKJS_UART_DEFAULT_BAUD
+    int "Default UART baud rate"
+    range 300 5000000
+    default 115200
+    depends on ESP32_MQUICKJS_FEATURE_UART
+    help
+        Default baud rate used by uart.open().
+
+config ESP32_MQUICKJS_UART_DEFAULT_RX_BUFFER_SIZE
+    int "Default UART RX buffer size"
+    range 129 16384
+    default 1024
+    depends on ESP32_MQUICKJS_FEATURE_UART
+    help
+        Default UART driver RX buffer size in bytes.
+
+config ESP32_MQUICKJS_UART_DEFAULT_TX_BUFFER_SIZE
+    int "Default UART TX buffer size"
+    range 0 16384
+    default 1024
+    depends on ESP32_MQUICKJS_FEATURE_UART
+    help
+        Default UART driver TX buffer size in bytes. Zero disables the driver
+        TX ring buffer and writes directly through the hardware FIFO.
+
+config ESP32_MQUICKJS_UART_DEFAULT_TIMEOUT_MS
+    int "Default UART read/flush timeout (ms)"
+    range 0 5000
+    default 100
+    depends on ESP32_MQUICKJS_FEATURE_UART
+    help
+        Default timeout used by UARTPort.read() and UARTPort.flush().
 
 config ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS
     int "Default Wi-Fi connect timeout (ms)"

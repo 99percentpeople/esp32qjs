@@ -66,6 +66,8 @@ static JSValue esp32_make_features_object(JSContext *ctx)
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_I2C)) ||
         !esp32_mquickjs_set_property(ctx, *features, "spi",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_SPI)) ||
+        !esp32_mquickjs_set_property(ctx, *features, "uart",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_UART)) ||
         !esp32_mquickjs_set_property(ctx, *features, "wifi",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_WIFI)) ||
         !esp32_mquickjs_set_property(ctx, *features, "httpServer",

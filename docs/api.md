@@ -5,7 +5,7 @@ This project exposes a small JavaScript runtime with an optional REPL. Run `help
 The API is split into two parts:
 
 - [docs/c-api.md](/home/zach/esp32qjs/docs/c-api.md)
-  C-side host APIs exported by the firmware runtime, including global helpers, `fs`, `Stream`, `Request`, `Response`, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `displayBuffer`, `esp32`, `wifi`, and `http`.
+  C-side host APIs exported by the firmware runtime, including global helpers, `fs`, `Stream`, `Request`, `Response`, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `displayBuffer`, `esp32`, `wifi`, and `http`.
 - [docs/js-api.md](/home/zach/esp32qjs/docs/js-api.md)
   JavaScript-side APIs loaded from LittleFS, currently including `display` and `ui`.
 - [docs/api-stability-plan.md](/home/zach/esp32qjs/docs/api-stability-plan.md)

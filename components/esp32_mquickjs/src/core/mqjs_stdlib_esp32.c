@@ -14,12 +14,13 @@
 #define JS_CLASS_I2C_BUS (JS_CLASS_USER + 7)
 #define JS_CLASS_SPI_BUS (JS_CLASS_USER + 8)
 #define JS_CLASS_SPI_DEVICE (JS_CLASS_USER + 9)
-#define JS_CLASS_BYTE_VIEW (JS_CLASS_USER + 10)
-#define JS_CLASS_BYTE_SPAN_SOURCE (JS_CLASS_USER + 11)
-#define JS_CLASS_DISPLAY_BUFFER_SPAN_SOURCE (JS_CLASS_USER + 12)
-#define JS_CLASS_DISPLAY_BUFFER (JS_CLASS_USER + 13)
-#define JS_CLASS_DISPLAY_FONT (JS_CLASS_USER + 14)
-#define JS_CLASS_COUNT (JS_CLASS_USER + 15)
+#define JS_CLASS_UART_PORT (JS_CLASS_USER + 10)
+#define JS_CLASS_BYTE_VIEW (JS_CLASS_USER + 11)
+#define JS_CLASS_BYTE_SPAN_SOURCE (JS_CLASS_USER + 12)
+#define JS_CLASS_DISPLAY_BUFFER_SPAN_SOURCE (JS_CLASS_USER + 13)
+#define JS_CLASS_DISPLAY_BUFFER (JS_CLASS_USER + 14)
+#define JS_CLASS_DISPLAY_FONT (JS_CLASS_USER + 15)
+#define JS_CLASS_COUNT (JS_CLASS_USER + 16)
 
 #define js_global_object js_global_object_base
 #define js_c_function_decl js_c_function_decl_base
@@ -438,6 +439,39 @@ static const JSClassDef js_spi_obj =
     JS_OBJECT_DEF("spi", js_spi);
 #endif
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_UART
+static const JSPropDef js_uart_port_proto[] = {
+    JS_CFUNC_DEF("close", 0, js_uart_port_close),
+    JS_CFUNC_DEF("status", 0, js_uart_port_status),
+    JS_CFUNC_DEF("write", 1, js_uart_port_write),
+    JS_CFUNC_DEF("writeChunks", 1, js_uart_port_write_chunks),
+    JS_CFUNC_DEF("writeSource", 1, js_uart_port_write_source),
+    JS_CFUNC_DEF("read", 2, js_uart_port_read),
+    JS_CFUNC_DEF("available", 0, js_uart_port_available),
+    JS_CFUNC_DEF("flush", 1, js_uart_port_flush),
+    JS_CFUNC_DEF("clearRx", 0, js_uart_port_clear_rx),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_uart_port_class =
+    JS_CLASS_DEF("UARTPort", 0, js_uart_port_constructor, JS_CLASS_UART_PORT, NULL, js_uart_port_proto, NULL, js_uart_port_finalizer);
+
+static const JSPropDef js_uart[] = {
+    JS_CGETSET_DEF("DEFAULT_PORT", js_uart_get_default_port, NULL),
+    JS_CGETSET_DEF("DEFAULT_TX", js_uart_get_default_tx, NULL),
+    JS_CGETSET_DEF("DEFAULT_RX", js_uart_get_default_rx, NULL),
+    JS_CGETSET_DEF("DEFAULT_BAUD", js_uart_get_default_baud, NULL),
+    JS_CGETSET_DEF("DEFAULT_RX_BUFFER_SIZE", js_uart_get_default_rx_buffer_size, NULL),
+    JS_CGETSET_DEF("DEFAULT_TX_BUFFER_SIZE", js_uart_get_default_tx_buffer_size, NULL),
+    JS_CGETSET_DEF("DEFAULT_TIMEOUT_MS", js_uart_get_default_timeout_ms, NULL),
+    JS_CFUNC_DEF("open", 1, js_uart_open),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_uart_obj =
+    JS_OBJECT_DEF("uart", js_uart);
+#endif
+
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
 static const JSPropDef js_wifi_async[] = {
     JS_CFUNC_DEF("connect", 4, js_wifi_async_connect),
@@ -559,6 +593,10 @@ static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("spi", &js_spi_obj),
     JS_PROP_CLASS_DEF("SPIBus", &js_spi_bus_class),
     JS_PROP_CLASS_DEF("SPIDevice", &js_spi_device_class),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_UART
+    JS_PROP_CLASS_DEF("uart", &js_uart_obj),
+    JS_PROP_CLASS_DEF("UARTPort", &js_uart_port_class),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     JS_PROP_CLASS_DEF("wifi", &js_wifi_obj),

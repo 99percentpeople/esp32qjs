@@ -872,6 +872,7 @@ declare namespace ESP32QJS {
     dac: boolean;
     i2c: boolean;
     spi: boolean;
+    uart: boolean;
     displayBuffer: boolean;
     wifi: boolean;
     http: boolean;
@@ -1124,6 +1125,77 @@ declare namespace ESP32QJS {
     readonly DEFAULT_QUEUE_SIZE: number;
     readonly DEFAULT_MAX_TRANSFER_SIZE: number;
     openBus(options?: SPIOpenBusOptions): SPIBus;
+  }
+
+  type UARTParity = "none" | "even" | "odd";
+  type UARTStopBits = 1 | 1.5 | 2;
+
+  /**
+   * UART port state.
+   */
+  interface UARTStatus {
+    opened: boolean;
+    port: number;
+    tx: number;
+    rx: number;
+    baud: number;
+    dataBits: 5 | 6 | 7 | 8;
+    parity: UARTParity;
+    stopBits: UARTStopBits;
+    rxBufferSize: number;
+    txBufferSize: number;
+    timeoutMs: number;
+  }
+
+  /**
+   * UART open options.
+   */
+  interface UARTOpenOptions {
+    port?: number;
+    tx?: number;
+    rx?: number;
+    baud?: number;
+    dataBits?: 5 | 6 | 7 | 8;
+    parity?: UARTParity;
+    stopBits?: UARTStopBits;
+    rxBufferSize?: number;
+    txBufferSize?: number;
+    timeoutMs?: number;
+  }
+
+  interface UARTWriteStats {
+    chunks: number;
+    bytes: number;
+    totalUs: number;
+  }
+
+  /**
+   * Open synchronous UART port handle.
+   */
+  interface UARTPort {
+    close(): boolean;
+    status(): UARTStatus;
+    write(data: ByteSource): number;
+    writeChunks(chunks: ArrayLike<ByteSource>): UARTWriteStats;
+    writeSource(source: ByteSpanSource): UARTWriteStats;
+    read(length: number, timeoutMs?: number): number[];
+    available(): number;
+    flush(timeoutMs?: number): boolean;
+    clearRx(): boolean;
+  }
+
+  /**
+   * UART factory and constants.
+   */
+  interface UARTModule {
+    readonly DEFAULT_PORT: number;
+    readonly DEFAULT_TX: number;
+    readonly DEFAULT_RX: number;
+    readonly DEFAULT_BAUD: number;
+    readonly DEFAULT_RX_BUFFER_SIZE: number;
+    readonly DEFAULT_TX_BUFFER_SIZE: number;
+    readonly DEFAULT_TIMEOUT_MS: number;
+    open(options?: UARTOpenOptions): UARTPort;
   }
 
   /**
@@ -1430,6 +1502,8 @@ declare global {
   const i2c: ESP32QJS.I2CModule;
   /** SPI master bus/device helpers. */
   const spi: ESP32QJS.SPIModule;
+  /** Synchronous UART port helpers. */
+  const uart: ESP32QJS.UARTModule;
   /** Native display-buffer helpers. Exposed only when `esp32.info().features.displayBuffer` is enabled. */
   const displayBuffer: ESP32QJS.DisplayBufferModule;
   /** Wi-Fi station helpers. */

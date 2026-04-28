@@ -36,6 +36,7 @@ test("esp32/runtime", function () {
   expectFeature("dac", hasObject("dac"));
   expectFeature("i2c", hasObject("i2c"));
   expectFeature("spi", hasObject("spi"));
+  expectFeature("uart", hasObject("uart"));
   expectFeature("displayBuffer", hasObject("displayBuffer"));
   expectFeature("wifi", hasObject("wifi"));
   expectFeature("http", hasObject("http") && typeof globalThis.fetch === "function");
