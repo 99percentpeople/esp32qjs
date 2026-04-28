@@ -351,7 +351,7 @@ bus.close();
 - `device.writeChunks(chunks, options?)`
   Queue an array-like list of byte-source chunks for write-only SPI transfers. `options.queueDepth` defaults to `2` and is capped by the device queue size. DMA-capable chunks are queued directly; other chunks are copied into DMA-capable staging buffers. The method returns `{ chunks, bytes, prepUs, queueUs, waitUs, transferUs, totalUs, queueDepth, direct }`.
 - `device.writeSource(source, options?)`
-  Queue spans from a retained native byte span source, such as `DisplayBuffer.createSpanSource(...)`, without materializing a JavaScript chunk array. `options.queueDepth` and the returned stats object match `writeChunks(...)`.
+  Queue spans from a retained native `ByteSpanSource`, such as `DisplayBuffer.createSpanSource(...)`, without materializing a JavaScript chunk array. SPI treats the source as a generic transport capability; it does not inspect display-buffer internals. `options.queueDepth` and the returned stats object match `writeChunks(...)`.
 - `device.read(length, fillByte = 0)`
   Clock `length` bytes and return the bytes read from MISO. `fillByte` controls the dummy value shifted out on MOSI while reading.
 
@@ -449,7 +449,12 @@ Formats and layouts:
 - `readRectChunks(x, y, width, height, options?)`
   Return an array of native byte views split by `options.chunkBytes` or the buffer's `chunkBytes`. Passing `options.reuse: true` lets direct full-row exports reuse an internal chunk array and ByteView wrappers, which avoids per-frame wrapper allocation in display flush loops.
 - `createSpanSource(options?)`
-  Return a retained native byte span source bound to the buffer. Use `source.setRect(x, y, width, height)` before `SPIDevice.writeSource(source, options?)` to update the clamped export rectangle without allocating JS chunk arrays or ByteView wrappers in the flush loop.
+  Return a retained native `DisplayBufferSpanSource` bound to the buffer. Pass it to `SPIDevice.writeSource(source, options?)` to flush without allocating JS chunk arrays or ByteView wrappers in the loop.
+
+`DisplayBufferSpanSource` methods:
+
+- `source.setRect(x, y, width, height)`
+  Update the clamped export rectangle and return the same source for reuse in display flush loops. This method belongs to display-buffer-created sources, not to the generic `ByteSpanSource` transport capability.
 
 `DisplayFont` properties:
 

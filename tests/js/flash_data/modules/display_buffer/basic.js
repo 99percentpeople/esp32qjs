@@ -160,9 +160,12 @@ test("display_buffer/basic", function () {
   test.equal(chunks.length, 2, "readRectChunks should split by configured chunkBytes");
   test.equal(chunks[0].length, 4, "readRectChunks should return ByteView chunks");
   source = rgb.createSpanSource({ byteOrder: "be", chunkBytes: 4 });
-  test.ok(source && typeof source.setRect === "function", "createSpanSource should return a reusable span source");
-  test.equal(source.setRect(-1, -1, 2, 2), source, "span source setRect should return the source");
-  test.equal(source.setRect(0, 0, 2, 2), source, "span source setRect should allow repeated updates");
+  test.equal(typeof _ByteSpanSource.prototype.setRect, "undefined", "generic ByteSpanSource should stay opaque");
+  test.ok(source instanceof _ByteSpanSource, "DisplayBufferSpanSource should be accepted as a ByteSpanSource");
+  test.ok(source instanceof _DisplayBufferSpanSource, "createSpanSource should return a DisplayBufferSpanSource");
+  test.ok(source && typeof source.setRect === "function", "DisplayBufferSpanSource should expose setRect");
+  test.equal(source.setRect(-1, -1, 2, 2), source, "DisplayBufferSpanSource setRect should return the source");
+  test.equal(source.setRect(0, 0, 2, 2), source, "DisplayBufferSpanSource setRect should allow repeated updates");
   var reusedChunks = rgb.readRectChunks(0, 0, 2, 2, { byteOrder: "be", reuse: true });
   var reusedFirst = reusedChunks[0];
 

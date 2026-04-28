@@ -21,6 +21,7 @@ typedef struct {
 } esp32_mquickjs_byte_source_chunk_t;
 
 typedef struct {
+    int class_id;
     bool (*open)(JSContext *ctx,
                  JSValue source_value,
                  void *opaque,
@@ -93,5 +94,6 @@ JSValue js_byte_view_get_length(JSContext *ctx, JSValue *this_val, int argc, JSV
 JSValue js_byte_view_to_array(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 
 JSValue js_byte_span_source_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_display_buffer_span_source_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 void js_byte_span_source_finalizer(JSContext *ctx, void *opaque);
-JSValue js_byte_span_source_set_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_display_buffer_span_source_set_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

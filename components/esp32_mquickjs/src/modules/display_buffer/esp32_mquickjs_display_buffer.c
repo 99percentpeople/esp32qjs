@@ -1059,7 +1059,7 @@ static bool display_span_source_prepare_rect(JSContext *ctx,
     esp32_mquickjs_display_buffer_rect_t rect;
 
     if (source == NULL) {
-        JS_ThrowInternalError(ctx, "ByteSpanSource.setRect() received invalid source state");
+        JS_ThrowInternalError(ctx, "DisplayBufferSpanSource.setRect() received invalid source state");
         return false;
     }
     rect.x = x;
@@ -1069,7 +1069,7 @@ static bool display_span_source_prepare_rect(JSContext *ctx,
     rect.byte_order = source->rect.byte_order;
 
     if (source->buffer == NULL || source->buffer->closed) {
-        JS_ThrowReferenceError(ctx, "ByteSpanSource.setRect() failed because the DisplayBuffer is closed");
+        JS_ThrowReferenceError(ctx, "DisplayBufferSpanSource.setRect() failed because the DisplayBuffer is closed");
         return false;
     }
     if (!esp32_mquickjs_display_buffer_normalize_rect(source->buffer, &rect)) {
@@ -1212,6 +1212,7 @@ static void display_span_source_destroy(JSContext *ctx, void *opaque)
 }
 
 static const esp32_mquickjs_byte_span_source_object_ops_t display_span_source_ops = {
+    .class_id = JS_CLASS_DISPLAY_BUFFER_SPAN_SOURCE,
     .open = display_span_source_open,
     .set_rect = display_span_source_set_rect,
     .destroy = display_span_source_destroy,

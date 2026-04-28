@@ -37,13 +37,19 @@ declare namespace ESP32QJS {
   /**
    * Retained native byte span source.
    *
-   * Producers such as `DisplayBuffer.createSpanSource(...)` expose this to let
-   * transports open byte spans on demand. `setRect(...)` updates the source's
-   * clamped export rectangle and returns the same source for reuse in flush
-   * loops.
+   * Transports open byte spans on demand from this opaque capability.
+   * Producer-specific controls live on subtypes such as
+   * `DisplayBufferSpanSource`.
    */
   interface ByteSpanSource {
-    setRect(x: number, y: number, width: number, height: number): ByteSpanSource;
+    readonly __byteSpanSourceBrand: never;
+  }
+
+  /**
+   * Retained display-buffer byte span source.
+   */
+  interface DisplayBufferSpanSource extends ByteSpanSource {
+    setRect(x: number, y: number, width: number, height: number): this;
   }
 
   type DisplayBufferFormat = "mono1" | "rgb565";
@@ -841,7 +847,7 @@ declare namespace ESP32QJS {
       height: number,
       options?: DisplayBufferReadRectChunksOptions,
     ): ByteView[];
-    createSpanSource(options?: DisplaySpanSourceOptions): ByteSpanSource;
+    createSpanSource(options?: DisplaySpanSourceOptions): DisplayBufferSpanSource;
   }
 
   /**

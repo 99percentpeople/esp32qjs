@@ -791,6 +791,11 @@ def build(config: ProjectConfig) -> None:
     run_idf_action_with_stale_build_recovery(["build"], config)
 
 
+def build_firmware_images(config: ProjectConfig) -> None:
+    """Build flashable firmware images without rebuilding the LittleFS storage image."""
+    run_idf_action_with_stale_build_recovery(["bootloader", "partition-table", "app"], config)
+
+
 def build_fs_image(config: ProjectConfig) -> None:
     """Build only the LittleFS image used by the storage partition."""
     run_idf_action_with_stale_build_recovery(["littlefs_storage_bin"], config)
@@ -882,6 +887,45 @@ def resolve_flash_entry(
     return offset, file_path
 
 
+def resolve_flash_entry_offsets(flasher_args: dict[str, object], entry_names: tuple[str, ...]) -> set[int]:
+    """Resolve named flash entries to offsets so full flashes can skip selected partitions."""
+    offsets: set[int] = set()
+
+    for entry_name in entry_names:
+        entry = flasher_args.get(entry_name)
+        if not isinstance(entry, dict):
+            continue
+        offset = str(entry.get("offset", ""))
+        if offset:
+            offsets.add(int(offset, 0))
+
+    return offsets
+
+
+def resolve_flash_pairs(
+    flasher_args: dict[str, object],
+    build_dir: Path,
+    exclude_entries: tuple[str, ...] = (),
+) -> list[str]:
+    """Resolve the full ESP-IDF flash plan, optionally skipping named entries."""
+    flash_files = dict(flasher_args.get("flash_files", {}))
+    excluded_offsets = resolve_flash_entry_offsets(flasher_args, exclude_entries)
+    flash_pairs: list[str] = []
+
+    for offset, file_name in sorted(flash_files.items(), key=lambda item: int(item[0], 0)):
+        if int(offset, 0) in excluded_offsets:
+            continue
+        file_path = Path(file_name)
+        if not file_path.is_absolute():
+            file_path = build_dir / file_path
+        flash_pairs.extend([offset, str(file_path)])
+
+    if not flash_pairs:
+        raise SystemExit("No flash entries remain after applying exclusions.")
+
+    return flash_pairs
+
+
 def write_flash(config: ProjectConfig, write_flash_args: list[str], flash_pairs: list[str], chip: str, before: str, after: str) -> None:
     """Run esptool write-flash with one or more offset/file pairs."""
     subprocess.run(
@@ -904,24 +948,20 @@ def write_flash(config: ProjectConfig, write_flash_args: list[str], flash_pairs:
     )
 
 
-def flash(config: ProjectConfig, build_first: bool) -> None:
+def flash(config: ProjectConfig, build_first: bool, exclude_entries: tuple[str, ...] = ()) -> None:
     """Flash all ESP-IDF build outputs listed in flasher_args.json over RFC2217."""
     write_esptool_config()
 
     if build_first:
-        build(config)
+        if "storage" in exclude_entries:
+            build_firmware_images(config)
+        else:
+            build(config)
 
     flasher_args = load_flasher_args(config.build_dir)
     extra_esptool_args = dict(flasher_args.get("extra_esptool_args", {}))
     write_flash_args = [str(arg) for arg in flasher_args.get("write_flash_args", [])]
-    flash_files = dict(flasher_args.get("flash_files", {}))
-    flash_pairs: list[str] = []
-
-    for offset, file_name in sorted(flash_files.items(), key=lambda item: int(item[0], 0)):
-        file_path = Path(file_name)
-        if not file_path.is_absolute():
-            file_path = config.build_dir / file_path
-        flash_pairs.extend([offset, str(file_path)])
+    flash_pairs = resolve_flash_pairs(flasher_args, config.build_dir, exclude_entries=exclude_entries)
 
     write_flash(
         config,
@@ -1372,6 +1412,17 @@ def try_read_monitor_until_line_prefix(session: MonitorSession, prefix: str, tim
     return None
 
 
+def wait_for_optional_js_repl_banner(session: MonitorSession, initial_output: str) -> None:
+    """Wait for the REPL banner when observable, but let the runtime probe prove readiness."""
+    if JS_REPL_BANNER_MARKER in initial_output:
+        return
+
+    try:
+        read_monitor_until_text(session, JS_REPL_BANNER_MARKER, 25.0, "the JS REPL banner")
+    except MarkerTimeoutError:
+        print("JS REPL banner was not observed; probing the runtime directly", flush=True)
+
+
 def send_js_command(session: MonitorSession, command: str) -> None:
     """Send one JavaScript command line to the remote REPL."""
     payload = f"{command}\r".encode("utf-8")
@@ -1661,9 +1712,9 @@ def run_js_tests(config: ProjectConfig,
     js_config = js_test_build_config(config)
 
     if flash_firmware_first:
-        print("Flashing latest firmware before JS tests", flush=True)
+        print("Flashing latest firmware before JS tests (leaving storage for the JS test image)", flush=True)
         try:
-            flash(config, build_first=True)
+            flash(config, build_first=True, exclude_entries=("storage",))
         except subprocess.CalledProcessError as exc:
             summary.status = "failed"
             summary.note = f"firmware flash exited with code {exc.returncode}"
@@ -1689,8 +1740,8 @@ def run_js_tests(config: ProjectConfig,
     session = start_monitor_session(config)
     try:
         try:
-            read_monitor_until_text(session, MONITOR_READY_MARKER, 10.0, "the ESP-IDF monitor banner")
-            read_monitor_until_text(session, JS_REPL_BANNER_MARKER, 25.0, "the JS REPL banner")
+            startup_output = read_monitor_until_text(session, MONITOR_READY_MARKER, 10.0, "the ESP-IDF monitor banner")
+            wait_for_optional_js_repl_banner(session, startup_output)
         except MarkerTimeoutError as exc:
             summary.status = "failed"
             summary.note = f"startup timeout waiting for {exc.description}"

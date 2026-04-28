@@ -60,6 +60,20 @@ test("spi/basic", function () {
     writeSourceRejected = String(writeSourceError).indexOf("ByteSpanSource") >= 0;
   }
   test.ok(writeSourceRejected, "SPIDevice.writeSource should reject non-source inputs");
+  if (info.features.displayBuffer && typeof displayBuffer === "object") {
+    var buffer = displayBuffer.create({ width: 1, height: 1, format: "rgb565" });
+    try {
+      var source = buffer.createSpanSource();
+      var sourceStats = device.writeSource(source);
+
+      test.ok(source instanceof _ByteSpanSource, "display span source should provide the generic ByteSpanSource capability");
+      test.ok(sourceStats && typeof sourceStats === "object", "SPIDevice.writeSource should accept generic ByteSpanSource inputs");
+      test.equal(sourceStats.bytes, 2, "SPIDevice.writeSource should report generic source bytes");
+      test.equal(sourceStats.chunks, 1, "SPIDevice.writeSource should consume one source span");
+    } finally {
+      buffer.close();
+    }
+  }
   test.equal(device.transfer([]).length, 0, "SPIDevice.transfer([]) should return an empty array");
   test.equal(device.read(0).length, 0, "SPIDevice.read(0) should return an empty array");
 

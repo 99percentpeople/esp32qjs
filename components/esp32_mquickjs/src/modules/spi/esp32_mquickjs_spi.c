@@ -894,7 +894,7 @@ static JSValue spi_write_span_source(JSContext *ctx,
 
         if (!esp32_mquickjs_byte_span_source_next(ctx, source, &span)) {
             error = JS_GetException(ctx);
-            if (!JS_IsUndefined(error)) {
+            if (!JS_IsUndefined(error) && !JS_IsNull(error)) {
                 goto fail_with_js_error;
             }
             break;
