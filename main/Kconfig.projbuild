@@ -9,7 +9,7 @@ config ESP32QJS_ENABLE_REPL
 
 config ESP32QJS_JS_HEAP_SIZE
     int "JavaScript heap size (bytes)"
-    range 65536 2097152
+    range 65536 4194304
     default 163840
     help
         Size of the dedicated heap buffer passed to mquickjs.

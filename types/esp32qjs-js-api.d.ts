@@ -191,6 +191,8 @@ declare namespace ESP32QJS {
     drawChar(x: number, y: number, ch: string, options?: TextStyle): this;
     drawText(x: number, y: number, text: string, options?: TextStyle): this;
     init(): this;
+    beginBatch?(options?: unknown): Surface;
+    endBatch?(batch: Surface, dirty?: Rect | null): this;
     flush(): this;
     flushRect?(x: number, y: number, width: number, height: number): this;
     flushRects?(
@@ -252,9 +254,7 @@ declare namespace ESP32QJS {
     open<T extends Surface = Surface>(options: DisplayOpenOptions): T;
   }
 
-  /**
-   * Insets used by the UI layout helpers.
-   */
+  /** Insets used by the UI helpers. */
   interface Insets {
     top: number;
     right: number;
@@ -271,129 +271,255 @@ declare namespace ESP32QJS {
     y?: number;
   }
 
-  type Align = "start" | "center" | "end" | "stretch";
-  type Justify = "start" | "center" | "end" | "space-between";
+  type UIAlign = "start" | "center" | "end" | "stretch";
+  type UISoftkeyResult = "left" | "center" | "right" | null;
 
-  interface UIBaseProps {
-    width?: number;
-    height?: number;
-    flex?: number;
-    gap?: number;
-    padding?: number | InsetsInput;
+  interface UITouchInput {
+    x?: number;
+    y?: number;
+    pressed?: boolean;
+  }
+
+  interface UIInput {
+    up?: boolean;
+    down?: boolean;
+    left?: boolean;
+    right?: boolean;
+    ok?: boolean;
+    back?: boolean;
+    encoderDelta?: number;
+    touch?: UITouchInput | null;
+  }
+
+  interface UITheme {
     background?: ColorValue;
-    border?: boolean;
-    borderColor?: ColorValue;
-    align?: Align;
-    valign?: Align;
-    justify?: Justify;
-    spacing?: number;
-    color?: ColorValue;
+    foreground?: ColorValue;
+    muted?: ColorValue;
+    panel?: ColorValue;
+    control?: ColorValue;
+    border?: ColorValue;
+    accent?: ColorValue;
+    accentText?: ColorValue;
+    danger?: ColorValue;
+    focus?: ColorValue;
+    pressed?: ColorValue;
   }
 
-  interface UITextProps extends UIBaseProps {
-    text?: string;
-  }
-
-  interface UISpacerProps {
-    size?: number;
-    width?: number;
-    height?: number;
-  }
-
-  /**
-   * UI layout node returned by `ui.box(...)`, `ui.row(...)`, and friends.
-   */
-  interface UINode<P extends object = Record<string, unknown>> {
-    type: string;
-    props: P;
-    children: UINode[];
-    frame: Rect | null;
-    contentFrame: Rect | null;
-  }
-
-  /**
-   * Render options accepted by `ui.render(...)`.
-   */
-  interface UIRenderOptions extends Partial<Rect> {
+  interface UIFrameOptions extends Partial<Rect> {
     clear?: boolean;
     clearColor?: ColorValue;
     flush?: boolean;
+    partial?: boolean;
+    gcBeforeFlush?: boolean;
+    batch?: boolean | unknown;
+    focusVisible?: boolean;
+    input?: UIInput;
+    theme?: UITheme;
+    gap?: number;
+    align?: UIAlign;
+    font?: DisplayFont;
   }
 
-  /**
-   * UI/layout helpers loaded from `_sys/ui.js`.
-   *
-   * @example
-   * ```js
-   * load("_sys/display.js");
-   * load("_sys/ui.js");
-   * var oled = display.open({ driver: "ssd1306", sda: 5, scl: 6, address: 0x3c });
-   * var screen = ui.column(
-   *   { gap: 2, padding: 2 },
-   *   ui.text("HELLO"),
-   *   ui.row(ui.box({ width: 12, height: 12, border: true }), ui.text("WIFI OK"))
-   * );
-   * ui.render(oled, screen);
-   * ```
-   */
+  interface UILayoutOptions extends Partial<Rect> {
+    id?: string;
+    padding?: number | InsetsInput;
+    gap?: number;
+    align?: UIAlign;
+    background?: ColorValue;
+    border?: boolean;
+    borderColor?: ColorValue;
+    radius?: number;
+    borderRadius?: number;
+  }
+
+  interface UISpacerOptions extends Partial<Rect> {
+    size?: number;
+  }
+
+  interface UISeparatorOptions extends Partial<Rect> {
+    id?: string;
+    thickness?: number;
+    color?: ColorValue;
+  }
+
+  interface UITextOptions extends UILayoutOptions, TextStyle {
+    valign?: UIAlign;
+    textAlign?: UIAlign;
+  }
+
+  interface UIStyleOptions extends Partial<Rect>, TextStyle {
+    padding?: number | InsetsInput;
+    gap?: number;
+    align?: UIAlign;
+    background?: ColorValue;
+    border?: boolean;
+    borderColor?: ColorValue;
+    radius?: number;
+    borderRadius?: number;
+    valign?: UIAlign;
+    textAlign?: UIAlign;
+    outline?: boolean;
+    outlineColor?: ColorValue;
+    outlineWidth?: number;
+  }
+
+  interface UIControlOptions extends UIStyleOptions {
+    id?: string;
+    label?: string;
+    left?: string;
+    title?: string;
+    center?: string;
+    right?: string;
+    selected?: boolean;
+    min?: number;
+    max?: number;
+    step?: number;
+    visibleCount?: number;
+    rowHeight?: number;
+  }
+
+  interface UIFpsOptions extends UIStyleOptions {
+    enabled?: boolean;
+    sampleMs?: number;
+    precision?: number;
+    charWidth?: number;
+  }
+
+  interface UIComponent<T = Rect> extends Partial<Rect> {
+    readonly rendered: boolean;
+    readonly result: T;
+    readonly value: T;
+    readonly rect: Rect | null;
+    style(options?: UIStyleOptions): this;
+    valueOf(): T;
+    toString(): string;
+  }
+
+  type UIControlCommand = "up" | "down" | "left" | "right" | "ok" | "back";
+
+  interface UIControlButtonBinding {
+    pin: number;
+    command?: UIControlCommand;
+    activeLow?: boolean;
+    pull?: string | false | null;
+  }
+
+  interface UIControlButtonOptions {
+    activeLow?: boolean;
+    pull?: string | false | null;
+    configure?: boolean;
+  }
+
+  interface UIControlIndicatorOptions extends UIControlOptions {
+    idle?: string;
+  }
+
+  interface UIControlDriver {
+    press(command: UIControlCommand): this;
+    hold(command: UIControlCommand, active?: boolean): this;
+    encoder(delta: number): this;
+    touch(x: number, y: number, pressed?: boolean): this;
+    bindButtons(
+      map: Record<string, number | UIControlButtonBinding | false | null | undefined>,
+      options?: UIControlButtonOptions,
+    ): this;
+    read(extra?: UIInput): UIInput;
+    last(): string;
+    clear(): this;
+    indicator(options?: UIControlIndicatorOptions): Rect;
+  }
+
+  interface UIContext {
+    surface: Surface;
+    focusedId: string | null;
+    focusVisible: boolean;
+    editingId: string | null;
+    input: UIInput;
+    theme: Required<UITheme>;
+  }
+
+  /** Immediate-mode UI helpers loaded from `_sys/ui.js`. */
   interface UIModule {
     readonly VERSION: string;
-    node(
-      type: string,
-      props?: Record<string, unknown>,
-      children?: UINode[],
-    ): UINode;
-    box(
-      props?: UIBaseProps,
-      ...children: Array<
-        | UINode
-        | string
-        | number
-        | boolean
-        | Array<UINode | string | number | boolean>
-      >
-    ): UINode<UIBaseProps>;
-    row(
-      props?: UIBaseProps,
-      ...children: Array<
-        | UINode
-        | string
-        | number
-        | boolean
-        | Array<UINode | string | number | boolean>
-      >
-    ): UINode<UIBaseProps>;
-    column(
-      props?: UIBaseProps,
-      ...children: Array<
-        | UINode
-        | string
-        | number
-        | boolean
-        | Array<UINode | string | number | boolean>
-      >
-    ): UINode<UIBaseProps>;
-    text(
+    readonly theme: {
+      dark: Required<UITheme>;
+      mono: Required<UITheme>;
+      [name: string]: Required<UITheme>;
+    };
+    input(input?: UIInput): UIInput;
+    begin(surface: Surface, options?: UIFrameOptions): UIContext;
+    endFrame(): UIContext;
+    frame(
+      surface: Surface,
+      render: (context: UIContext) => void,
+      options?: UIFrameOptions,
+    ): UIContext;
+    row(options?: UILayoutOptions): UIComponent<Rect>;
+    column(options?: UILayoutOptions): UIComponent<Rect>;
+    group(options?: UILayoutOptions): UIComponent<Rect>;
+    panel(options?: UILayoutOptions): UIComponent<Rect>;
+    end(): Rect;
+    spacer(sizeOrOptions?: number | UISpacerOptions): Rect;
+    separator(options?: UISeparatorOptions): UIComponent<Rect>;
+    text(value: string | number | boolean, options?: UITextOptions): UIComponent<Rect>;
+    value(
+      label: string | number | boolean,
       value: string | number | boolean,
-      props?: UITextProps,
-    ): UINode<UITextProps>;
-    spacer(sizeOrProps: number | UISpacerProps): UINode<UISpacerProps>;
-    padding(
-      insets: number | InsetsInput,
-      child: UINode | string | number | boolean,
-      props?: UIBaseProps,
-    ): UINode<UIBaseProps>;
-    measure(surface: Surface, node: UINode | string | number | boolean): Size;
-    layout(
-      surface: Surface,
-      node: UINode | string | number | boolean,
-      options?: Partial<Rect>,
-    ): UINode;
-    render(
-      surface: Surface,
-      node: UINode | string | number | boolean,
-      options?: UIRenderOptions,
-    ): UINode;
+      options?: UITextOptions,
+    ): UIComponent<Rect>;
+    badge(text: string | number | boolean, options?: UIControlOptions): UIComponent<Rect>;
+    icon(name: string, options?: UITextOptions): UIComponent<Rect>;
+    statusBar(options?: UIControlOptions): UIComponent<Rect>;
+    progress(id: string, value: number, options?: UIControlOptions): UIComponent<Rect>;
+    /** Optional helper loaded from `_sys/ui/control.js`. */
+    control?: UIControlDriver;
+    /** Optional helper loaded from `_sys/ui/fps.js`. */
+    fps?: (id: string, options?: UIFpsOptions) => number;
+    gauge(id: string, value: number, options?: UIControlOptions): UIComponent<Rect>;
+    button(
+      id: string,
+      label: string | number | boolean,
+      options?: UIControlOptions,
+    ): UIComponent<boolean>;
+    iconButton(id: string, icon: string, options?: UIControlOptions): UIComponent<boolean>;
+    toggle(
+      id: string,
+      label: string | number | boolean,
+      value: boolean,
+      options?: UIControlOptions,
+    ): UIComponent<boolean>;
+    checkbox(
+      id: string,
+      label: string | number | boolean,
+      value: boolean,
+      options?: UIControlOptions,
+    ): UIComponent<boolean>;
+    slider(id: string, value: number, options?: UIControlOptions): UIComponent<number>;
+    stepper(id: string, value: number, options?: UIControlOptions): UIComponent<number>;
+    list(
+      id: string,
+      items: ArrayLike<string | number | boolean>,
+      selectedIndex: number,
+      options?: UIControlOptions,
+    ): UIComponent<number>;
+    menu(
+      id: string,
+      items: ArrayLike<string | number | boolean>,
+      selectedIndex: number,
+      options?: UIControlOptions,
+    ): UIComponent<number>;
+    tabs(
+      id: string,
+      tabs: ArrayLike<string | number | boolean>,
+      selectedIndex: number,
+      options?: UIControlOptions,
+    ): UIComponent<number>;
+    softkeys(
+      left?: string | number | boolean,
+      center?: string | number | boolean,
+      right?: string | number | boolean,
+      options?: UIControlOptions,
+    ): UIComponent<UISoftkeyResult>;
   }
 }
 

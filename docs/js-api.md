@@ -49,7 +49,7 @@ Supported `options` fields:
 - `spacing`
   Extra inter-character spacing for `drawText()`.
 
-The built-in display drivers require the native `displayBuffer` module. Drawing primitives are forwarded to the native buffer, while JavaScript manages fonts, colors, dirty/flush policy, and panel command sequencing. ST7789 uses a retained RGB565 span source from `createSpanSource(...)` and flushes it through SPI `writeSource(...)`. SSD1306 uses a native mono buffer and can flush chunks through I2C `writeChunks(...)` when needed.
+The built-in display drivers require the native `displayBuffer` module. Drawing primitives are forwarded to the native buffer, while JavaScript manages fonts, colors, dirty/flush policy, and panel command sequencing. ST7789 can pack immediate-mode UI drawing into one command stream per frame, append it to a retained native command buffer, replay it once into the RGB565 framebuffer, then flush through a retained span source from `createSpanSource(...)` and SPI `writeSource(...)`. SSD1306 uses a native mono buffer and can flush chunks through I2C `writeChunks(...)` when needed.
 
 The display stdlib loads `_sys/display/fonts/mono5x7.eqf` as `display.defaultFont`. Additional fonts can be loaded from LittleFS with `display.loadFont(path, name?)`. The file must use the EQF1 fixed bitmap format documented in the C API. Pass the returned font with `{ font }` to `drawText()` or `measureText()`.
 
@@ -127,62 +127,179 @@ oled.flush();
 These helpers are implemented in JavaScript on top of the `display` surface interface and live under `/littlefs/_sys/ui/`.
 
 - `ui.VERSION`
-  Current JS UI layer version, `"0.1.0"`.
-- `ui.box(props?, ...children)`
-  Decorated container with optional `padding`, `background`, `border`, `align`, and `valign`.
-- `ui.row(props?, ...children)`
-  Horizontal layout with optional `gap`, `justify`, `align`, and child `flex`.
-- `ui.column(props?, ...children)`
-  Vertical layout with optional `gap`, `justify`, `align`, and child `flex`.
-- `ui.text(value, props?)`
-  Text node drawn with the active surface font.
-- `ui.spacer(size | props)`
-  Empty layout node for fixed spacing.
-- `ui.padding(insets, child, props?)`
-  Convenience wrapper that applies padding around a single child.
-- `ui.measure(surface, node)`
-  Return the natural `{ width, height }` of a node tree.
-- `ui.layout(surface, node, options?)`
-  Compute node frames without drawing.
-- `ui.render(surface, node, options?)`
-  Clear, layout, paint, and optionally `flush()` the surface.
+  Current JS UI layer version, `"0.3.1"`.
+- `ui.begin(surface, options?)`
+  Start an immediate-mode frame on a display surface. Drivers with `beginBatch()` support, such as ST7789, use native command-buffer replay by default; pass `{ batch: false }` to force direct drawing.
+- `ui.endFrame()`
+  Finish the frame, validate that all layout scopes are closed, and flush the dirty region.
+- `ui.frame(surface, render, options?)`
+  Convenience wrapper around `begin(...)`, a render callback, and `endFrame()`.
+- `ui.input(input?)`
+  Set or read the pending normalized input snapshot used by the next frame.
+- `ui.row(render?, options?)` / `ui.column(render?, options?)` / `ui.group(render?, options?)` / `ui.panel(render?, options?)`
+  Open a layout scope. When `render` is provided, the layout is closed automatically after the callback returns. `panel(...)` also draws a decorated container. For compatibility, the older `ui.row(options, render)` form is still accepted.
+- `ui.end()`
+  Close the current layout scope.
+- `ui.spacer(size | options)` / `ui.separator(options?)`
+  Add fixed spacing or a one-pixel separator.
+- `ui.text(value, options?)` / `ui.value(label, value, options?)` / `ui.badge(text, options?)`
+  Draw simple non-interactive content.
+- `ui.statusBar(options?)`
+  Draw a compact left/title/right status row.
+- `ui.progress(id, value, options?)` / `ui.gauge(id, value, options?)`
+  Draw bounded numeric indicators and return the allocated rect.
+- `ui.button(id, label, options?)` / `ui.iconButton(id, icon, options?)`
+  Draw a focusable command and return `true` when activated.
+- `ui.toggle(id, label, value, options?)` / `ui.checkbox(id, label, value, options?)`
+  Draw a focusable boolean control and return the updated value.
+- `ui.slider(id, value, options?)` / `ui.stepper(id, value, options?)`
+  Draw a focusable numeric control and return the updated value.
+- `ui.list(id, items, selectedIndex, options?)` / `ui.menu(id, items, selectedIndex, options?)`
+  Draw a compact selectable list and return the updated selected index.
+- `ui.tabs(id, tabs, selectedIndex, options?)`
+  Draw a tab strip and return the updated selected index.
+- `ui.softkeys(left, center, right, options?)`
+  Draw a three-zone softkey bar and return `"left"`, `"center"`, `"right"`, or `null`.
 
-Supported common props:
+Frame options:
 
-- `width`, `height`
-  Fixed outer size in pixels.
+- `x`, `y`, `width`, `height`
+  Root frame bounds. Defaults to the whole surface.
+- `clear`
+  Clear the root frame before drawing. Defaults to `true` for the first frame on a surface and `false` afterwards.
+- `clearColor`
+  Packed display color used when clearing.
+- `flush`
+  Set `false` to draw without flushing.
+- `partial`
+  Set `false` to force full `surface.flush()`. By default `endFrame()` uses `flushRects(...)` or `flushRect(...)` when available.
+- `gcBeforeFlush`
+  Set `false` to skip the automatic `gc()` before first-frame or large dirty-region flushes.
+- `focusVisible`
+  Controls whether the focused control draws its outline. By default the runtime keeps a logical focus target for button/encoder input but only shows the outline after keyboard, encoder, or touch input.
+- `input`
+  Normalized input snapshot for this frame.
+- `theme`
+  Packed display colors overriding the default mono or RGB565 theme.
+
+Normalized input fields:
+
+- `up`, `down`
+  Move focus between focusable controls.
+- `left`, `right`
+  Adjust focused value controls such as sliders, steppers, lists, and tabs.
+- `ok`
+  Activate the focused button/toggle/checkbox or softkey center.
+- `back`
+  Activate the softkey left action.
+- `encoderDelta`
+  Adjust focused value controls.
+- `touch`
+  Optional `{ x, y, pressed }` touch point. A press inside a focusable control focuses and activates it.
+
+Common control/layout options:
+
+- `x`, `y`, `width`, `height`
+  Pixel bounds or fixed outer size.
 - `padding`
-  Number or `{ top, right, bottom, left }`.
+  Number or `{ top, right, bottom, left }`; `{ x, y }` sets horizontal and vertical padding.
 - `gap`
-  Space between row or column children.
-- `flex`
-  Extra main-axis space share for row or column children.
+  Space between children in a row or column layout.
 - `align`
   Cross-axis alignment: `"start"`, `"center"`, `"end"`, or `"stretch"`.
-- `justify`
-  Main-axis alignment for rows and columns: `"start"`, `"center"`, `"end"`, or `"space-between"`.
 - `background`
-  Fill the node frame before painting children with a packed display color.
+  Packed fill color.
 - `border`
-  Draw a 1-pixel border around the node frame.
+  Draw a 1-pixel border.
 - `borderColor`
-  Packed border color. Defaults to the surface foreground color.
+  Packed border color.
+- `radius`, `borderRadius`
+  Rounded-corner radius in pixels when the display surface supports round rectangles.
+- `outline`
+  Focus-visible controls draw a 2-pixel outline by default. Set to `false` to disable it for a specific control.
+- `outlineColor`, `outlineWidth`
+  Packed focus outline color and pixel width. Defaults to the theme focus color and `2`.
 - `color`
-  Packed text color for `ui.text(...)`, for example `display.mono1(1)` or `display.rgb565(255, 255, 255)`.
+  Packed text/control foreground color.
+- `font`, `spacing`
+  Text style forwarded to `surface.drawText(...)` and `surface.measureText(...)`.
+
+Common declaration/config options:
+
+- `id`
+  Optional stable ID for non-interactive/decorative controls that need persistent dirty tracking. Interactive controls use the explicit `id` argument.
+- `min`, `max`, `step`
+  Numeric bounds for progress, gauges, sliders, and steppers.
+- `visibleCount`, `rowHeight`
+  List/menu sizing controls.
+- `left`, `title`, `center`, `right`
+  Status-bar labels.
 
 Example:
 
 ```js
-var oled = display.open({ driver: "ssd1306", sda: 5, scl: 6, address: 0x3c });
-var screen = ui.column(
-  { padding: 2, gap: 4, border: true },
-  ui.text("HELLO"),
-  ui.row(
-    { gap: 4, align: "center" },
-    ui.box({ width: 12, height: 12, border: true }),
-    ui.text("WIFI OK")
-  )
-);
+var screen = display.open({ driver: "st7789" });
+var wifiEnabled = true;
+var brightness = 40;
+var selectedTab = 0;
 
-ui.render(oled, screen);
+ui.begin(screen, { clear: true, partial: true });
+ui.column(function () {
+  ui.statusBar({ left: "ESP32", title: "Control", right: "74%" });
+  selectedTab = ui.tabs("mode", ["Main", "Net", "Info"], selectedTab);
+
+  ui.panel(function () {
+    ui.text("Immediate UI");
+    wifiEnabled = ui.toggle("wifi", "WiFi", wifiEnabled);
+    brightness = ui.slider("brightness", brightness, { min: 0, max: 100, step: 5 });
+  }, { height: 78, padding: 4, gap: 4 });
+
+  if (ui.button("apply", "Apply", { width: 48 })) {
+    print("apply");
+  }
+}, { padding: 6, gap: 4 });
+ui.endFrame();
+```
+
+Optional UI helpers are loaded separately when needed:
+
+- `load("_sys/ui/control.js")`
+  Adds `ui.control`, a thin command/input helper for REPL, programmatic control, and optional GPIO buttons. It does not change the core UI input model; call `ui.control.read()` and pass the returned snapshot to `ui.begin(..., { input })`.
+- `load("_sys/ui/fps.js")`
+  Adds `ui.fps(id, options?)`, a small frame-rate meter implemented by composing core UI primitives. It keeps sampling state by `id`, returns the sampled FPS value, and accepts `enabled: false` to clear its reserved area without showing text. `sampleMs` controls the sample window and `precision` controls decimal places.
+
+Example:
+
+```js
+load("_sys/ui/control.js");
+load("_sys/ui/fps.js");
+
+var showFps = true;
+
+ui.begin(screen, {
+  clear: true,
+  partial: true,
+  input: ui.control.read()
+});
+ui.column(function () {
+  showFps = ui.toggle("showFps", "FPS", showFps);
+  ui.control.indicator({ label: "IN", width: 74 });
+  ui.fps("fps", { enabled: showFps, sampleMs: 1000, precision: 1 });
+}, { padding: 6, gap: 4 });
+ui.endFrame();
+
+// From the REPL or another script:
+ui.control.press("down");
+ui.control.press("ok");
+ui.control.encoder(1);
+```
+
+GPIO buttons can be composed directly through the same helper:
+
+```js
+ui.control.bindButtons({
+  up: 1,
+  down: 2,
+  ok: { pin: 3, activeLow: true }
+});
 ```

@@ -307,6 +307,13 @@
     this.chunkBytes = chunkBytes;
     this.payload = null;
     this.nativeBuffer = createNativeBuffer(this, options, chunkBytes);
+    this.commandBufferOptions = {
+      commandCapacity: own(options, "commandCapacity") ? options.commandCapacity : 192,
+      textBytes: own(options, "commandTextBytes") ? options.commandTextBytes : 2048
+    };
+    this.commandBufferEnabled = options.commandBuffer !== false;
+    this.commandBuffer = null;
+    this.commandBatch = null;
     this.flushSource = typeof this.nativeBuffer.createSpanSource === "function"
       ? this.nativeBuffer.createSpanSource({
           byteOrder: "be",
@@ -335,6 +342,232 @@
   system.inherit(ST7789Display, display.Surface);
 
   ST7789Display.rgb565 = rgb565;
+
+  var CMD_CLEAR = 1;
+  var CMD_FILL_RECT = 2;
+  var CMD_DRAW_RECT = 3;
+  var CMD_DRAW_LINE = 4;
+  var CMD_DRAW_ROUND_RECT = 5;
+  var CMD_FILL_ROUND_RECT = 6;
+  var CMD_DRAW_TEXT = 7;
+  var CMD_TEXT_HAS_BACKGROUND = 1;
+
+  function pushU16(out, value) {
+    value = value | 0;
+    out.push(value & 0xff, (value >> 8) & 0xff);
+  }
+
+  function pushI16(out, value) {
+    pushU16(out, value);
+  }
+
+  function pushRectCommand(out, op, x, y, width, height, color) {
+    out.push(op);
+    pushI16(out, x);
+    pushI16(out, y);
+    pushI16(out, width);
+    pushI16(out, height);
+    pushU16(out, color);
+  }
+
+  function pushRoundRectCommand(out, op, x, y, width, height, radius, color) {
+    out.push(op);
+    pushI16(out, x);
+    pushI16(out, y);
+    pushI16(out, width);
+    pushI16(out, height);
+    pushI16(out, radius);
+    pushU16(out, color);
+  }
+
+  function clampTextSpacing(value) {
+    value = value | 0;
+    if (value < 0) {
+      return 0;
+    }
+    if (value > 32) {
+      return 32;
+    }
+    return value;
+  }
+
+  function ST7789CommandBatch(surface, nativeBatch) {
+    this.surface = surface;
+    this.nativeBatch = nativeBatch;
+    this.pixelFormat = surface.pixelFormat;
+    this.foreground = surface.foreground;
+    this.background = surface.background;
+    this.spacing = surface.spacing;
+    this.bytes = [];
+    this.text = "";
+    this.textFont = null;
+  }
+
+  ST7789CommandBatch.prototype.reset = function (nativeBatch) {
+    this.nativeBatch = nativeBatch || this.nativeBatch;
+    this.bytes.length = 0;
+    this.text = "";
+    this.textFont = null;
+    return this;
+  };
+
+  ST7789CommandBatch.prototype.flush = function () {
+    var options;
+
+    if (this.bytes.length <= 0) {
+      return this;
+    }
+    if (this.text.length > 0) {
+      options = {
+        text: this.text,
+        font: this.textFont
+      };
+      this.nativeBatch.appendPacked(this.bytes, options);
+    } else {
+      this.nativeBatch.appendPacked(this.bytes);
+    }
+    this.bytes.length = 0;
+    this.text = "";
+    this.textFont = null;
+    return this;
+  };
+
+  ST7789CommandBatch.prototype.clear = function (color) {
+    color = nativeDrawColor(this.surface, color, this.surface.background, "ST7789 batch clear(color)");
+    this.bytes.push(CMD_CLEAR);
+    pushU16(this.bytes, color);
+    return this;
+  };
+
+  ST7789CommandBatch.prototype.fill = function (color) {
+    return this.clear(color);
+  };
+
+  ST7789CommandBatch.prototype.fillRect = function (x, y, width, height, color) {
+    color = nativeDrawColor(this.surface, color, this.surface.foreground,
+      "ST7789 batch fillRect(x, y, width, height, color)");
+    if ((width | 0) > 0 && (height | 0) > 0) {
+      pushRectCommand(this.bytes, CMD_FILL_RECT, x, y, width, height, color);
+    }
+    return this;
+  };
+
+  ST7789CommandBatch.prototype.drawLine = function (x0, y0, x1, y1, color) {
+    color = nativeDrawColor(this.surface, color, this.surface.foreground,
+      "ST7789 batch drawLine(x0, y0, x1, y1, color)");
+    pushRectCommand(this.bytes, CMD_DRAW_LINE, x0, y0, x1, y1, color);
+    return this;
+  };
+
+  ST7789CommandBatch.prototype.drawRect = function (x, y, width, height, color) {
+    color = nativeDrawColor(this.surface, color, this.surface.foreground,
+      "ST7789 batch drawRect(x, y, width, height, color)");
+    if ((width | 0) > 0 && (height | 0) > 0) {
+      pushRectCommand(this.bytes, CMD_DRAW_RECT, x, y, width, height, color);
+    }
+    return this;
+  };
+
+  ST7789CommandBatch.prototype.drawRoundRect = function (x, y, width, height, radius, color) {
+    color = nativeDrawColor(this.surface, color, this.surface.foreground,
+      "ST7789 batch drawRoundRect(x, y, width, height, radius, color)");
+    if ((width | 0) > 0 && (height | 0) > 0) {
+      pushRoundRectCommand(this.bytes, CMD_DRAW_ROUND_RECT, x, y, width, height, radius, color);
+    }
+    return this;
+  };
+
+  ST7789CommandBatch.prototype.fillRoundRect = function (x, y, width, height, radius, color) {
+    color = nativeDrawColor(this.surface, color, this.surface.foreground,
+      "ST7789 batch fillRoundRect(x, y, width, height, radius, color)");
+    if ((width | 0) > 0 && (height | 0) > 0) {
+      pushRoundRectCommand(this.bytes, CMD_FILL_ROUND_RECT, x, y, width, height, radius, color);
+    }
+    return this;
+  };
+
+  ST7789CommandBatch.prototype.drawChar = function (x, y, ch, options) {
+    return this.drawText(x, y, String(ch).charAt(0), options);
+  };
+
+  ST7789CommandBatch.prototype.drawText = function (x, y, text, options) {
+    var style = styleOptions(options, "ST7789 batch drawText(x, y, text, options)");
+    var color = nativeDrawColor(this.surface, style.color, this.surface.foreground,
+      "ST7789 batch drawText(x, y, text, options).color");
+    var nativeOptions = nativeTextOptions(this.surface, style);
+    var encoded = nativeText(text, style);
+    var hasBackground = nativeOptions.background !== undefined && nativeOptions.background !== null;
+    var background = hasBackground ? nativeOptions.background : this.surface.background;
+    var font = nativeOptions.font;
+    var textOffset;
+    var textLength;
+
+    if (!font) {
+      throw new Error("ST7789 batch drawText(x, y, text, options) requires a native font");
+    }
+    textLength = encoded.length | 0;
+    if (textLength <= 0) {
+      return this;
+    }
+    if (textLength > 0xffff) {
+      throw new Error("ST7789 batch drawText(x, y, text, options) text is too long");
+    }
+    if (this.textFont && this.textFont !== font) {
+      this.flush();
+    }
+    if (!this.textFont) {
+      this.textFont = font;
+    }
+    if (this.text.length + textLength > 0xffff) {
+      this.flush();
+      this.textFont = font;
+    }
+    textOffset = this.text.length;
+    this.text += encoded;
+    this.bytes.push(CMD_DRAW_TEXT);
+    pushI16(this.bytes, x);
+    pushI16(this.bytes, y);
+    pushU16(this.bytes, color);
+    pushU16(this.bytes, background);
+    pushU16(this.bytes, hasBackground ? CMD_TEXT_HAS_BACKGROUND : 0);
+    pushI16(this.bytes, clampTextSpacing(nativeOptions.spacing));
+    pushU16(this.bytes, textOffset);
+    pushU16(this.bytes, textLength);
+    return this;
+  };
+
+  ST7789CommandBatch.prototype.measureText = function (text, style) {
+    return this.surface.measureText(text, style);
+  };
+
+  ST7789Display.prototype.beginBatch = function () {
+    if (!this.commandBufferEnabled ||
+        !this.nativeBuffer ||
+        typeof this.nativeBuffer.createCommandBuffer !== "function") {
+      return null;
+    }
+    if (!this.commandBuffer) {
+      this.commandBuffer = this.nativeBuffer.createCommandBuffer(this.commandBufferOptions);
+    } else {
+      this.commandBuffer.reset();
+    }
+    if (!this.commandBatch) {
+      this.commandBatch = new ST7789CommandBatch(this, this.commandBuffer);
+    }
+    return this.commandBatch.reset(this.commandBuffer);
+  };
+
+  ST7789Display.prototype.endBatch = function (batch) {
+    var nativeBatch = batch && batch.nativeBatch ? batch.nativeBatch : batch;
+
+    if (batch && typeof batch.flush === "function") {
+      batch.flush();
+    }
+    if (nativeBatch && typeof nativeBatch.replay === "function") {
+      nativeBatch.replay(this.nativeBuffer);
+    }
+    return this;
+  };
 
   ST7789Display.prototype.clear = function (color) {
     color = nativeDrawColor(this, color, this.background, "ST7789.clear(color)");
@@ -837,6 +1070,11 @@
       this.bus = null;
     }
     if (this.nativeBuffer) {
+      if (this.commandBuffer) {
+        this.commandBuffer.close();
+        this.commandBuffer = null;
+        this.commandBatch = null;
+      }
       this.flushSource = null;
       this.nativeBuffer.close();
       this.nativeBuffer = null;
