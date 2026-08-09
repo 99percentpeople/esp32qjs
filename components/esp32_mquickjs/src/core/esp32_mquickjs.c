@@ -65,6 +65,11 @@ struct esp32_mquickjs_timer_slot {
 };
 
 #define ESP32_MQUICKJS_MAX_ASYNC_POLLERS 8
+#define ESP32_MQUICKJS_TIMER_HANDLE_ID_BITS 6U
+#define ESP32_MQUICKJS_TIMER_HANDLE_ID_MASK ((1U << ESP32_MQUICKJS_TIMER_HANDLE_ID_BITS) - 1U)
+#define ESP32_MQUICKJS_TIMER_HANDLE_MAX \
+    (((uint64_t)UINT32_MAX << ESP32_MQUICKJS_TIMER_HANDLE_ID_BITS) | \
+     ESP32_MQUICKJS_TIMER_HANDLE_ID_MASK)
 
 static void run_pending_external_gc(JSContext *ctx)
 {
@@ -962,7 +967,11 @@ static void esp32_mquickjs_timer_cb(void *arg)
     }
 }
 
-static JSValue js_value_to_delay_ms(JSContext *ctx, int argc, JSValue *argv, int arg_index)
+static JSValue js_value_to_delay_ms(JSContext *ctx,
+                                     int argc,
+                                     JSValue *argv,
+                                     int arg_index,
+                                     bool repeating)
 {
     int delay_ms = 0;
 
@@ -972,10 +981,43 @@ static JSValue js_value_to_delay_ms(JSContext *ctx, int argc, JSValue *argv, int
     if (delay_ms < 0) {
         return JS_ThrowRangeError(ctx, "timer delay must be non-negative");
     }
-    if (delay_ms == 0) {
+    if (repeating && delay_ms < CONFIG_ESP32_MQUICKJS_MIN_INTERVAL_MS) {
+        delay_ms = CONFIG_ESP32_MQUICKJS_MIN_INTERVAL_MS;
+    } else if (delay_ms == 0) {
         delay_ms = 1;
     }
     return JS_NewInt32(ctx, delay_ms);
+}
+
+static uint64_t esp32_mquickjs_timer_handle(const esp32_mquickjs_timer_slot_t *slot)
+{
+    return ((uint64_t)slot->generation << ESP32_MQUICKJS_TIMER_HANDLE_ID_BITS) |
+           (uint64_t)slot->timer_id;
+}
+
+static bool esp32_mquickjs_decode_timer_handle(JSContext *ctx,
+                                                JSValue value,
+                                                uint8_t *out_timer_id,
+                                                uint32_t *out_generation)
+{
+    double raw_handle;
+    uint64_t handle;
+
+    if (JS_ToNumber(ctx, &raw_handle, value) != 0 ||
+        !(raw_handle > 0) ||
+        raw_handle > (double)ESP32_MQUICKJS_TIMER_HANDLE_MAX) {
+        return false;
+    }
+    handle = (uint64_t)raw_handle;
+    if ((double)handle != raw_handle) {
+        return false;
+    }
+    *out_timer_id = (uint8_t)(handle & ESP32_MQUICKJS_TIMER_HANDLE_ID_MASK);
+    *out_generation = (uint32_t)(handle >> ESP32_MQUICKJS_TIMER_HANDLE_ID_BITS);
+    return *out_generation != 0 &&
+           *out_timer_id < ESP32_MQUICKJS_MAX_TIMERS &&
+           handle == (((uint64_t)*out_generation << ESP32_MQUICKJS_TIMER_HANDLE_ID_BITS) |
+                      (uint64_t)*out_timer_id);
 }
 
 static void esp32_mquickjs_cancel_timer(JSContext *ctx, esp32_mquickjs_timer_slot_t *slot)
@@ -1059,7 +1101,7 @@ static JSValue esp32_mquickjs_create_timer(JSContext *ctx,
         return JS_ThrowInternalError(ctx, "timer state is not initialized");
     }
 
-    delay_js = js_value_to_delay_ms(ctx, 1, &delay_value, 0);
+    delay_js = js_value_to_delay_ms(ctx, 1, &delay_value, 0, repeating);
     if (JS_IsException(delay_js)) {
         return delay_js;
     }
@@ -1078,6 +1120,9 @@ static JSValue esp32_mquickjs_create_timer(JSContext *ctx,
     }
 
     slot->generation++;
+    if (slot->generation == 0) {
+        slot->generation++;
+    }
     slot->pending = false;
     slot->repeating = repeating;
     slot->allocated = true;
@@ -1107,7 +1152,7 @@ static JSValue esp32_mquickjs_create_timer(JSContext *ctx,
         return JS_ThrowInternalError(ctx, "failed to start timer");
     }
 
-    return JS_NewInt32(ctx, slot->timer_id);
+    return JS_NewInt64(ctx, (int64_t)esp32_mquickjs_timer_handle(slot));
 }
 
 JSContext *esp32_mquickjs_create(void *mem_start,
@@ -1382,6 +1427,7 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
             fputs("Timer callback skipped: JS stack overflow\n", stdout);
             fflush(stdout);
             note_console_output();
+            esp32_mquickjs_cancel_timer(ctx, slot);
             continue;
         }
 
@@ -1394,6 +1440,9 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
         ret = esp32_mquickjs_call(ctx, runtime, *callback, JS_NULL, 0, NULL);
         if (JS_IsException(ret)) {
             esp32_mquickjs_print_exception(ctx);
+            if (slot->allocated && slot->generation == event.generation && slot->repeating) {
+                esp32_mquickjs_cancel_timer(ctx, slot);
+            }
         }
         JS_PopGCRef(ctx, &callback_ref);
     }
@@ -1526,14 +1575,19 @@ JSValue js_setInterval(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
 JSValue js_clearTimeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     esp32_mquickjs_timer_state_t *state = esp32_mquickjs_timer_state(s_active_runtime);
-    int timer_id;
+    uint8_t timer_id;
+    uint32_t generation;
 
     (void)this_val;
-    if (argc < 1 || JS_ToInt32(ctx, &timer_id, argv[0]) != 0) {
-        return JS_ThrowTypeError(ctx, "clearTimeout(id) expects a timer id");
+    if (argc < 1 || !esp32_mquickjs_decode_timer_handle(ctx, argv[0], &timer_id, &generation)) {
+        return JS_ThrowTypeError(ctx, "clearTimeout(handle) expects a timer handle");
     }
-    if (state != NULL && state->slots != NULL && timer_id >= 0 && timer_id < ESP32_MQUICKJS_MAX_TIMERS) {
-        esp32_mquickjs_cancel_timer(ctx, &state->slots[timer_id]);
+    if (state != NULL && state->slots != NULL) {
+        esp32_mquickjs_timer_slot_t *slot = &state->slots[timer_id];
+
+        if (slot->allocated && slot->generation == generation) {
+            esp32_mquickjs_cancel_timer(ctx, slot);
+        }
     }
     return JS_UNDEFINED;
 }

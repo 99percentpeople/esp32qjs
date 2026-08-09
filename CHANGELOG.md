@@ -12,5 +12,7 @@ Versioning; the native Host API uses a separate integer compatibility version.
   stop/destroy, native callback cleanup, and guarded in-flight HTTP teardown.
 - Apply deadlines to every native-to-JavaScript callback path.
 - Add optional runtime-task watchdog integration.
+- Make timer handles generation-checked, clamp tight intervals, and cancel
+  repeating timers whose callbacks fail.
 - Publish Host API version `1` through `esp32.info()`.
 - Establish Apache-2.0 licensing and initial framework documentation.

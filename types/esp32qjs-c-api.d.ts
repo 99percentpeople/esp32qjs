@@ -10,6 +10,9 @@ declare namespace ESP32QJS {
   type RequestBody = string | Stream | null | undefined;
   type RoutePattern = string | RegExp;
 
+  /** Opaque generation-checked token returned by the timer globals. */
+  type TimerHandle = number & { readonly __timerHandleBrand: never };
+
   /**
    * Byte payload accepted by low-level transports.
    *
@@ -1566,10 +1569,10 @@ declare global {
     options?: ESP32QJS.FetchOptions,
   ): ESP32QJS.Response;
 
-  function setTimeout(fn: () => void, ms: number): number;
-  function clearTimeout(id: number): void;
-  function setInterval(fn: () => void, ms: number): number;
-  function clearInterval(id: number): void;
+  function setTimeout(fn: () => void, ms: number): ESP32QJS.TimerHandle;
+  function clearTimeout(handle: ESP32QJS.TimerHandle): void;
+  function setInterval(fn: () => void, ms: number): ESP32QJS.TimerHandle;
+  function clearInterval(handle: ESP32QJS.TimerHandle): void;
 
   /** File-system helpers bound to `/littlefs`. */
   const fs: ESP32QJS.FsModule;

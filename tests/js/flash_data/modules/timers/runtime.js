@@ -20,6 +20,8 @@ test("timers/runtime", function () {
   var clearedIntervalTicks;
   var deferredRejectedCaught = false;
   var waitForRejectedCaught = false;
+  var staleHandleResult;
+  var throwingIntervalTicks;
   var callbackTimeoutRecovery;
 
   clearedTimeoutResult = waitFor(function (resolve) {
@@ -60,6 +62,33 @@ test("timers/runtime", function () {
   test.equal(deferred.wait(1000), "deferred-ok", "deferred wait");
   test.ok(!clearedTimeoutResult, "cleared timeout should not run");
   test.ok(clearedIntervalTicks >= 2, "cleared interval should tick before clear");
+
+  staleHandleResult = waitFor(function (resolve, reject) {
+    var staleHandle = setTimeout(function () {
+      reject("cleared stale timer ran");
+    }, 500);
+    var replacementHandle;
+
+    clearTimeout(staleHandle);
+    replacementHandle = setTimeout(function () {
+      resolve(staleHandle !== replacementHandle);
+    }, 20);
+    clearTimeout(staleHandle);
+  }, 1000);
+  test.ok(staleHandleResult, "stale handle should not cancel a reused timer slot");
+
+  throwingIntervalTicks = waitFor(function (resolve) {
+    var ticks = 0;
+
+    setInterval(function () {
+      ticks++;
+      throw "expected interval failure";
+    }, 10);
+    setTimeout(function () {
+      resolve(ticks);
+    }, 60);
+  }, 1000);
+  test.equal(throwingIntervalTicks, 1, "throwing interval should cancel itself");
 
   try {
     deferredRejected.wait(1000);

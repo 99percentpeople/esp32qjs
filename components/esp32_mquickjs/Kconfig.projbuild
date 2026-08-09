@@ -132,6 +132,14 @@ config ESP32_MQUICKJS_MAX_TIMERS
     help
         Maximum number of active setTimeout/setInterval handles.
 
+config ESP32_MQUICKJS_MIN_INTERVAL_MS
+    int "Minimum setInterval period (ms)"
+    range 1 1000
+    default 10
+    help
+        Clamp shorter setInterval periods to this value so a callback cannot
+        monopolize the runtime with a zero-delay repeating timer.
+
 config ESP32_MQUICKJS_TIMER_QUEUE_LEN
     int "Timer event queue length"
     range 1 64
