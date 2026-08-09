@@ -172,7 +172,8 @@ static JSValue js_fs_list_path(JSContext *ctx, const char *path)
     while ((entry_raw = readdir(dir)) != NULL) {
         char entry_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
         struct stat st;
-        JSValue entry;
+        JSGCRef entry_ref;
+        JSValue *entry;
         int needed;
 
         if (strcmp(entry_raw->d_name, ".") == 0 || strcmp(entry_raw->d_name, "..") == 0) {
@@ -189,13 +190,14 @@ static JSValue js_fs_list_path(JSContext *ctx, const char *path)
             goto fail;
         }
 
-        entry = fs_make_stat_object(ctx, entry_path, &st);
-        if (JS_IsException(entry)) {
+        entry = JS_PushGCRef(ctx, &entry_ref);
+        *entry = fs_make_stat_object(ctx, entry_path, &st);
+        if (JS_IsException(*entry) ||
+            JS_IsException(JS_SetPropertyUint32(ctx, *entries, index++, *entry))) {
+            JS_PopGCRef(ctx, &entry_ref);
             goto fail;
         }
-        if (JS_IsException(JS_SetPropertyUint32(ctx, *entries, index++, entry))) {
-            goto fail;
-        }
+        JS_PopGCRef(ctx, &entry_ref);
     }
 
     closedir(dir);

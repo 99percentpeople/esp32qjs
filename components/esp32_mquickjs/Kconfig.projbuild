@@ -101,6 +101,15 @@ config ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
 
 endmenu
 
+config ESP32_MQUICKJS_DEBUG_GC
+    bool "Force garbage collection before every allocation"
+    default n
+    help
+        Enable MicroQuickJS DEBUG_GC mode so every allocation first compacts
+        the JavaScript heap. This is intentionally slow and should only be
+        enabled in automated tests or while auditing native bindings for
+        missing JSGCRef roots.
+
 config ESP32_MQUICKJS_DEFAULT_EVAL_TIMEOUT_MS
     int "Default JavaScript eval timeout (ms)"
     range 50 10000

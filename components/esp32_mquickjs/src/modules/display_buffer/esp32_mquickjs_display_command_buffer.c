@@ -329,21 +329,33 @@ static bool keep_font_alive(JSContext *ctx,
                             display_command_buffer_t *command_buffer,
                             JSValue font_value)
 {
+    JSGCRef owner_ref;
+    JSGCRef font_ref;
     JSGCRef fonts_ref;
+    JSValue *rooted_owner;
+    JSValue *rooted_font;
     JSValue *fonts;
     bool ok = true;
 
+    rooted_owner = JS_PushGCRef(ctx, &owner_ref);
+    rooted_font = JS_PushGCRef(ctx, &font_ref);
     fonts = JS_PushGCRef(ctx, &fonts_ref);
-    *fonts = JS_GetPropertyStr(ctx, owner, DISPLAY_COMMAND_BUFFER_FONTS_KEY);
+    *rooted_owner = owner;
+    *rooted_font = font_value;
+    *fonts = JS_GetPropertyStr(ctx, *rooted_owner, DISPLAY_COMMAND_BUFFER_FONTS_KEY);
     if (JS_IsException(*fonts)) {
         JS_PopGCRef(ctx, &fonts_ref);
+        JS_PopGCRef(ctx, &font_ref);
+        JS_PopGCRef(ctx, &owner_ref);
         return false;
     }
     if (JS_IsUndefined(*fonts) || JS_IsNull(*fonts) || JS_GetClassID(ctx, *fonts) != JS_CLASS_ARRAY) {
         *fonts = JS_NewArray(ctx, 0);
         if (JS_IsException(*fonts) ||
-            !esp32_mquickjs_set_property(ctx, owner, DISPLAY_COMMAND_BUFFER_FONTS_KEY, *fonts)) {
+            !esp32_mquickjs_set_property(ctx, *rooted_owner, DISPLAY_COMMAND_BUFFER_FONTS_KEY, *fonts)) {
             JS_PopGCRef(ctx, &fonts_ref);
+            JS_PopGCRef(ctx, &font_ref);
+            JS_PopGCRef(ctx, &owner_ref);
             return false;
         }
     }
@@ -351,12 +363,14 @@ static bool keep_font_alive(JSContext *ctx,
         JS_IsException(JS_SetPropertyUint32(ctx,
                                             *fonts,
                                             (uint32_t)command_buffer->font_ref_count,
-                                            font_value))) {
+                                            *rooted_font))) {
         ok = false;
     } else {
         command_buffer->font_ref_count += 1U;
     }
     JS_PopGCRef(ctx, &fonts_ref);
+    JS_PopGCRef(ctx, &font_ref);
+    JS_PopGCRef(ctx, &owner_ref);
     return ok;
 }
 
@@ -553,7 +567,6 @@ JSValue js_display_buffer_create_command_buffer(JSContext *ctx, JSValue *this_va
     display_command_buffer_t *command_buffer;
     uint32_t command_capacity = DISPLAY_COMMAND_BUFFER_DEFAULT_COMMANDS;
     uint32_t text_capacity = DISPLAY_COMMAND_BUFFER_DEFAULT_TEXT_BYTES;
-    JSValue options;
     JSGCRef object_ref;
     JSValue *object;
 
@@ -561,10 +574,11 @@ JSValue js_display_buffer_create_command_buffer(JSContext *ctx, JSValue *this_va
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
-    options = argc >= 1 ? argv[0] : JS_UNDEFINED;
-    if (!text_options_is_object(ctx, options, "DisplayBuffer.createCommandBuffer()") ||
-        !get_u32_option(ctx, options, "commandCapacity", &command_capacity, "DisplayBuffer.createCommandBuffer()") ||
-        !get_u32_option(ctx, options, "textBytes", &text_capacity, "DisplayBuffer.createCommandBuffer()")) {
+    if (!text_options_is_object(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, "DisplayBuffer.createCommandBuffer()") ||
+        !get_u32_option(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED,
+                        "commandCapacity", &command_capacity, "DisplayBuffer.createCommandBuffer()") ||
+        !get_u32_option(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED,
+                        "textBytes", &text_capacity, "DisplayBuffer.createCommandBuffer()")) {
         return JS_EXCEPTION;
     }
     if (command_capacity == 0) {
@@ -869,8 +883,8 @@ JSValue js_display_command_buffer_draw_text(JSContext *ctx, JSValue *this_val, i
     size_t text_length;
     int spacing;
     const esp32_mquickjs_bitmap_font_t *font;
-    JSValue font_value;
-    JSValue options;
+    JSGCRef font_value_ref;
+    JSValue *font_value;
     JSGCRef property_ref;
     JSValue *property;
 
@@ -881,51 +895,54 @@ JSValue js_display_command_buffer_draw_text(JSContext *ctx, JSValue *this_val, i
     if (argc < 3 || !value_to_i32(ctx, argv[0], &x) || !value_to_i32(ctx, argv[1], &y)) {
         return JS_ThrowTypeError(ctx, "DisplayCommandBuffer.drawText(x, y, text, options?) expects x, y, and text");
     }
-    text = JS_ToCStringLen(ctx, &text_length, argv[2], &text_buf);
-    if (text == NULL) {
-        return JS_EXCEPTION;
-    }
-    options = argc >= 4 ? argv[3] : JS_UNDEFINED;
-    if (!text_options_is_object(ctx, options, "DisplayCommandBuffer.drawText()")) {
-        return JS_EXCEPTION;
+
+    font_value = JS_PushGCRef(ctx, &font_value_ref);
+    *font_value = JS_UNDEFINED;
+    if (!text_options_is_object(ctx, argc >= 4 ? argv[3] : JS_UNDEFINED,
+                                "DisplayCommandBuffer.drawText()")) {
+        goto fail;
     }
     color = command_buffer->foreground;
-    if (!JS_IsUndefined(options) && !JS_IsNull(options)) {
+    if (argc >= 4 && !JS_IsUndefined(argv[3]) && !JS_IsNull(argv[3])) {
         property = JS_PushGCRef(ctx, &property_ref);
-        *property = JS_GetPropertyStr(ctx, options, "color");
+        *property = JS_GetPropertyStr(ctx, argv[3], "color");
         if (JS_IsException(*property)) {
             JS_PopGCRef(ctx, &property_ref);
-            return JS_EXCEPTION;
+            goto fail;
         }
         color = normalize_color(ctx, command_buffer->format, *property, command_buffer->foreground, &ok);
         JS_PopGCRef(ctx, &property_ref);
         if (!ok) {
-            return JS_ThrowTypeError(ctx, "DisplayCommandBuffer.drawText() option 'color' expects a valid color");
+            JS_ThrowTypeError(ctx, "DisplayCommandBuffer.drawText() option 'color' expects a valid color");
+            goto fail;
         }
     }
-    spacing = text_spacing_from_options(ctx, options, 0);
+    spacing = text_spacing_from_options(ctx, argc >= 4 ? argv[3] : JS_UNDEFINED, 0);
     if (!text_font_from_options(ctx,
-                                options,
+                                argc >= 4 ? argv[3] : JS_UNDEFINED,
                                 "DisplayCommandBuffer.drawText() option 'font'",
                                 &font,
-                                &font_value)) {
-        return JS_EXCEPTION;
+                                font_value)) {
+        goto fail;
     }
     if (!text_background_from_options(ctx,
                                       command_buffer->format,
-                                      options,
+                                      argc >= 4 ? argv[3] : JS_UNDEFINED,
                                       command_buffer->background,
                                       &background,
                                       &has_background)) {
-        return JS_ThrowTypeError(ctx, "DisplayCommandBuffer.drawText() option 'background' expects a valid color or null");
+        JS_ThrowTypeError(ctx, "DisplayCommandBuffer.drawText() option 'background' expects a valid color or null");
+        goto fail;
     }
-    if (text_length == SIZE_MAX ||
+    if (!keep_font_alive(ctx, *this_val, command_buffer, *font_value)) {
+        goto fail;
+    }
+
+    text = JS_ToCStringLen(ctx, &text_length, argv[2], &text_buf);
+    if (text == NULL || text_length == SIZE_MAX ||
         !reserve_text(ctx, command_buffer, text_length + 1U) ||
         !reserve_commands(ctx, command_buffer, 1U)) {
-        return JS_EXCEPTION;
-    }
-    if (!keep_font_alive(ctx, *this_val, command_buffer, font_value)) {
-        return JS_EXCEPTION;
+        goto fail;
     }
 
     command = &command_buffer->commands[command_buffer->count];
@@ -944,7 +961,12 @@ JSValue js_display_command_buffer_draw_text(JSContext *ctx, JSValue *this_val, i
     command_buffer->text[command_buffer->text_length + text_length] = '\0';
     command_buffer->text_length += text_length + 1U;
     command_buffer->count += 1U;
+    JS_PopGCRef(ctx, &font_value_ref);
     return *this_val;
+
+fail:
+    JS_PopGCRef(ctx, &font_value_ref);
+    return JS_EXCEPTION;
 }
 
 JSValue js_display_command_buffer_append_packed(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -952,8 +974,8 @@ JSValue js_display_command_buffer_append_packed(JSContext *ctx, JSValue *this_va
     display_command_buffer_t *command_buffer;
     esp32_mquickjs_byte_source_t source;
     uint8_t *owned = NULL;
+    char *owned_text = NULL;
     JSValue error = JS_UNDEFINED;
-    JSValue options;
     JSGCRef text_value_ref;
     JSGCRef font_value_ref;
     JSValue *text_value;
@@ -984,27 +1006,35 @@ JSValue js_display_command_buffer_append_packed(JSContext *ctx, JSValue *this_va
                    : error;
     }
 
-    options = argc >= 2 ? argv[1] : JS_UNDEFINED;
     text_value = JS_PushGCRef(ctx, &text_value_ref);
     *text_value = JS_UNDEFINED;
     font_value = JS_PushGCRef(ctx, &font_value_ref);
     *font_value = JS_UNDEFINED;
 
-    if (!text_options_is_object(ctx, options, "DisplayCommandBuffer.appendPacked()")) {
+    if (!text_options_is_object(ctx, argc >= 2 ? argv[1] : JS_UNDEFINED,
+                                "DisplayCommandBuffer.appendPacked()")) {
         goto fail;
     }
-    if (!JS_IsUndefined(options) && !JS_IsNull(options)) {
-        *text_value = JS_GetPropertyStr(ctx, options, "text");
+    if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+        *text_value = JS_GetPropertyStr(ctx, argv[1], "text");
         if (JS_IsException(*text_value)) {
             goto fail;
         }
         if (!JS_IsUndefined(*text_value) && !JS_IsNull(*text_value)) {
             packed_text = JS_ToCStringLen(ctx, &packed_text_length, *text_value, &text_buf);
-            if (packed_text == NULL) {
+            if (packed_text == NULL || packed_text_length == SIZE_MAX) {
                 goto fail;
             }
+            owned_text = heap_caps_malloc(packed_text_length + 1U, MALLOC_CAP_8BIT);
+            if (owned_text == NULL) {
+                JS_ThrowOutOfMemory(ctx);
+                goto fail;
+            }
+            memcpy(owned_text, packed_text, packed_text_length);
+            owned_text[packed_text_length] = '\0';
+            packed_text = owned_text;
         }
-        *font_value = JS_GetPropertyStr(ctx, options, "font");
+        *font_value = JS_GetPropertyStr(ctx, argv[1], "font");
         if (JS_IsException(*font_value)) {
             goto fail;
         }
@@ -1036,6 +1066,7 @@ JSValue js_display_command_buffer_append_packed(JSContext *ctx, JSValue *this_va
     if (command_count == 0U) {
         JS_PopGCRef(ctx, &font_value_ref);
         JS_PopGCRef(ctx, &text_value_ref);
+        heap_caps_free(owned_text);
         esp32_mquickjs_release_byte_source(owned);
         return *this_val;
     }
@@ -1143,12 +1174,14 @@ JSValue js_display_command_buffer_append_packed(JSContext *ctx, JSValue *this_va
 
     JS_PopGCRef(ctx, &font_value_ref);
     JS_PopGCRef(ctx, &text_value_ref);
+    heap_caps_free(owned_text);
     esp32_mquickjs_release_byte_source(owned);
     return *this_val;
 
 fail:
     JS_PopGCRef(ctx, &font_value_ref);
     JS_PopGCRef(ctx, &text_value_ref);
+    heap_caps_free(owned_text);
     esp32_mquickjs_release_byte_source(owned);
     return JS_EXCEPTION;
 }

@@ -372,6 +372,9 @@ foreach(esp32_mquickjs_feature_config ${ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS})
 endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE _GNU_SOURCE)
+if(CONFIG_ESP32_MQUICKJS_DEBUG_GC)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEBUG_GC=1)
+endif()
 target_compile_options(
     ${COMPONENT_LIB}
     PRIVATE

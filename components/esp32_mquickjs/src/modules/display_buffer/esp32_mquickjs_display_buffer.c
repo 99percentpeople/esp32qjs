@@ -25,7 +25,8 @@ typedef struct {
     size_t scratch_capacity;
     int iter_y;
     int iter_remaining;
-    JSValue owner;
+    JSGCRef owner_ref;
+    bool owner_ref_added;
     bool iterating;
 } display_buffer_span_source_t;
 
@@ -622,7 +623,9 @@ static bool read_rect_options(JSContext *ctx,
                               uint32_t *out_chunk_bytes,
                               bool *out_reuse)
 {
+    JSGCRef options_ref;
     JSGCRef property_ref;
+    JSValue *rooted_options;
     JSValue *property;
     bool ok = true;
 
@@ -641,8 +644,10 @@ static bool read_rect_options(JSContext *ctx,
         return false;
     }
 
+    rooted_options = JS_PushGCRef(ctx, &options_ref);
     property = JS_PushGCRef(ctx, &property_ref);
-    *property = JS_GetPropertyStr(ctx, options, "byteOrder");
+    *rooted_options = options;
+    *property = JS_GetPropertyStr(ctx, *rooted_options, "byteOrder");
     if (JS_IsException(*property)) {
         ok = false;
         goto done;
@@ -665,7 +670,7 @@ static bool read_rect_options(JSContext *ctx,
     }
 
     if (out_chunk_bytes != NULL) {
-        *property = JS_GetPropertyStr(ctx, options, "chunkBytes");
+        *property = JS_GetPropertyStr(ctx, *rooted_options, "chunkBytes");
         if (JS_IsException(*property)) {
             ok = false;
             goto done;
@@ -681,7 +686,7 @@ static bool read_rect_options(JSContext *ctx,
     if (out_reuse != NULL) {
         int reuse = 0;
 
-        *property = JS_GetPropertyStr(ctx, options, "reuse");
+        *property = JS_GetPropertyStr(ctx, *rooted_options, "reuse");
         if (JS_IsException(*property)) {
             ok = false;
             goto done;
@@ -698,6 +703,7 @@ static bool read_rect_options(JSContext *ctx,
 
 done:
     JS_PopGCRef(ctx, &property_ref);
+    JS_PopGCRef(ctx, &options_ref);
     return ok;
 }
 
@@ -706,7 +712,9 @@ static bool span_source_options(JSContext *ctx,
                                 bool *out_little_endian,
                                 uint32_t *out_chunk_bytes)
 {
+    JSGCRef options_ref;
     JSGCRef property_ref;
+    JSValue *rooted_options;
     JSValue *property;
     bool ok = true;
 
@@ -720,8 +728,10 @@ static bool span_source_options(JSContext *ctx,
         return false;
     }
 
+    rooted_options = JS_PushGCRef(ctx, &options_ref);
     property = JS_PushGCRef(ctx, &property_ref);
-    *property = JS_GetPropertyStr(ctx, options, "byteOrder");
+    *rooted_options = options;
+    *property = JS_GetPropertyStr(ctx, *rooted_options, "byteOrder");
     if (JS_IsException(*property)) {
         ok = false;
         goto done;
@@ -743,7 +753,7 @@ static bool span_source_options(JSContext *ctx,
         }
     }
 
-    *property = JS_GetPropertyStr(ctx, options, "chunkBytes");
+    *property = JS_GetPropertyStr(ctx, *rooted_options, "chunkBytes");
     if (JS_IsException(*property)) {
         ok = false;
         goto done;
@@ -757,6 +767,7 @@ static bool span_source_options(JSContext *ctx,
 
 done:
     JS_PopGCRef(ctx, &property_ref);
+    JS_PopGCRef(ctx, &options_ref);
     return ok;
 }
 
@@ -1124,7 +1135,11 @@ static bool display_span_source_open(JSContext *ctx,
         *out_error = JS_ThrowReferenceError(ctx, "SPIDevice.writeSource(source) failed because the DisplayBuffer is closed");
         return false;
     }
-    source->owner = source_value;
+    if (source->owner_ref_added) {
+        JS_DeleteGCRef(ctx, &source->owner_ref);
+    }
+    *JS_AddGCRef(ctx, &source->owner_ref) = source_value;
+    source->owner_ref_added = true;
     source->iter_y = source->rect.y;
     source->iter_remaining = source->rect.height;
     source->iterating = true;
@@ -1163,7 +1178,7 @@ static bool display_span_source_next(JSContext *ctx, void *opaque, esp32_mquickj
     if (esp32_mquickjs_display_buffer_direct_rect(source->buffer, &rect, &direct_data, &length)) {
         out->data = direct_data;
         out->length = length;
-        out->owner = source->owner;
+        out->owner = source->owner_ref_added ? source->owner_ref.val : JS_UNDEFINED;
         out->dma_capable = true;
     } else {
         length = esp32_mquickjs_display_buffer_rect_length(source->buffer, rect.width, rect.height);
@@ -1178,7 +1193,7 @@ static bool display_span_source_next(JSContext *ctx, void *opaque, esp32_mquickj
         }
         out->data = source->scratch;
         out->length = length;
-        out->owner = source->owner;
+        out->owner = source->owner_ref_added ? source->owner_ref.val : JS_UNDEFINED;
         out->dma_capable = false;
     }
 
@@ -1196,16 +1211,22 @@ static void display_span_source_close(JSContext *ctx, void *opaque)
         return;
     }
     source->iterating = false;
-    source->owner = JS_UNDEFINED;
+    if (source->owner_ref_added) {
+        JS_DeleteGCRef(ctx, &source->owner_ref);
+        source->owner_ref_added = false;
+    }
 }
 
 static void display_span_source_destroy(JSContext *ctx, void *opaque)
 {
     display_buffer_span_source_t *source = opaque;
 
-    (void)ctx;
     if (source == NULL) {
         return;
+    }
+    if (source->owner_ref_added) {
+        JS_DeleteGCRef(ctx, &source->owner_ref);
+        source->owner_ref_added = false;
     }
     heap_caps_free(source->scratch);
     heap_caps_free(source);
@@ -1257,7 +1278,10 @@ static JSValue make_staged_rect_byte_view(JSContext *ctx,
     uint8_t *data;
     const uint8_t *direct_data;
     size_t length = 0;
-    JSValue staged_view;
+    JSGCRef staged_ref;
+    JSGCRef owner_ref;
+    JSValue *staged_view;
+    JSValue *rooted_owner;
 
     if (rect_clamp(buffer, &x, &y, &width, &height)) {
         if (direct_read_rect_data(buffer, x, y, width, height, little_endian, &direct_data, &length)) {
@@ -1274,32 +1298,37 @@ static JSValue make_staged_rect_byte_view(JSContext *ctx,
         read_rect_fill(buffer, x, y, width, height, little_endian, data);
     }
 
-    staged_view = JS_GetPropertyStr(ctx, owner, DISPLAY_BUFFER_STAGED_VIEW_KEY);
-    if (JS_IsException(staged_view)) {
-        return JS_EXCEPTION;
+    staged_view = JS_PushGCRef(ctx, &staged_ref);
+    rooted_owner = JS_PushGCRef(ctx, &owner_ref);
+    *staged_view = JS_UNDEFINED;
+    *rooted_owner = owner;
+    *staged_view = JS_GetPropertyStr(ctx, *rooted_owner, DISPLAY_BUFFER_STAGED_VIEW_KEY);
+    if (JS_IsException(*staged_view)) {
+        goto fail;
     }
-    if (JS_GetClassID(ctx, staged_view) == JS_CLASS_BYTE_VIEW) {
-        if (!esp32_mquickjs_update_byte_view(ctx, staged_view, data, length)) {
-            return JS_EXCEPTION;
+    if (JS_GetClassID(ctx, *staged_view) == JS_CLASS_BYTE_VIEW) {
+        if (!esp32_mquickjs_update_byte_view(ctx, *staged_view, data, length)) {
+            goto fail;
         }
-        return staged_view;
-    }
-
-    {
-        JSGCRef staged_ref;
-        JSValue *staged_obj = JS_PushGCRef(ctx, &staged_ref);
-
-        *staged_obj = esp32_mquickjs_new_byte_view(ctx, owner, data, length);
-        if (JS_IsException(*staged_obj)) {
-            JS_PopGCRef(ctx, &staged_ref);
-            return JS_EXCEPTION;
-        }
-        if (JS_IsException(JS_SetPropertyStr(ctx, owner, DISPLAY_BUFFER_STAGED_VIEW_KEY, *staged_obj))) {
-            JS_PopGCRef(ctx, &staged_ref);
-            return JS_EXCEPTION;
-        }
+        JS_PopGCRef(ctx, &owner_ref);
         return JS_PopGCRef(ctx, &staged_ref);
     }
+
+    *staged_view = esp32_mquickjs_new_byte_view(ctx, *rooted_owner, data, length);
+    if (JS_IsException(*staged_view) ||
+        JS_IsException(JS_SetPropertyStr(ctx,
+                                         *rooted_owner,
+                                         DISPLAY_BUFFER_STAGED_VIEW_KEY,
+                                         *staged_view))) {
+        goto fail;
+    }
+    JS_PopGCRef(ctx, &owner_ref);
+    return JS_PopGCRef(ctx, &staged_ref);
+
+fail:
+    JS_PopGCRef(ctx, &owner_ref);
+    JS_PopGCRef(ctx, &staged_ref);
+    return JS_EXCEPTION;
 }
 
 static JSValue make_rect_byte_view(JSContext *ctx,
@@ -1376,7 +1405,7 @@ static bool rect_chunks_are_direct(const esp32_mquickjs_display_buffer_t *buffer
 }
 
 static JSValue make_reused_direct_rect_chunks(JSContext *ctx,
-                                              JSValue owner,
+                                              JSValue *owner,
                                               const esp32_mquickjs_display_buffer_t *buffer,
                                               int x,
                                               int y,
@@ -1399,7 +1428,7 @@ static JSValue make_reused_direct_rect_chunks(JSContext *ctx,
     }
 
     array = JS_PushGCRef(ctx, &array_ref);
-    *array = JS_GetPropertyStr(ctx, owner, DISPLAY_BUFFER_STAGED_CHUNKS_KEY);
+    *array = JS_GetPropertyStr(ctx, *owner, DISPLAY_BUFFER_STAGED_CHUNKS_KEY);
     if (JS_IsException(*array)) {
         JS_PopGCRef(ctx, &array_ref);
         return JS_EXCEPTION;
@@ -1419,7 +1448,8 @@ static JSValue make_reused_direct_rect_chunks(JSContext *ctx,
         int rows = rows_per_chunk;
         const uint8_t *direct_data;
         size_t length = 0;
-        JSValue chunk = JS_UNDEFINED;
+        JSGCRef chunk_ref;
+        JSValue *chunk;
 
         if (rows > end_y - y) {
             rows = end_y - y;
@@ -1453,17 +1483,21 @@ static JSValue make_reused_direct_rect_chunks(JSContext *ctx,
             JS_PopGCRef(ctx, &item_ref);
         }
 
-        chunk = esp32_mquickjs_new_byte_view(ctx, owner, direct_data, length);
-        if (JS_IsException(chunk) || JS_IsException(JS_SetPropertyUint32(ctx, *array, index, chunk))) {
+        chunk = JS_PushGCRef(ctx, &chunk_ref);
+        *chunk = esp32_mquickjs_new_byte_view(ctx, *owner, direct_data, length);
+        if (JS_IsException(*chunk) ||
+            JS_IsException(JS_SetPropertyUint32(ctx, *array, index, *chunk))) {
+            JS_PopGCRef(ctx, &chunk_ref);
             JS_PopGCRef(ctx, &array_ref);
             return JS_EXCEPTION;
         }
+        JS_PopGCRef(ctx, &chunk_ref);
         y += rows;
         index++;
     }
 
     if (must_cache_array &&
-        JS_IsException(JS_SetPropertyStr(ctx, owner, DISPLAY_BUFFER_STAGED_CHUNKS_KEY, *array))) {
+        JS_IsException(JS_SetPropertyStr(ctx, *owner, DISPLAY_BUFFER_STAGED_CHUNKS_KEY, *array))) {
         JS_PopGCRef(ctx, &array_ref);
         return JS_EXCEPTION;
     }
@@ -1532,21 +1566,25 @@ JSValue js_display_buffer_create(JSContext *ctx, JSValue *this_val, int argc, JS
     if (!parse_format(format_name_value, &format)) {
         return JS_ThrowTypeError(ctx, "displayBuffer.create({ format }) expects 'mono1' or 'rgb565'");
     }
-    if (!get_string_option(ctx, argv[0], "layout", &layout_name_value, &layout_buf, false, "displayBuffer.create()") ||
-        !get_string_option(ctx, argv[0], "storage", &storage_name_value, &storage_buf, false, "displayBuffer.create()") ||
-        !get_u32_option(ctx, argv[0], "stride", &stride, false, "displayBuffer.create()") ||
+    if (!get_string_option(ctx, argv[0], "layout", &layout_name_value, &layout_buf, false, "displayBuffer.create()")) {
+        return JS_EXCEPTION;
+    }
+    if (!parse_layout(layout_name_value, format, &layout)) {
+        return JS_ThrowTypeError(ctx, "displayBuffer.create({ layout }) expects 'linear' or 'page-y8'");
+    }
+    if (!get_string_option(ctx, argv[0], "storage", &storage_name_value, &storage_buf, false, "displayBuffer.create()")) {
+        return JS_EXCEPTION;
+    }
+    if (!parse_storage(storage_name_value, &storage)) {
+        return JS_ThrowTypeError(ctx, "displayBuffer.create({ storage }) expects 'auto', 'internal', 'psram', or 'dma'");
+    }
+    if (!get_u32_option(ctx, argv[0], "stride", &stride, false, "displayBuffer.create()") ||
         !get_u32_option(ctx, argv[0], "pageHeight", &page_height, false, "displayBuffer.create()") ||
         !get_u32_option(ctx, argv[0], "chunkBytes", &chunk_bytes, false, "displayBuffer.create()")) {
         return JS_EXCEPTION;
     }
     if (chunk_bytes == 0) {
         chunk_bytes = DISPLAY_BUFFER_DEFAULT_CHUNK_BYTES;
-    }
-    if (!parse_layout(layout_name_value, format, &layout)) {
-        return JS_ThrowTypeError(ctx, "displayBuffer.create({ layout }) expects 'linear' or 'page-y8'");
-    }
-    if (!parse_storage(storage_name_value, &storage)) {
-        return JS_ThrowTypeError(ctx, "displayBuffer.create({ storage }) expects 'auto', 'internal', 'psram', or 'dma'");
     }
     if (!compute_layout(width,
                         height,
@@ -1904,7 +1942,7 @@ JSValue js_display_buffer_create_span_source(JSContext *ctx, JSValue *this_val, 
     memset(source, 0, sizeof(*source));
     source->buffer = buffer;
     source->chunk_bytes = chunk_bytes;
-    source->owner = JS_UNDEFINED;
+    source->owner_ref_added = false;
     source->rect.byte_order = little_endian ? ESP32_MQUICKJS_DISPLAY_BUFFER_BYTE_ORDER_LE
                                             : ESP32_MQUICKJS_DISPLAY_BUFFER_BYTE_ORDER_BE;
 
@@ -2000,7 +2038,7 @@ JSValue js_display_buffer_read_rect_chunks(JSContext *ctx, JSValue *this_val, in
 
     if (reuse) {
         JSValue reused = make_reused_direct_rect_chunks(ctx,
-                                                       *this_val,
+                                                       this_val,
                                                        buffer,
                                                        x,
                                                        y,
@@ -2027,16 +2065,21 @@ JSValue js_display_buffer_read_rect_chunks(JSContext *ctx, JSValue *this_val, in
     end_y = y + height;
     while (y < end_y) {
         int rows = rows_per_chunk;
-        JSValue chunk;
+        JSGCRef chunk_ref;
+        JSValue *chunk;
 
         if (rows > end_y - y) {
             rows = end_y - y;
         }
-        chunk = make_rect_byte_view(ctx, *this_val, buffer, x, y, width, rows, little_endian);
-        if (JS_IsException(chunk) || JS_IsException(JS_SetPropertyUint32(ctx, *array, index++, chunk))) {
+        chunk = JS_PushGCRef(ctx, &chunk_ref);
+        *chunk = make_rect_byte_view(ctx, *this_val, buffer, x, y, width, rows, little_endian);
+        if (JS_IsException(*chunk) ||
+            JS_IsException(JS_SetPropertyUint32(ctx, *array, index++, *chunk))) {
+            JS_PopGCRef(ctx, &chunk_ref);
             JS_PopGCRef(ctx, &array_ref);
             return JS_EXCEPTION;
         }
+        JS_PopGCRef(ctx, &chunk_ref);
         y += rows;
     }
     return JS_PopGCRef(ctx, &array_ref);

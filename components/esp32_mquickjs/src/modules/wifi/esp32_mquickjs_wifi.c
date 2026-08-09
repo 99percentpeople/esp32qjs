@@ -887,12 +887,16 @@ static JSValue wifi_make_scan_results_array(JSContext *ctx)
     }
 
     for (i = 0; i < count; ++i) {
-        JSValue entry = wifi_make_scan_entry_object(ctx, &records[i]);
+        JSGCRef entry_ref;
+        JSValue *entry = JS_PushGCRef(ctx, &entry_ref);
 
-        if (JS_IsException(entry) ||
-            JS_IsException(JS_SetPropertyUint32(ctx, *results, i, entry))) {
+        *entry = wifi_make_scan_entry_object(ctx, &records[i]);
+        if (JS_IsException(*entry) ||
+            JS_IsException(JS_SetPropertyUint32(ctx, *results, i, *entry))) {
+            JS_PopGCRef(ctx, &entry_ref);
             goto fail;
         }
+        JS_PopGCRef(ctx, &entry_ref);
     }
 
     heap_caps_free(records);
@@ -1010,6 +1014,10 @@ JSValue js_wifi_connect(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
     JSCStringBuf password_buf;
     const char *ssid;
     const char *password;
+    size_t ssid_len = 0;
+    size_t password_len = 0;
+    char ssid_copy[ESP32_MQUICKJS_WIFI_SSID_MAX_LEN + 1];
+    char password_copy[ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN + 1];
     uint32_t timeout_ms = ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS;
     esp_err_t err;
 
@@ -1030,9 +1038,23 @@ JSValue js_wifi_connect(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
             return JS_ThrowTypeError(ctx, "wifi.connect(..., timeoutMs) expects a non-negative integer");
         }
     }
-    ssid = JS_ToCString(ctx, argv[0], &ssid_buf);
-    password = JS_ToCString(ctx, argv[1], &password_buf);
-    err = wifi_connect(ssid, password, timeout_ms);
+    ssid = JS_ToCStringLen(ctx, &ssid_len, argv[0], &ssid_buf);
+    if (ssid == NULL || ssid_len == 0 || ssid_len > ESP32_MQUICKJS_WIFI_SSID_MAX_LEN) {
+        return JS_ThrowTypeError(ctx, "wifi.connect(ssid, ...) expects an SSID of 1..%d bytes",
+                                 ESP32_MQUICKJS_WIFI_SSID_MAX_LEN);
+    }
+    memcpy(ssid_copy, ssid, ssid_len);
+    ssid_copy[ssid_len] = '\0';
+
+    password = JS_ToCStringLen(ctx, &password_len, argv[1], &password_buf);
+    if (password == NULL || password_len > ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN) {
+        return JS_ThrowTypeError(ctx, "wifi.connect(..., password, ...) expects at most %d bytes",
+                                 ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN);
+    }
+    memcpy(password_copy, password, password_len);
+    password_copy[password_len] = '\0';
+
+    err = wifi_connect(ssid_copy, password_copy, timeout_ms);
     if (err != ESP_OK) {
         return wifi_throw_connect_error(ctx, err);
     }

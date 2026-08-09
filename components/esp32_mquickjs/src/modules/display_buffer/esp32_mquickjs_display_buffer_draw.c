@@ -1525,9 +1525,10 @@ JSValue js_display_buffer_draw_bitmap(JSContext *ctx, JSValue *this_val, int arg
     int32_t y;
     uint32_t width = 0;
     uint32_t height = 0;
+    JSGCRef pixels_ref;
     JSGCRef property_ref;
+    JSValue *pixels;
     JSValue *property;
-    JSValue pixels = JS_UNDEFINED;
     uint32_t index = 0;
     uint16_t color;
     uint16_t background;
@@ -1543,20 +1544,25 @@ JSValue js_display_buffer_draw_bitmap(JSContext *ctx, JSValue *this_val, int arg
         JS_GetClassID(ctx, argv[2]) < 0) {
         return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap(x, y, bitmap, options?) expects a bitmap object");
     }
+    pixels = JS_PushGCRef(ctx, &pixels_ref);
     property = JS_PushGCRef(ctx, &property_ref);
+    *pixels = JS_UNDEFINED;
     *property = JS_GetPropertyStr(ctx, argv[2], "width");
     if (JS_IsException(*property) || !value_to_u32(ctx, *property, &width)) {
         JS_PopGCRef(ctx, &property_ref);
+        JS_PopGCRef(ctx, &pixels_ref);
         return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() bitmap.width must be numeric");
     }
     *property = JS_GetPropertyStr(ctx, argv[2], "height");
     if (JS_IsException(*property) || !value_to_u32(ctx, *property, &height)) {
         JS_PopGCRef(ctx, &property_ref);
+        JS_PopGCRef(ctx, &pixels_ref);
         return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() bitmap.height must be numeric");
     }
-    pixels = JS_GetPropertyStr(ctx, argv[2], "pixels");
-    if (JS_IsException(pixels)) {
+    *pixels = JS_GetPropertyStr(ctx, argv[2], "pixels");
+    if (JS_IsException(*pixels)) {
         JS_PopGCRef(ctx, &property_ref);
+        JS_PopGCRef(ctx, &pixels_ref);
         return JS_EXCEPTION;
     }
     color = buffer->foreground;
@@ -1564,27 +1570,32 @@ JSValue js_display_buffer_draw_bitmap(JSContext *ctx, JSValue *this_val, int arg
     if (argc >= 4 && !JS_IsUndefined(argv[3]) && !JS_IsNull(argv[3])) {
         if (JS_GetClassID(ctx, argv[3]) < 0) {
             JS_PopGCRef(ctx, &property_ref);
+            JS_PopGCRef(ctx, &pixels_ref);
             return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() options must be an object");
         }
         *property = JS_GetPropertyStr(ctx, argv[3], "color");
         if (JS_IsException(*property)) {
             JS_PopGCRef(ctx, &property_ref);
+            JS_PopGCRef(ctx, &pixels_ref);
             return JS_EXCEPTION;
         }
         color = normalize_color(ctx, buffer->format, *property, buffer->foreground, &ok);
         if (!ok) {
             JS_PopGCRef(ctx, &property_ref);
+            JS_PopGCRef(ctx, &pixels_ref);
             return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() option 'color' must be valid");
         }
         *property = JS_GetPropertyStr(ctx, argv[3], "background");
         if (JS_IsException(*property)) {
             JS_PopGCRef(ctx, &property_ref);
+            JS_PopGCRef(ctx, &pixels_ref);
             return JS_EXCEPTION;
         }
         if (!JS_IsUndefined(*property) && !JS_IsNull(*property)) {
             background = normalize_color(ctx, buffer->format, *property, buffer->background, &ok);
             if (!ok) {
                 JS_PopGCRef(ctx, &property_ref);
+                JS_PopGCRef(ctx, &pixels_ref);
                 return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() option 'background' must be valid or null");
             }
             has_background = true;
@@ -1596,9 +1607,10 @@ JSValue js_display_buffer_draw_bitmap(JSContext *ctx, JSValue *this_val, int arg
         for (col = 0; col < width; ++col) {
             uint32_t mask_pixel = 0;
 
-            *property = JS_GetPropertyUint32(ctx, pixels, index++);
+            *property = JS_GetPropertyUint32(ctx, *pixels, index++);
             if (JS_IsException(*property)) {
                 JS_PopGCRef(ctx, &property_ref);
+                JS_PopGCRef(ctx, &pixels_ref);
                 return JS_EXCEPTION;
             }
             if (!JS_IsUndefined(*property) && !JS_IsNull(*property) &&
@@ -1610,6 +1622,7 @@ JSValue js_display_buffer_draw_bitmap(JSContext *ctx, JSValue *this_val, int arg
         }
     }
     JS_PopGCRef(ctx, &property_ref);
+    JS_PopGCRef(ctx, &pixels_ref);
     mark_dirty(buffer, x, y, (int)width, (int)height);
     return *this_val;
 }

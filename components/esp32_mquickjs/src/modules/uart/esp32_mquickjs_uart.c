@@ -345,18 +345,22 @@ static JSValue uart_make_write_stats(JSContext *ctx,
 static JSValue uart_make_status_object(JSContext *ctx, const esp32_mquickjs_uart_slot_t *slot)
 {
     JSGCRef status_ref;
+    JSGCRef stop_bits_ref;
     JSValue *status_obj;
-    JSValue stop_bits_value = JS_UNDEFINED;
+    JSValue *stop_bits_value;
 
     status_obj = JS_PushGCRef(ctx, &status_ref);
+    stop_bits_value = JS_PushGCRef(ctx, &stop_bits_ref);
     *status_obj = JS_NewObject(ctx);
+    *stop_bits_value = JS_UNDEFINED;
     if (JS_IsException(*status_obj)) {
+        JS_PopGCRef(ctx, &stop_bits_ref);
         JS_PopGCRef(ctx, &status_ref);
         return JS_EXCEPTION;
     }
 
-    stop_bits_value = uart_stop_bits_to_value(ctx, slot != NULL ? slot->stop_bits : UART_STOP_BITS_1);
-    if (JS_IsException(stop_bits_value) ||
+    *stop_bits_value = uart_stop_bits_to_value(ctx, slot != NULL ? slot->stop_bits : UART_STOP_BITS_1);
+    if (JS_IsException(*stop_bits_value) ||
         !esp32_mquickjs_set_property(ctx, *status_obj, "opened",
                                      JS_NewBool(slot != NULL && slot->allocated)) ||
         !esp32_mquickjs_set_property(ctx, *status_obj, "port",
@@ -371,17 +375,19 @@ static JSValue uart_make_status_object(JSContext *ctx, const esp32_mquickjs_uart
                                      JS_NewInt32(ctx, slot != NULL ? uart_data_bits_to_number(slot->data_bits) : 8)) ||
         !esp32_mquickjs_set_property(ctx, *status_obj, "parity",
                                      JS_NewString(ctx, slot != NULL ? uart_parity_to_string(slot->parity) : "none")) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "stopBits", stop_bits_value) ||
+        !esp32_mquickjs_set_property(ctx, *status_obj, "stopBits", *stop_bits_value) ||
         !esp32_mquickjs_set_property(ctx, *status_obj, "rxBufferSize",
                                      JS_NewUint32(ctx, slot != NULL ? slot->rx_buffer_size : ESP32_MQUICKJS_UART_DEFAULT_RX_BUFFER_SIZE)) ||
         !esp32_mquickjs_set_property(ctx, *status_obj, "txBufferSize",
                                      JS_NewUint32(ctx, slot != NULL ? slot->tx_buffer_size : ESP32_MQUICKJS_UART_DEFAULT_TX_BUFFER_SIZE)) ||
         !esp32_mquickjs_set_property(ctx, *status_obj, "timeoutMs",
                                      JS_NewUint32(ctx, slot != NULL ? slot->timeout_ms : ESP32_MQUICKJS_UART_DEFAULT_TIMEOUT_MS))) {
+        JS_PopGCRef(ctx, &stop_bits_ref);
         JS_PopGCRef(ctx, &status_ref);
         return JS_EXCEPTION;
     }
 
+    JS_PopGCRef(ctx, &stop_bits_ref);
     return JS_PopGCRef(ctx, &status_ref);
 }
 

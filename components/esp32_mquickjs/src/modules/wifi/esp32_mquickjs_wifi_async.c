@@ -6,6 +6,7 @@
 
 #include <inttypes.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -127,8 +128,11 @@ JSValue js_wifi_async_connect(JSContext *ctx, JSValue *this_val, int argc, JSVal
     JSCStringBuf password_buf;
     const char *ssid;
     const char *password;
+    size_t ssid_len = 0;
+    size_t password_len = 0;
+    char ssid_copy[ESP32_MQUICKJS_WIFI_SSID_MAX_LEN + 1];
+    char password_copy[ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN + 1];
     uint32_t timeout_ms = ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS;
-    JSValue callback = JS_UNDEFINED;
 
     (void)this_val;
 
@@ -137,25 +141,39 @@ JSValue js_wifi_async_connect(JSContext *ctx, JSValue *this_val, int argc, JSVal
                                  "wifi.async.connect(ssid, password, callback) or wifi.async.connect(ssid, password, timeoutMs, callback) expects two strings, an optional timeout, and a callback");
     }
 
-    if (argc == 3) {
-        callback = argv[2];
-    } else {
-        if (esp32_mquickjs_wifi_value_to_timeout_ms(ctx,
-                                                    argv[2],
-                                                    ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS,
-                                                    &timeout_ms) != 0) {
-            return JS_ThrowTypeError(ctx, "wifi.async.connect(..., timeoutMs) expects a non-negative integer");
-        }
-        callback = argv[3];
+    if (argc == 4 &&
+        esp32_mquickjs_wifi_value_to_timeout_ms(ctx,
+                                                argv[2],
+                                                ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS,
+                                                &timeout_ms) != 0) {
+        return JS_ThrowTypeError(ctx, "wifi.async.connect(..., timeoutMs) expects a non-negative integer");
     }
 
-    if (!JS_IsFunction(ctx, callback)) {
+    if (!JS_IsFunction(ctx, argc == 3 ? argv[2] : argv[3])) {
         return JS_ThrowTypeError(ctx, "wifi.async.connect(..., callback) expects a callback function");
     }
 
-    ssid = JS_ToCString(ctx, argv[0], &ssid_buf);
-    password = JS_ToCString(ctx, argv[1], &password_buf);
-    return wifi_connect_async_js(ctx, ssid, password, timeout_ms, callback);
+    ssid = JS_ToCStringLen(ctx, &ssid_len, argv[0], &ssid_buf);
+    if (ssid == NULL || ssid_len == 0 || ssid_len > ESP32_MQUICKJS_WIFI_SSID_MAX_LEN) {
+        return JS_ThrowTypeError(ctx, "wifi.async.connect(ssid, ...) expects an SSID of 1..%d bytes",
+                                 ESP32_MQUICKJS_WIFI_SSID_MAX_LEN);
+    }
+    memcpy(ssid_copy, ssid, ssid_len);
+    ssid_copy[ssid_len] = '\0';
+
+    password = JS_ToCStringLen(ctx, &password_len, argv[1], &password_buf);
+    if (password == NULL || password_len > ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN) {
+        return JS_ThrowTypeError(ctx, "wifi.async.connect(..., password, ...) expects at most %d bytes",
+                                 ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN);
+    }
+    memcpy(password_copy, password, password_len);
+    password_copy[password_len] = '\0';
+
+    return wifi_connect_async_js(ctx,
+                                 ssid_copy,
+                                 password_copy,
+                                 timeout_ms,
+                                 argc == 3 ? argv[2] : argv[3]);
 }
 
 static bool wifi_async_poller(JSContext *ctx,

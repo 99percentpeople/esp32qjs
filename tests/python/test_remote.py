@@ -62,6 +62,25 @@ class RemoteConfigTests(unittest.TestCase):
         )
         self.assertIn("-DESP32QJS_FLASH_DATA_DIR=", config.cmake_cache_entries)
 
+    def test_js_test_build_enables_debug_gc(self):
+        args, board, app = REMOTE.parse_args([
+            "--board", "xiao_esp32s3",
+            "--app", "minimal",
+            "show-config",
+        ])
+        config = REMOTE.build_project_config(args, board, app)
+        test_config = REMOTE.js_test_build_config(config)
+
+        self.assertEqual(test_config.flash_data_override, REMOTE.JS_TEST_FLASH_DATA_DIR)
+        self.assertEqual(
+            test_config.sdkconfig_defaults[-1],
+            REMOTE.JS_TEST_SDKCONFIG_DEFAULTS,
+        )
+        self.assertIn(
+            "CONFIG_ESP32_MQUICKJS_DEBUG_GC=y",
+            REMOTE.JS_TEST_SDKCONFIG_DEFAULTS.read_text(),
+        )
+
     def test_complete_flash_data_override_is_preserved(self):
         override = ROOT / "tests" / "js" / "flash_data"
         args, board, app = REMOTE.parse_args([

@@ -298,41 +298,50 @@ static JSValue adc_make_status_object(JSContext *ctx, adc_unit_t unit)
 {
     esp32_mquickjs_adc_unit_state_t *unit_state = adc_unit_state(unit);
     JSGCRef status_ref;
+    JSGCRef channels_ref;
     JSValue *status_obj;
-    JSValue channels_array;
+    JSValue *channels_array;
 
     status_obj = JS_PushGCRef(ctx, &status_ref);
+    channels_array = JS_PushGCRef(ctx, &channels_ref);
     *status_obj = JS_NewObject(ctx);
+    *channels_array = JS_UNDEFINED;
     if (JS_IsException(*status_obj)) {
-        JS_PopGCRef(ctx, &status_ref);
-        return JS_EXCEPTION;
+        goto fail;
     }
 
-    channels_array = JS_NewArray(ctx, 0);
-    if (JS_IsException(channels_array)) {
-        JS_PopGCRef(ctx, &status_ref);
-        return JS_EXCEPTION;
+    *channels_array = JS_NewArray(ctx, 0);
+    if (JS_IsException(*channels_array)) {
+        goto fail;
     }
 
     for (int i = 0; i < adc_channel_count(unit); ++i) {
-        JSValue channel_obj = adc_make_channel_object(ctx, unit, (adc_channel_t)i);
+        JSGCRef channel_ref;
+        JSValue *channel_obj = JS_PushGCRef(ctx, &channel_ref);
 
-        if (JS_IsException(channel_obj) ||
-            JS_IsException(JS_SetPropertyUint32(ctx, channels_array, (uint32_t)i, channel_obj))) {
-            JS_PopGCRef(ctx, &status_ref);
-            return JS_EXCEPTION;
+        *channel_obj = adc_make_channel_object(ctx, unit, (adc_channel_t)i);
+        if (JS_IsException(*channel_obj) ||
+            JS_IsException(JS_SetPropertyUint32(ctx, *channels_array, (uint32_t)i, *channel_obj))) {
+            JS_PopGCRef(ctx, &channel_ref);
+            goto fail;
         }
+        JS_PopGCRef(ctx, &channel_ref);
     }
 
     if (!esp32_mquickjs_set_property(ctx, *status_obj, "unit", JS_NewInt32(ctx, adc_unit_to_number(unit))) ||
         !esp32_mquickjs_set_property(ctx, *status_obj, "opened", JS_NewBool(unit_state->opened)) ||
         !esp32_mquickjs_set_property(ctx, *status_obj, "channelCount", JS_NewInt32(ctx, adc_channel_count(unit))) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "channels", channels_array)) {
-        JS_PopGCRef(ctx, &status_ref);
-        return JS_EXCEPTION;
+        !esp32_mquickjs_set_property(ctx, *status_obj, "channels", *channels_array)) {
+        goto fail;
     }
 
+    JS_PopGCRef(ctx, &channels_ref);
     return JS_PopGCRef(ctx, &status_ref);
+
+fail:
+    JS_PopGCRef(ctx, &channels_ref);
+    JS_PopGCRef(ctx, &status_ref);
+    return JS_EXCEPTION;
 }
 
 void esp32_mquickjs_init_adc_runtime(void)
@@ -411,7 +420,6 @@ JSValue js_adc_configure(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
     adc_atten_t atten = ADC_ATTEN_DB_12;
     adc_bitwidth_t bitwidth = ADC_BITWIDTH_DEFAULT;
     adc_oneshot_chan_cfg_t config = {0};
-    JSValue options;
     esp_err_t err;
 
     (void)this_val;
@@ -426,10 +434,8 @@ JSValue js_adc_configure(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
         return JS_EXCEPTION;
     }
 
-    options = argv[2];
-
     {
-        JSValue property = JS_GetPropertyStr(ctx, options, "atten");
+        JSValue property = JS_GetPropertyStr(ctx, argv[2], "atten");
         if (JS_IsException(property)) {
             return JS_EXCEPTION;
         }
@@ -437,7 +443,7 @@ JSValue js_adc_configure(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
             return JS_ThrowTypeError(ctx, "adc.configure({ atten }) expects adc.ATTEN_DB_0/2_5/6/12");
         }
 
-        property = JS_GetPropertyStr(ctx, options, "bitwidth");
+        property = JS_GetPropertyStr(ctx, argv[2], "bitwidth");
         if (JS_IsException(property)) {
             return JS_EXCEPTION;
         }

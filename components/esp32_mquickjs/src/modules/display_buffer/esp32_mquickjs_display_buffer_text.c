@@ -184,7 +184,6 @@ JSValue js_display_buffer_draw_text(JSContext *ctx, JSValue *this_val, int argc,
     int spacing;
     const esp32_mquickjs_bitmap_font_t *font;
     bool font_ok;
-    JSValue options;
     JSGCRef property_ref;
     JSValue *property;
 
@@ -195,18 +194,14 @@ JSValue js_display_buffer_draw_text(JSContext *ctx, JSValue *this_val, int argc,
     if (argc < 3 || !value_to_i32(ctx, argv[0], &x) || !value_to_i32(ctx, argv[1], &y)) {
         return JS_ThrowTypeError(ctx, "DisplayBuffer.drawText(x, y, text, options?) expects x, y, and text");
     }
-    text = JS_ToCString(ctx, argv[2], &text_buf);
-    if (text == NULL) {
-        return JS_EXCEPTION;
-    }
-    options = argc >= 4 ? argv[3] : JS_UNDEFINED;
-    if (!text_options_is_object(ctx, options, "DisplayBuffer.drawText()")) {
+    if (!text_options_is_object(ctx, argc >= 4 ? argv[3] : JS_UNDEFINED,
+                                "DisplayBuffer.drawText()")) {
         return JS_EXCEPTION;
     }
     color = buffer->foreground;
-    if (!JS_IsUndefined(options) && !JS_IsNull(options)) {
+    if (argc >= 4 && !JS_IsUndefined(argv[3]) && !JS_IsNull(argv[3])) {
         property = JS_PushGCRef(ctx, &property_ref);
-        *property = JS_GetPropertyStr(ctx, options, "color");
+        *property = JS_GetPropertyStr(ctx, argv[3], "color");
         if (JS_IsException(*property)) {
             JS_PopGCRef(ctx, &property_ref);
             return JS_EXCEPTION;
@@ -217,9 +212,9 @@ JSValue js_display_buffer_draw_text(JSContext *ctx, JSValue *this_val, int argc,
             return JS_ThrowTypeError(ctx, "DisplayBuffer.drawText() option 'color' expects a valid color");
         }
     }
-    spacing = text_spacing_from_options(ctx, options, 0);
+    spacing = text_spacing_from_options(ctx, argc >= 4 ? argv[3] : JS_UNDEFINED, 0);
     font = text_font_from_options(ctx,
-                                  options,
+                                  argc >= 4 ? argv[3] : JS_UNDEFINED,
                                   "DisplayBuffer.drawText() option 'font'",
                                   &font_ok);
     if (!font_ok || font == NULL) {
@@ -227,11 +222,15 @@ JSValue js_display_buffer_draw_text(JSContext *ctx, JSValue *this_val, int argc,
     }
     if (!text_background_from_options(ctx,
                                       buffer->format,
-                                      options,
+                                      argc >= 4 ? argv[3] : JS_UNDEFINED,
                                       buffer->background,
                                       &background,
                                       &has_background)) {
         return JS_ThrowTypeError(ctx, "DisplayBuffer.drawText() option 'background' expects a valid color or null");
+    }
+    text = JS_ToCString(ctx, argv[2], &text_buf);
+    if (text == NULL) {
+        return JS_EXCEPTION;
     }
     display_buffer_draw_text_raw(buffer, x, y, text, font, spacing, color, has_background, background);
     return *this_val;
@@ -255,10 +254,6 @@ JSValue js_display_buffer_measure_text(JSContext *ctx, JSValue *this_val, int ar
     if (argc < 1) {
         return JS_ThrowTypeError(ctx, "DisplayBuffer.measureText(text, options?) expects text");
     }
-    text = JS_ToCString(ctx, argv[0], &text_buf);
-    if (text == NULL) {
-        return JS_EXCEPTION;
-    }
     if (!text_options_is_object(ctx, argc >= 2 ? argv[1] : JS_UNDEFINED, "DisplayBuffer.measureText()")) {
         return JS_EXCEPTION;
     }
@@ -268,6 +263,10 @@ JSValue js_display_buffer_measure_text(JSContext *ctx, JSValue *this_val, int ar
                                   "DisplayBuffer.measureText() option 'font'",
                                   &font_ok);
     if (!font_ok || font == NULL) {
+        return JS_EXCEPTION;
+    }
+    text = JS_ToCString(ctx, argv[0], &text_buf);
+    if (text == NULL) {
         return JS_EXCEPTION;
     }
     esp32_mquickjs_bitmap_font_measure(font, text, spacing, &width, &height, &lines);

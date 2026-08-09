@@ -153,12 +153,17 @@ static JSValue dac_make_status_array(JSContext *ctx)
     }
 
     for (int i = 0; i < SOC_DAC_CHAN_NUM; ++i) {
-        JSValue status = dac_make_status_object(ctx, (dac_channel_t)i);
-        if (JS_IsException(status) ||
-            JS_IsException(JS_SetPropertyUint32(ctx, *array_obj, (uint32_t)i, status))) {
+        JSGCRef status_ref;
+        JSValue *status = JS_PushGCRef(ctx, &status_ref);
+
+        *status = dac_make_status_object(ctx, (dac_channel_t)i);
+        if (JS_IsException(*status) ||
+            JS_IsException(JS_SetPropertyUint32(ctx, *array_obj, (uint32_t)i, *status))) {
+            JS_PopGCRef(ctx, &status_ref);
             JS_PopGCRef(ctx, &array_ref);
             return JS_EXCEPTION;
         }
+        JS_PopGCRef(ctx, &status_ref);
     }
 
     return JS_PopGCRef(ctx, &array_ref);

@@ -548,7 +548,7 @@ static bool http_server_capture_headers(httpd_req_t *req,
 }
 
 static bool http_server_compile_route_pattern(JSContext *ctx,
-                                              JSValue pattern_value,
+                                              JSValue *pattern_value,
                                               esp32_mquickjs_http_server_route_t *route)
 {
     JSCStringBuf uri_buf;
@@ -558,8 +558,8 @@ static bool http_server_compile_route_pattern(JSContext *ctx,
         return false;
     }
 
-    if (JS_IsString(ctx, pattern_value)) {
-        uri = JS_ToCString(ctx, pattern_value, &uri_buf);
+    if (JS_IsString(ctx, *pattern_value)) {
+        uri = JS_ToCString(ctx, *pattern_value, &uri_buf);
         if (uri == NULL) {
             return false;
         }
@@ -586,7 +586,7 @@ static bool http_server_compile_route_pattern(JSContext *ctx,
         return true;
     }
 
-    if (http_server_is_object(ctx, pattern_value)) {
+    if (http_server_is_object(ctx, *pattern_value)) {
         JSGCRef source_ref;
         JSGCRef flags_ref;
         JSValue *source_value;
@@ -595,14 +595,15 @@ static bool http_server_compile_route_pattern(JSContext *ctx,
         JSCStringBuf flags_buf;
         const char *source;
         const char *flags;
+        char *source_copy = NULL;
         size_t source_len;
         size_t flags_len;
         char *route_text;
 
         source_value = JS_PushGCRef(ctx, &source_ref);
         flags_value = JS_PushGCRef(ctx, &flags_ref);
-        *source_value = JS_GetPropertyStr(ctx, pattern_value, "source");
-        *flags_value = JS_GetPropertyStr(ctx, pattern_value, "flags");
+        *source_value = JS_GetPropertyStr(ctx, *pattern_value, "source");
+        *flags_value = JS_GetPropertyStr(ctx, *pattern_value, "flags");
         if (JS_IsException(*source_value) || JS_IsException(*flags_value)) {
             JS_PopGCRef(ctx, &flags_ref);
             JS_PopGCRef(ctx, &source_ref);
@@ -610,29 +611,34 @@ static bool http_server_compile_route_pattern(JSContext *ctx,
         }
 
         source = JS_ToCString(ctx, *source_value, &source_buf);
+        if (source != NULL) {
+            source_copy = http_server_strdup(source);
+        }
         flags = JS_ToCString(ctx, *flags_value, &flags_buf);
-        if (source != NULL && flags != NULL) {
-            source_len = strlen(source);
+        if (source_copy != NULL && flags != NULL) {
+            source_len = strlen(source_copy);
             flags_len = strlen(flags);
             route_text = heap_caps_malloc(source_len + flags_len + 3, MALLOC_CAP_8BIT);
             if (route_text == NULL) {
+                heap_caps_free(source_copy);
                 JS_PopGCRef(ctx, &flags_ref);
                 JS_PopGCRef(ctx, &source_ref);
                 return false;
             }
             route_text[0] = '/';
-            memcpy(route_text + 1, source, source_len);
+            memcpy(route_text + 1, source_copy, source_len);
             route_text[source_len + 1] = '/';
             memcpy(route_text + source_len + 2, flags, flags_len);
             route_text[source_len + flags_len + 2] = '\0';
             route->uri = route_text;
         } else {
-            uri = JS_ToCString(ctx, pattern_value, &uri_buf);
+            uri = JS_ToCString(ctx, *pattern_value, &uri_buf);
             route->uri = http_server_strdup(uri != NULL ? uri : "<regexp>");
         }
+        heap_caps_free(source_copy);
         JS_PopGCRef(ctx, &flags_ref);
         JS_PopGCRef(ctx, &source_ref);
-        *JS_AddGCRef(ctx, &route->pattern) = pattern_value;
+        *JS_AddGCRef(ctx, &route->pattern) = *pattern_value;
         route->pattern_ref_added = true;
         route->match_with_regex = true;
         return route->uri != NULL;
@@ -641,7 +647,7 @@ static bool http_server_compile_route_pattern(JSContext *ctx,
     return false;
 }
 
-static bool http_server_regex_test(JSContext *ctx, JSValue pattern, const char *path)
+static bool http_server_regex_test(JSContext *ctx, JSValue *pattern, const char *path)
 {
     JSGCRef test_ref;
     JSGCRef path_ref;
@@ -652,13 +658,13 @@ static bool http_server_regex_test(JSContext *ctx, JSValue pattern, const char *
     JSValue reset_index;
     int matched = 0;
 
-    if (JS_IsException(pattern)) {
+    if (JS_IsException(*pattern)) {
         return false;
     }
 
     test_fn = JS_PushGCRef(ctx, &test_ref);
     path_value = JS_PushGCRef(ctx, &path_ref);
-    *test_fn = JS_GetPropertyStr(ctx, pattern, "test");
+    *test_fn = JS_GetPropertyStr(ctx, *pattern, "test");
     *path_value = JS_NewString(ctx, path != NULL ? path : "");
     if (JS_IsException(*test_fn) || !JS_IsFunction(ctx, *test_fn) || JS_IsException(*path_value)) {
         JS_PopGCRef(ctx, &path_ref);
@@ -667,10 +673,10 @@ static bool http_server_regex_test(JSContext *ctx, JSValue pattern, const char *
     }
     reset_index = JS_NewInt32(ctx, 0);
     if (!JS_IsException(reset_index)) {
-        JS_SetPropertyStr(ctx, pattern, "lastIndex", reset_index);
+        JS_SetPropertyStr(ctx, *pattern, "lastIndex", reset_index);
     }
     argv[0] = *path_value;
-    result = http_server_call_function(ctx, *test_fn, pattern, 1, argv);
+    result = http_server_call_function(ctx, *test_fn, *pattern, 1, argv);
     if (!JS_IsException(result) && JS_ToInt32(ctx, &matched, result) == 0) {
         JS_PopGCRef(ctx, &path_ref);
         JS_PopGCRef(ctx, &test_ref);
@@ -782,7 +788,7 @@ static esp32_mquickjs_http_server_route_t *http_server_find_route(JSContext *ctx
             continue;
         }
         if (route->match_with_regex) {
-            if ((route->pattern_ref_added && http_server_regex_test(ctx, route->pattern.val, path)) ||
+            if ((route->pattern_ref_added && http_server_regex_test(ctx, &route->pattern.val, path)) ||
                 (!route->pattern_ref_added && http_server_glob_match(route->uri, path != NULL ? path : ""))) {
                 return route;
             }
@@ -886,10 +892,13 @@ static bool http_server_make_request_object(JSContext *ctx,
     JSGCRef global_ref;
     JSGCRef query_ref;
     JSGCRef headers_ref;
+    JSGCRef headers_value_ref;
+    JSGCRef body_ref;
     JSValue *global_obj;
     JSValue *query_obj;
     JSValue *headers_plain;
-    JSValue headers_value = JS_UNDEFINED;
+    JSValue *headers_value;
+    JSValue *body_value;
     char *url = NULL;
     const char *route_text;
     const char *mount_path;
@@ -903,9 +912,13 @@ static bool http_server_make_request_object(JSContext *ctx,
     global_obj = JS_PushGCRef(ctx, &global_ref);
     query_obj = JS_PushGCRef(ctx, &query_ref);
     headers_plain = JS_PushGCRef(ctx, &headers_ref);
+    headers_value = JS_PushGCRef(ctx, &headers_value_ref);
+    body_value = JS_PushGCRef(ctx, &body_ref);
     *global_obj = JS_GetGlobalObject(ctx);
     *query_obj = JS_NewObject(ctx);
     *headers_plain = JS_NewObject(ctx);
+    *headers_value = JS_UNDEFINED;
+    *body_value = JS_UNDEFINED;
     if (JS_IsException(*global_obj) || JS_IsException(*query_obj) || JS_IsException(*headers_plain)) {
         goto fail;
     }
@@ -1001,8 +1014,8 @@ static bool http_server_make_request_object(JSContext *ctx,
         }
     }
 
-    headers_value = esp32_mquickjs_make_headers_object(ctx, *global_obj, *headers_plain);
-    if (JS_IsException(headers_value)) {
+    *headers_value = esp32_mquickjs_make_headers_object(ctx, *global_obj, *headers_plain);
+    if (JS_IsException(*headers_value)) {
         goto fail;
     }
 
@@ -1020,6 +1033,11 @@ static bool http_server_make_request_object(JSContext *ctx,
         }
     }
 
+    *body_value = JS_NewString(ctx, request->body != NULL ? request->body : "");
+    if (JS_IsException(*body_value)) {
+        goto fail;
+    }
+
     *out_obj = esp32_mquickjs_make_request_object(ctx,
                                                   *global_obj,
                                                   request->method != NULL ? request->method : "GET",
@@ -1030,9 +1048,11 @@ static bool http_server_make_request_object(JSContext *ctx,
                                                   relative_path,
                                                   request->query_string != NULL ? request->query_string : "",
                                                   *query_obj,
-                                                  headers_value,
-                                                  JS_NewString(ctx, request->body != NULL ? request->body : ""));
+                                                  *headers_value,
+                                                  *body_value);
     heap_caps_free(url);
+    JS_PopGCRef(ctx, &body_ref);
+    JS_PopGCRef(ctx, &headers_value_ref);
     JS_PopGCRef(ctx, &headers_ref);
     JS_PopGCRef(ctx, &query_ref);
     JS_PopGCRef(ctx, &global_ref);
@@ -1040,6 +1060,8 @@ static bool http_server_make_request_object(JSContext *ctx,
 
 fail:
     heap_caps_free(url);
+    JS_PopGCRef(ctx, &body_ref);
+    JS_PopGCRef(ctx, &headers_value_ref);
     JS_PopGCRef(ctx, &headers_ref);
     JS_PopGCRef(ctx, &query_ref);
     JS_PopGCRef(ctx, &global_ref);
@@ -1063,7 +1085,7 @@ static int http_server_parse_status(JSContext *ctx, JSValue value, int32_t *out_
 }
 
 static int http_server_parse_headers(JSContext *ctx,
-                                     JSValue value,
+                                     JSValue *value,
                                      esp32_mquickjs_http_server_header_t **out_headers,
                                      size_t *out_count)
 {
@@ -1083,16 +1105,16 @@ static int http_server_parse_headers(JSContext *ctx,
 
     *out_headers = NULL;
     *out_count = 0;
-    if (JS_IsUndefined(value) || JS_IsNull(value)) {
+    if (JS_IsUndefined(*value) || JS_IsNull(*value)) {
         return 0;
     }
-    if (esp32_mquickjs_is_headers_object(ctx, value)) {
-        value = esp32_mquickjs_headers_to_plain_object(ctx, value);
-        if (JS_IsException(value)) {
+    if (esp32_mquickjs_is_headers_object(ctx, *value)) {
+        *value = esp32_mquickjs_headers_to_plain_object(ctx, *value);
+        if (JS_IsException(*value)) {
             return -1;
         }
     }
-    if (!http_server_is_object(ctx, value)) {
+    if (!http_server_is_object(ctx, *value)) {
         return -1;
     }
 
@@ -1114,7 +1136,7 @@ static int http_server_parse_headers(JSContext *ctx,
     if (JS_IsException(*keys_fn) || !JS_IsFunction(ctx, *keys_fn)) {
         goto fail;
     }
-    *keys_array = http_server_call_function(ctx, *keys_fn, *object_ctor, 1, &value);
+    *keys_array = http_server_call_function(ctx, *keys_fn, *object_ctor, 1, value);
     if (JS_IsException(*keys_array)) {
         goto fail;
     }
@@ -1148,6 +1170,7 @@ static int http_server_parse_headers(JSContext *ctx,
         JSCStringBuf val_buf;
         const char *key_str;
         const char *val_str;
+        char *key_copy;
 
         key = JS_PushGCRef(ctx, &key_ref);
         val = JS_PushGCRef(ctx, &val_ref);
@@ -1163,7 +1186,14 @@ static int http_server_parse_headers(JSContext *ctx,
             JS_PopGCRef(ctx, &key_ref);
             goto fail;
         }
-        *val = JS_GetPropertyStr(ctx, value, key_str);
+        key_copy = http_server_strdup(key_str);
+        if (key_copy == NULL) {
+            JS_PopGCRef(ctx, &val_ref);
+            JS_PopGCRef(ctx, &key_ref);
+            goto fail;
+        }
+        headers[i].key = key_copy;
+        *val = JS_GetPropertyStr(ctx, *value, key_copy);
         if (JS_IsException(*val)) {
             JS_PopGCRef(ctx, &val_ref);
             JS_PopGCRef(ctx, &key_ref);
@@ -1176,11 +1206,10 @@ static int http_server_parse_headers(JSContext *ctx,
             goto fail;
         }
 
-        headers[i].key = http_server_strdup(key_str);
         headers[i].value = http_server_strdup(val_str);
         JS_PopGCRef(ctx, &val_ref);
         JS_PopGCRef(ctx, &key_ref);
-        if (headers[i].key == NULL || headers[i].value == NULL) {
+        if (headers[i].value == NULL) {
             goto fail;
         }
     }
@@ -1207,7 +1236,7 @@ fail:
 }
 
 static int http_server_make_response(JSContext *ctx,
-                                     JSValue value,
+                                     JSValue *value,
                                      esp32_mquickjs_http_server_response_t *out_response)
 {
     JSGCRef status_ref;
@@ -1225,7 +1254,7 @@ static int http_server_make_response(JSContext *ctx,
     out_response->status = 200;
     out_response->status_text = NULL;
 
-    if (!esp32_mquickjs_is_response_object(ctx, value)) {
+    if (!esp32_mquickjs_is_response_object(ctx, *value)) {
         JS_ThrowTypeError(ctx, "http.server handlers must return a Response");
         return -1;
     }
@@ -1235,10 +1264,10 @@ static int http_server_make_response(JSContext *ctx,
     body_value = JS_PushGCRef(ctx, &body_ref);
     status_text_value = JS_PushGCRef(ctx, &status_text_ref);
 
-    *status_value = JS_GetPropertyStr(ctx, value, "status");
-    *headers_value = JS_GetPropertyStr(ctx, value, "headers");
-    *body_value = JS_GetPropertyStr(ctx, value, "body");
-    *status_text_value = JS_GetPropertyStr(ctx, value, "statusText");
+    *status_value = JS_GetPropertyStr(ctx, *value, "status");
+    *headers_value = JS_GetPropertyStr(ctx, *value, "headers");
+    *body_value = JS_GetPropertyStr(ctx, *value, "body");
+    *status_text_value = JS_GetPropertyStr(ctx, *value, "statusText");
     if (JS_IsException(*status_value) || JS_IsException(*headers_value) || JS_IsException(*body_value) ||
         JS_IsException(*status_text_value)) {
         goto fail;
@@ -1247,7 +1276,7 @@ static int http_server_make_response(JSContext *ctx,
         goto fail;
     }
     if (http_server_parse_headers(ctx,
-                                  *headers_value,
+                                  headers_value,
                                   &out_response->headers,
                                   &out_response->header_count) != 0) {
         goto fail;
@@ -1420,14 +1449,20 @@ static JSValue http_server_make_static_handler(JSContext *ctx, const char *root_
 {
     JSGCRef handler_ref;
     JSValue *handler_obj;
+    char *root_copy = http_server_strdup(root_path);
 
+    if (root_copy == NULL) {
+        return JS_ThrowOutOfMemory(ctx);
+    }
     handler_obj = JS_PushGCRef(ctx, &handler_ref);
     *handler_obj = JS_NewObjectClassUser(ctx, JS_CLASS_STATIC_FILE_HANDLER);
     if (JS_IsException(*handler_obj) ||
-        !esp32_mquickjs_set_property(ctx, *handler_obj, "root", JS_NewString(ctx, root_path))) {
+        !esp32_mquickjs_set_property(ctx, *handler_obj, "root", JS_NewString(ctx, root_copy))) {
+        heap_caps_free(root_copy);
         JS_PopGCRef(ctx, &handler_ref);
         return JS_EXCEPTION;
     }
+    heap_caps_free(root_copy);
     return JS_PopGCRef(ctx, &handler_ref);
 }
 #endif
@@ -1637,41 +1672,50 @@ static bool http_server_register_route_js(JSContext *ctx,
 {
     esp32_mquickjs_http_server_slot_t *server;
     esp32_mquickjs_http_server_route_t *route = NULL;
-    JSGCRef handle_ref;
-    JSValue *handle_value = NULL;
-    JSValue callback = JS_UNDEFINED;
-    JSValue callback_this = JS_UNDEFINED;
+    JSGCRef pattern_ref;
+    JSGCRef handler_ref;
+    JSGCRef callback_ref;
+    JSGCRef callback_this_ref;
+    JSValue *rooted_pattern;
+    JSValue *rooted_handler;
+    JSValue *callback;
+    JSValue *callback_this;
     int i;
     httpd_method_t method;
 
-    if (JS_IsFunction(ctx, handler)) {
-        callback = handler;
-    } else if (http_server_is_object(ctx, handler)) {
-        handle_value = JS_PushGCRef(ctx, &handle_ref);
-        *handle_value = JS_GetPropertyStr(ctx, handler, "handle");
-        if (JS_IsException(*handle_value)) {
-            JS_PopGCRef(ctx, &handle_ref);
+    rooted_pattern = JS_PushGCRef(ctx, &pattern_ref);
+    rooted_handler = JS_PushGCRef(ctx, &handler_ref);
+    callback = JS_PushGCRef(ctx, &callback_ref);
+    callback_this = JS_PushGCRef(ctx, &callback_this_ref);
+    *rooted_pattern = pattern_value;
+    *rooted_handler = handler;
+    *callback = JS_UNDEFINED;
+    *callback_this = JS_UNDEFINED;
+
+    if (JS_IsFunction(ctx, *rooted_handler)) {
+        *callback = *rooted_handler;
+    } else if (http_server_is_object(ctx, *rooted_handler)) {
+        *callback = JS_GetPropertyStr(ctx, *rooted_handler, "handle");
+        if (JS_IsException(*callback)) {
             *out_result = JS_EXCEPTION;
-            return true;
+            goto done;
         }
-        if (!JS_IsFunction(ctx, *handle_value)) {
-            JS_PopGCRef(ctx, &handle_ref);
+        if (!JS_IsFunction(ctx, *callback)) {
             *out_result = JS_ThrowTypeError(ctx,
                                             "server.<method>(pathOrPattern, handler) expects a function or object with handle(req)");
-            return true;
+            goto done;
         }
-        callback = *handle_value;
-        callback_this = handler;
+        *callback_this = *rooted_handler;
     } else {
         *out_result = JS_ThrowTypeError(ctx,
                                         "server.<method>(pathOrPattern, handler) expects a function or object with handle(req)");
-        return true;
+        goto done;
     }
 
     server = http_server_get_slot(server_id);
     if (server == NULL) {
         *out_result = JS_ThrowInternalError(ctx, "invalid server handle");
-        return true;
+        goto done;
     }
 
     method = http_server_method_from_name(method_name);
@@ -1689,32 +1733,28 @@ static bool http_server_register_route_js(JSContext *ctx,
     http_server_unlock();
 
     if (route == NULL) {
-        if (handle_value != NULL) {
-            JS_PopGCRef(ctx, &handle_ref);
-        }
         *out_result = JS_ThrowInternalError(ctx, "too many server routes");
-        return true;
+        goto done;
     }
 
-    if (!http_server_compile_route_pattern(ctx, pattern_value, route)) {
+    if (!http_server_compile_route_pattern(ctx, rooted_pattern, route)) {
         http_server_cleanup_route(ctx, route);
-        if (handle_value != NULL) {
-            JS_PopGCRef(ctx, &handle_ref);
-        }
         *out_result = JS_ThrowTypeError(ctx, "server.<method>(pathOrPattern, handler) expects a string path or RegExp");
-        return true;
+        goto done;
     }
-    *JS_AddGCRef(ctx, &route->callback) = callback;
+    *JS_AddGCRef(ctx, &route->callback) = *callback;
     route->callback_ref_added = true;
-    if (!JS_IsUndefined(callback_this) && !JS_IsNull(callback_this)) {
-        *JS_AddGCRef(ctx, &route->callback_this) = callback_this;
+    if (!JS_IsUndefined(*callback_this) && !JS_IsNull(*callback_this)) {
+        *JS_AddGCRef(ctx, &route->callback_this) = *callback_this;
         route->callback_this_ref_added = true;
     }
-    if (handle_value != NULL) {
-        JS_PopGCRef(ctx, &handle_ref);
-    }
-
     *out_result = JS_UNDEFINED;
+
+done:
+    JS_PopGCRef(ctx, &callback_this_ref);
+    JS_PopGCRef(ctx, &callback_ref);
+    JS_PopGCRef(ctx, &handler_ref);
+    JS_PopGCRef(ctx, &pattern_ref);
     return true;
 }
 
@@ -1963,8 +2003,8 @@ JSValue js_http_server_create(JSContext *ctx, JSValue *this_val, int argc, JSVal
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER && CONFIG_ESP32_MQUICKJS_FEATURE_FS
 static JSValue http_server_static_file_handler_handle_internal(JSContext *ctx,
-                                                               JSValue handler_value,
-                                                               JSValue request_value);
+                                                               JSValue *handler_value,
+                                                               JSValue *request_value);
 
 JSValue js_http_static_file_handler(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
@@ -1984,14 +2024,15 @@ JSValue js_http_static_file_handler(JSContext *ctx, JSValue *this_val, int argc,
 
 JSValue js_http_static_file_handler_handle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    return http_server_static_file_handler_handle_internal(ctx,
-                                                           *this_val,
-                                                           argc >= 1 ? argv[0] : JS_UNDEFINED);
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "staticFileHandler.handle(req) expects a request object");
+    }
+    return http_server_static_file_handler_handle_internal(ctx, this_val, &argv[0]);
 }
 
 static JSValue http_server_static_file_handler_handle_internal(JSContext *ctx,
-                                                               JSValue handler_value,
-                                                               JSValue request_value)
+                                                               JSValue *handler_value,
+                                                               JSValue *request_value)
 {
     JSGCRef root_ref;
     JSGCRef relative_ref;
@@ -2007,14 +2048,15 @@ static JSValue http_server_static_file_handler_handle_internal(JSContext *ctx,
     const char *content_type;
     JSValue response_obj;
 
-    if (JS_GetClassID(ctx, handler_value) != JS_CLASS_STATIC_FILE_HANDLER || !http_server_is_object(ctx, request_value)) {
+    if (JS_GetClassID(ctx, *handler_value) != JS_CLASS_STATIC_FILE_HANDLER ||
+        !http_server_is_object(ctx, *request_value)) {
         return JS_ThrowTypeError(ctx, "staticFileHandler.handle(req) expects a request object");
     }
 
     root_value = JS_PushGCRef(ctx, &root_ref);
     relative_value = JS_PushGCRef(ctx, &relative_ref);
-    *root_value = JS_GetPropertyStr(ctx, handler_value, "root");
-    *relative_value = JS_GetPropertyStr(ctx, request_value, "relativePath");
+    *root_value = JS_GetPropertyStr(ctx, *handler_value, "root");
+    *relative_value = JS_GetPropertyStr(ctx, *request_value, "relativePath");
     if (JS_IsException(*root_value) || JS_IsException(*relative_value)) {
         JS_PopGCRef(ctx, &relative_ref);
         JS_PopGCRef(ctx, &root_ref);
@@ -2022,17 +2064,22 @@ static JSValue http_server_static_file_handler_handle_internal(JSContext *ctx,
     }
 
     root = JS_ToCString(ctx, *root_value, &root_buf);
-    relative_path = JS_ToCString(ctx, *relative_value, &relative_buf);
-    if (root == NULL || relative_path == NULL) {
+    if (root == NULL) {
         JS_PopGCRef(ctx, &relative_ref);
         JS_PopGCRef(ctx, &root_ref);
         return JS_EXCEPTION;
     }
-
     if (!http_server_resolve_littlefs_path(root, littlefs_root, sizeof(littlefs_root))) {
         JS_PopGCRef(ctx, &relative_ref);
         JS_PopGCRef(ctx, &root_ref);
         return JS_ThrowTypeError(ctx, "staticFileHandler(root) expects a path under /littlefs");
+    }
+
+    relative_path = JS_ToCString(ctx, *relative_value, &relative_buf);
+    if (relative_path == NULL) {
+        JS_PopGCRef(ctx, &relative_ref);
+        JS_PopGCRef(ctx, &root_ref);
+        return JS_EXCEPTION;
     }
     while (*relative_path == '/') {
         relative_path++;
@@ -2061,13 +2108,15 @@ static JSValue http_server_static_file_handler_handle_internal(JSContext *ctx,
     }
     if (file == NULL) {
         JSGCRef global_ref;
+        JSGCRef body_ref;
         JSValue *global_obj;
+        JSValue *body_obj;
 
         global_obj = JS_PushGCRef(ctx, &global_ref);
+        body_obj = JS_PushGCRef(ctx, &body_ref);
         *global_obj = JS_GetGlobalObject(ctx);
-        JS_PopGCRef(ctx, &relative_ref);
-        JS_PopGCRef(ctx, &root_ref);
-        response_obj = JS_IsException(*global_obj)
+        *body_obj = JS_NewString(ctx, "Not Found");
+        response_obj = JS_IsException(*global_obj) || JS_IsException(*body_obj)
                            ? JS_EXCEPTION
                            : esp32_mquickjs_make_response_object(ctx,
                                                                  *global_obj,
@@ -2075,8 +2124,11 @@ static JSValue http_server_static_file_handler_handle_internal(JSContext *ctx,
                                                                  "Not Found",
                                                                  "",
                                                                  JS_UNDEFINED,
-                                                                 JS_NewString(ctx, "Not Found"));
+                                                                 *body_obj);
+        JS_PopGCRef(ctx, &body_ref);
         JS_PopGCRef(ctx, &global_ref);
+        JS_PopGCRef(ctx, &relative_ref);
+        JS_PopGCRef(ctx, &root_ref);
         return response_obj;
     }
 
@@ -2085,15 +2137,19 @@ static JSValue http_server_static_file_handler_handle_internal(JSContext *ctx,
     {
         JSGCRef global_ref;
         JSGCRef headers_ref;
+        JSGCRef stream_ref;
         JSValue *global_obj;
         JSValue *headers_obj;
-        JSValue stream_obj;
+        JSValue *stream_obj;
 
         global_obj = JS_PushGCRef(ctx, &global_ref);
         headers_obj = JS_PushGCRef(ctx, &headers_ref);
+        stream_obj = JS_PushGCRef(ctx, &stream_ref);
         *global_obj = JS_GetGlobalObject(ctx);
         *headers_obj = JS_NewObject(ctx);
+        *stream_obj = JS_UNDEFINED;
         if (JS_IsException(*global_obj) || JS_IsException(*headers_obj)) {
+            JS_PopGCRef(ctx, &stream_ref);
             JS_PopGCRef(ctx, &headers_ref);
             JS_PopGCRef(ctx, &global_ref);
             JS_PopGCRef(ctx, &relative_ref);
@@ -2104,14 +2160,16 @@ static JSValue http_server_static_file_handler_handle_internal(JSContext *ctx,
                                          *headers_obj,
                                          "content-type",
                                          JS_NewString(ctx, content_type))) {
+            JS_PopGCRef(ctx, &stream_ref);
             JS_PopGCRef(ctx, &headers_ref);
             JS_PopGCRef(ctx, &global_ref);
             JS_PopGCRef(ctx, &relative_ref);
             JS_PopGCRef(ctx, &root_ref);
             return JS_EXCEPTION;
         }
-        stream_obj = esp32_mquickjs_stream_open_file(ctx, *global_obj, target_path, "rb");
-        if (JS_IsException(stream_obj)) {
+        *stream_obj = esp32_mquickjs_stream_open_file(ctx, *global_obj, target_path, "rb");
+        if (JS_IsException(*stream_obj)) {
+            JS_PopGCRef(ctx, &stream_ref);
             JS_PopGCRef(ctx, &headers_ref);
             JS_PopGCRef(ctx, &global_ref);
             JS_PopGCRef(ctx, &relative_ref);
@@ -2124,7 +2182,8 @@ static JSValue http_server_static_file_handler_handle_internal(JSContext *ctx,
                                                            "OK",
                                                            "",
                                                            *headers_obj,
-                                                           stream_obj);
+                                                           *stream_obj);
+        JS_PopGCRef(ctx, &stream_ref);
         JS_PopGCRef(ctx, &headers_ref);
         JS_PopGCRef(ctx, &global_ref);
     }
@@ -2190,10 +2249,11 @@ static bool http_server_async_poller(JSContext *ctx,
         esp32_mquickjs_http_server_request_t *request;
         esp32_mquickjs_http_server_route_t *route;
         JSGCRef callback_ref;
+        JSGCRef request_ref;
+        JSGCRef result_ref;
         JSValue *callback_fn;
-        JSValue req_obj = JS_UNDEFINED;
-        JSValue callback_this = JS_NULL;
-        JSValue callback_result = JS_UNDEFINED;
+        JSValue *req_obj;
+        JSValue *callback_result;
         esp32_mquickjs_http_server_response_t response = {0};
 
         if (event.request_id >= ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN) {
@@ -2214,9 +2274,14 @@ static bool http_server_async_poller(JSContext *ctx,
         }
 
         callback_fn = JS_PushGCRef(ctx, &callback_ref);
+        req_obj = JS_PushGCRef(ctx, &request_ref);
+        callback_result = JS_PushGCRef(ctx, &result_ref);
         *callback_fn = route->callback.val;
-        callback_this = route->callback_this_ref_added ? route->callback_this.val : JS_NULL;
-        if (!http_server_make_request_object(ctx, request, route, &req_obj)) {
+        *req_obj = JS_UNDEFINED;
+        *callback_result = JS_UNDEFINED;
+        if (!http_server_make_request_object(ctx, request, route, req_obj)) {
+            JS_PopGCRef(ctx, &result_ref);
+            JS_PopGCRef(ctx, &request_ref);
             JS_PopGCRef(ctx, &callback_ref);
             http_server_send_error(request->async_req, 500, "failed to build request object");
             http_server_cleanup_request(request);
@@ -2224,8 +2289,13 @@ static bool http_server_async_poller(JSContext *ctx,
             continue;
         }
 
-        callback_result = http_server_call_function(ctx, *callback_fn, callback_this, 1, &req_obj);
-        if (JS_IsException(callback_result)) {
+        *callback_result = http_server_call_function(
+            ctx,
+            *callback_fn,
+            route->callback_this_ref_added ? route->callback_this.val : JS_NULL,
+            1,
+            req_obj);
+        if (JS_IsException(*callback_result)) {
             esp32_mquickjs_print_exception(ctx);
             http_server_send_error(request->async_req, 500, "handler exception");
         } else if (http_server_make_response(ctx, callback_result, &response) != 0) {
@@ -2234,18 +2304,20 @@ static bool http_server_async_poller(JSContext *ctx,
             ESP_LOGE(TAG, "failed to send response");
         }
 
-        if (!JS_IsException(req_obj)) {
+        if (!JS_IsException(*req_obj)) {
             JSGCRef req_body_ref;
             JSValue *req_body_value;
 
             req_body_value = JS_PushGCRef(ctx, &req_body_ref);
-            *req_body_value = JS_GetPropertyStr(ctx, req_obj, "body");
+            *req_body_value = JS_GetPropertyStr(ctx, *req_obj, "body");
             if (!JS_IsException(*req_body_value)) {
                 esp32_mquickjs_stream_close_value(ctx, *req_body_value);
             }
             JS_PopGCRef(ctx, &req_body_ref);
         }
 
+        JS_PopGCRef(ctx, &result_ref);
+        JS_PopGCRef(ctx, &request_ref);
         JS_PopGCRef(ctx, &callback_ref);
         http_server_free_response(&response);
         http_server_cleanup_request(request);

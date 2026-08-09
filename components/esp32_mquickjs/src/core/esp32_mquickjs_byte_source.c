@@ -110,12 +110,18 @@ static JSValue byte_view_make(JSContext *ctx,
                               size_t length)
 {
     JSGCRef object_ref;
+    JSGCRef owner_ref;
     JSValue *object;
+    JSValue *rooted_owner;
     esp32_mquickjs_byte_view_t *view;
 
     object = JS_PushGCRef(ctx, &object_ref);
+    rooted_owner = JS_PushGCRef(ctx, &owner_ref);
+    *object = JS_UNDEFINED;
+    *rooted_owner = owner;
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_BYTE_VIEW);
     if (JS_IsException(*object)) {
+        JS_PopGCRef(ctx, &owner_ref);
         JS_PopGCRef(ctx, &object_ref);
         heap_caps_free(owned_data);
         return JS_EXCEPTION;
@@ -123,6 +129,7 @@ static JSValue byte_view_make(JSContext *ctx,
 
     view = heap_caps_malloc(sizeof(*view), MALLOC_CAP_8BIT);
     if (view == NULL) {
+        JS_PopGCRef(ctx, &owner_ref);
         JS_PopGCRef(ctx, &object_ref);
         heap_caps_free(owned_data);
         return JS_ThrowOutOfMemory(ctx);
@@ -132,21 +139,23 @@ static JSValue byte_view_make(JSContext *ctx,
     view->owned_data = owned_data;
     JS_SetOpaque(ctx, *object, view);
 
-    if (!JS_IsUndefined(owner) &&
-        JS_IsException(JS_SetPropertyStr(ctx, *object, ESP32_MQUICKJS_BYTE_VIEW_OWNER_KEY, owner))) {
+    if (!JS_IsUndefined(*rooted_owner) &&
+        JS_IsException(JS_SetPropertyStr(ctx, *object, ESP32_MQUICKJS_BYTE_VIEW_OWNER_KEY, *rooted_owner))) {
         JS_SetOpaque(ctx, *object, NULL);
         heap_caps_free(view->owned_data);
         heap_caps_free(view);
+        JS_PopGCRef(ctx, &owner_ref);
         JS_PopGCRef(ctx, &object_ref);
         return JS_EXCEPTION;
     }
 
     note_byte_view_gc_pressure(sizeof(*view) + (owned_data != NULL ? length : 0U));
+    JS_PopGCRef(ctx, &owner_ref);
     return JS_PopGCRef(ctx, &object_ref);
 }
 
 static bool js_value_to_array_bytes(JSContext *ctx,
-                                    JSValue value,
+                                    JSValue *value,
                                     const char *api_name,
                                     esp32_mquickjs_byte_source_t *out,
                                     uint8_t **out_owned,
@@ -158,13 +167,13 @@ static bool js_value_to_array_bytes(JSContext *ctx,
     uint8_t *bytes;
     uint32_t i;
 
-    if (JS_GetClassID(ctx, value) < 0) {
+    if (JS_GetClassID(ctx, *value) < 0) {
         *out_error = JS_ThrowTypeError(ctx, "%s expects an array-like object of byte values", api_name);
         return false;
     }
 
     length_value = JS_PushGCRef(ctx, &length_ref);
-    *length_value = JS_GetPropertyStr(ctx, value, "length");
+    *length_value = JS_GetPropertyStr(ctx, *value, "length");
     if (JS_IsException(*length_value) || !js_value_to_u32(ctx, *length_value, &length)) {
         JS_PopGCRef(ctx, &length_ref);
         *out_error = JS_ThrowTypeError(ctx, "%s expects an array-like object with a numeric length", api_name);
@@ -175,7 +184,7 @@ static bool js_value_to_array_bytes(JSContext *ctx,
     if (length == 0) {
         out->data = NULL;
         out->length = 0;
-        out->owner = value;
+        out->owner = *value;
         *out_owned = NULL;
         return true;
     }
@@ -191,7 +200,7 @@ static bool js_value_to_array_bytes(JSContext *ctx,
         JSValue *item = JS_PushGCRef(ctx, &item_ref);
         uint32_t raw_byte = 0;
 
-        *item = JS_GetPropertyUint32(ctx, value, i);
+        *item = JS_GetPropertyUint32(ctx, *value, i);
         if (JS_IsException(*item) || !js_value_to_u32(ctx, *item, &raw_byte) || raw_byte > 0xffU) {
             JS_PopGCRef(ctx, &item_ref);
             heap_caps_free(bytes);
@@ -204,7 +213,7 @@ static bool js_value_to_array_bytes(JSContext *ctx,
 
     out->data = bytes;
     out->length = length;
-    out->owner = value;
+    out->owner = *value;
     *out_owned = bytes;
     return true;
 }
@@ -216,7 +225,10 @@ bool esp32_mquickjs_get_byte_source(JSContext *ctx,
                                     uint8_t **out_owned,
                                     JSValue *out_error)
 {
+    JSGCRef value_ref;
+    JSValue *rooted_value;
     esp32_mquickjs_byte_view_t *view;
+    bool result;
 
     if (out == NULL || out_owned == NULL || out_error == NULL) {
         return false;
@@ -227,19 +239,24 @@ bool esp32_mquickjs_get_byte_source(JSContext *ctx,
     *out_owned = NULL;
     *out_error = JS_UNDEFINED;
 
-    if (JS_GetClassID(ctx, value) == JS_CLASS_BYTE_VIEW) {
-        view = byte_view_from_value(ctx, value, api_name);
+    rooted_value = JS_PushGCRef(ctx, &value_ref);
+    *rooted_value = value;
+    if (JS_GetClassID(ctx, *rooted_value) == JS_CLASS_BYTE_VIEW) {
+        view = byte_view_from_value(ctx, *rooted_value, api_name);
         if (view == NULL) {
             *out_error = JS_EXCEPTION;
-            return false;
+            result = false;
+        } else {
+            out->data = view->data;
+            out->length = view->length;
+            out->owner = *rooted_value;
+            result = true;
         }
-        out->data = view->data;
-        out->length = view->length;
-        out->owner = value;
-        return true;
+    } else {
+        result = js_value_to_array_bytes(ctx, rooted_value, api_name, out, out_owned, out_error);
     }
-
-    return js_value_to_array_bytes(ctx, value, api_name, out, out_owned, out_error);
+    JS_PopGCRef(ctx, &value_ref);
+    return result;
 }
 
 bool esp32_mquickjs_get_byte_source_array_length(JSContext *ctx,
@@ -354,7 +371,9 @@ JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx,
                                             void *opaque)
 {
     JSGCRef object_ref;
+    JSGCRef owner_ref;
     JSValue *object;
+    JSValue *rooted_owner;
     esp32_mquickjs_byte_span_source_object_t *source;
     int class_id;
 
@@ -373,11 +392,15 @@ JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx,
     }
 
     object = JS_PushGCRef(ctx, &object_ref);
+    rooted_owner = JS_PushGCRef(ctx, &owner_ref);
+    *object = JS_UNDEFINED;
+    *rooted_owner = owner;
     *object = JS_NewObjectClassUser(ctx, class_id);
     if (JS_IsException(*object)) {
         if (ops->destroy != NULL) {
             ops->destroy(ctx, opaque);
         }
+        JS_PopGCRef(ctx, &owner_ref);
         JS_PopGCRef(ctx, &object_ref);
         return JS_EXCEPTION;
     }
@@ -387,6 +410,7 @@ JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx,
         if (ops->destroy != NULL) {
             ops->destroy(ctx, opaque);
         }
+        JS_PopGCRef(ctx, &owner_ref);
         JS_PopGCRef(ctx, &object_ref);
         return JS_ThrowOutOfMemory(ctx);
     }
@@ -395,17 +419,19 @@ JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx,
     source->closed = false;
     JS_SetOpaque(ctx, *object, source);
 
-    if (!JS_IsUndefined(owner) &&
-        JS_IsException(JS_SetPropertyStr(ctx, *object, ESP32_MQUICKJS_BYTE_SPAN_SOURCE_OWNER_KEY, owner))) {
+    if (!JS_IsUndefined(*rooted_owner) &&
+        JS_IsException(JS_SetPropertyStr(ctx, *object, ESP32_MQUICKJS_BYTE_SPAN_SOURCE_OWNER_KEY, *rooted_owner))) {
         JS_SetOpaque(ctx, *object, NULL);
         if (ops->destroy != NULL) {
             ops->destroy(ctx, opaque);
         }
         heap_caps_free(source);
+        JS_PopGCRef(ctx, &owner_ref);
         JS_PopGCRef(ctx, &object_ref);
         return JS_EXCEPTION;
     }
 
+    JS_PopGCRef(ctx, &owner_ref);
     return JS_PopGCRef(ctx, &object_ref);
 }
 

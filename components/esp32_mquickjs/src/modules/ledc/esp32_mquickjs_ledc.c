@@ -352,7 +352,6 @@ void esp32_mquickjs_init_ledc_runtime(void)
 JSValue js_ledc_timerConfig(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     ledc_timer_t timer;
-    JSValue options;
     bool deconfigure = false;
     uint32_t freq_hz = 0;
     ledc_timer_bit_t duty_resolution = LEDC_TIMER_8_BIT;
@@ -367,9 +366,7 @@ JSValue js_ledc_timerConfig(JSContext *ctx, JSValue *this_val, int argc, JSValue
                                  "ledc.timerConfig(timer, options) expects a timer index and an options object");
     }
 
-    options = argv[1];
-
-    if (!ledc_read_bool_option(ctx, options, "deconfigure", &deconfigure)) {
+    if (!ledc_read_bool_option(ctx, argv[1], "deconfigure", &deconfigure)) {
         return JS_EXCEPTION;
     }
 
@@ -378,17 +375,17 @@ JSValue js_ledc_timerConfig(JSContext *ctx, JSValue *this_val, int argc, JSValue
     config.deconfigure = deconfigure;
 
     if (!deconfigure) {
-        JSValue property = JS_GetPropertyStr(ctx, options, "freqHz");
+        JSValue property = JS_GetPropertyStr(ctx, argv[1], "freqHz");
         if (JS_IsException(property) || js_value_to_u32(ctx, property, &freq_hz) != 0 || freq_hz == 0) {
             return JS_ThrowTypeError(ctx, "ledc.timerConfig({ freqHz }) expects a positive integer");
         }
 
-        property = JS_GetPropertyStr(ctx, options, "dutyResolution");
+        property = JS_GetPropertyStr(ctx, argv[1], "dutyResolution");
         if (JS_IsException(property) || js_value_to_duty_resolution(ctx, property, &duty_resolution) != 0) {
             return JS_ThrowTypeError(ctx, "ledc.timerConfig({ dutyResolution }) expects 1..%d", SOC_LEDC_TIMER_BIT_WIDTH);
         }
 
-        property = JS_GetPropertyStr(ctx, options, "clock");
+        property = JS_GetPropertyStr(ctx, argv[1], "clock");
         if (JS_IsException(property)) {
             return JS_EXCEPTION;
         }
@@ -431,7 +428,6 @@ JSValue js_ledc_timerConfig(JSContext *ctx, JSValue *this_val, int argc, JSValue
 JSValue js_ledc_channelConfig(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     ledc_channel_t channel;
-    JSValue options;
     bool deconfigure = false;
     gpio_num_t pin = GPIO_NUM_NC;
     ledc_timer_t timer = LEDC_TIMER_0;
@@ -449,9 +445,7 @@ JSValue js_ledc_channelConfig(JSContext *ctx, JSValue *this_val, int argc, JSVal
                                  "ledc.channelConfig(channel, options) expects a channel index and an options object");
     }
 
-    options = argv[1];
-
-    if (!ledc_read_bool_option(ctx, options, "deconfigure", &deconfigure)) {
+    if (!ledc_read_bool_option(ctx, argv[1], "deconfigure", &deconfigure)) {
         return JS_EXCEPTION;
     }
 
@@ -460,17 +454,17 @@ JSValue js_ledc_channelConfig(JSContext *ctx, JSValue *this_val, int argc, JSVal
     config.deconfigure = deconfigure;
 
     if (!deconfigure) {
-        JSValue property = JS_GetPropertyStr(ctx, options, "pin");
+        JSValue property = JS_GetPropertyStr(ctx, argv[1], "pin");
         if (JS_IsException(property) || js_value_to_gpio_num(ctx, property, &pin) != 0) {
             return JS_ThrowTypeError(ctx, "ledc.channelConfig({ pin }) expects an output-capable GPIO");
         }
 
-        property = JS_GetPropertyStr(ctx, options, "timer");
+        property = JS_GetPropertyStr(ctx, argv[1], "timer");
         if (JS_IsException(property) || js_value_to_timer(ctx, property, &timer) != 0) {
             return JS_ThrowTypeError(ctx, "ledc.channelConfig({ timer }) expects a valid timer index");
         }
 
-        property = JS_GetPropertyStr(ctx, options, "duty");
+        property = JS_GetPropertyStr(ctx, argv[1], "duty");
         if (JS_IsException(property)) {
             return JS_EXCEPTION;
         }
@@ -480,7 +474,7 @@ JSValue js_ledc_channelConfig(JSContext *ctx, JSValue *this_val, int argc, JSVal
             }
         }
 
-        property = JS_GetPropertyStr(ctx, options, "hpoint");
+        property = JS_GetPropertyStr(ctx, argv[1], "hpoint");
         if (JS_IsException(property)) {
             return JS_EXCEPTION;
         }
@@ -490,11 +484,11 @@ JSValue js_ledc_channelConfig(JSContext *ctx, JSValue *this_val, int argc, JSVal
             }
         }
 
-        if (!ledc_read_bool_option(ctx, options, "outputInvert", &output_invert)) {
+        if (!ledc_read_bool_option(ctx, argv[1], "outputInvert", &output_invert)) {
             return JS_EXCEPTION;
         }
 
-        property = JS_GetPropertyStr(ctx, options, "sleepMode");
+        property = JS_GetPropertyStr(ctx, argv[1], "sleepMode");
         if (JS_IsException(property)) {
             return JS_EXCEPTION;
         }

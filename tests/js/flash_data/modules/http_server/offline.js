@@ -14,6 +14,11 @@ test("http_server/offline", function () {
   server.get("/ping", function () {
     return Response.text("pong");
   });
+  server.get(/^\/items\/.+$/, {
+    handle: function () {
+      return Response.json({ ok: true });
+    },
+  });
 
   if (features.staticFileHandler) {
     test.ok(typeof http.staticFileHandler === "function",
@@ -23,6 +28,16 @@ test("http_server/offline", function () {
     fileHandler = staticFileHandler(".");
     test.ok(fileHandler && typeof fileHandler.handle === "function",
       "static file handler should expose handle()");
+    var missingResponse = fileHandler.handle({ relativePath: "missing-gc-root-fixture.txt" });
+    var fontResponse = fileHandler.handle({ relativePath: "_sys/display/fonts/mono5x7.eqf" });
+    test.equal(missingResponse.status, 404,
+      "static file handler should return a rooted 404 response");
+    test.equal(missingResponse.text(), "Not Found",
+      "static file handler should preserve the 404 body");
+    test.equal(fontResponse.status, 200,
+      "static file handler should return a rooted file response");
+    test.ok(fontResponse.text().length > 0,
+      "static file handler should preserve the file stream");
   } else {
     test.equal(typeof http.staticFileHandler, "undefined",
       "http.staticFileHandler should stay hidden without fs support");

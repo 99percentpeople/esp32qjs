@@ -532,19 +532,23 @@ JSValue esp32_mquickjs_http_make_response_object(JSContext *ctx,
     JSGCRef global_ref;
     JSGCRef headers_ref;
     JSGCRef body_ref;
+    JSGCRef plain_ref;
     JSValue *global_obj;
     JSValue *headers_obj;
     JSValue *body_stream;
-    JSValue plain_headers = JS_UNDEFINED;
+    JSValue *plain_headers;
+    JSValue result = JS_EXCEPTION;
 
     global_obj = JS_PushGCRef(ctx, &global_ref);
     headers_obj = JS_PushGCRef(ctx, &headers_ref);
     body_stream = JS_PushGCRef(ctx, &body_ref);
+    plain_headers = JS_PushGCRef(ctx, &plain_ref);
     *global_obj = JS_GetGlobalObject(ctx);
     *headers_obj = JS_NewObject(ctx);
     *body_stream = JS_UNDEFINED;
+    *plain_headers = JS_UNDEFINED;
     if (JS_IsException(*global_obj) || JS_IsException(*headers_obj)) {
-        goto fail;
+        goto done;
     }
 
     if (response != NULL) {
@@ -555,12 +559,10 @@ JSValue esp32_mquickjs_http_make_response_object(JSContext *ctx,
                                              *headers_obj,
                                              response->headers[i].key,
                                              JS_NewString(ctx, response->headers[i].value))) {
-                goto fail;
+                goto done;
             }
         }
     }
-    plain_headers = *headers_obj;
-    *headers_obj = JS_UNDEFINED;
 
     *body_stream = esp32_mquickjs_make_text_body_stream(ctx,
                                                         *global_obj,
@@ -568,33 +570,28 @@ JSValue esp32_mquickjs_http_make_response_object(JSContext *ctx,
                                                             ? response->body
                                                             : "");
     if (JS_IsException(*body_stream)) {
-        goto fail;
+        goto done;
     }
 
-    plain_headers = esp32_mquickjs_make_headers_object(ctx, *global_obj, plain_headers);
-    if (JS_IsException(plain_headers)) {
-        goto fail;
+    *plain_headers = esp32_mquickjs_make_headers_object(ctx, *global_obj, *headers_obj);
+    if (JS_IsException(*plain_headers)) {
+        goto done;
     }
 
-    {
-        JSValue result = esp32_mquickjs_make_response_object(ctx,
-                                                             *global_obj,
-                                                             response != NULL ? response->status : 200,
-                                                             response != NULL ? response->status_text : "OK",
-                                                             response != NULL ? response->url : "",
-                                                             plain_headers,
-                                                             *body_stream);
+    result = esp32_mquickjs_make_response_object(ctx,
+                                                 *global_obj,
+                                                 response != NULL ? response->status : 200,
+                                                 response != NULL ? response->status_text : "OK",
+                                                 response != NULL ? response->url : "",
+                                                 *plain_headers,
+                                                 *body_stream);
 
-        JS_PopGCRef(ctx, &body_ref);
-        JS_PopGCRef(ctx, &global_ref);
-        return result;
-    }
-
-fail:
-    JS_PopGCRef(ctx, &headers_ref);
+done:
+    JS_PopGCRef(ctx, &plain_ref);
     JS_PopGCRef(ctx, &body_ref);
+    JS_PopGCRef(ctx, &headers_ref);
     JS_PopGCRef(ctx, &global_ref);
-    return JS_EXCEPTION;
+    return result;
 }
 
 static int http_parse_timeout(JSContext *ctx,
@@ -616,7 +613,7 @@ static int http_parse_timeout(JSContext *ctx,
 }
 
 static int http_parse_headers(JSContext *ctx,
-                              JSValue headers_value,
+                              JSValue *headers_value,
                               esp32_mquickjs_http_header_t **out_headers,
                               size_t *out_header_count)
 {
@@ -636,14 +633,14 @@ static int http_parse_headers(JSContext *ctx,
     int i;
     int result = -1;
 
-    if (JS_IsUndefined(headers_value) || JS_IsNull(headers_value)) {
+    if (JS_IsUndefined(*headers_value) || JS_IsNull(*headers_value)) {
         *out_headers = NULL;
         *out_header_count = 0;
         return 0;
     }
-    if (esp32_mquickjs_is_headers_object(ctx, headers_value)) {
-        headers_value = esp32_mquickjs_headers_to_plain_object(ctx, headers_value);
-        if (JS_IsException(headers_value)) {
+    if (esp32_mquickjs_is_headers_object(ctx, *headers_value)) {
+        *headers_value = esp32_mquickjs_headers_to_plain_object(ctx, *headers_value);
+        if (JS_IsException(*headers_value)) {
             return -1;
         }
     }
@@ -676,7 +673,7 @@ static int http_parse_headers(JSContext *ctx,
         goto done;
     }
 
-    *keys_array = esp32_mquickjs_http_call_function(ctx, *keys_fn, *object_ctor, 1, &headers_value);
+    *keys_array = esp32_mquickjs_http_call_function(ctx, *keys_fn, *object_ctor, 1, headers_value);
     if (JS_IsException(*keys_array)) {
         goto done;
     }
@@ -708,6 +705,7 @@ static int http_parse_headers(JSContext *ctx,
         JSCStringBuf value_buf;
         const char *key;
         const char *value;
+        char *key_copy;
 
         key_value = JS_PushGCRef(ctx, &key_ref);
         value_value = JS_PushGCRef(ctx, &value_ref);
@@ -725,9 +723,17 @@ static int http_parse_headers(JSContext *ctx,
             JS_PopGCRef(ctx, &key_ref);
             goto done;
         }
+        key_copy = esp32_mquickjs_http_strdup(key);
+        if (key_copy == NULL) {
+            JS_PopGCRef(ctx, &value_ref);
+            JS_PopGCRef(ctx, &key_ref);
+            JS_ThrowOutOfMemory(ctx);
+            goto done;
+        }
 
-        *value_value = JS_GetPropertyStr(ctx, headers_value, key);
+        *value_value = JS_GetPropertyStr(ctx, *headers_value, key_copy);
         if (JS_IsException(*value_value)) {
+            heap_caps_free(key_copy);
             JS_PopGCRef(ctx, &value_ref);
             JS_PopGCRef(ctx, &key_ref);
             goto done;
@@ -735,20 +741,21 @@ static int http_parse_headers(JSContext *ctx,
 
         value = JS_ToCString(ctx, *value_value, &value_buf);
         if (value == NULL) {
+            heap_caps_free(key_copy);
             JS_PopGCRef(ctx, &value_ref);
             JS_PopGCRef(ctx, &key_ref);
             goto done;
         }
 
-        headers[header_count].key = esp32_mquickjs_http_strdup(key);
         headers[header_count].value = esp32_mquickjs_http_strdup(value);
-        if (headers[header_count].key == NULL || headers[header_count].value == NULL) {
+        if (headers[header_count].value == NULL) {
+            heap_caps_free(key_copy);
             JS_PopGCRef(ctx, &value_ref);
             JS_PopGCRef(ctx, &key_ref);
             JS_ThrowOutOfMemory(ctx);
             goto done;
         }
-
+        headers[header_count].key = key_copy;
         header_count++;
         JS_PopGCRef(ctx, &value_ref);
         JS_PopGCRef(ctx, &key_ref);
@@ -770,7 +777,7 @@ done:
 }
 
 static int http_parse_options(JSContext *ctx,
-                              JSValue options_value,
+                              JSValue *options_value,
                               esp32_mquickjs_http_request_t *request)
 {
     JSGCRef method_ref;
@@ -786,10 +793,10 @@ static int http_parse_options(JSContext *ctx,
     const char *method;
     const char *body;
 
-    if (JS_IsUndefined(options_value) || JS_IsNull(options_value)) {
+    if (JS_IsUndefined(*options_value) || JS_IsNull(*options_value)) {
         return 0;
     }
-    if (JS_IsString(ctx, options_value) || JS_IsBool(options_value) || JS_IsFunction(ctx, options_value)) {
+    if (JS_IsString(ctx, *options_value) || JS_IsBool(*options_value) || JS_IsFunction(ctx, *options_value)) {
         JS_ThrowTypeError(ctx, "fetch(url, options) expects options to be an object");
         return -1;
     }
@@ -798,10 +805,10 @@ static int http_parse_options(JSContext *ctx,
     body_value = JS_PushGCRef(ctx, &body_ref);
     timeout_value = JS_PushGCRef(ctx, &timeout_ref);
     headers_value = JS_PushGCRef(ctx, &headers_ref);
-    *method_value = JS_GetPropertyStr(ctx, options_value, "method");
-    *body_value = JS_GetPropertyStr(ctx, options_value, "body");
-    *timeout_value = JS_GetPropertyStr(ctx, options_value, "timeoutMs");
-    *headers_value = JS_GetPropertyStr(ctx, options_value, "headers");
+    *method_value = JS_GetPropertyStr(ctx, *options_value, "method");
+    *body_value = JS_GetPropertyStr(ctx, *options_value, "body");
+    *timeout_value = JS_GetPropertyStr(ctx, *options_value, "timeoutMs");
+    *headers_value = JS_GetPropertyStr(ctx, *options_value, "headers");
 
     if (JS_IsException(*method_value) || JS_IsException(*body_value) ||
         JS_IsException(*timeout_value) || JS_IsException(*headers_value)) {
@@ -862,7 +869,7 @@ static int http_parse_options(JSContext *ctx,
         goto fail;
     }
 
-    if (http_parse_headers(ctx, *headers_value, &request->headers, &request->header_count) != 0) {
+    if (http_parse_headers(ctx, headers_value, &request->headers, &request->header_count) != 0) {
         goto fail;
     }
 
@@ -899,7 +906,7 @@ static JSValue http_fetch_sync(JSContext *ctx,
 }
 
 static int http_parse_request_object(JSContext *ctx,
-                                     JSValue request_value,
+                                     JSValue *request_value,
                                      esp32_mquickjs_http_request_t *request)
 {
     JSGCRef method_ref;
@@ -922,11 +929,11 @@ static int http_parse_request_object(JSContext *ctx,
     headers_value = JS_PushGCRef(ctx, &headers_ref);
     body_value = JS_PushGCRef(ctx, &body_ref);
     timeout_value = JS_PushGCRef(ctx, &timeout_ref);
-    *method_value = JS_GetPropertyStr(ctx, request_value, "method");
-    *url_value = JS_GetPropertyStr(ctx, request_value, "url");
-    *headers_value = JS_GetPropertyStr(ctx, request_value, "headers");
-    *body_value = JS_GetPropertyStr(ctx, request_value, "body");
-    *timeout_value = JS_GetPropertyStr(ctx, request_value, "timeoutMs");
+    *method_value = JS_GetPropertyStr(ctx, *request_value, "method");
+    *url_value = JS_GetPropertyStr(ctx, *request_value, "url");
+    *headers_value = JS_GetPropertyStr(ctx, *request_value, "headers");
+    *body_value = JS_GetPropertyStr(ctx, *request_value, "body");
+    *timeout_value = JS_GetPropertyStr(ctx, *request_value, "timeoutMs");
 
     if (JS_IsException(*method_value) || JS_IsException(*url_value) || JS_IsException(*headers_value) ||
         JS_IsException(*body_value) || JS_IsException(*timeout_value)) {
@@ -938,15 +945,22 @@ static int http_parse_request_object(JSContext *ctx,
     }
 
     method = JS_ToCString(ctx, *method_value, &method_buf);
-    url = JS_ToCString(ctx, *url_value, &url_buf);
-    if (method == NULL || url == NULL) {
+    if (method == NULL) {
+        goto fail;
+    }
+    request->method = esp32_mquickjs_http_strdup(method);
+    if (request->method == NULL) {
+        JS_ThrowOutOfMemory(ctx);
         goto fail;
     }
 
-    request->method = esp32_mquickjs_http_strdup(method);
+    url = JS_ToCString(ctx, *url_value, &url_buf);
+    if (url == NULL) {
+        goto fail;
+    }
     request->url = esp32_mquickjs_http_strdup(url);
     request->timeout_ms = ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS;
-    if (request->method == NULL || request->url == NULL) {
+    if (request->url == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto fail;
     }
@@ -955,7 +969,7 @@ static int http_parse_request_object(JSContext *ctx,
         JS_ThrowTypeError(ctx, "fetch(request) expects Request.timeoutMs to be a non-negative integer");
         goto fail;
     }
-    if (http_parse_headers(ctx, *headers_value, &request->headers, &request->header_count) != 0) {
+    if (http_parse_headers(ctx, headers_value, &request->headers, &request->header_count) != 0) {
         goto fail;
     }
     if (!JS_IsUndefined(*body_value) && !JS_IsNull(*body_value)) {
@@ -1008,7 +1022,6 @@ int esp32_mquickjs_http_build_request_from_args(JSContext *ctx,
 {
     JSCStringBuf url_buf;
     const char *url;
-    JSValue options = JS_UNDEFINED;
 
     if (argc < 1 || argc > 2) {
         JS_ThrowTypeError(ctx, "fetch(input, options?) expects a URL string or Request");
@@ -1021,15 +1034,14 @@ int esp32_mquickjs_http_build_request_from_args(JSContext *ctx,
                               "fetch(input, options?) does not accept a callback; use http.async.fetch(input, callback)");
             return -1;
         }
-        options = argv[1];
     }
 
     if (esp32_mquickjs_is_request_object(ctx, argv[0])) {
-        if (!JS_IsUndefined(options) && !JS_IsNull(options)) {
+        if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
             JS_ThrowTypeError(ctx, "fetch(request) does not accept a separate options object");
             return -1;
         }
-        return http_parse_request_object(ctx, argv[0], request);
+        return http_parse_request_object(ctx, &argv[0], request);
     }
 
     if (!JS_IsString(ctx, argv[0])) {
@@ -1050,7 +1062,7 @@ int esp32_mquickjs_http_build_request_from_args(JSContext *ctx,
         return -1;
     }
 
-    return http_parse_options(ctx, options, request);
+    return argc >= 2 ? http_parse_options(ctx, &argv[1], request) : 0;
 }
 
 bool esp32_mquickjs_init_http_runtime(JSContext *ctx,

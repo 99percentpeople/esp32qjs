@@ -43,6 +43,14 @@ static char *rr_strdup(const char *value)
     return copy;
 }
 
+static char *rr_value_to_string_copy(JSContext *ctx, JSValue value)
+{
+    JSCStringBuf value_buf;
+    const char *text = JS_ToCString(ctx, value, &value_buf);
+
+    return text != NULL ? rr_strdup(text) : NULL;
+}
+
 bool esp32_mquickjs_is_headers_object(JSContext *ctx, JSValue value)
 {
     return rr_is_object(ctx, value) && JS_GetClassID(ctx, value) == JS_CLASS_HEADERS;
@@ -120,8 +128,8 @@ static char *rr_url_decode(const char *value)
 }
 
 static int rr_copy_object_properties(JSContext *ctx,
-                                     JSValue source_obj,
-                                     JSValue target_obj,
+                                     JSValue *source_obj,
+                                     JSValue *target_obj,
                                      bool normalize_keys)
 {
     JSGCRef global_ref;
@@ -160,7 +168,7 @@ static int rr_copy_object_properties(JSContext *ctx,
     if (JS_IsException(*keys_fn) || !JS_IsFunction(ctx, *keys_fn)) {
         goto done;
     }
-    *keys_array = rr_call_function(ctx, *keys_fn, *object_ctor, 1, &source_obj);
+    *keys_array = rr_call_function(ctx, *keys_fn, *object_ctor, 1, source_obj);
     if (JS_IsException(*keys_array)) {
         goto done;
     }
@@ -204,7 +212,7 @@ static int rr_copy_object_properties(JSContext *ctx,
             goto done;
         }
 
-        *value_value = JS_GetPropertyStr(ctx, source_obj, key_str);
+        *value_value = JS_GetPropertyStr(ctx, *source_obj, key_str);
         if (JS_IsException(*value_value)) {
             heap_caps_free(prop_name);
             JS_PopGCRef(ctx, &value_ref);
@@ -226,7 +234,7 @@ static int rr_copy_object_properties(JSContext *ctx,
             goto done;
         }
 
-        if (!esp32_mquickjs_set_property(ctx, target_obj, prop_name, JS_NewString(ctx, value_str))) {
+        if (!esp32_mquickjs_set_property(ctx, *target_obj, prop_name, JS_NewString(ctx, value_str))) {
             heap_caps_free(prop_name);
             JS_PopGCRef(ctx, &value_ref);
             JS_PopGCRef(ctx, &key_ref);
@@ -248,7 +256,7 @@ done:
     return result;
 }
 
-static JSValue rr_get_object_keys(JSContext *ctx, JSValue object_value)
+static JSValue rr_get_object_keys(JSContext *ctx, JSValue *object_value)
 {
     JSGCRef global_ref;
     JSGCRef object_ref;
@@ -279,7 +287,7 @@ static JSValue rr_get_object_keys(JSContext *ctx, JSValue object_value)
     if (JS_IsException(*keys_fn) || !JS_IsFunction(ctx, *keys_fn)) {
         goto fail;
     }
-    *keys_array = rr_call_function(ctx, *keys_fn, *object_ctor, 1, &object_value);
+    *keys_array = rr_call_function(ctx, *keys_fn, *object_ctor, 1, object_value);
     if (JS_IsException(*keys_array)) {
         goto fail;
     }
@@ -312,51 +320,75 @@ static JSValue rr_get_global_object(JSContext *ctx)
 
 JSValue esp32_mquickjs_headers_to_plain_object(JSContext *ctx, JSValue headers_value)
 {
+    JSGCRef headers_ref;
+    JSGCRef source_ref;
     JSGCRef plain_ref;
+    JSValue *headers_obj;
+    JSValue *source_obj;
     JSValue *plain_obj;
-    JSValue source_obj = JS_UNDEFINED;
 
     plain_obj = JS_PushGCRef(ctx, &plain_ref);
+    headers_obj = JS_PushGCRef(ctx, &headers_ref);
+    source_obj = JS_PushGCRef(ctx, &source_ref);
+    *plain_obj = JS_UNDEFINED;
+    *headers_obj = headers_value;
+    *source_obj = JS_UNDEFINED;
     *plain_obj = JS_NewObject(ctx);
     if (JS_IsException(*plain_obj)) {
         goto fail;
     }
 
-    if (esp32_mquickjs_is_headers_object(ctx, headers_value)) {
-        source_obj = rr_get_headers_store(ctx, headers_value);
-        if (JS_IsException(source_obj)) {
+    if (esp32_mquickjs_is_headers_object(ctx, *headers_obj)) {
+        *source_obj = rr_get_headers_store(ctx, *headers_obj);
+        if (JS_IsException(*source_obj)) {
             goto fail;
         }
-    } else if (rr_is_object(ctx, headers_value)) {
-        source_obj = headers_value;
-    } else if (JS_IsUndefined(headers_value) || JS_IsNull(headers_value)) {
+    } else if (rr_is_object(ctx, *headers_obj)) {
+        *source_obj = *headers_obj;
+    } else if (JS_IsUndefined(*headers_obj) || JS_IsNull(*headers_obj)) {
+        JS_PopGCRef(ctx, &source_ref);
+        JS_PopGCRef(ctx, &headers_ref);
         return JS_PopGCRef(ctx, &plain_ref);
     } else {
         JS_ThrowTypeError(ctx, "Headers expects a plain object or Headers");
         goto fail;
     }
 
-    if (rr_copy_object_properties(ctx, source_obj, *plain_obj, false) != 0) {
+    if (rr_copy_object_properties(ctx, source_obj, plain_obj, false) != 0) {
         goto fail;
     }
 
+    JS_PopGCRef(ctx, &source_ref);
+    JS_PopGCRef(ctx, &headers_ref);
     return JS_PopGCRef(ctx, &plain_ref);
 
 fail:
+    JS_PopGCRef(ctx, &source_ref);
+    JS_PopGCRef(ctx, &headers_ref);
     JS_PopGCRef(ctx, &plain_ref);
     return JS_EXCEPTION;
 }
 
 JSValue esp32_mquickjs_make_headers_object(JSContext *ctx, JSValue global_obj, JSValue init_value)
 {
+    JSGCRef init_ref;
     JSGCRef headers_ref;
     JSGCRef store_ref;
+    JSGCRef plain_ref;
+    JSValue *init_obj;
     JSValue *headers_obj;
     JSValue *store_obj;
+    JSValue *plain_obj;
 
     (void)global_obj;
     headers_obj = JS_PushGCRef(ctx, &headers_ref);
+    init_obj = JS_PushGCRef(ctx, &init_ref);
     store_obj = JS_PushGCRef(ctx, &store_ref);
+    plain_obj = JS_PushGCRef(ctx, &plain_ref);
+    *headers_obj = JS_UNDEFINED;
+    *init_obj = init_value;
+    *store_obj = JS_UNDEFINED;
+    *plain_obj = JS_UNDEFINED;
     *headers_obj = JS_NewObjectClassUser(ctx, JS_CLASS_HEADERS);
     *store_obj = JS_NewObject(ctx);
     if (JS_IsException(*headers_obj) || JS_IsException(*store_obj)) {
@@ -366,27 +398,24 @@ JSValue esp32_mquickjs_make_headers_object(JSContext *ctx, JSValue global_obj, J
     if (!esp32_mquickjs_set_property(ctx, *headers_obj, ESP32_MQUICKJS_HEADERS_STORE_KEY, *store_obj)) {
         goto fail;
     }
-    *store_obj = JS_UNDEFINED;
 
-    if (!JS_IsUndefined(init_value) && !JS_IsNull(init_value)) {
-        JSValue plain_obj = esp32_mquickjs_headers_to_plain_object(ctx, init_value);
-
-        if (JS_IsException(plain_obj)) {
-            goto fail;
-        }
-        if (rr_copy_object_properties(ctx,
-                                      plain_obj,
-                                      JS_GetPropertyStr(ctx, *headers_obj, ESP32_MQUICKJS_HEADERS_STORE_KEY),
-                                      true) != 0) {
+    if (!JS_IsUndefined(*init_obj) && !JS_IsNull(*init_obj)) {
+        *plain_obj = esp32_mquickjs_headers_to_plain_object(ctx, *init_obj);
+        if (JS_IsException(*plain_obj) ||
+            rr_copy_object_properties(ctx, plain_obj, store_obj, true) != 0) {
             goto fail;
         }
     }
 
+    JS_PopGCRef(ctx, &plain_ref);
     JS_PopGCRef(ctx, &store_ref);
+    JS_PopGCRef(ctx, &init_ref);
     return JS_PopGCRef(ctx, &headers_ref);
 
 fail:
+    JS_PopGCRef(ctx, &plain_ref);
     JS_PopGCRef(ctx, &store_ref);
+    JS_PopGCRef(ctx, &init_ref);
     JS_PopGCRef(ctx, &headers_ref);
     return JS_EXCEPTION;
 }
@@ -595,41 +624,58 @@ JSValue esp32_mquickjs_make_request_object(JSContext *ctx,
                                            JSValue body_stream)
 {
     JSGCRef request_ref;
+    JSGCRef global_ref;
+    JSGCRef query_input_ref;
+    JSGCRef headers_input_ref;
+    JSGCRef body_input_ref;
     JSGCRef query_ref;
     JSGCRef headers_ref;
     JSGCRef body_ref;
     JSValue *request_obj;
+    JSValue *rooted_global;
+    JSValue *query_input;
+    JSValue *headers_input;
+    JSValue *body_input;
     JSValue *query_obj;
     JSValue *headers_obj;
     JSValue *body_obj;
 
     request_obj = JS_PushGCRef(ctx, &request_ref);
+    rooted_global = JS_PushGCRef(ctx, &global_ref);
+    query_input = JS_PushGCRef(ctx, &query_input_ref);
+    headers_input = JS_PushGCRef(ctx, &headers_input_ref);
+    body_input = JS_PushGCRef(ctx, &body_input_ref);
     query_obj = JS_PushGCRef(ctx, &query_ref);
     headers_obj = JS_PushGCRef(ctx, &headers_ref);
     body_obj = JS_PushGCRef(ctx, &body_ref);
-    *request_obj = JS_NewObjectClassUser(ctx, JS_CLASS_REQUEST);
+    *request_obj = JS_UNDEFINED;
+    *rooted_global = global_obj;
+    *query_input = query_value;
+    *headers_input = headers_init;
+    *body_input = body_stream;
     *query_obj = JS_UNDEFINED;
     *headers_obj = JS_UNDEFINED;
     *body_obj = JS_UNDEFINED;
+    *request_obj = JS_NewObjectClassUser(ctx, JS_CLASS_REQUEST);
     if (JS_IsException(*request_obj)) {
         goto fail;
     }
 
-    if (JS_IsUndefined(query_value) || JS_IsNull(query_value)) {
+    if (JS_IsUndefined(*query_input) || JS_IsNull(*query_input)) {
         *query_obj = rr_make_query_object(ctx, query_string != NULL ? query_string : "");
     } else {
-        *query_obj = query_value;
+        *query_obj = *query_input;
     }
     if (JS_IsException(*query_obj)) {
         goto fail;
     }
 
-    *headers_obj = esp32_mquickjs_make_headers_object(ctx, global_obj, headers_init);
+    *headers_obj = esp32_mquickjs_make_headers_object(ctx, *rooted_global, *headers_input);
     if (JS_IsException(*headers_obj)) {
         goto fail;
     }
 
-    *body_obj = rr_body_to_stream(ctx, global_obj, body_stream, "Request");
+    *body_obj = rr_body_to_stream(ctx, *rooted_global, *body_input, "Request");
     if (JS_IsException(*body_obj)) {
         goto fail;
     }
@@ -657,12 +703,20 @@ JSValue esp32_mquickjs_make_request_object(JSContext *ctx,
     JS_PopGCRef(ctx, &body_ref);
     JS_PopGCRef(ctx, &headers_ref);
     JS_PopGCRef(ctx, &query_ref);
+    JS_PopGCRef(ctx, &body_input_ref);
+    JS_PopGCRef(ctx, &headers_input_ref);
+    JS_PopGCRef(ctx, &query_input_ref);
+    JS_PopGCRef(ctx, &global_ref);
     return JS_PopGCRef(ctx, &request_ref);
 
 fail:
     JS_PopGCRef(ctx, &body_ref);
     JS_PopGCRef(ctx, &headers_ref);
     JS_PopGCRef(ctx, &query_ref);
+    JS_PopGCRef(ctx, &body_input_ref);
+    JS_PopGCRef(ctx, &headers_input_ref);
+    JS_PopGCRef(ctx, &query_input_ref);
+    JS_PopGCRef(ctx, &global_ref);
     JS_PopGCRef(ctx, &request_ref);
     return JS_EXCEPTION;
 }
@@ -728,28 +782,41 @@ JSValue esp32_mquickjs_make_response_object(JSContext *ctx,
                                             JSValue body_stream)
 {
     JSGCRef response_ref;
+    JSGCRef global_ref;
+    JSGCRef headers_input_ref;
+    JSGCRef body_input_ref;
     JSGCRef headers_ref;
     JSGCRef body_ref;
     JSValue *response_obj;
+    JSValue *rooted_global;
+    JSValue *headers_input;
+    JSValue *body_input;
     JSValue *headers_obj;
     JSValue *body_obj;
     bool ok = status >= 200 && status < 300;
 
     response_obj = JS_PushGCRef(ctx, &response_ref);
+    rooted_global = JS_PushGCRef(ctx, &global_ref);
+    headers_input = JS_PushGCRef(ctx, &headers_input_ref);
+    body_input = JS_PushGCRef(ctx, &body_input_ref);
     headers_obj = JS_PushGCRef(ctx, &headers_ref);
     body_obj = JS_PushGCRef(ctx, &body_ref);
-    *response_obj = JS_NewObjectClassUser(ctx, JS_CLASS_RESPONSE);
+    *response_obj = JS_UNDEFINED;
+    *rooted_global = global_obj;
+    *headers_input = headers_init;
+    *body_input = body_stream;
     *headers_obj = JS_UNDEFINED;
     *body_obj = JS_UNDEFINED;
+    *response_obj = JS_NewObjectClassUser(ctx, JS_CLASS_RESPONSE);
     if (JS_IsException(*response_obj)) {
         goto fail;
     }
 
-    *headers_obj = esp32_mquickjs_make_headers_object(ctx, global_obj, headers_init);
+    *headers_obj = esp32_mquickjs_make_headers_object(ctx, *rooted_global, *headers_input);
     if (JS_IsException(*headers_obj)) {
         goto fail;
     }
-    *body_obj = rr_body_to_stream(ctx, global_obj, body_stream, "Response");
+    *body_obj = rr_body_to_stream(ctx, *rooted_global, *body_input, "Response");
     if (JS_IsException(*body_obj)) {
         goto fail;
     }
@@ -768,29 +835,38 @@ JSValue esp32_mquickjs_make_response_object(JSContext *ctx,
 
     JS_PopGCRef(ctx, &body_ref);
     JS_PopGCRef(ctx, &headers_ref);
+    JS_PopGCRef(ctx, &body_input_ref);
+    JS_PopGCRef(ctx, &headers_input_ref);
+    JS_PopGCRef(ctx, &global_ref);
     return JS_PopGCRef(ctx, &response_ref);
 
 fail:
     JS_PopGCRef(ctx, &body_ref);
     JS_PopGCRef(ctx, &headers_ref);
+    JS_PopGCRef(ctx, &body_input_ref);
+    JS_PopGCRef(ctx, &headers_input_ref);
+    JS_PopGCRef(ctx, &global_ref);
     JS_PopGCRef(ctx, &response_ref);
     return JS_EXCEPTION;
 }
 
 static JSValue rr_json_parse(JSContext *ctx, JSValue text_value)
 {
+    JSGCRef text_ref;
     JSGCRef global_ref;
     JSGCRef json_ref;
     JSGCRef parse_ref;
+    JSValue *rooted_text;
     JSValue *global_obj;
     JSValue *json_obj;
     JSValue *parse_fn;
-    JSValue argv[1];
     JSValue result = JS_EXCEPTION;
 
+    rooted_text = JS_PushGCRef(ctx, &text_ref);
     global_obj = JS_PushGCRef(ctx, &global_ref);
     json_obj = JS_PushGCRef(ctx, &json_ref);
     parse_fn = JS_PushGCRef(ctx, &parse_ref);
+    *rooted_text = text_value;
     *global_obj = JS_GetGlobalObject(ctx);
     *json_obj = JS_UNDEFINED;
     *parse_fn = JS_UNDEFINED;
@@ -805,30 +881,33 @@ static JSValue rr_json_parse(JSContext *ctx, JSValue text_value)
     if (JS_IsException(*parse_fn) || !JS_IsFunction(ctx, *parse_fn)) {
         goto done;
     }
-    argv[0] = text_value;
-    result = rr_call_function(ctx, *parse_fn, *json_obj, 1, argv);
+    result = rr_call_function(ctx, *parse_fn, *json_obj, 1, rooted_text);
 
 done:
     JS_PopGCRef(ctx, &parse_ref);
     JS_PopGCRef(ctx, &json_ref);
     JS_PopGCRef(ctx, &global_ref);
+    JS_PopGCRef(ctx, &text_ref);
     return result;
 }
 
 static JSValue rr_json_stringify(JSContext *ctx, JSValue value)
 {
+    JSGCRef value_ref;
     JSGCRef global_ref;
     JSGCRef json_ref;
     JSGCRef stringify_ref;
+    JSValue *rooted_value;
     JSValue *global_obj;
     JSValue *json_obj;
     JSValue *stringify_fn;
-    JSValue argv[1];
     JSValue result = JS_EXCEPTION;
 
+    rooted_value = JS_PushGCRef(ctx, &value_ref);
     global_obj = JS_PushGCRef(ctx, &global_ref);
     json_obj = JS_PushGCRef(ctx, &json_ref);
     stringify_fn = JS_PushGCRef(ctx, &stringify_ref);
+    *rooted_value = value;
     *global_obj = JS_GetGlobalObject(ctx);
     *json_obj = JS_UNDEFINED;
     *stringify_fn = JS_UNDEFINED;
@@ -843,13 +922,13 @@ static JSValue rr_json_stringify(JSContext *ctx, JSValue value)
     if (JS_IsException(*stringify_fn) || !JS_IsFunction(ctx, *stringify_fn)) {
         goto done;
     }
-    argv[0] = value;
-    result = rr_call_function(ctx, *stringify_fn, *json_obj, 1, argv);
+    result = rr_call_function(ctx, *stringify_fn, *json_obj, 1, rooted_value);
 
 done:
     JS_PopGCRef(ctx, &stringify_ref);
     JS_PopGCRef(ctx, &json_ref);
     JS_PopGCRef(ctx, &global_ref);
+    JS_PopGCRef(ctx, &value_ref);
     return result;
 }
 
@@ -886,10 +965,14 @@ done:
 
 static JSValue rr_make_request_from_args(JSContext *ctx, JSValue global_obj, int argc, JSValue *argv)
 {
+    JSGCRef global_ref;
+    JSGCRef query_ref;
     JSGCRef init_ref;
     JSGCRef method_ref;
     JSGCRef headers_ref;
     JSGCRef body_ref;
+    JSValue *rooted_global;
+    JSValue *query_value;
     JSValue *init_value;
     JSValue *method_value;
     JSValue *headers_value;
@@ -901,13 +984,16 @@ static JSValue rr_make_request_from_args(JSContext *ctx, JSValue global_obj, int
     char *mount_path = NULL;
     char *relative_path = NULL;
     char *query_string = NULL;
-    JSValue query_value = JS_UNDEFINED;
     JSValue result = JS_EXCEPTION;
 
+    rooted_global = JS_PushGCRef(ctx, &global_ref);
+    query_value = JS_PushGCRef(ctx, &query_ref);
     init_value = JS_PushGCRef(ctx, &init_ref);
     method_value = JS_PushGCRef(ctx, &method_ref);
     headers_value = JS_PushGCRef(ctx, &headers_ref);
     body_value = JS_PushGCRef(ctx, &body_ref);
+    *rooted_global = global_obj;
+    *query_value = JS_UNDEFINED;
     *init_value = argc >= 2 ? argv[1] : JS_UNDEFINED;
     *method_value = JS_UNDEFINED;
     *headers_value = JS_UNDEFINED;
@@ -931,21 +1017,6 @@ static JSValue rr_make_request_from_args(JSContext *ctx, JSValue global_obj, int
         JSValue *mount_path_value;
         JSValue *relative_path_value;
         JSValue *query_string_value;
-        JSCStringBuf method_buf;
-        JSCStringBuf url_buf;
-        JSCStringBuf path_buf;
-        JSCStringBuf route_buf;
-        JSCStringBuf mount_path_buf;
-        JSCStringBuf relative_path_buf;
-        JSCStringBuf query_buf;
-        const char *method_str;
-        const char *url_str;
-        const char *path_str;
-        const char *route_str;
-        const char *mount_path_str;
-        const char *relative_path_str;
-        const char *query_str;
-
         url_value = JS_PushGCRef(ctx, &url_ref);
         path_value = JS_PushGCRef(ctx, &path_ref);
         route_value = JS_PushGCRef(ctx, &route_ref);
@@ -961,12 +1032,12 @@ static JSValue rr_make_request_from_args(JSContext *ctx, JSValue global_obj, int
         *mount_path_value = JS_GetPropertyStr(ctx, argv[0], "mountPath");
         *relative_path_value = JS_GetPropertyStr(ctx, argv[0], "relativePath");
         *query_string_value = JS_GetPropertyStr(ctx, argv[0], "queryString");
-        query_value = JS_GetPropertyStr(ctx, argv[0], "query");
+        *query_value = JS_GetPropertyStr(ctx, argv[0], "query");
         if (JS_IsException(*method_value) || JS_IsException(*headers_value) || JS_IsException(*body_value) ||
             JS_IsException(*url_value) || JS_IsException(*path_value) || JS_IsException(*route_value) ||
             JS_IsException(*mount_path_value) || JS_IsException(*relative_path_value) ||
             JS_IsException(*query_string_value) ||
-            JS_IsException(query_value)) {
+            JS_IsException(*query_value)) {
             JS_PopGCRef(ctx, &query_string_ref);
             JS_PopGCRef(ctx, &relative_path_ref);
             JS_PopGCRef(ctx, &mount_path_ref);
@@ -975,26 +1046,27 @@ static JSValue rr_make_request_from_args(JSContext *ctx, JSValue global_obj, int
             JS_PopGCRef(ctx, &url_ref);
             goto done;
         }
-        method_str = JS_ToCString(ctx, *method_value, &method_buf);
-        url_str = JS_ToCString(ctx, *url_value, &url_buf);
-        path_str = JS_ToCString(ctx, *path_value, &path_buf);
-        route_str = JS_ToCString(ctx, *route_value, &route_buf);
-        mount_path_str = JS_ToCString(ctx, *mount_path_value, &mount_path_buf);
-        relative_path_str = JS_ToCString(ctx, *relative_path_value, &relative_path_buf);
-        query_str = JS_ToCString(ctx, *query_string_value, &query_buf);
-        method = rr_strdup(method_str != NULL ? method_str : "GET");
-        url = rr_strdup(url_str != NULL ? url_str : "");
-        path = rr_strdup(path_str != NULL ? path_str : "/");
-        route = rr_strdup(route_str != NULL ? route_str : (path_str != NULL ? path_str : "/"));
-        mount_path = rr_strdup(mount_path_str != NULL ? mount_path_str : "");
-        relative_path = rr_strdup(relative_path_str != NULL ? relative_path_str : "");
-        query_string = rr_strdup(query_str != NULL ? query_str : "");
+        method = rr_value_to_string_copy(ctx, *method_value);
+        url = rr_value_to_string_copy(ctx, *url_value);
+        path = rr_value_to_string_copy(ctx, *path_value);
+        route = rr_value_to_string_copy(ctx, *route_value);
+        mount_path = rr_value_to_string_copy(ctx, *mount_path_value);
+        relative_path = rr_value_to_string_copy(ctx, *relative_path_value);
+        query_string = rr_value_to_string_copy(ctx, *query_string_value);
+        if (method == NULL || url == NULL || path == NULL || route == NULL || mount_path == NULL ||
+            relative_path == NULL || query_string == NULL) {
+            JS_ThrowOutOfMemory(ctx);
+        }
         JS_PopGCRef(ctx, &query_string_ref);
         JS_PopGCRef(ctx, &relative_path_ref);
         JS_PopGCRef(ctx, &mount_path_ref);
         JS_PopGCRef(ctx, &route_ref);
         JS_PopGCRef(ctx, &path_ref);
         JS_PopGCRef(ctx, &url_ref);
+        if (method == NULL || url == NULL || path == NULL || route == NULL || mount_path == NULL ||
+            relative_path == NULL || query_string == NULL) {
+            goto done;
+        }
     } else if (JS_IsString(ctx, argv[0])) {
         JSCStringBuf url_buf;
         const char *url_str = JS_ToCString(ctx, argv[0], &url_buf);
@@ -1007,7 +1079,7 @@ static JSValue rr_make_request_from_args(JSContext *ctx, JSValue global_obj, int
         route = NULL;
         mount_path = rr_strdup("");
         relative_path = rr_strdup("");
-        if (url == NULL || method == NULL || rr_parse_url_parts(ctx, url_str, &path, &query_string, &query_value) != 0) {
+        if (url == NULL || method == NULL || rr_parse_url_parts(ctx, url_str, &path, &query_string, query_value) != 0) {
             JS_ThrowOutOfMemory(ctx);
             goto done;
         }
@@ -1073,7 +1145,7 @@ static JSValue rr_make_request_from_args(JSContext *ctx, JSValue global_obj, int
     }
 
     result = esp32_mquickjs_make_request_object(ctx,
-                                                global_obj,
+                                                *rooted_global,
                                                 method != NULL ? method : "GET",
                                                 url != NULL ? url : "",
                                                 path != NULL ? path : "/",
@@ -1081,7 +1153,7 @@ static JSValue rr_make_request_from_args(JSContext *ctx, JSValue global_obj, int
                                                 mount_path != NULL ? mount_path : "",
                                                 relative_path != NULL ? relative_path : "",
                                                 query_string != NULL ? query_string : "",
-                                                query_value,
+                                                *query_value,
                                                 *headers_value,
                                                 *body_value);
 
@@ -1097,16 +1169,20 @@ done:
     JS_PopGCRef(ctx, &headers_ref);
     JS_PopGCRef(ctx, &method_ref);
     JS_PopGCRef(ctx, &init_ref);
+    JS_PopGCRef(ctx, &query_ref);
+    JS_PopGCRef(ctx, &global_ref);
     return result;
 }
 
 static JSValue rr_make_response_from_args(JSContext *ctx, JSValue global_obj, int argc, JSValue *argv)
 {
+    JSGCRef global_ref;
     JSGCRef init_ref;
     JSGCRef status_ref;
     JSGCRef status_text_ref;
     JSGCRef headers_ref;
     JSGCRef url_ref;
+    JSValue *rooted_global;
     JSValue *init_value;
     JSValue *status_value;
     JSValue *status_text_value;
@@ -1117,11 +1193,13 @@ static JSValue rr_make_response_from_args(JSContext *ctx, JSValue global_obj, in
     char *url = NULL;
     JSValue result = JS_EXCEPTION;
 
+    rooted_global = JS_PushGCRef(ctx, &global_ref);
     init_value = JS_PushGCRef(ctx, &init_ref);
     status_value = JS_PushGCRef(ctx, &status_ref);
     status_text_value = JS_PushGCRef(ctx, &status_text_ref);
     headers_value = JS_PushGCRef(ctx, &headers_ref);
     url_value = JS_PushGCRef(ctx, &url_ref);
+    *rooted_global = global_obj;
     *init_value = argc >= 2 ? argv[1] : JS_UNDEFINED;
     *status_value = JS_UNDEFINED;
     *status_text_value = JS_UNDEFINED;
@@ -1166,7 +1244,7 @@ static JSValue rr_make_response_from_args(JSContext *ctx, JSValue global_obj, in
     }
 
     result = esp32_mquickjs_make_response_object(ctx,
-                                                 global_obj,
+                                                 *rooted_global,
                                                  status,
                                                  status_text,
                                                  url,
@@ -1181,105 +1259,156 @@ done:
     JS_PopGCRef(ctx, &status_text_ref);
     JS_PopGCRef(ctx, &status_ref);
     JS_PopGCRef(ctx, &init_ref);
+    JS_PopGCRef(ctx, &global_ref);
     return result;
 }
 
 static JSValue rr_make_response_text_factory(JSContext *ctx, JSValue global_obj, int argc, JSValue *argv)
 {
+    JSGCRef global_ref;
+    JSGCRef body_ref;
+    JSValue *rooted_global;
+    JSValue *body_stream;
     JSCStringBuf text_buf;
-    const char *text = argc >= 1 ? JS_ToCString(ctx, argv[0], &text_buf) : "";
-    JSValue body_stream;
+    const char *text;
     JSValue result;
 
+    rooted_global = JS_PushGCRef(ctx, &global_ref);
+    body_stream = JS_PushGCRef(ctx, &body_ref);
+    *rooted_global = global_obj;
+    *body_stream = JS_UNDEFINED;
+    text = argc >= 1 ? JS_ToCString(ctx, argv[0], &text_buf) : "";
     if (argc >= 1 && text == NULL) {
-        return JS_EXCEPTION;
+        result = JS_EXCEPTION;
+        goto done;
     }
-    body_stream = esp32_mquickjs_make_text_body_stream(ctx, global_obj, text != NULL ? text : "");
-    if (JS_IsException(body_stream)) {
-        return JS_EXCEPTION;
+    *body_stream = esp32_mquickjs_make_text_body_stream(ctx, *rooted_global, text != NULL ? text : "");
+    if (JS_IsException(*body_stream)) {
+        result = JS_EXCEPTION;
+        goto done;
     }
-    result = rr_make_response_from_args(ctx, global_obj, argc >= 2 ? 2 : 1,
-                                        (JSValue[]){ body_stream, argc >= 2 ? argv[1] : JS_UNDEFINED });
+    result = rr_make_response_from_args(
+        ctx,
+        *rooted_global,
+        argc >= 2 ? 2 : 1,
+        (JSValue[]){*body_stream, argc >= 2 ? argv[1] : JS_UNDEFINED});
+
+done:
+    JS_PopGCRef(ctx, &body_ref);
+    JS_PopGCRef(ctx, &global_ref);
     return result;
 }
 
 static JSValue rr_make_response_json_factory(JSContext *ctx, JSValue global_obj, int argc, JSValue *argv)
 {
-    JSValue text_value;
+    JSGCRef global_ref;
+    JSGCRef text_ref;
+    JSGCRef body_ref;
+    JSGCRef init_ref;
+    JSGCRef headers_init_ref;
+    JSGCRef headers_ref;
+    JSGCRef plain_ref;
+    JSValue *rooted_global;
+    JSValue *text_value;
+    JSValue *body_stream;
+    JSValue *init_obj;
+    JSValue *headers_init;
+    JSValue *headers_obj;
+    JSValue *plain_headers;
     JSCStringBuf text_buf;
     const char *text;
-    JSValue body_stream;
-    JSValue result;
+    JSValue result = JS_EXCEPTION;
 
-    text_value = rr_json_stringify(ctx, argc >= 1 ? argv[0] : JS_NULL);
-    if (JS_IsException(text_value)) {
-        return JS_EXCEPTION;
+    rooted_global = JS_PushGCRef(ctx, &global_ref);
+    text_value = JS_PushGCRef(ctx, &text_ref);
+    body_stream = JS_PushGCRef(ctx, &body_ref);
+    init_obj = JS_PushGCRef(ctx, &init_ref);
+    headers_init = JS_PushGCRef(ctx, &headers_init_ref);
+    headers_obj = JS_PushGCRef(ctx, &headers_ref);
+    plain_headers = JS_PushGCRef(ctx, &plain_ref);
+    *rooted_global = global_obj;
+    *text_value = JS_UNDEFINED;
+    *body_stream = JS_UNDEFINED;
+    *init_obj = JS_UNDEFINED;
+    *headers_init = JS_UNDEFINED;
+    *headers_obj = JS_UNDEFINED;
+    *plain_headers = JS_UNDEFINED;
+
+    *text_value = rr_json_stringify(ctx, argc >= 1 ? argv[0] : JS_NULL);
+    if (JS_IsException(*text_value)) {
+        goto done;
     }
-    text = JS_ToCString(ctx, text_value, &text_buf);
+    text = JS_ToCString(ctx, *text_value, &text_buf);
     if (text == NULL) {
-        return JS_EXCEPTION;
+        goto done;
     }
-    body_stream = esp32_mquickjs_make_text_body_stream(ctx, global_obj, text);
-    if (JS_IsException(body_stream)) {
-        return JS_EXCEPTION;
+    *body_stream = esp32_mquickjs_make_text_body_stream(ctx, *rooted_global, text);
+    if (JS_IsException(*body_stream)) {
+        goto done;
     }
 
+    *init_obj = JS_NewObject(ctx);
+    if (JS_IsException(*init_obj)) {
+        goto done;
+    }
     if (argc >= 2 && rr_is_object(ctx, argv[1])) {
-        JSGCRef init_ref;
-        JSValue *init_obj;
-
-        init_obj = JS_PushGCRef(ctx, &init_ref);
-        *init_obj = JS_NewObject(ctx);
-        if (JS_IsException(*init_obj)) {
-            JS_PopGCRef(ctx, &init_ref);
-            return JS_EXCEPTION;
+        if (rr_copy_object_properties(ctx, &argv[1], init_obj, false) != 0) {
+            goto done;
         }
-        if (rr_copy_object_properties(ctx, argv[1], *init_obj, false) != 0 ||
-            !esp32_mquickjs_set_property(ctx, *init_obj, "headers",
-                                         esp32_mquickjs_make_headers_object(ctx, global_obj,
-                                                                            JS_GetPropertyStr(ctx, argv[1], "headers")))) {
-            JS_PopGCRef(ctx, &init_ref);
-            return JS_EXCEPTION;
+        *headers_init = JS_GetPropertyStr(ctx, argv[1], "headers");
+        if (JS_IsException(*headers_init)) {
+            goto done;
         }
-        {
-            JSValue plain_headers = JS_GetPropertyStr(ctx, *init_obj, "headers");
-            JSValue headers_with_json = esp32_mquickjs_make_headers_object(ctx, global_obj, plain_headers);
-            JSValue plain_obj = esp32_mquickjs_headers_to_plain_object(ctx, headers_with_json);
-
-            if (JS_IsException(headers_with_json) || JS_IsException(plain_obj) ||
-                !esp32_mquickjs_set_property(ctx, plain_obj, "content-type",
-                                             JS_NewString(ctx, "application/json; charset=utf-8")) ||
-                !esp32_mquickjs_set_property(ctx, *init_obj, "headers", plain_obj)) {
-                JS_PopGCRef(ctx, &init_ref);
-                return JS_EXCEPTION;
-            }
-        }
-        result = rr_make_response_from_args(ctx, global_obj, 2, (JSValue[]){ body_stream, *init_obj });
-        JS_PopGCRef(ctx, &init_ref);
-        return result;
     }
 
-    {
-        JSValue headers = JS_NewObject(ctx);
-        JSValue init_obj = JS_NewObject(ctx);
-
-        if (JS_IsException(headers) || JS_IsException(init_obj) ||
-            !esp32_mquickjs_set_property(ctx, headers, "content-type",
-                                         JS_NewString(ctx, "application/json; charset=utf-8")) ||
-            !esp32_mquickjs_set_property(ctx, init_obj, "headers", headers)) {
-            return JS_EXCEPTION;
-        }
-        return rr_make_response_from_args(ctx, global_obj, 2, (JSValue[]){ body_stream, init_obj });
+    *headers_obj = esp32_mquickjs_make_headers_object(ctx, *rooted_global, *headers_init);
+    if (JS_IsException(*headers_obj)) {
+        goto done;
     }
+    *plain_headers = esp32_mquickjs_headers_to_plain_object(ctx, *headers_obj);
+    if (JS_IsException(*plain_headers) ||
+        !esp32_mquickjs_set_property(ctx, *plain_headers, "content-type",
+                                     JS_NewString(ctx, "application/json; charset=utf-8")) ||
+        !esp32_mquickjs_set_property(ctx, *init_obj, "headers", *plain_headers)) {
+        goto done;
+    }
+
+    result = rr_make_response_from_args(
+        ctx,
+        *rooted_global,
+        2,
+        (JSValue[]){*body_stream, *init_obj});
+
+done:
+    JS_PopGCRef(ctx, &plain_ref);
+    JS_PopGCRef(ctx, &headers_ref);
+    JS_PopGCRef(ctx, &headers_init_ref);
+    JS_PopGCRef(ctx, &init_ref);
+    JS_PopGCRef(ctx, &body_ref);
+    JS_PopGCRef(ctx, &text_ref);
+    JS_PopGCRef(ctx, &global_ref);
+    return result;
 }
 
 static JSValue rr_make_response_stream_factory(JSContext *ctx, JSValue global_obj, int argc, JSValue *argv)
 {
+    JSGCRef global_ref;
+    JSValue *rooted_global;
+    JSValue result;
+
+    rooted_global = JS_PushGCRef(ctx, &global_ref);
+    *rooted_global = global_obj;
     if (argc < 1 || !esp32_mquickjs_stream_is_stream(ctx, argv[0])) {
-        return JS_ThrowTypeError(ctx, "Response.stream(stream, options?) expects a Stream");
+        result = JS_ThrowTypeError(ctx, "Response.stream(stream, options?) expects a Stream");
+    } else {
+        result = rr_make_response_from_args(
+            ctx,
+            *rooted_global,
+            argc >= 2 ? 2 : 1,
+            (JSValue[]){argv[0], argc >= 2 ? argv[1] : JS_UNDEFINED});
     }
-    return rr_make_response_from_args(ctx, global_obj, argc >= 2 ? 2 : 1,
-                                      (JSValue[]){ argv[0], argc >= 2 ? argv[1] : JS_UNDEFINED });
+    JS_PopGCRef(ctx, &global_ref);
+    return result;
 }
 
 static JSValue rr_require_global_object(JSContext *ctx)
@@ -1382,6 +1511,7 @@ JSValue js_headers_set(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
     const char *key;
     const char *value;
     char *normalized;
+    char *value_copy;
 
     if (JS_IsException(rr_require_headers_this(ctx, *this_val, "Headers.set(name, value)"))) {
         return JS_EXCEPTION;
@@ -1390,21 +1520,32 @@ JSValue js_headers_set(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
         return JS_ThrowTypeError(ctx, "Headers.set(name, value) expects a name and value");
     }
     key = JS_ToCString(ctx, argv[0], &key_buf);
-    value = JS_ToCString(ctx, argv[1], &value_buf);
-    if (key == NULL || value == NULL) {
+    if (key == NULL) {
         return JS_EXCEPTION;
     }
     normalized = rr_normalize_header_key(key);
     if (normalized == NULL) {
         return JS_ThrowOutOfMemory(ctx);
     }
+    value = JS_ToCString(ctx, argv[1], &value_buf);
+    if (value == NULL) {
+        heap_caps_free(normalized);
+        return JS_EXCEPTION;
+    }
+    value_copy = rr_strdup(value);
+    if (value_copy == NULL) {
+        heap_caps_free(normalized);
+        return JS_ThrowOutOfMemory(ctx);
+    }
     store_obj = JS_PushGCRef(ctx, &store_ref);
     *store_obj = rr_get_headers_store(ctx, *this_val);
-    if (!esp32_mquickjs_set_property(ctx, *store_obj, normalized, JS_NewString(ctx, value))) {
+    if (!esp32_mquickjs_set_property(ctx, *store_obj, normalized, JS_NewString(ctx, value_copy))) {
+        heap_caps_free(value_copy);
         heap_caps_free(normalized);
         JS_PopGCRef(ctx, &store_ref);
         return JS_EXCEPTION;
     }
+    heap_caps_free(value_copy);
     heap_caps_free(normalized);
     JS_PopGCRef(ctx, &store_ref);
     return *this_val;
@@ -1482,11 +1623,12 @@ JSValue js_headers_delete(JSContext *ctx, JSValue *this_val, int argc, JSValue *
 
 JSValue js_headers_entries(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    JSValue plain_obj;
     JSGCRef array_ref;
-    JSValue *entries_array;
+    JSGCRef plain_ref;
     JSGCRef keys_ref;
     JSGCRef length_ref;
+    JSValue *entries_array;
+    JSValue *plain_obj;
     JSValue *keys_array;
     JSValue *length_value;
     int length = 0;
@@ -1497,44 +1639,82 @@ JSValue js_headers_entries(JSContext *ctx, JSValue *this_val, int argc, JSValue 
     if (JS_IsException(rr_require_headers_this(ctx, *this_val, "Headers.entries()"))) {
         return JS_EXCEPTION;
     }
-    plain_obj = esp32_mquickjs_headers_to_plain_object(ctx, *this_val);
-    if (JS_IsException(plain_obj)) {
-        return JS_EXCEPTION;
-    }
     entries_array = JS_PushGCRef(ctx, &array_ref);
+    plain_obj = JS_PushGCRef(ctx, &plain_ref);
     keys_array = JS_PushGCRef(ctx, &keys_ref);
     length_value = JS_PushGCRef(ctx, &length_ref);
+    *entries_array = JS_UNDEFINED;
+    *plain_obj = esp32_mquickjs_headers_to_plain_object(ctx, *this_val);
+    *keys_array = JS_UNDEFINED;
+    *length_value = JS_UNDEFINED;
+    if (JS_IsException(*plain_obj)) {
+        goto fail;
+    }
     *entries_array = JS_NewArray(ctx, 0);
     *keys_array = rr_get_object_keys(ctx, plain_obj);
-    *length_value = JS_UNDEFINED;
+    if (JS_IsException(*entries_array) || JS_IsException(*keys_array)) {
+        goto fail;
+    }
     *length_value = JS_GetPropertyStr(ctx, *keys_array, "length");
-    if (JS_IsException(*entries_array) || JS_IsException(*keys_array) || JS_IsException(*length_value) ||
-        JS_ToInt32(ctx, &length, *length_value) != 0) {
-        JS_PopGCRef(ctx, &length_ref);
-        JS_PopGCRef(ctx, &keys_ref);
-        JS_PopGCRef(ctx, &array_ref);
-        return JS_EXCEPTION;
+    if (JS_IsException(*length_value) || JS_ToInt32(ctx, &length, *length_value) != 0) {
+        goto fail;
     }
-    for (i = 0; i < length; ++i) {
-        JSValue pair = JS_NewArray(ctx, 0);
-        JSValue key = JS_GetPropertyUint32(ctx, *keys_array, (uint32_t)i);
-        JSCStringBuf key_buf;
-        const char *key_str = JS_ToCString(ctx, key, &key_buf);
-        JSValue value = key_str != NULL ? JS_GetPropertyStr(ctx, plain_obj, key_str) : JS_EXCEPTION;
 
-        if (JS_IsException(pair) || JS_IsException(key) || key_str == NULL || JS_IsException(value) ||
-            JS_SetPropertyUint32(ctx, pair, 0, key) == JS_EXCEPTION ||
-            JS_SetPropertyUint32(ctx, pair, 1, value) == JS_EXCEPTION ||
-            JS_SetPropertyUint32(ctx, *entries_array, (uint32_t)i, pair) == JS_EXCEPTION) {
-            JS_PopGCRef(ctx, &length_ref);
-            JS_PopGCRef(ctx, &keys_ref);
-            JS_PopGCRef(ctx, &array_ref);
-            return JS_EXCEPTION;
+    for (i = 0; i < length; ++i) {
+        JSGCRef pair_ref;
+        JSGCRef key_ref;
+        JSGCRef value_ref;
+        JSValue *pair;
+        JSValue *key;
+        JSValue *value;
+        JSCStringBuf key_buf;
+        const char *key_str;
+
+        pair = JS_PushGCRef(ctx, &pair_ref);
+        key = JS_PushGCRef(ctx, &key_ref);
+        value = JS_PushGCRef(ctx, &value_ref);
+        *pair = JS_NewArray(ctx, 0);
+        *key = JS_GetPropertyUint32(ctx, *keys_array, (uint32_t)i);
+        *value = JS_UNDEFINED;
+        if (JS_IsException(*pair) || JS_IsException(*key)) {
+            JS_PopGCRef(ctx, &value_ref);
+            JS_PopGCRef(ctx, &key_ref);
+            JS_PopGCRef(ctx, &pair_ref);
+            goto fail;
         }
+        key_str = JS_ToCString(ctx, *key, &key_buf);
+        if (key_str == NULL) {
+            JS_PopGCRef(ctx, &value_ref);
+            JS_PopGCRef(ctx, &key_ref);
+            JS_PopGCRef(ctx, &pair_ref);
+            goto fail;
+        }
+        *value = JS_GetPropertyStr(ctx, *plain_obj, key_str);
+        if (JS_IsException(*value) ||
+            JS_IsException(JS_SetPropertyUint32(ctx, *pair, 0, *key)) ||
+            JS_IsException(JS_SetPropertyUint32(ctx, *pair, 1, *value)) ||
+            JS_IsException(JS_SetPropertyUint32(ctx, *entries_array, (uint32_t)i, *pair))) {
+            JS_PopGCRef(ctx, &value_ref);
+            JS_PopGCRef(ctx, &key_ref);
+            JS_PopGCRef(ctx, &pair_ref);
+            goto fail;
+        }
+        JS_PopGCRef(ctx, &value_ref);
+        JS_PopGCRef(ctx, &key_ref);
+        JS_PopGCRef(ctx, &pair_ref);
     }
+
     JS_PopGCRef(ctx, &length_ref);
     JS_PopGCRef(ctx, &keys_ref);
+    JS_PopGCRef(ctx, &plain_ref);
     return JS_PopGCRef(ctx, &array_ref);
+
+fail:
+    JS_PopGCRef(ctx, &length_ref);
+    JS_PopGCRef(ctx, &keys_ref);
+    JS_PopGCRef(ctx, &plain_ref);
+    JS_PopGCRef(ctx, &array_ref);
+    return JS_EXCEPTION;
 }
 
 JSValue js_headers_toObject(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

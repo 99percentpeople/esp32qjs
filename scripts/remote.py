@@ -47,7 +47,9 @@ custom_hard_reset_sequence = R1|W0.2|R0
 """
 
 HOST_TEST_BUILD_DIR = ROOT_DIR / "build-host-tests"
-JS_TEST_FLASH_DATA_DIR = ROOT_DIR / "tests" / "js" / "flash_data"
+JS_TEST_DIR = ROOT_DIR / "tests" / "js"
+JS_TEST_FLASH_DATA_DIR = JS_TEST_DIR / "flash_data"
+JS_TEST_SDKCONFIG_DEFAULTS = JS_TEST_DIR / "sdkconfig.defaults"
 JS_TEST_READY_MARKER = "__ESP32QJS_TEST_READY__"
 JS_TEST_FEATURES_PREFIX = "__ESP32QJS_TEST_FEATURES__:"
 JS_TEST_PASS_PREFIX = "__TEST_PASS__:"
@@ -1727,7 +1729,7 @@ def send_js_command(session: MonitorSession, command: str) -> None:
 
 
 def js_test_build_config(config: ProjectConfig) -> ProjectConfig:
-    """Return a build config that targets the dedicated JS test LittleFS image."""
+    """Return a build config that enables test instrumentation and test LittleFS."""
     build_dir = config.build_dir.parent / f"{config.build_dir.name}-js-test"
     cmake_entries = [
         entry for entry in config.cmake_cache_entries
@@ -1739,6 +1741,7 @@ def js_test_build_config(config: ProjectConfig) -> ProjectConfig:
         config,
         build_dir=build_dir,
         generated_sdkconfig=build_dir / config.generated_sdkconfig.name,
+        sdkconfig_defaults=config.sdkconfig_defaults + (JS_TEST_SDKCONFIG_DEFAULTS,),
         flash_data_override=JS_TEST_FLASH_DATA_DIR,
         cmake_cache_entries=tuple(cmake_entries),
     )

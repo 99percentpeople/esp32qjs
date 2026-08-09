@@ -201,7 +201,6 @@ bool esp32_mquickjs_init_http_async_runtime(JSContext *ctx,
 JSValue js_http_async_fetch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     esp32_mquickjs_http_request_t request = {0};
-    JSValue callback;
     JSValue result;
 
     (void)this_val;
@@ -211,8 +210,7 @@ JSValue js_http_async_fetch(JSContext *ctx, JSValue *this_val, int argc, JSValue
                                  "http.async.fetch(input, callback) or http.async.fetch(input, options, callback) expects a URL string or Request");
     }
 
-    callback = argv[argc - 1];
-    if (!JS_IsFunction(ctx, callback)) {
+    if (!JS_IsFunction(ctx, argv[argc - 1])) {
         return JS_ThrowTypeError(ctx, "http.async.fetch(..., callback) expects a callback function");
     }
 
@@ -221,7 +219,7 @@ JSValue js_http_async_fetch(JSContext *ctx, JSValue *this_val, int argc, JSValue
         return JS_EXCEPTION;
     }
 
-    result = http_fetch_async(ctx, &request, callback);
+    result = http_fetch_async(ctx, &request, argv[argc - 1]);
     esp32_mquickjs_http_free_request(&request);
     return result;
 }
