@@ -50,6 +50,7 @@ HOST_TEST_BUILD_DIR = ROOT_DIR / "build-host-tests"
 JS_TEST_DIR = ROOT_DIR / "tests" / "js"
 JS_TEST_FLASH_DATA_DIR = JS_TEST_DIR / "flash_data"
 JS_TEST_SDKCONFIG_DEFAULTS = JS_TEST_DIR / "sdkconfig.defaults"
+JS_SYNTAX_CHECK_SCRIPT = ROOT_DIR / "scripts" / "check_js_syntax.py"
 JS_TEST_READY_MARKER = "__ESP32QJS_TEST_READY__"
 JS_TEST_FEATURES_PREFIX = "__ESP32QJS_TEST_FEATURES__:"
 JS_TEST_PASS_PREFIX = "__TEST_PASS__:"
@@ -2147,6 +2148,13 @@ def run_js_tests(config: ProjectConfig,
         close_monitor_session(session)
 
 
+def run_js_syntax_check() -> None:
+    """Parse first-party JS and runnable docs with the firmware's MQuickJS engine."""
+    returncode, _ = run_streaming([sys.executable, str(JS_SYNTAX_CHECK_SCRIPT)], cwd=ROOT_DIR)
+    if returncode != 0:
+        raise SystemExit("MQuickJS JavaScript syntax validation failed.")
+
+
 def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
     """Run the selected host C and/or board JS automated tests."""
     scopes = resolve_test_scopes(args.scope)
@@ -2163,6 +2171,9 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
             raise SystemExit("`--no-flash-firmware` requires JS scope.")
         if args.no_flash_fs:
             raise SystemExit("`--no-flash-fs` requires JS scope.")
+
+    if "js" in scopes:
+        run_js_syntax_check()
 
     stage_errors: list[str] = []
 
@@ -2388,6 +2399,12 @@ def parse_args(
     build_fs_parser = sub.add_parser("build-fs", help="Build only the LittleFS storage image.")
     build_fs_parser.set_defaults(_noop=True)
 
+    check_js_parser = sub.add_parser(
+        "check-js",
+        help="Parse all first-party JavaScript with the exact MQuickJS engine.",
+    )
+    check_js_parser.set_defaults(_noop=True)
+
     chip = sub.add_parser("chip-id", help="Check connectivity over the selected target.")
 
     flash_parser = sub.add_parser("flash", help="Build and flash over the selected target.")
@@ -2463,6 +2480,10 @@ def main() -> int:
 
     if args.command == "build-fs":
         build_fs_image(config)
+        return 0
+
+    if args.command == "check-js":
+        run_js_syntax_check()
         return 0
 
     if args.command == "chip-id":

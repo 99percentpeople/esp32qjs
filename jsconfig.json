@@ -4,7 +4,9 @@
       "ES5"
     ],
     "allowJs": true,
-    "checkJs": false
+    "checkJs": true,
+    "noEmit": true,
+    "strict": false
   },
   "files": [
     "types/esp32qjs-c-api.d.ts",
@@ -12,7 +14,6 @@
   ],
   "include": [
     "shared/flash_data/**/*.js",
-    "apps/*/flash_data/**/*.js",
-    "tests/js/flash_data/**/*.js"
+    "apps/*/flash_data/**/*.js"
   ]
 }

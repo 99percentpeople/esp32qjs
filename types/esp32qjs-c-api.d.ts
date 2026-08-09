@@ -1,4 +1,5 @@
-declare namespace ESP32QJS {
+declare global {
+namespace ESP32QJS {
   /**
    * JSON-like value supported by `Response.json(...)` and the HTTP helpers.
    */
@@ -574,12 +575,23 @@ declare namespace ESP32QJS {
     sleepMode: LedcSleepMode;
   }
 
-  interface LedcTimerConfigOptions {
+  interface LedcTimerSetupOptions {
     freqHz: number;
     dutyResolution: number;
     clock?: LedcClock;
-    deconfigure?: boolean;
+    deconfigure?: false;
   }
+
+  interface LedcTimerDeconfigureOptions {
+    deconfigure: true;
+    freqHz?: never;
+    dutyResolution?: never;
+    clock?: never;
+  }
+
+  type LedcTimerConfigOptions =
+    | LedcTimerSetupOptions
+    | LedcTimerDeconfigureOptions;
 
   interface LedcChannelConfigOptions {
     pin?: number;
@@ -1470,7 +1482,7 @@ declare namespace ESP32QJS {
   class StaticFileHandler implements HttpRouteHandlerObject {
     private constructor();
     readonly root: string;
-    handle(request: Request): Response;
+    handle(request: Request | { relativePath: string }): Response;
   }
 
   /**
@@ -1503,7 +1515,6 @@ declare namespace ESP32QJS {
   }
 }
 
-declare global {
   const Headers: typeof ESP32QJS.Headers;
   const Request: typeof ESP32QJS.Request;
   const Response: typeof ESP32QJS.Response;
@@ -1585,29 +1596,29 @@ declare global {
   function clearInterval(handle: ESP32QJS.TimerHandle): void;
 
   /** File-system helpers bound to `/littlefs`. */
-  const fs: ESP32QJS.FsModule;
+  var fs: ESP32QJS.FsModule;
   /** GPIO helpers for the active board profile. */
-  const gpio: ESP32QJS.GpioModule;
+  var gpio: ESP32QJS.GpioModule;
   /** LEDC PWM timer/channel helpers. */
-  const ledc: ESP32QJS.LedcModule;
+  var ledc: ESP32QJS.LedcModule;
   /** ADC oneshot helpers. */
-  const adc: ESP32QJS.AdcModule;
+  var adc: ESP32QJS.AdcModule;
   /** DAC oneshot helpers. Exposed only when `esp32.info().features.dac` is enabled. */
-  const dac: ESP32QJS.DacModule;
+  var dac: ESP32QJS.DacModule;
   /** ESP32 runtime information helpers. */
-  const esp32: ESP32QJS.Esp32Module;
+  var esp32: ESP32QJS.Esp32Module;
   /** Shared I2C bus helpers. */
-  const i2c: ESP32QJS.I2CModule;
+  var i2c: ESP32QJS.I2CModule;
   /** SPI master bus/device helpers. */
-  const spi: ESP32QJS.SPIModule;
+  var spi: ESP32QJS.SPIModule;
   /** Synchronous UART port helpers. */
-  const uart: ESP32QJS.UARTModule;
+  var uart: ESP32QJS.UARTModule;
   /** Native display-buffer helpers. Exposed only when `esp32.info().features.displayBuffer` is enabled. */
-  const displayBuffer: ESP32QJS.DisplayBufferModule;
+  var displayBuffer: ESP32QJS.DisplayBufferModule;
   /** Wi-Fi station helpers. */
-  const wifi: ESP32QJS.WiFiModule;
+  var wifi: ESP32QJS.WiFiModule;
   /** HTTP client/server namespace. Exposed when either `esp32.info().features.http` or `.httpServer` is enabled. */
-  const http: ESP32QJS.HttpModule;
+  var http: ESP32QJS.HttpModule;
 
   /**
    * Create a static-file route handler rooted under LittleFS.

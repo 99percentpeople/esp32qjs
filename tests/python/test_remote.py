@@ -14,6 +14,12 @@ SPEC.loader.exec_module(REMOTE)
 
 
 class RemoteConfigTests(unittest.TestCase):
+    def test_check_js_command_is_available(self):
+        args, _, _ = REMOTE.parse_args(["check-js"])
+
+        self.assertEqual(args.command, "check-js")
+        self.assertTrue(REMOTE.JS_SYNTAX_CHECK_SCRIPT.is_file())
+
     def test_bundled_application_profiles_are_valid(self):
         minimal = REMOTE.load_app_profile(
             "minimal", "xiao_esp32s3", "esp32s3"

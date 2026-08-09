@@ -1,4 +1,5 @@
-declare namespace ESP32QJS {
+declare global {
+namespace ESP32QJS {
   type ColorValue = boolean | number | null | undefined;
 
   interface Point {
@@ -76,6 +77,49 @@ declare namespace ESP32QJS {
     segments?: number;
   }
 
+  interface DisplayPerformanceStats {
+    flushCalls: number;
+    chunks: number;
+    pixels: number;
+    bytes: number;
+    totalFlushUs: number;
+    windowUs: number;
+    pixelUs: number;
+    dataUs: number;
+    directFlushes: number;
+  }
+
+  /**
+   * Reduced drawing target returned by command-buffer-backed surfaces.
+   */
+  interface SurfaceBatch {
+    clear(color?: ColorValue): this;
+    fill(color?: ColorValue): this;
+    fillRect(x: number, y: number, width: number, height: number, color?: ColorValue): this;
+    drawLine(x0: number, y0: number, x1: number, y1: number, color?: ColorValue): this;
+    drawRect(x: number, y: number, width: number, height: number, color?: ColorValue): this;
+    drawRoundRect(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      radius: number,
+      color?: ColorValue,
+    ): this;
+    fillRoundRect(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      radius: number,
+      color?: ColorValue,
+    ): this;
+    drawChar(x: number, y: number, ch: string, options?: TextStyle): this;
+    drawText(x: number, y: number, text: string, options?: TextStyle): this;
+    measureText(text: string, style?: TextStyle): TextMetrics;
+    flush(): this;
+  }
+
   /**
    * Base display surface. Concrete drivers implement drawing methods.
    */
@@ -86,39 +130,44 @@ declare namespace ESP32QJS {
     height: number;
     pixelFormat: string;
     ready: boolean;
+    perfEnabled?: boolean;
+    perf?: DisplayPerformanceStats;
+    commandBuffer?: DisplayCommandBuffer | null;
+    resetPerf?(): this;
+    getPerf?(): DisplayPerformanceStats;
     clear(color?: ColorValue): this;
     fill(color?: ColorValue): this;
-    setPixel(x: number, y: number, color: ColorValue): this;
+    setPixel(x: number, y: number, color?: ColorValue): this;
     getPixel(x: number, y: number): number;
     fillRect(
       x: number,
       y: number,
       width: number,
       height: number,
-      color: ColorValue,
+      color?: ColorValue,
     ): this;
     drawLine(
       x0: number,
       y0: number,
       x1: number,
       y1: number,
-      color: ColorValue,
+      color?: ColorValue,
     ): this;
     drawRect(
       x: number,
       y: number,
       width: number,
       height: number,
-      color: ColorValue,
+      color?: ColorValue,
     ): this;
-    drawCircle(cx: number, cy: number, radius: number, color: ColorValue): this;
-    fillCircle(cx: number, cy: number, radius: number, color: ColorValue): this;
+    drawCircle(cx: number, cy: number, radius: number, color?: ColorValue): this;
+    fillCircle(cx: number, cy: number, radius: number, color?: ColorValue): this;
     drawEllipse(
       cx: number,
       cy: number,
       rx: number,
       ry: number,
-      color: ColorValue,
+      color?: ColorValue,
       options?: CurveOptions,
     ): this;
     fillEllipse(
@@ -126,7 +175,7 @@ declare namespace ESP32QJS {
       cy: number,
       rx: number,
       ry: number,
-      color: ColorValue,
+      color?: ColorValue,
     ): this;
     drawRoundRect(
       x: number,
@@ -134,7 +183,7 @@ declare namespace ESP32QJS {
       width: number,
       height: number,
       radius: number,
-      color: ColorValue,
+      color?: ColorValue,
     ): this;
     fillRoundRect(
       x: number,
@@ -142,11 +191,11 @@ declare namespace ESP32QJS {
       width: number,
       height: number,
       radius: number,
-      color: ColorValue,
+      color?: ColorValue,
     ): this;
-    drawPolyline(points: PointList, color: ColorValue): this;
-    drawPolygon(points: PointList, color: ColorValue): this;
-    fillPolygon(points: PointList, color: ColorValue): this;
+    drawPolyline(points: PointList, color?: ColorValue): this;
+    drawPolygon(points: PointList, color?: ColorValue): this;
+    fillPolygon(points: PointList, color?: ColorValue): this;
     drawTriangle(
       x0: number,
       y0: number,
@@ -154,7 +203,7 @@ declare namespace ESP32QJS {
       y1: number,
       x2: number,
       y2: number,
-      color: ColorValue,
+      color?: ColorValue,
     ): this;
     fillTriangle(
       x0: number,
@@ -163,7 +212,7 @@ declare namespace ESP32QJS {
       y1: number,
       x2: number,
       y2: number,
-      color: ColorValue,
+      color?: ColorValue,
     ): this;
     drawQuadraticBezier(
       x0: number,
@@ -172,7 +221,7 @@ declare namespace ESP32QJS {
       cy: number,
       x1: number,
       y1: number,
-      color: ColorValue,
+      color?: ColorValue,
       options?: CurveOptions,
     ): this;
     drawCubicBezier(
@@ -184,15 +233,16 @@ declare namespace ESP32QJS {
       c2y: number,
       x1: number,
       y1: number,
-      color: ColorValue,
+      color?: ColorValue,
       options?: CurveOptions,
     ): this;
     drawBitmap(x: number, y: number, bitmap: Bitmap, options?: BitmapStyle): this;
     drawChar(x: number, y: number, ch: string, options?: TextStyle): this;
     drawText(x: number, y: number, text: string, options?: TextStyle): this;
     init(): this;
-    beginBatch?(options?: unknown): Surface;
-    endBatch?(batch: Surface, dirty?: Rect | null): this;
+    close(): boolean;
+    beginBatch?(options?: unknown): SurfaceBatch | null;
+    endBatch?(batch: SurfaceBatch, dirty?: Rect | null): this;
     flush(): this;
     flushRect?(x: number, y: number, width: number, height: number): this;
     flushRects?(
@@ -231,6 +281,8 @@ declare namespace ESP32QJS {
    */
   interface DisplayModule {
     readonly VERSION: string;
+    __loaded: boolean;
+    ST7789?: Function;
     readonly Surface: typeof Surface;
     readonly fonts: Record<string, DisplayFont>;
     readonly defaultFont: DisplayFont;
@@ -311,7 +363,7 @@ declare namespace ESP32QJS {
     flush?: boolean;
     partial?: boolean;
     gcBeforeFlush?: boolean;
-    batch?: boolean | unknown;
+    batch?: boolean | Record<string, unknown>;
     focusVisible?: boolean;
     input?: UIInput;
     theme?: UITheme;
@@ -343,6 +395,7 @@ declare namespace ESP32QJS {
   }
 
   interface UITextOptions extends UILayoutOptions, TextStyle {
+    valueFont?: DisplayFont;
     valign?: UIAlign;
     textAlign?: UIAlign;
   }
@@ -380,19 +433,10 @@ declare namespace ESP32QJS {
 
   interface UIFpsOptions extends UIStyleOptions {
     enabled?: boolean;
+    label?: string;
     sampleMs?: number;
     precision?: number;
     charWidth?: number;
-  }
-
-  interface UIComponent<T = Rect> extends Partial<Rect> {
-    readonly rendered: boolean;
-    readonly result: T;
-    readonly value: T;
-    readonly rect: Rect | null;
-    style(options?: UIStyleOptions): this;
-    valueOf(): T;
-    toString(): string;
   }
 
   type UIControlCommand = "up" | "down" | "left" | "right" | "ok" | "back";
@@ -440,8 +484,11 @@ declare namespace ESP32QJS {
 
   /** Immediate-mode UI helpers loaded from `_sys/ui.js`. */
   interface UIModule {
-    readonly VERSION: string;
-    readonly theme: {
+    VERSION: string;
+    __loaded: boolean;
+    __controlLoaded?: boolean;
+    __fpsLoaded?: boolean;
+    theme: {
       dark: Required<UITheme>;
       mono: Required<UITheme>;
       [name: string]: Required<UITheme>;
@@ -454,80 +501,91 @@ declare namespace ESP32QJS {
       render: (context: UIContext) => void,
       options?: UIFrameOptions,
     ): UIContext;
-    row(options?: UILayoutOptions): UIComponent<Rect>;
-    column(options?: UILayoutOptions): UIComponent<Rect>;
-    group(options?: UILayoutOptions): UIComponent<Rect>;
-    panel(options?: UILayoutOptions): UIComponent<Rect>;
+    row(
+      renderOrOptions?: (() => void) | UILayoutOptions,
+      optionsOrRender?: UILayoutOptions | (() => void),
+    ): Rect;
+    column(
+      renderOrOptions?: (() => void) | UILayoutOptions,
+      optionsOrRender?: UILayoutOptions | (() => void),
+    ): Rect;
+    group(
+      renderOrOptions?: (() => void) | UILayoutOptions,
+      optionsOrRender?: UILayoutOptions | (() => void),
+    ): Rect;
+    panel(
+      renderOrOptions?: (() => void) | UILayoutOptions,
+      optionsOrRender?: UILayoutOptions | (() => void),
+    ): Rect;
     end(): Rect;
     spacer(sizeOrOptions?: number | UISpacerOptions): Rect;
-    separator(options?: UISeparatorOptions): UIComponent<Rect>;
-    text(value: string | number | boolean, options?: UITextOptions): UIComponent<Rect>;
+    separator(options?: UISeparatorOptions): Rect;
+    text(value: string | number | boolean, options?: UITextOptions): Rect;
     value(
       label: string | number | boolean,
       value: string | number | boolean,
       options?: UITextOptions,
-    ): UIComponent<Rect>;
-    badge(text: string | number | boolean, options?: UIControlOptions): UIComponent<Rect>;
-    icon(name: string, options?: UITextOptions): UIComponent<Rect>;
-    statusBar(options?: UIControlOptions): UIComponent<Rect>;
-    progress(id: string, value: number, options?: UIControlOptions): UIComponent<Rect>;
+    ): Rect;
+    badge(text: string | number | boolean, options?: UIControlOptions): Rect;
+    icon(name: string, options?: UITextOptions): Rect;
+    statusBar(options?: UIControlOptions): Rect;
+    progress(id: string, value: number, options?: UIControlOptions): Rect;
     /** Optional helper loaded from `_sys/ui/control.js`. */
     control?: UIControlDriver;
     /** Optional helper loaded from `_sys/ui/fps.js`. */
     fps?: (id: string, options?: UIFpsOptions) => number;
-    gauge(id: string, value: number, options?: UIControlOptions): UIComponent<Rect>;
+    gauge(id: string, value: number, options?: UIControlOptions): Rect;
     button(
       id: string,
       label: string | number | boolean,
       options?: UIControlOptions,
-    ): UIComponent<boolean>;
-    iconButton(id: string, icon: string, options?: UIControlOptions): UIComponent<boolean>;
+    ): boolean;
+    iconButton(id: string, icon: string, options?: UIControlOptions): boolean;
     toggle(
       id: string,
       label: string | number | boolean,
       value: boolean,
       options?: UIControlOptions,
-    ): UIComponent<boolean>;
+    ): boolean;
     checkbox(
       id: string,
       label: string | number | boolean,
       value: boolean,
       options?: UIControlOptions,
-    ): UIComponent<boolean>;
-    slider(id: string, value: number, options?: UIControlOptions): UIComponent<number>;
-    stepper(id: string, value: number, options?: UIControlOptions): UIComponent<number>;
+    ): boolean;
+    slider(id: string, value: number, options?: UIControlOptions): number;
+    stepper(id: string, value: number, options?: UIControlOptions): number;
     list(
       id: string,
       items: ArrayLike<string | number | boolean>,
       selectedIndex: number,
       options?: UIControlOptions,
-    ): UIComponent<number>;
+    ): number;
     menu(
       id: string,
       items: ArrayLike<string | number | boolean>,
       selectedIndex: number,
       options?: UIControlOptions,
-    ): UIComponent<number>;
+    ): number;
     tabs(
       id: string,
       tabs: ArrayLike<string | number | boolean>,
       selectedIndex: number,
       options?: UIControlOptions,
-    ): UIComponent<number>;
+    ): number;
     softkeys(
       left?: string | number | boolean,
       center?: string | number | boolean,
       right?: string | number | boolean,
       options?: UIControlOptions,
-    ): UIComponent<UISoftkeyResult>;
+    ): UISoftkeyResult;
   }
 }
 
-declare global {
   /** JavaScript display helpers loaded from `_sys/display.js`. */
-  const display: ESP32QJS.DisplayModule;
+  var display: ESP32QJS.DisplayModule;
   /** JavaScript UI/layout helpers loaded from `_sys/ui.js`. */
-  const ui: ESP32QJS.UIModule;
+  var ui: ESP32QJS.UIModule;
 }
 
 export {};

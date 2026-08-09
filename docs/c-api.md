@@ -993,7 +993,7 @@ Example:
 
 ```js
 print(JSON.stringify(wifi.status()));
-const aps = wifi.scan();
+var aps = wifi.scan();
 print(aps.length);
 wifi.async.scan(function (results, error) {
   print(error === undefined, results.length);
@@ -1100,7 +1100,7 @@ print(response.text());
 Handler shape:
 
 - `handler` can be:
-  - a function `(req) => Response`
+  - a function `function (req) { return response; }` that returns a `Response`
   - or an object with `handle(req)` that returns a `Response`
 - `req` is always a `Request`
 - request bodies larger than 8192 bytes are rejected with HTTP 413 before a

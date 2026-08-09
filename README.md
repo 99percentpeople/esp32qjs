@@ -70,8 +70,13 @@ python scripts/remote.py --app demo flash
 For JavaScript-only changes:
 
 ```bash
+python scripts/remote.py check-js
 python scripts/remote.py --app demo flash-fs
 ```
+
+`check-js` builds a cached host parser from the vendored MQuickJS sources and
+validates application, shared, test, and runnable API-documentation snippets
+without executing them. The JS test scope runs the same check automatically.
 
 A complete LittleFS source directory can be supplied for compatibility or test
 workflows with `--flash-data-dir PATH`. One-off application inputs can be
@@ -128,6 +133,7 @@ Version `0.1.0` intentionally supports one active runtime.
 
 ```bash
 python -m unittest discover -s tests/python
+python scripts/remote.py check-js
 python scripts/remote.py test --scope c
 python scripts/remote.py test
 ```

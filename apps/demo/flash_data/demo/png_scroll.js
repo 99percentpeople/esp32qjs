@@ -33,7 +33,7 @@ load("_sys/display.js");
     };
 
     if (CONFIG.display) {
-      var displayOptions = {};
+      var displayOptions = { driver: defaults.driver };
       for (var key in defaults) {
         if (Object.prototype.hasOwnProperty.call(defaults, key)) {
           displayOptions[key] = defaults[key];

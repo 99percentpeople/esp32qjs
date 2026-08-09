@@ -11,6 +11,7 @@ Use the repo scripts for normal development; do not default to direct `idf.py` w
 - `python scripts/remote.py boards` lists available board profiles.
 - `python scripts/remote.py apps` lists available application profiles.
 - `python scripts/remote.py show-config` prints the merged board/app/sdkconfig/partition/resource/tool configuration.
+- `python scripts/remote.py check-js` parses first-party JS and runnable API examples with the exact vendored MQuickJS engine.
 - `python scripts/remote.py --assume y build` builds for the active board.
 - `python scripts/remote.py flash` builds and flashes the active board.
 - `python scripts/remote.py flash-fs` refreshes only the LittleFS `storage` partition for JS-only changes.
@@ -33,7 +34,9 @@ Remote flashing setup is documented in [docs/remote-rfc2217.md](docs/remote-rfc2
 Use 4-space indentation and standard ESP-IDF C style. Prefer `snake_case` for functions and locals, `UPPER_SNAKE_CASE` for macros, and keep ESP32-specific code in the adapter layer instead of editing the submodule directly. Match existing logging and error-handling patterns with `ESP_LOG*`, `ESP_ERROR_CHECK`, and thin adapter helpers around third-party code.
 
 ## Testing
-The default validation target is `python scripts/remote.py test`. It runs host C tests plus the JS modules enabled by the active board's runtime feature set, and it reflashes the latest firmware before board-backed JS tests so C-side changes are not left stale on the device. Use `--scope c`, `--scope js`, `--module ...`, `--network`, and `--loopback` to narrow or extend coverage when needed. Hardware-specific JS tests can read optional values from `TEST_JS_CONFIG`; SPI loopback cases require `--loopback`, use `spi.DEFAULT_*` by default, and `testConfig.spiLoopback` only overrides selected fields. Use `--no-flash-firmware` and `--no-flash-fs` only when you intentionally want to reuse what is already on the board.
+The default validation target is `python scripts/remote.py test`. It runs host C tests plus the JS modules enabled by the active board's runtime feature set, runs the MQuickJS syntax preflight before JS scope, and reflashes the latest firmware before board-backed JS tests so C-side changes are not left stale on the device. Use `--scope c`, `--scope js`, `--module ...`, `--network`, and `--loopback` to narrow or extend coverage when needed. Hardware-specific JS tests can read optional values from `TEST_JS_CONFIG`; SPI loopback cases require `--loopback`, use `spi.DEFAULT_*` by default, and `testConfig.spiLoopback` only overrides selected fields. Use `--no-flash-firmware` and `--no-flash-fs` only when you intentionally want to reuse what is already on the board.
+
+MQuickJS is a constrained ES5-like engine. Do not use `node --check` as the syntax authority and do not introduce `const`, `let`, classes, arrow functions, template literals, or other modern syntax directly into flashed sources. If a modern authoring source is ever added, its checked artifact must be explicitly transpiled before the MQuickJS preflight.
 
 For firmware changes, prefer `python scripts/remote.py --assume y build` and `python scripts/remote.py test` over manual `idf.py` checks. The offline JS baseline already covers the built-in runtime modules such as `core`, `esp32`, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `timers`, `fs`, `stream`, `load`, `wifi`, `http`, and `http_server`; modules disabled by `esp32.info().features` are auto-skipped, opt-in cases such as network and physical loopback are skipped unless their flag is passed, and explicitly requested disabled modules fail fast.
 

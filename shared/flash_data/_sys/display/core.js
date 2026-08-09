@@ -317,6 +317,11 @@
     return this;
   };
 
+  Surface.prototype.close = function () {
+    this.ready = false;
+    return true;
+  };
+
   Surface.prototype.flush = function () {
     throw new Error("display surface does not implement flush()");
   };

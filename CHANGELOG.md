@@ -16,5 +16,9 @@ Versioning; the native Host API uses a separate integer compatibility version.
   repeating timers whose callbacks fail.
 - Bound HTTP response capture, add cancellable asynchronous requests, and add
   explicit server/route release methods.
+- Add an exact-engine MQuickJS syntax preflight for flashed sources and runnable
+  API examples, plus checked JavaScript declarations for apps/shared libraries.
+- Align display/UI declarations with runtime return values, optional colors,
+  batching, and explicit surface close behavior.
 - Publish Host API version `1` through `esp32.info()`.
 - Establish Apache-2.0 licensing and initial framework documentation.

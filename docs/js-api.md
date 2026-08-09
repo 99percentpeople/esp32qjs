@@ -63,33 +63,34 @@ screen.drawText(8, 40, "中文显示", {
 });
 ```
 
-Display instance methods:
+Display instance methods use the surface foreground color when an optional
+`color` argument is omitted, except `clear()`/`fill()`, which use the background.
 
 - `init()`
   Initialize the panel and clear the framebuffer.
 - `clear(color?)` / `fill(color?)`
   Fill the local framebuffer with a packed color. Defaults to the surface background color.
-- `setPixel(x, y, color)` / `getPixel(x, y)`
+- `setPixel(x, y, color?)` / `getPixel(x, y)`
   Write or read one packed pixel color.
-- `fillRect(x, y, width, height, color)`
+- `fillRect(x, y, width, height, color?)`
   Fill a rectangle in the framebuffer.
-- `drawLine(x0, y0, x1, y1, color)`
+- `drawLine(x0, y0, x1, y1, color?)`
   Draw a line with Bresenham logic.
-- `drawRect(x, y, width, height, color)`
+- `drawRect(x, y, width, height, color?)`
   Draw a rectangle outline.
-- `drawCircle(x, y, radius, color)` / `fillCircle(x, y, radius, color)`
+- `drawCircle(x, y, radius, color?)` / `fillCircle(x, y, radius, color?)`
   Draw or fill a circle.
-- `drawEllipse(x, y, rx, ry, color, options?)` / `fillEllipse(x, y, rx, ry, color)`
+- `drawEllipse(x, y, rx, ry, color?, options?)` / `fillEllipse(x, y, rx, ry, color?)`
   Draw or fill an ellipse. `options.segments` controls outline tessellation.
-- `drawRoundRect(x, y, width, height, radius, color)` / `fillRoundRect(x, y, width, height, radius, color)`
+- `drawRoundRect(x, y, width, height, radius, color?)` / `fillRoundRect(x, y, width, height, radius, color?)`
   Draw or fill a rounded rectangle.
-- `drawPolyline(points, color)` / `drawPolygon(points, color)` / `fillPolygon(points, color)`
+- `drawPolyline(points, color?)` / `drawPolygon(points, color?)` / `fillPolygon(points, color?)`
   Draw or fill point lists. Points can be `[[x, y], ...]`, `[{ x, y }, ...]`, or a flat `[x0, y0, x1, y1, ...]` array.
-- `drawTriangle(x0, y0, x1, y1, x2, y2, color)` / `fillTriangle(x0, y0, x1, y1, x2, y2, color)`
+- `drawTriangle(x0, y0, x1, y1, x2, y2, color?)` / `fillTriangle(x0, y0, x1, y1, x2, y2, color?)`
   Convenience triangle helpers.
-- `drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color, options?)`
+- `drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color?, options?)`
   Draw a quadratic Bezier curve. `options.segments` defaults to `24`.
-- `drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options?)`
+- `drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color?, options?)`
   Draw a cubic Bezier curve. `options.segments` defaults to `32`.
 - `drawBitmap(x, y, bitmap, options?)`
   Draw a bitmap shaped as `{ width, height, pixels }` with `{ color, background }`.
@@ -111,6 +112,10 @@ Display instance methods:
   Toggle inverse display mode.
 - `contrast(value)`
   Set contrast `0..255`.
+- `close()`
+  Release the native framebuffer and owned I2C/SPI handles, mark the surface
+  not ready, and return `true`. Call this before discarding a display that may
+  be replaced or reopened at runtime.
 
 Example:
 

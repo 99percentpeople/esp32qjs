@@ -1,7 +1,7 @@
 (function (global) {
   var owns = Object.prototype.hasOwnProperty;
   var display = global.display;
-  var ui = global.ui || {};
+  var ui = /** @type {ESP32QJS.UIModule} */ (global.ui || {});
   var contexts = [];
   var activeContext = null;
   var pendingInput = {};
@@ -1312,7 +1312,7 @@
   }
 
   ui.VERSION = "0.3.1";
-  ui.theme = ui.theme || {};
+  ui.theme = /** @type {ESP32QJS.UIModule["theme"]} */ (ui.theme || {});
   ui.theme.dark = rgbTheme();
   ui.theme.mono = monoTheme();
 
@@ -1490,7 +1490,7 @@
 
   ui.spacer = function (sizeOrOptions) {
     var context = currentContext();
-    var options = {};
+    var options = /** @type {ESP32QJS.UISpacerOptions} */ ({});
     var rect;
 
     if (typeof sizeOrOptions === "number") {

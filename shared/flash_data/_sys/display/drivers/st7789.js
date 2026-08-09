@@ -103,7 +103,7 @@
     var config = {
       width: surface.width,
       height: surface.height,
-      format: "rgb565",
+      format: /** @type {"rgb565"} */ ("rgb565"),
       storage: storage,
       chunkBytes: chunkBytes,
       foreground: surface.foreground,
@@ -195,10 +195,10 @@
   }
 
   function copyOptions(source) {
-    var target = {};
     var key;
 
     source = source || {};
+    var target = { driver: source.driver || "st7789" };
     for (key in source) {
       if (own(source, key)) {
         target[key] = source[key];

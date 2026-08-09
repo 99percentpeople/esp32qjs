@@ -199,7 +199,8 @@ Required before this plan is marked complete:
 - [x] `python scripts/remote.py --app demo --assume y build`
 - [x] `python scripts/remote.py --board esp32c3_supermini --app minimal --assume y build`
 - [x] Default board-backed JS test baseline after flashing the dedicated test image
-- [x] JavaScript syntax checks for shared and application files
+- [x] `python scripts/remote.py check-js` for shared, application, test, and
+  runnable API-documentation JavaScript
 - [x] Configuration checks for local serial, application profiles, and RFC2217 normalization
 
 The network and physical loopback suites remain opt-in and must be recorded
