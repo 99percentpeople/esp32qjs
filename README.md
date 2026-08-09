@@ -151,6 +151,7 @@ python scripts/remote.py test --scope js --module spi --module uart --loopback
 - [API index](docs/api.md)
 - [Native Host API](docs/c-api.md)
 - [JavaScript libraries](docs/js-api.md)
+- [Display/driver redesign proposal](docs/display-driver-redesign.md)
 - [API stability plan](docs/api-stability-plan.md)
 - [Native runtime integration](docs/runtime-api.md)
 - [Framework plan](docs/framework-plan.md)
