@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Unified helper for local and remote ESP32 board development.
+"""Unified helper for local and remote ESP32QJS application development.
 
-The script reads repository-local `/.env` defaults, then merges them with a
-selected board profile from `configs/boards/*/.env`. That keeps day-to-day
-commands short while still allowing different targets, build directories,
-sdkconfig files, and remote serial bridges per board.
+The script combines a board profile from `configs/boards/*/.env` with an
+application profile from `apps/*/app.env`. That keeps hardware configuration
+independent from application behavior, partitions, and LittleFS resources.
 """
 
 from __future__ import annotations
@@ -30,6 +29,8 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 ENV_PATH = ROOT_DIR / ".env"
 CONFIG_DIR = ROOT_DIR / "configs"
 BOARD_DIR = CONFIG_DIR / "boards"
+APP_DIR = ROOT_DIR / "apps"
+SHARED_FLASH_DATA_DIR = ROOT_DIR / "shared" / "flash_data"
 
 ESPTOOL_CONFIG_TEXT = """[esptool]
 custom_reset_sequence = R0|D0|W0.1|D1|R0|W0.1|R1|D0|R1|W0.1|D0|R0
@@ -235,13 +236,33 @@ class BoardProfile:
 
 
 @dataclass(frozen=True)
+class AppProfile:
+    reference: str
+    name: str
+    file: Path
+    label: str
+    flash_data_dir: Path
+    sdkconfig_defaults: Path | None
+    partition_table: Path
+
+
+@dataclass(frozen=True)
 class ProjectConfig:
     board: str
     board_file: Path
     board_label: str
+    app: str
+    app_file: Path
+    app_label: str
+    shared_flash_data_dir: Path
+    app_flash_data_dir: Path
+    flash_data_override: Path | None
     build_dir: Path
     generated_sdkconfig: Path
-    sdkconfig_defaults: Path | None
+    board_sdkconfig_defaults: Path | None
+    app_sdkconfig_defaults: Path | None
+    sdkconfig_defaults: tuple[Path, ...]
+    partition_table: Path
     idf_target: str
     idf_path: str
     target: str
@@ -417,6 +438,132 @@ def resolve_board_file(reference: str) -> Path:
         )
 
     return board_file.resolve()
+
+
+def app_reference_from_env(repo_env: dict[str, str], override: str | None) -> str:
+    """Choose the application profile from CLI or repository-local settings."""
+    if override:
+        return override
+    if os.environ.get("APP_FILE"):
+        return os.environ["APP_FILE"]
+    if repo_env.get("APP_FILE"):
+        return repo_env["APP_FILE"]
+    if os.environ.get("APP"):
+        return os.environ["APP"]
+    if repo_env.get("APP"):
+        return repo_env["APP"]
+    return "minimal"
+
+
+def resolve_app_file(reference: str) -> Path:
+    """Resolve an application profile to an on-disk `app.env` file."""
+    ref_path = Path(reference).expanduser()
+    if ref_path.is_absolute() or "/" in reference or "\\" in reference or reference.endswith(".env"):
+        candidate = ref_path if ref_path.is_absolute() else ROOT_DIR / ref_path
+    else:
+        candidate = APP_DIR / reference
+
+    app_file = candidate / "app.env" if candidate.is_dir() else candidate
+    if not app_file.exists():
+        raise SystemExit(
+            f"Application profile {reference!r} not found. Add {app_file} or run "
+            "`python scripts/remote.py apps` to list available applications."
+        )
+    return app_file.resolve()
+
+
+def resolve_app_profile_path(
+    raw_path: str,
+    app_dir: Path,
+    board_name: str,
+    idf_target: str,
+) -> Path:
+    """Resolve an app path after expanding the selected board placeholders."""
+    try:
+        expanded = raw_path.format(board=board_name, idf_target=idf_target)
+    except KeyError as exc:
+        raise SystemExit(
+            f"Unsupported application path placeholder {exc.args[0]!r} in {raw_path!r}; "
+            "only {board} and {idf_target} are available."
+        ) from exc
+
+    path = Path(expanded).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    if expanded.startswith(("apps/", "configs/", "shared/")):
+        return (ROOT_DIR / path).resolve()
+    return (app_dir / path).resolve()
+
+
+def load_app_profile(
+    app_override: str | None,
+    board_name: str,
+    idf_target: str,
+) -> AppProfile:
+    """Load an application profile for one board and validate all app inputs."""
+    repo_env = load_dotenv(ENV_PATH)
+    reference = app_reference_from_env(repo_env, app_override)
+    app_file = resolve_app_file(reference)
+    app_dir = app_file.parent
+    app_env = load_dotenv(app_file)
+
+    flash_data_raw = app_env.get("FLASH_DATA_DIR", "flash_data")
+    flash_data_dir = resolve_app_profile_path(
+        flash_data_raw, app_dir, board_name, idf_target
+    )
+    if not flash_data_dir.is_dir():
+        raise SystemExit(f"Application flash data directory does not exist: {flash_data_dir}")
+    if not (flash_data_dir / "index.js").is_file():
+        raise SystemExit(f"Application flash data must contain index.js: {flash_data_dir}")
+
+    app_defaults_raw = os.environ.get(
+        "APP_SDKCONFIG_DEFAULTS",
+        repo_env.get("APP_SDKCONFIG_DEFAULTS", app_env.get("APP_SDKCONFIG_DEFAULTS", "")),
+    ).strip()
+    if not app_defaults_raw and (app_dir / "sdkconfig.defaults").is_file():
+        app_defaults_raw = "sdkconfig.defaults"
+    app_defaults = (
+        resolve_app_profile_path(app_defaults_raw, app_dir, board_name, idf_target)
+        if app_defaults_raw
+        else None
+    )
+    if app_defaults is not None and not app_defaults.is_file():
+        raise SystemExit(f"Application sdkconfig defaults file does not exist: {app_defaults}")
+
+    partition_raw = os.environ.get(
+        "PARTITION_TABLE",
+        repo_env.get(
+            "PARTITION_TABLE",
+            app_env.get("PARTITION_TABLE", "partitions/{board}.csv"),
+        ),
+    ).strip()
+    if not partition_raw:
+        raise SystemExit(f"{app_file} must define PARTITION_TABLE.")
+    partition_table = resolve_app_profile_path(
+        partition_raw, app_dir, board_name, idf_target
+    )
+    if not partition_table.is_file():
+        raise SystemExit(
+            f"Application partition table does not exist for board {board_name}: "
+            f"{partition_table}"
+        )
+
+    return AppProfile(
+        reference=reference,
+        name=app_dir.name,
+        file=app_file,
+        label=app_env.get("APP_LABEL", app_dir.name),
+        flash_data_dir=flash_data_dir,
+        sdkconfig_defaults=app_defaults,
+        partition_table=partition_table,
+    )
+
+
+def available_app_profiles() -> list[Path]:
+    """Return application profiles shipped in the repository."""
+    if not APP_DIR.exists():
+        return []
+    return sorted(path for path in APP_DIR.glob("*/app.env") if path.is_file())
 
 
 def legacy_target(repo_env: dict[str, str], board_env: dict[str, str]) -> tuple[str, int]:
@@ -735,8 +882,9 @@ def idf_py_cmd(project_args: list[str], config: ProjectConfig) -> list[str]:
     ]
     cmake_args.extend(config.cmake_cache_entries)
 
-    if config.sdkconfig_defaults is not None:
-        cmake_args.append(f"-DSDKCONFIG_DEFAULTS={config.sdkconfig_defaults}")
+    if config.sdkconfig_defaults:
+        joined_defaults = ";".join(str(path) for path in config.sdkconfig_defaults)
+        cmake_args.append(f"-DSDKCONFIG_DEFAULTS={joined_defaults}")
 
     full_args = [*cmake_args, *project_args]
 
@@ -1106,30 +1254,45 @@ def flash_monitor(config: ProjectConfig, build_first: bool) -> None:
 
 
 def config_default_inputs(config: ProjectConfig) -> list[Path]:
-    """Return the defaults files that define the selected board configuration."""
-    defaults: list[Path] = []
-    if config.sdkconfig_defaults is not None:
-        defaults.append(config.sdkconfig_defaults)
-    return defaults
+    """Return tracked inputs that define the selected board/app configuration."""
+    return [
+        *config.sdkconfig_defaults,
+        config.board_file,
+        config.app_file,
+        config.partition_table,
+    ]
 
 
 def refresh_generated_sdkconfig(config: ProjectConfig) -> None:
-    """Regenerate the build-local sdkconfig when tracked defaults changed."""
-    if not config.generated_sdkconfig.exists():
-        return
+    """Regenerate the combination-local sdkconfig when profile inputs changed."""
+    input_paths = [path.resolve() for path in config_default_inputs(config) if path.exists()]
+    identity = json.dumps([str(path) for path in input_paths], indent=2) + "\n"
+    stamp = config.generated_sdkconfig.with_name(
+        f".{config.generated_sdkconfig.name}.inputs.json"
+    )
+    previous_identity = stamp.read_text(encoding="utf-8") if stamp.exists() else ""
 
-    generated_mtime = config.generated_sdkconfig.stat().st_mtime
-    defaults = [path for path in config_default_inputs(config) if path.exists()]
-    if not defaults:
-        return
+    should_refresh = False
+    if config.generated_sdkconfig.exists():
+        generated_mtime = config.generated_sdkconfig.stat().st_mtime
+        should_refresh = previous_identity != identity or any(
+            path.stat().st_mtime > generated_mtime for path in input_paths
+        )
 
-    if not any(path.stat().st_mtime > generated_mtime for path in defaults):
-        return
+    if should_refresh:
+        print(
+            f"Refreshing {format_path(config.generated_sdkconfig)} because "
+            "board/application configuration inputs changed."
+        )
+        config.generated_sdkconfig.unlink(missing_ok=True)
+        old_sdkconfig = config.generated_sdkconfig.with_name(
+            f"{config.generated_sdkconfig.name}.old"
+        )
+        old_sdkconfig.unlink(missing_ok=True)
 
-    print(f"Refreshing {format_path(config.generated_sdkconfig)} because board defaults changed.")
-    config.generated_sdkconfig.unlink(missing_ok=True)
-    old_sdkconfig = config.generated_sdkconfig.with_name(f"{config.generated_sdkconfig.name}.old")
-    old_sdkconfig.unlink(missing_ok=True)
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    if previous_identity != identity:
+        stamp.write_text(identity, encoding="utf-8")
 
 
 def list_boards(selected_board: str) -> None:
@@ -1155,16 +1318,53 @@ def list_boards(selected_board: str) -> None:
         print(f"{marker} {board_file.parent.name}: {label} [{detail}]")
 
 
+def list_apps(selected_app: str) -> None:
+    """Print application profiles bundled with the repository."""
+    profiles = available_app_profiles()
+    if not profiles:
+        print("No application profiles found.")
+        return
+
+    selected = resolve_app_file(selected_app)
+    for app_file in profiles:
+        app_env = load_dotenv(app_file)
+        marker = "*" if app_file.resolve() == selected else " "
+        label = app_env.get("APP_LABEL", app_file.parent.name)
+        flash_data = app_env.get("FLASH_DATA_DIR", "flash_data")
+        app_defaults = app_env.get("APP_SDKCONFIG_DEFAULTS", "sdkconfig.defaults")
+        partition_table = app_env.get(
+            "PARTITION_TABLE", "partitions/{board}.csv"
+        )
+        print(
+            f"{marker} {app_file.parent.name}: {label} "
+            f"[{flash_data}, {app_defaults}, {partition_table}]"
+        )
+
+
 def show_config(config: ProjectConfig) -> None:
-    """Print the effective merged configuration for the selected board."""
+    """Print the effective merged board, application, and tool configuration."""
     normalized_target = normalize_target(config.target)
     print(f"board={config.board}")
     print(f"board_file={config.board_file}")
     print(f"board_label={config.board_label}")
+    print(f"app={config.app}")
+    print(f"app_file={config.app_file}")
+    print(f"app_label={config.app_label}")
+    print(f"shared_flash_data_dir={format_path(config.shared_flash_data_dir)}")
+    print(f"app_flash_data_dir={format_path(config.app_flash_data_dir)}")
+    print(f"flash_data_override={format_path(config.flash_data_override)}")
     print(f"idf_target={config.idf_target}")
     print(f"build_dir={format_path(config.build_dir)}")
     print(f"generated_sdkconfig={format_path(config.generated_sdkconfig)}")
-    print(f"sdkconfig_defaults={format_path(config.sdkconfig_defaults)}")
+    print(
+        f"board_sdkconfig_defaults={format_path(config.board_sdkconfig_defaults)}"
+    )
+    print(f"app_sdkconfig_defaults={format_path(config.app_sdkconfig_defaults)}")
+    print(
+        "sdkconfig_defaults="
+        + ";".join(format_path(path) for path in config.sdkconfig_defaults)
+    )
+    print(f"partition_table={format_path(config.partition_table)}")
     print(f"idf_path={config.idf_path}")
     print(f"target={config.target}")
     print(f"normalized_target={normalized_target}")
@@ -1529,12 +1729,17 @@ def send_js_command(session: MonitorSession, command: str) -> None:
 def js_test_build_config(config: ProjectConfig) -> ProjectConfig:
     """Return a build config that targets the dedicated JS test LittleFS image."""
     build_dir = config.build_dir.parent / f"{config.build_dir.name}-js-test"
-    cmake_entries = [*config.cmake_cache_entries, f"-DESP32QJS_FLASH_DATA_DIR={JS_TEST_FLASH_DATA_DIR}"]
+    cmake_entries = [
+        entry for entry in config.cmake_cache_entries
+        if not entry.startswith("-DESP32QJS_FLASH_DATA_DIR=")
+    ]
+    cmake_entries.append(f"-DESP32QJS_FLASH_DATA_DIR={JS_TEST_FLASH_DATA_DIR}")
 
     return replace(
         config,
         build_dir=build_dir,
-        generated_sdkconfig=build_dir / "sdkconfig",
+        generated_sdkconfig=build_dir / config.generated_sdkconfig.name,
+        flash_data_override=JS_TEST_FLASH_DATA_DIR,
         cmake_cache_entries=tuple(cmake_entries),
     )
 
@@ -1988,28 +2193,79 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
         raise SystemExit("One or more test stages failed.")
 
 
-def build_project_config(args: argparse.Namespace, profile: BoardProfile) -> ProjectConfig:
-    """Convert parsed CLI args to the effective project config."""
-    sdkconfig_defaults = (
-        Path(args.sdkconfig_defaults).expanduser()
-        if getattr(args, "sdkconfig_defaults", "")
-        else None
+def build_project_config(
+    args: argparse.Namespace,
+    profile: BoardProfile,
+    app_profile: AppProfile,
+) -> ProjectConfig:
+    """Convert parsed CLI args and selected profiles to the effective project config."""
+    def cli_path(raw_path: str) -> Path | None:
+        if not raw_path:
+            return None
+        path = Path(raw_path).expanduser()
+        return (path if path.is_absolute() else ROOT_DIR / path).resolve()
+
+    board_defaults = cli_path(getattr(args, "sdkconfig_defaults", ""))
+    app_defaults = cli_path(getattr(args, "app_sdkconfig_defaults", ""))
+    partition_table = cli_path(getattr(args, "partition_table", ""))
+    if partition_table is None:
+        partition_table = app_profile.partition_table
+
+    for label, path in (
+        ("Board sdkconfig defaults", board_defaults),
+        ("Application sdkconfig defaults", app_defaults),
+        ("Partition table", partition_table),
+    ):
+        if path is not None and not path.is_file():
+            raise SystemExit(f"{label} file does not exist: {path}")
+
+    sdkconfig_defaults = tuple(
+        dict.fromkeys(
+            path for path in (board_defaults, app_defaults) if path is not None
+        )
     )
-    if sdkconfig_defaults is not None and not sdkconfig_defaults.is_absolute():
-        sdkconfig_defaults = ROOT_DIR / sdkconfig_defaults
 
     build_dir = Path(args.build_dir).expanduser()
     if not build_dir.is_absolute():
         build_dir = ROOT_DIR / build_dir
+    build_dir = build_dir.resolve()
 
+    flash_data_override = cli_path(getattr(args, "flash_data_dir", ""))
+    if flash_data_override is not None and not flash_data_override.is_dir():
+        raise SystemExit(f"Flash data override does not exist: {flash_data_override}")
+
+    shared_flash_data_dir = SHARED_FLASH_DATA_DIR.resolve()
+    cmake_entries = (
+        f"-DESP32QJS_BOARD={profile.name}",
+        f"-DESP32QJS_APP={app_profile.name}",
+        f"-DESP32QJS_SHARED_FLASH_DATA_DIR={shared_flash_data_dir}",
+        f"-DESP32QJS_APP_FLASH_DATA_DIR={app_profile.flash_data_dir}",
+        f"-DESP32QJS_FLASH_DATA_DIR={flash_data_override or ''}",
+        f"-DESP32QJS_BOARD_SDKCONFIG_DEFAULTS={board_defaults or ''}",
+        f"-DESP32QJS_APP_SDKCONFIG_DEFAULTS={app_defaults or ''}",
+        f"-DESP32QJS_PARTITION_TABLE={partition_table}",
+    )
+
+    config_slug = re.sub(
+        r"[^A-Za-z0-9_.-]+", "_", f"{profile.name}.{app_profile.name}"
+    )
     board_file = Path(args.board_file)
     return ProjectConfig(
         board=profile.name,
         board_file=board_file,
         board_label=profile.label,
+        app=app_profile.name,
+        app_file=app_profile.file,
+        app_label=app_profile.label,
+        shared_flash_data_dir=shared_flash_data_dir,
+        app_flash_data_dir=app_profile.flash_data_dir,
+        flash_data_override=flash_data_override,
         build_dir=build_dir,
-        generated_sdkconfig=build_dir / "sdkconfig",
+        generated_sdkconfig=build_dir / f"sdkconfig.{config_slug}",
+        board_sdkconfig_defaults=board_defaults,
+        app_sdkconfig_defaults=app_defaults,
         sdkconfig_defaults=sdkconfig_defaults,
+        partition_table=partition_table,
         idf_target=args.idf_target,
         idf_path=args.idf_path,
         target=normalize_target(getattr(args, "target", profile.target)),
@@ -2022,6 +2278,7 @@ def build_project_config(args: argparse.Namespace, profile: BoardProfile) -> Pro
         test_wifi_password=profile.test_wifi_password,
         test_http_url=profile.test_http_url,
         test_js_config=profile.test_js_config,
+        cmake_cache_entries=cmake_entries,
     )
 
 
@@ -2034,9 +2291,38 @@ def add_common_board_args(parser: argparse.ArgumentParser, profile: BoardProfile
     )
     parser.add_argument("--build-dir", default=format_path(profile.build_dir))
     parser.add_argument("--idf-target", default=profile.idf_target)
-    parser.add_argument("--sdkconfig-defaults", default=format_path(profile.sdkconfig_defaults))
+    parser.add_argument(
+        "--sdkconfig-defaults",
+        default=format_path(profile.sdkconfig_defaults),
+        help="Board/base sdkconfig defaults file applied before application defaults.",
+    )
     parser.add_argument("--idf-path", default=profile.idf_path)
     parser.set_defaults(board_file=str(profile.file))
+
+
+def add_common_app_args(parser: argparse.ArgumentParser, profile: AppProfile) -> None:
+    """Attach application and LittleFS resource selection options."""
+    parser.add_argument(
+        "--app",
+        default=profile.reference,
+        help="Application name from apps/*/app.env, or a direct app directory/profile path.",
+    )
+    parser.add_argument(
+        "--app-sdkconfig-defaults",
+        default=format_path(profile.sdkconfig_defaults),
+        help="Application sdkconfig defaults applied after the selected board defaults.",
+    )
+    parser.add_argument(
+        "--partition-table",
+        default=format_path(profile.partition_table),
+        help="Application partition CSV for the selected board.",
+    )
+    parser.add_argument(
+        "--flash-data-dir",
+        default="",
+        help="Use one complete LittleFS source directory instead of merging shared and app data.",
+    )
+    parser.set_defaults(app_file=str(profile.file))
 
 
 def add_common_connection_args(parser: argparse.ArgumentParser, profile: BoardProfile) -> None:
@@ -2052,16 +2338,25 @@ def add_common_connection_args(parser: argparse.ArgumentParser, profile: BoardPr
     parser.add_argument("--python-exe", default=profile.server_python_exe)
 
 
-def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, BoardProfile]:
-    """Parse CLI arguments after resolving the selected board profile."""
+def parse_args(
+    argv: list[str] | None = None,
+) -> tuple[argparse.Namespace, BoardProfile, AppProfile]:
+    """Parse CLI arguments after resolving board and application profiles."""
     raw_argv = sys.argv[1:] if argv is None else argv
     bootstrap = argparse.ArgumentParser(add_help=False)
     bootstrap.add_argument("--board")
+    bootstrap.add_argument("--app")
     pre_args, _ = bootstrap.parse_known_args(raw_argv)
     profile = load_profile(pre_args.board)
+    app_profile = load_app_profile(
+        pre_args.app,
+        board_name=profile.name,
+        idf_target=profile.idf_target,
+    )
 
-    parser = argparse.ArgumentParser(description="Unified helper for local and remote ESP32 board development.")
+    parser = argparse.ArgumentParser(description="Unified helper for ESP32QJS application development.")
     add_common_board_args(parser, profile)
+    add_common_app_args(parser, app_profile)
     add_common_connection_args(parser, profile)
     parser.add_argument(
         "--assume",
@@ -2075,7 +2370,10 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, Board
     boards_parser = sub.add_parser("boards", help="List bundled board profiles.")
     boards_parser.set_defaults(_noop=True)
 
-    show_parser = sub.add_parser("show-config", help="Print the merged board/tool configuration.")
+    apps_parser = sub.add_parser("apps", help="List bundled application profiles.")
+    apps_parser.set_defaults(_noop=True)
+
+    show_parser = sub.add_parser("show-config", help="Print the merged board/app/tool configuration.")
     show_parser.set_defaults(_noop=True)
 
     server = sub.add_parser("server", help="Write config and start esp_rfc2217_server.")
@@ -2134,15 +2432,19 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, Board
         help="Reuse the existing JS test LittleFS image instead of rebuilding and reflashing it.",
     )
 
-    return parser.parse_args(raw_argv), profile
+    return parser.parse_args(raw_argv), profile, app_profile
 
 
 def main() -> int:
-    args, profile = parse_args()
-    config = build_project_config(args, profile)
+    args, profile, app_profile = parse_args()
+    config = build_project_config(args, profile, app_profile)
 
     if args.command == "boards":
         list_boards(args.board)
+        return 0
+
+    if args.command == "apps":
+        list_apps(args.app)
         return 0
 
     if args.command == "show-config":

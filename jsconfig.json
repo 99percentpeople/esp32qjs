@@ -11,6 +11,8 @@
     "types/esp32qjs-js-api.d.ts"
   ],
   "include": [
-    "flash_data/**/*.js"
+    "shared/flash_data/**/*.js",
+    "apps/*/flash_data/**/*.js",
+    "tests/js/flash_data/**/*.js"
   ]
 }

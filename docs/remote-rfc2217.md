@@ -1,6 +1,6 @@
 # Local And Remote Flashing
 
-This project supports both direct local serial development and remote RFC2217 development through the same [scripts/remote.py](/home/zach/esp32qjs/scripts/remote.py) entrypoint. Use one `TARGET` value everywhere: if it is an `rfc2217://...` URL, the helper talks to a remote board; otherwise it treats the value as a local serial device path. The RFC2217 path still relies on `esp_rfc2217_server`, and the Windows server must override the default reset sequence. Without this override, the server uses `ClassicReset`, which does not reliably put `USB-Serial/JTAG` boards into download mode.
+This project supports both direct local serial development and remote RFC2217 development through the same [scripts/remote.py](../scripts/remote.py) entrypoint. Use one `TARGET` value everywhere: if it is an `rfc2217://...` URL, the helper talks to a remote board; otherwise it treats the value as a local serial device path. The RFC2217 path still relies on `esp_rfc2217_server`, and the Windows server must override the default reset sequence. Without this override, the server uses `ClassicReset`, which does not reliably put `USB-Serial/JTAG` boards into download mode.
 
 ## Local Serial Usage
 For a board connected to the current machine, set `TARGET=/dev/ttyACM0` or pass a one-off override:
@@ -12,7 +12,7 @@ python scripts/remote.py --target /dev/ttyACM0 monitor
 ```
 
 ## Server Setup on Windows
-Run `uv sync` once in the repository root to provision the repo-local Python tools. Then copy [.env.example](/home/zach/esp32qjs/.env.example) to `/.env`, choose a board profile with `BOARD=...`, and set `TARGET` to the local serial device on the machine that owns the board. For `rfc2217://...` URLs, the helper auto-adds `ign_set_control` and `timeout=10` when they are missing. With `SERVER_PYTHON_EXE=auto`, the helper prefers the uv-managed `esptool` install automatically, and `build` / `monitor` derive `idf.py` and `export.sh` from `IDF_PATH`. Then run [scripts/remote.py](/home/zach/esp32qjs/scripts/remote.py) on the machine that owns the board:
+Run `uv sync` once in the repository root to provision the repo-local Python tools. Then copy [.env.example](../.env.example) to `/.env`, choose board and application profiles with `BOARD=...` and `APP=...`, and set `TARGET` to the local serial device on the machine that owns the board. For `rfc2217://...` URLs, the helper auto-adds `ign_set_control` and `timeout=10` when they are missing. With `SERVER_PYTHON_EXE=auto`, the helper prefers the uv-managed `esptool` install automatically, and `build` / `monitor` derive `idf.py` and `export.sh` from `IDF_PATH`. Then run [scripts/remote.py](../scripts/remote.py) on the machine that owns the board:
 
 ```bash
 python scripts/remote.py server --force-restart
@@ -27,11 +27,12 @@ custom_hard_reset_sequence = R1|W0.2|R0
 ```
 
 ## Client Usage
-From the development machine, use the same [scripts/remote.py](/home/zach/esp32qjs/scripts/remote.py) entrypoint:
+From the development machine, use the same [scripts/remote.py](../scripts/remote.py) entrypoint:
 
 ```bash
 uv sync
 python scripts/remote.py boards
+python scripts/remote.py apps
 python scripts/remote.py show-config
 python scripts/remote.py chip-id
 python scripts/remote.py flash
@@ -41,10 +42,11 @@ python scripts/remote.py test
 python scripts/remote.py --assume n build
 ```
 
-Board profiles live under [`configs/boards/<board>/`](</home/zach/esp32qjs/configs/boards>). Each board directory carries its own `.env`, `sdkconfig.defaults`, and `partitions.csv`. For example:
+Board profiles live under [`configs/boards/<board>/`](../configs/boards) and carry hardware target, pin, feature, and memory defaults. Application profiles live under `apps/<app>/` and carry `app.env`, behavior `sdkconfig.defaults`, board-specific `partitions/<board>.csv`, and `flash_data/`. Board defaults are applied before application defaults, while shared `_sys` libraries come from `shared/flash_data` and application files overlay them. For example:
 
 ```bash
-python scripts/remote.py --board xiao_esp32s3 flash-monitor
+python scripts/remote.py --board xiao_esp32s3 --app minimal flash-monitor
+python scripts/remote.py --board xiao_esp32s3 --app demo build
 python scripts/remote.py --board esp32c3_supermini build
 python scripts/remote.py --board esp32c3_supermini chip-id
 python scripts/remote.py --board esp32c3_supermini test --scope js --module fs --module stream
@@ -70,13 +72,15 @@ The script flashes the files listed in the selected build directory's `flasher_a
 - `build/bootloader/bootloader.bin` at `0x0`
 - `build/partition_table/partition-table.bin` at `0x8000`
 - `build/esp32qjs.bin` at `0x10000`
-- `build/storage.bin` at `0x150000`
+- `build/storage.bin` at the selected partition table's `storage` offset (currently `0x210000` for the bundled boards)
 
-For JavaScript-only changes under `flash_data/`, use the faster filesystem-only path:
+`show-config` prints the exact board/application defaults, combination-specific generated sdkconfig, partition table, and resource paths. App paths may use `{board}` and `{idf_target}` placeholders; missing inputs fail before ESP-IDF starts. One-off overrides are available through `--app-sdkconfig-defaults`, `--partition-table`, and `--flash-data-dir`.
+
+For JavaScript-only changes under `shared/flash_data` or `apps/<app>/flash_data`, use the faster filesystem-only path:
 
 ```bash
-python scripts/remote.py build-fs
-python scripts/remote.py flash-fs
+python scripts/remote.py --app minimal build-fs
+python scripts/remote.py --app demo flash-fs
 ```
 
 For automated validation, use the unified test entrypoint:

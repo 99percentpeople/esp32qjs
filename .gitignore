@@ -1,6 +1,7 @@
 build/
 build-*/
 build_*/
+/sdkconfig
 sdkconfig.old
 setup.cfg
 
