@@ -1,246 +1,33 @@
 (function (global) {
-  var system = global.__displaySystem;
+  var system = global.__displaySystemV2;
   var display = global.display;
   var DEFAULT_WIDTH = 240;
   var DEFAULT_HEIGHT = 240;
-  var DEFAULT_FREQ_HZ = 20000000;
-  var DEFAULT_NATIVE_MAX_TRANSFER_SIZE = 16384;
 
-  if (!system || system.st7789Loaded) {
+  if (!system || system.st7789DriverLoaded) {
     return;
   }
 
-  function own(obj, key) {
-    return system.own(obj, key);
-  }
-
-  function toBool(value, fallback) {
-    return system.toBool(value, fallback);
-  }
-
-  var rgb565 = display.rgb565;
-
-  function normalizeColor(value, fallback, apiName) {
-    if (value === undefined || value === null) {
-      return fallback & 0xffff;
-    }
-    if (typeof value === "boolean") {
-      throw new Error(apiName + " expects a display.rgb565(...) color");
-    }
-    if (typeof value === "number") {
-      return value & 0xffff;
-    }
-    if (value && typeof value === "object") {
-      return rgb565(value.r || 0, value.g || 0, value.b || 0);
-    }
-    throw new Error(apiName + " expects a display.rgb565(...) color");
-  }
-
-  function nativeDrawColor(surface, value, fallback, apiName) {
-    if (value === undefined) {
-      return fallback;
-    }
-    return normalizeColor(value, fallback, apiName);
-  }
-
-  function styleOptions(value, apiName) {
-    return system.styleOptions(value, apiName);
-  }
-
-  function textFontFromStyle(style) {
-    var font = display.defaultFont;
-
-    if (style && typeof style === "object") {
-      if (own(style, "font")) {
-        font = style.font;
-      }
-    }
-    return font;
-  }
-
-  function nativeTextOptions(surface, style) {
-    var options = {};
-    var font = textFontFromStyle(style);
-
-    if (style && typeof style === "object") {
-      if (own(style, "spacing")) {
-        options.spacing = style.spacing;
-      }
-      if (own(style, "background")) {
-        options.background = style.background === null
-          ? null
-          : nativeDrawColor(surface, style.background, surface.background, "ST7789 text background");
-      }
-    } else if (style !== undefined) {
-      options.spacing = style;
-    }
-    if (font) {
-      options.font = font.native || font;
-    }
-    if (!own(options, "spacing")) {
-      options.spacing = surface.spacing;
-    }
-    return options;
-  }
-
-  function nativeText(text, style) {
-    if (display && typeof display.encodeText === "function") {
-      return display.encodeText(text, textFontFromStyle(style));
-    }
-    return String(text);
-  }
-
-  function requireDisplayBuffer() {
-    if (typeof displayBuffer !== "object" ||
-        !displayBuffer ||
-        typeof displayBuffer.create !== "function") {
-      throw new Error("st7789 display driver requires the displayBuffer module");
-    }
-  }
-
-  function createNativeBuffer(surface, options, chunkBytes) {
-    var storage = own(options, "storage") ? options.storage : "dma";
-    var config = {
-      width: surface.width,
-      height: surface.height,
-      format: /** @type {"rgb565"} */ ("rgb565"),
-      storage: storage,
-      chunkBytes: chunkBytes,
-      foreground: surface.foreground,
-      background: surface.background
-    };
-
-    try {
-      return displayBuffer.create(config);
-    } catch (error) {
-      if (own(options, "storage") || storage === "auto") {
-        throw error;
-      }
-      config.storage = "auto";
-      return displayBuffer.create(config);
-    }
-  }
-
-  function writeGpio(pin, value) {
-    if (typeof pin === "number" && pin >= 0) {
-      gpio.digitalWrite(pin, !!value);
-    }
-  }
-
-  function configureOutput(pin, initialValue, requiredName) {
-    if (typeof pin !== "number" || pin < 0) {
-      if (requiredName) {
-        throw new Error(requiredName + " GPIO is required");
-      }
-      return;
-    }
-    gpio.pinMode(pin, gpio.OUTPUT);
-    gpio.digitalWrite(pin, !!initialValue);
-  }
-
-  function delayMs(ms) {
-    if (typeof sleep === "function") {
-      sleep(ms);
-    }
-  }
-
-  function toBytes(value) {
-    var bytes;
-    var i;
-
-    if (value === undefined || value === null) {
-      return [];
-    }
-    if (typeof value === "number") {
-      return [value & 0xff];
-    }
-    if (value && typeof value === "object" &&
-        value.buffer && value.BYTES_PER_ELEMENT === 1 &&
-        typeof value.length === "number") {
-      return value;
-    }
-    bytes = new Array(value.length);
-    for (i = 0; i < value.length; i += 1) {
-      bytes[i] = value[i] & 0xff;
-    }
-    return bytes;
-  }
-
-  function makeByteBuffer(length) {
-    if (typeof Uint8Array === "function") {
-      return new Uint8Array(length);
-    }
-    return new Array(length);
+  function own(value, key) {
+    return system.own(value, key);
   }
 
   function nowUs() {
-    if (typeof esp32 !== "undefined" && esp32 && typeof esp32.micros === "function") {
-      return esp32.micros();
-    }
-    return 0;
+    return global.esp32 && typeof global.esp32.micros === "function"
+      ? global.esp32.micros()
+      : 0;
   }
 
-  function newPerfStats() {
-    return {
-      flushCalls: 0,
-      chunks: 0,
-      pixels: 0,
-      bytes: 0,
-      totalFlushUs: 0,
-      windowUs: 0,
-      pixelUs: 0,
-      dataUs: 0,
-      directFlushes: 0
-    };
+  function delayMs(ms) {
+    if (typeof global.sleep === "function") {
+      global.sleep(ms);
+    }
   }
 
-  function copyOptions(source) {
-    var key;
-
-    source = source || {};
-    var target = { driver: source.driver || "st7789" };
-    for (key in source) {
-      if (own(source, key)) {
-        target[key] = source[key];
-      }
-    }
-    return target;
-  }
-
-  function flushRectFromValue(surface, value) {
-    var x;
-    var y;
-    var width;
-    var height;
-
-    if (!value || typeof value !== "object") {
-      return null;
-    }
-    if (value.length >= 4) {
-      x = value[0];
-      y = value[1];
-      width = value[2];
-      height = value[3];
-    } else {
-      x = value.x;
-      y = value.y;
-      width = own(value, "width") ? value.width : value.w;
-      height = own(value, "height") ? value.height : value.h;
-    }
-    x = system.clampInt(x, 0, surface.width);
-    y = system.clampInt(y, 0, surface.height);
-    width = system.clampInt(width, 0, surface.width - x);
-    height = system.clampInt(height, 0, surface.height - y);
-    if (width <= 0 || height <= 0) {
-      return null;
-    }
-    return {
-      x: x,
-      y: y,
-      width: width,
-      height: height,
-      area: width * height
-    };
+  function makeByteBuffer(length) {
+    return typeof global.Uint8Array === "function"
+      ? new global.Uint8Array(length)
+      : new Array(length);
   }
 
   function rotationMadctl(rotation, bgr) {
@@ -259,848 +46,364 @@
     return bgr ? (value | 0x08) : value;
   }
 
-  function ST7789Display(options) {
-    var maxTransferSize;
-    var chunkBytes;
+  function newStats() {
+    return {
+      presents: 0,
+      regions: 0,
+      pixels: 0,
+      bytes: 0,
+      chunks: 0,
+      directTransfers: 0,
+      totalUs: 0,
+      prepareUs: 0,
+      panelUs: 0,
+      transferUs: 0
+    };
+  }
 
-    if (typeof spi === "undefined" || typeof gpio === "undefined") {
-      throw new Error("st7789 display driver requires spi and gpio modules");
-    }
-    requireDisplayBuffer();
+  function copyStats(stats) {
+    return {
+      presents: stats.presents,
+      regions: stats.regions,
+      pixels: stats.pixels,
+      bytes: stats.bytes,
+      chunks: stats.chunks,
+      directTransfers: stats.directTransfers,
+      totalUs: stats.totalUs,
+      prepareUs: stats.prepareUs,
+      panelUs: stats.panelUs,
+      transferUs: stats.transferUs
+    };
+  }
 
-    options = options || {};
-    display.Surface.call(this, {
-      driver: own(options, "driverName") ? options.driverName : "st7789",
-      width: own(options, "width") ? options.width : DEFAULT_WIDTH,
-      height: own(options, "height") ? options.height : DEFAULT_HEIGHT,
-      pixelFormat: "rgb565"
-    });
-    this.spacing = own(options, "spacing") ? options.spacing : 0;
+  function addResult(target, result, pixels, timings) {
+    result = result || {};
+    target.regions += 1;
+    target.pixels += pixels;
+    target.bytes += result.bytes || pixels * 2;
+    target.chunks += result.chunks || 1;
+    target.directTransfers += result.direct ? 1 : 0;
+    target.prepareUs += timings.prepareUs;
+    target.panelUs += timings.panelUs;
+    target.transferUs += result.transferUs || result.totalUs || timings.transferUs;
+  }
 
-    maxTransferSize = own(options, "maxTransferSize")
-      ? options.maxTransferSize
-      : DEFAULT_NATIVE_MAX_TRANSFER_SIZE;
-    if (maxTransferSize < this.width * 2) {
-      maxTransferSize = this.width * 2;
+  function requireTransport(transport) {
+    if (!transport || typeof transport.open !== "function" ||
+        typeof transport.command !== "function" ||
+        typeof transport.write !== "function" ||
+        typeof transport.close !== "function") {
+      throw new TypeError("ST7789 driver requires an SPI4Wire display transport");
     }
-    chunkBytes = own(options, "chunkBytes") ? options.chunkBytes : maxTransferSize;
-    if (chunkBytes > maxTransferSize) {
-      chunkBytes = maxTransferSize;
+    if (transport.kind !== "spi4wire") {
+      throw new TypeError("ST7789 driver transport must be kind 'spi4wire'");
     }
-    if (chunkBytes < this.width * 2) {
-      chunkBytes = this.width * 2;
-    }
+    return transport;
+  }
 
-    this.pixelFormat = "rgb565";
+  function ST7789Driver(options) {
+    options = system.assertKnownOptions(options || {}, [
+      "transport",
+      "width",
+      "height",
+      "columnOffset",
+      "rowOffset",
+      "rotation",
+      "bgr",
+      "inverted"
+    ], "display.drivers.create(\"st7789\", options)");
+
+    this.name = "st7789";
+    this.transport = requireTransport(options.transport);
+    this.width = own(options, "width") ? options.width | 0 : DEFAULT_WIDTH;
+    this.height = own(options, "height") ? options.height | 0 : DEFAULT_HEIGHT;
+    if (this.width <= 0 || this.width > 320 ||
+        this.height <= 0 || this.height > 320) {
+      throw new RangeError("ST7789 dimensions must fit within 320x320");
+    }
     this.columnOffset = own(options, "columnOffset") ? options.columnOffset | 0 : 0;
     this.rowOffset = own(options, "rowOffset") ? options.rowOffset | 0 : 0;
     this.rotation = own(options, "rotation") ? options.rotation | 0 : 0;
-    this.bgr = toBool(options.bgr, false);
-    this.inverted = toBool(options.inverted, true);
-    this.foreground = normalizeColor(options.foreground, 0xffff, "ST7789 foreground");
-    this.background = normalizeColor(options.background, 0x0000, "ST7789 background");
-    this.dc = own(options, "dc") ? options.dc : -1;
-    this.resetPin = own(options, "reset") ? options.reset : (own(options, "rst") ? options.rst : -1);
-    this.backlightPin = own(options, "backlight") ? options.backlight : (own(options, "blk") ? options.blk : -1);
-    this.backlightActive = toBool(options.backlightActive, true);
-    this.rowsPerChunk = Math.max(1, (chunkBytes / (this.width * 2)) | 0);
-    this.chunkBytes = chunkBytes;
-    this.payload = null;
-    this.nativeBuffer = createNativeBuffer(this, options, chunkBytes);
-    this.commandBufferOptions = {
-      commandCapacity: own(options, "commandCapacity") ? options.commandCapacity : 192,
-      textBytes: own(options, "commandTextBytes") ? options.commandTextBytes : 2048
+    this.bgr = system.toBool(options.bgr, false);
+    this.inverted = system.toBool(options.inverted, true);
+    this.pixelFormat = "rgb565";
+    this.layout = "linear";
+    this.byteOrder = "be";
+    this.capabilities = {
+      partialPresent: true,
+      multiRegion: true,
+      power: true,
+      inversion: true,
+      contrast: false,
+      backlight: !!(
+        this.transport.capabilities && this.transport.capabilities.backlight
+      )
     };
-    this.commandBufferEnabled = options.commandBuffer !== false;
-    this.commandBuffer = null;
-    this.commandBatch = null;
-    this.flushSource = typeof this.nativeBuffer.createSpanSource === "function"
-      ? this.nativeBuffer.createSpanSource({
-          byteOrder: "be",
-          chunkBytes: this.chunkBytes
-        })
-      : null;
-    this.perfEnabled = toBool(options.perf, false);
-    this.perfStats = newPerfStats();
-    this.commandByte = makeByteBuffer(1);
     this.windowBytes = makeByteBuffer(4);
-    this.busOptions = {
-      host: own(options, "host") ? options.host : spi.DEFAULT_HOST,
-      sclk: own(options, "sclk") ? options.sclk : spi.DEFAULT_SCLK,
-      mosi: own(options, "mosi") ? options.mosi : spi.DEFAULT_MOSI,
-      miso: own(options, "miso") ? options.miso : -1,
-      maxTransferSize: maxTransferSize
-    };
-    this.deviceOptions = {
-      cs: own(options, "cs") ? options.cs : spi.DEFAULT_CS,
-      mode: own(options, "mode") ? options.mode : 0,
-      freqHz: own(options, "freqHz") ? options.freqHz : DEFAULT_FREQ_HZ,
-      queueSize: own(options, "queueSize") ? options.queueSize : 2
-    };
+    this.state = "created";
+    this._stats = newStats();
   }
 
-  system.inherit(ST7789Display, display.Surface);
-
-  ST7789Display.rgb565 = rgb565;
-
-  var CMD_CLEAR = 1;
-  var CMD_FILL_RECT = 2;
-  var CMD_DRAW_RECT = 3;
-  var CMD_DRAW_LINE = 4;
-  var CMD_DRAW_ROUND_RECT = 5;
-  var CMD_FILL_ROUND_RECT = 6;
-  var CMD_DRAW_TEXT = 7;
-  var CMD_TEXT_HAS_BACKGROUND = 1;
-
-  function pushU16(out, value) {
-    value = value | 0;
-    out.push(value & 0xff, (value >> 8) & 0xff);
-  }
-
-  function pushI16(out, value) {
-    pushU16(out, value);
-  }
-
-  function pushRectCommand(out, op, x, y, width, height, color) {
-    out.push(op);
-    pushI16(out, x);
-    pushI16(out, y);
-    pushI16(out, width);
-    pushI16(out, height);
-    pushU16(out, color);
-  }
-
-  function pushRoundRectCommand(out, op, x, y, width, height, radius, color) {
-    out.push(op);
-    pushI16(out, x);
-    pushI16(out, y);
-    pushI16(out, width);
-    pushI16(out, height);
-    pushI16(out, radius);
-    pushU16(out, color);
-  }
-
-  function clampTextSpacing(value) {
-    value = value | 0;
-    if (value < 0) {
-      return 0;
+  ST7789Driver.prototype.requireOpen = function (apiName) {
+    if (this.state !== "open") {
+      throw new Error(apiName + " requires an open ST7789 driver");
     }
-    if (value > 32) {
-      return 32;
-    }
-    return value;
-  }
-
-  function ST7789CommandBatch(surface, nativeBatch) {
-    this.surface = surface;
-    this.nativeBatch = nativeBatch;
-    this.pixelFormat = surface.pixelFormat;
-    this.foreground = surface.foreground;
-    this.background = surface.background;
-    this.spacing = surface.spacing;
-    this.bytes = [];
-    this.text = "";
-    this.textFont = null;
-  }
-
-  ST7789CommandBatch.prototype.reset = function (nativeBatch) {
-    this.nativeBatch = nativeBatch || this.nativeBatch;
-    this.bytes.length = 0;
-    this.text = "";
-    this.textFont = null;
     return this;
   };
 
-  ST7789CommandBatch.prototype.flush = function () {
-    var options;
-
-    if (this.bytes.length <= 0) {
+  ST7789Driver.prototype.open = function () {
+    if (this.state === "open") {
       return this;
     }
-    if (this.text.length > 0) {
-      options = {
-        text: this.text,
-        font: this.textFont
-      };
-      this.nativeBatch.appendPacked(this.bytes, options);
-    } else {
-      this.nativeBatch.appendPacked(this.bytes);
+    if (this.state === "closed") {
+      throw new Error("cannot reopen a closed ST7789 driver");
     }
-    this.bytes.length = 0;
-    this.text = "";
-    this.textFont = null;
-    return this;
-  };
-
-  ST7789CommandBatch.prototype.clear = function (color) {
-    color = nativeDrawColor(this.surface, color, this.surface.background, "ST7789 batch clear(color)");
-    this.bytes.push(CMD_CLEAR);
-    pushU16(this.bytes, color);
-    return this;
-  };
-
-  ST7789CommandBatch.prototype.fill = function (color) {
-    return this.clear(color);
-  };
-
-  ST7789CommandBatch.prototype.fillRect = function (x, y, width, height, color) {
-    color = nativeDrawColor(this.surface, color, this.surface.foreground,
-      "ST7789 batch fillRect(x, y, width, height, color)");
-    if ((width | 0) > 0 && (height | 0) > 0) {
-      pushRectCommand(this.bytes, CMD_FILL_RECT, x, y, width, height, color);
-    }
-    return this;
-  };
-
-  ST7789CommandBatch.prototype.drawLine = function (x0, y0, x1, y1, color) {
-    color = nativeDrawColor(this.surface, color, this.surface.foreground,
-      "ST7789 batch drawLine(x0, y0, x1, y1, color)");
-    pushRectCommand(this.bytes, CMD_DRAW_LINE, x0, y0, x1, y1, color);
-    return this;
-  };
-
-  ST7789CommandBatch.prototype.drawRect = function (x, y, width, height, color) {
-    color = nativeDrawColor(this.surface, color, this.surface.foreground,
-      "ST7789 batch drawRect(x, y, width, height, color)");
-    if ((width | 0) > 0 && (height | 0) > 0) {
-      pushRectCommand(this.bytes, CMD_DRAW_RECT, x, y, width, height, color);
-    }
-    return this;
-  };
-
-  ST7789CommandBatch.prototype.drawRoundRect = function (x, y, width, height, radius, color) {
-    color = nativeDrawColor(this.surface, color, this.surface.foreground,
-      "ST7789 batch drawRoundRect(x, y, width, height, radius, color)");
-    if ((width | 0) > 0 && (height | 0) > 0) {
-      pushRoundRectCommand(this.bytes, CMD_DRAW_ROUND_RECT, x, y, width, height, radius, color);
-    }
-    return this;
-  };
-
-  ST7789CommandBatch.prototype.fillRoundRect = function (x, y, width, height, radius, color) {
-    color = nativeDrawColor(this.surface, color, this.surface.foreground,
-      "ST7789 batch fillRoundRect(x, y, width, height, radius, color)");
-    if ((width | 0) > 0 && (height | 0) > 0) {
-      pushRoundRectCommand(this.bytes, CMD_FILL_ROUND_RECT, x, y, width, height, radius, color);
-    }
-    return this;
-  };
-
-  ST7789CommandBatch.prototype.drawChar = function (x, y, ch, options) {
-    return this.drawText(x, y, String(ch).charAt(0), options);
-  };
-
-  ST7789CommandBatch.prototype.drawText = function (x, y, text, options) {
-    var style = styleOptions(options, "ST7789 batch drawText(x, y, text, options)");
-    var color = nativeDrawColor(this.surface, style.color, this.surface.foreground,
-      "ST7789 batch drawText(x, y, text, options).color");
-    var nativeOptions = nativeTextOptions(this.surface, style);
-    var encoded = nativeText(text, style);
-    var hasBackground = nativeOptions.background !== undefined && nativeOptions.background !== null;
-    var background = hasBackground ? nativeOptions.background : this.surface.background;
-    var font = nativeOptions.font;
-    var textOffset;
-    var textLength;
-
-    if (!font) {
-      throw new Error("ST7789 batch drawText(x, y, text, options) requires a native font");
-    }
-    textLength = encoded.length | 0;
-    if (textLength <= 0) {
+    try {
+      this.transport.open();
+      if (this.transport.capabilities && this.transport.capabilities.reset) {
+        this.transport.reset();
+      }
+      this.transport.command(0x01);
+      delayMs(150);
+      this.transport.command(0x11);
+      delayMs(120);
+      this.transport.command(0x3a, 0x55);
+      this.transport.command(0x36, rotationMadctl(this.rotation, this.bgr));
+      this.transport.command(this.inverted ? 0x21 : 0x20);
+      this.transport.command(0x13);
+      delayMs(10);
+      this.transport.command(0x29);
+      delayMs(100);
+      if (this.capabilities.backlight) {
+        this.transport.setBacklight(true);
+      }
+      this.state = "open";
       return this;
+    } catch (error) {
+      try {
+        this.transport.close();
+      } catch (cleanupError) {
+      }
+      this.state = "closed";
+      throw error;
     }
-    if (textLength > 0xffff) {
-      throw new Error("ST7789 batch drawText(x, y, text, options) text is too long");
-    }
-    if (this.textFont && this.textFont !== font) {
-      this.flush();
-    }
-    if (!this.textFont) {
-      this.textFont = font;
-    }
-    if (this.text.length + textLength > 0xffff) {
-      this.flush();
-      this.textFont = font;
-    }
-    textOffset = this.text.length;
-    this.text += encoded;
-    this.bytes.push(CMD_DRAW_TEXT);
-    pushI16(this.bytes, x);
-    pushI16(this.bytes, y);
-    pushU16(this.bytes, color);
-    pushU16(this.bytes, background);
-    pushU16(this.bytes, hasBackground ? CMD_TEXT_HAS_BACKGROUND : 0);
-    pushI16(this.bytes, clampTextSpacing(nativeOptions.spacing));
-    pushU16(this.bytes, textOffset);
-    pushU16(this.bytes, textLength);
-    return this;
   };
 
-  ST7789CommandBatch.prototype.measureText = function (text, style) {
-    return this.surface.measureText(text, style);
-  };
-
-  ST7789Display.prototype.beginBatch = function () {
-    if (!this.commandBufferEnabled ||
-        !this.nativeBuffer ||
-        typeof this.nativeBuffer.createCommandBuffer !== "function") {
-      return null;
-    }
-    if (!this.commandBuffer) {
-      this.commandBuffer = this.nativeBuffer.createCommandBuffer(this.commandBufferOptions);
-    } else {
-      this.commandBuffer.reset();
-    }
-    if (!this.commandBatch) {
-      this.commandBatch = new ST7789CommandBatch(this, this.commandBuffer);
-    }
-    return this.commandBatch.reset(this.commandBuffer);
-  };
-
-  ST7789Display.prototype.endBatch = function (batch) {
-    var nativeBatch = batch && batch.nativeBatch ? batch.nativeBatch : batch;
-
-    if (batch && typeof batch.flush === "function") {
-      batch.flush();
-    }
-    if (nativeBatch && typeof nativeBatch.replay === "function") {
-      nativeBatch.replay(this.nativeBuffer);
-    }
-    return this;
-  };
-
-  ST7789Display.prototype.clear = function (color) {
-    color = nativeDrawColor(this, color, this.background, "ST7789.clear(color)");
-    this.nativeBuffer.clear(color);
-    return this;
-  };
-
-  ST7789Display.prototype.fill = function (color) {
-    return this.clear(color);
-  };
-
-  ST7789Display.prototype.setPixel = function (x, y, color) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.setPixel(x, y, color)");
-    this.nativeBuffer.setPixel(x, y, color);
-    return this;
-  };
-
-  ST7789Display.prototype.getPixel = function (x, y) {
-    return this.nativeBuffer.getPixel(x, y);
-  };
-
-  ST7789Display.prototype.fillRect = function (x, y, width, height, color) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.fillRect(x, y, width, height, color)");
-    this.nativeBuffer.fillRect(x, y, width, height, color);
-    return this;
-  };
-
-  ST7789Display.prototype.drawCircle = function (cx, cy, radius, color) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawCircle(cx, cy, radius, color)");
-    this.nativeBuffer.drawCircle(cx, cy, radius, color);
-    return this;
-  };
-
-  ST7789Display.prototype.fillCircle = function (cx, cy, radius, color) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.fillCircle(cx, cy, radius, color)");
-    this.nativeBuffer.fillCircle(cx, cy, radius, color);
-    return this;
-  };
-
-  ST7789Display.prototype.drawEllipse = function (cx, cy, rx, ry, color, options) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawEllipse(cx, cy, rx, ry, color)");
-    this.nativeBuffer.drawEllipse(cx, cy, rx, ry, color, options);
-    return this;
-  };
-
-  ST7789Display.prototype.fillEllipse = function (cx, cy, rx, ry, color) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.fillEllipse(cx, cy, rx, ry, color)");
-    this.nativeBuffer.fillEllipse(cx, cy, rx, ry, color);
-    return this;
-  };
-
-  ST7789Display.prototype.drawLine = function (x0, y0, x1, y1, color) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawLine(x0, y0, x1, y1, color)");
-    this.nativeBuffer.drawLine(x0, y0, x1, y1, color);
-    return this;
-  };
-
-  ST7789Display.prototype.drawRect = function (x, y, width, height, color) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawRect(x, y, width, height, color)");
-    this.nativeBuffer.drawRect(x, y, width, height, color);
-    return this;
-  };
-
-  ST7789Display.prototype.drawRoundRect = function (x, y, width, height, radius, color) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawRoundRect(x, y, width, height, radius, color)");
-    this.nativeBuffer.drawRoundRect(x, y, width, height, radius, color);
-    return this;
-  };
-
-  ST7789Display.prototype.fillRoundRect = function (x, y, width, height, radius, color) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.fillRoundRect(x, y, width, height, radius, color)");
-    this.nativeBuffer.fillRoundRect(x, y, width, height, radius, color);
-    return this;
-  };
-
-  ST7789Display.prototype.fillPolygon = function (points, color) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.fillPolygon(points, color)");
-    this.nativeBuffer.fillPolygon(points, color);
-    return this;
-  };
-
-  ST7789Display.prototype.fillTriangle = function (x0, y0, x1, y1, x2, y2, color) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.fillTriangle(x0, y0, x1, y1, x2, y2, color)");
-    this.nativeBuffer.fillTriangle(x0, y0, x1, y1, x2, y2, color);
-    return this;
-  };
-
-  ST7789Display.prototype.drawPolyline = function (points, color) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawPolyline(points, color)");
-    this.nativeBuffer.drawPolyline(points, color);
-    return this;
-  };
-
-  ST7789Display.prototype.drawPolygon = function (points, color) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawPolygon(points, color)");
-    this.nativeBuffer.drawPolygon(points, color);
-    return this;
-  };
-
-  ST7789Display.prototype.drawTriangle = function (x0, y0, x1, y1, x2, y2, color) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawTriangle(x0, y0, x1, y1, x2, y2, color)");
-    this.nativeBuffer.drawTriangle(x0, y0, x1, y1, x2, y2, color);
-    return this;
-  };
-
-  ST7789Display.prototype.drawQuadraticBezier = function (x0, y0, cx, cy, x1, y1, color, options) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color)");
-    this.nativeBuffer.drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color, options);
-    return this;
-  };
-
-  ST7789Display.prototype.drawCubicBezier = function (x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options) {
-    color = nativeDrawColor(this, color, this.foreground, "ST7789.drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color)");
-    this.nativeBuffer.drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options);
-    return this;
-  };
-
-  ST7789Display.prototype.drawBitmap = function (x, y, bitmap, options) {
-    var style = styleOptions(options, "ST7789.drawBitmap(x, y, bitmap, options)");
-    var color = nativeDrawColor(this, style.color, this.foreground, "ST7789.drawBitmap(x, y, bitmap, options).color");
-    var nativeOptions = {
-      color: color
-    };
-
-    if (style.background !== undefined && style.background !== null) {
-      nativeOptions.background = nativeDrawColor(this, style.background, this.background, "ST7789 bitmap background");
-    } else if (style.background === null) {
-      nativeOptions.background = null;
-    }
-    this.nativeBuffer.drawBitmap(x, y, bitmap, nativeOptions);
-    return this;
-  };
-
-  ST7789Display.prototype.drawChar = function (x, y, ch, options) {
-    var style = styleOptions(options, "ST7789.drawChar(x, y, ch, options)");
-    var color = nativeDrawColor(this, style.color, this.foreground, "ST7789.drawChar(x, y, ch, options).color");
-    var nativeOptions;
-
-    nativeOptions = nativeTextOptions(this, style);
-    nativeOptions.color = color;
-    this.nativeBuffer.drawText(x, y, String(ch).charAt(0), nativeOptions);
-    return this;
-  };
-
-  ST7789Display.prototype.drawText = function (x, y, text, options) {
-    var style = styleOptions(options, "ST7789.drawText(x, y, text, options)");
-    var color = nativeDrawColor(this, style.color, this.foreground, "ST7789.drawText(x, y, text, options).color");
-    var nativeOptions;
-
-    nativeOptions = nativeTextOptions(this, style);
-    nativeOptions.color = color;
-    this.nativeBuffer.drawText(x, y, nativeText(text, style), nativeOptions);
-    return this;
-  };
-
-  ST7789Display.prototype.measureText = function (text, style) {
-    return this.nativeBuffer.measureText(nativeText(text, style), nativeTextOptions(this, style));
-  };
-
-  ST7789Display.prototype._writeCommand = function (command) {
-    this.commandByte[0] = command & 0xff;
-    writeGpio(this.dc, false);
-    this.device.write(this.commandByte);
-    return this;
-  };
-
-  ST7789Display.prototype._command = function (command, data) {
-    this._writeCommand(command);
-    data = toBytes(data);
-    if (data.length > 0) {
-      writeGpio(this.dc, true);
-      this.device.write(data);
-    }
-    return this;
-  };
-
-  ST7789Display.prototype._data = function (data) {
-    writeGpio(this.dc, true);
-    this.device.write(data);
-    return this;
-  };
-
-  ST7789Display.prototype._reset = function () {
-    if (typeof this.resetPin !== "number" || this.resetPin < 0) {
-      return this;
-    }
-    writeGpio(this.resetPin, true);
-    delayMs(10);
-    writeGpio(this.resetPin, false);
-    delayMs(20);
-    writeGpio(this.resetPin, true);
-    delayMs(120);
-    return this;
-  };
-
-  ST7789Display.prototype._setWindow = function (x, y, width, height) {
+  ST7789Driver.prototype.setWindow = function (x, y, width, height) {
     var x0 = this.columnOffset + (x | 0);
     var y0 = this.rowOffset + (y | 0);
     var x1 = x0 + (width | 0) - 1;
     var y1 = y0 + (height | 0) - 1;
-    var windowBytes = this.windowBytes;
+    var bytes = this.windowBytes;
 
-    windowBytes[0] = (x0 >> 8) & 0xff;
-    windowBytes[1] = x0 & 0xff;
-    windowBytes[2] = (x1 >> 8) & 0xff;
-    windowBytes[3] = x1 & 0xff;
-    this._command(0x2a, windowBytes);
+    bytes[0] = (x0 >> 8) & 0xff;
+    bytes[1] = x0 & 0xff;
+    bytes[2] = (x1 >> 8) & 0xff;
+    bytes[3] = x1 & 0xff;
+    this.transport.command(0x2a, bytes);
 
-    windowBytes[0] = (y0 >> 8) & 0xff;
-    windowBytes[1] = y0 & 0xff;
-    windowBytes[2] = (y1 >> 8) & 0xff;
-    windowBytes[3] = y1 & 0xff;
-    this._command(0x2b, windowBytes);
-
-    this._writeCommand(0x2c);
+    bytes[0] = (y0 >> 8) & 0xff;
+    bytes[1] = y0 & 0xff;
+    bytes[2] = (y1 >> 8) & 0xff;
+    bytes[3] = y1 & 0xff;
+    this.transport.command(0x2b, bytes);
+    this.transport.command(0x2c);
     return this;
   };
 
-  ST7789Display.prototype._makePixelPayload = function (x, y, width, rows) {
-    return this.nativeBuffer.readRect(x, y, width, rows, { byteOrder: "be" });
-  };
-
-  ST7789Display.prototype.init = function () {
-    configureOutput(this.dc, false, "dc");
-    configureOutput(this.resetPin, true, null);
-    configureOutput(this.backlightPin, !this.backlightActive, null);
-
-    this.bus = spi.openBus(this.busOptions);
-    this.device = this.bus.openDevice(this.deviceOptions);
-    this._reset();
-
-    this._command(0x01);
-    delayMs(150);
-    this._command(0x11);
-    delayMs(120);
-    this._command(0x3a, 0x55);
-    this._command(0x36, rotationMadctl(this.rotation, this.bgr));
-    this._command(this.inverted ? 0x21 : 0x20);
-    this._command(0x13);
-    delayMs(10);
-    this._command(0x29);
-    delayMs(100);
-    writeGpio(this.backlightPin, this.backlightActive);
-
-    this.ready = true;
-    return this.clear().flush();
-  };
-
-  ST7789Display.prototype.flush = function () {
-    return this.flushRect(0, 0, this.width, this.height);
-  };
-
-  ST7789Display.prototype.flushRects = function (rects, options) {
-    var list = [];
-    var rect;
-    var i;
-    var x0 = this.width;
-    var y0 = this.height;
-    var x1 = 0;
-    var y1 = 0;
-    var totalArea = 0;
-    var boundsArea;
-    var screenArea = this.width * this.height;
-    var merge = true;
-    var mergeCoverage = 0.72;
-    var mergeAreaRatio = 1.22;
-    var mergePixelBudget = this.width * 24;
-
-    if (!rects || typeof rects.length !== "number") {
-      return this.flush();
-    }
-    options = options || {};
-    if (own(options, "merge")) {
-      merge = options.merge !== false;
-    }
-    if (own(options, "mergeCoverage")) {
-      mergeCoverage = +options.mergeCoverage;
-    }
-    if (own(options, "mergeAreaRatio")) {
-      mergeAreaRatio = +options.mergeAreaRatio;
-    }
-    if (own(options, "mergePixelBudget")) {
-      mergePixelBudget = options.mergePixelBudget | 0;
-    }
-
-    for (i = 0; i < rects.length; i += 1) {
-      rect = flushRectFromValue(this, rects[i]);
-      if (!rect) {
-        continue;
-      }
-      list.push(rect);
-      totalArea += rect.area;
-      if (rect.x < x0) {
-        x0 = rect.x;
-      }
-      if (rect.y < y0) {
-        y0 = rect.y;
-      }
-      if (rect.x + rect.width > x1) {
-        x1 = rect.x + rect.width;
-      }
-      if (rect.y + rect.height > y1) {
-        y1 = rect.y + rect.height;
-      }
-    }
-
-    if (list.length === 0) {
-      return this;
-    }
-    if (list.length === 1) {
-      rect = list[0];
-      return this.flushRect(rect.x, rect.y, rect.width, rect.height);
-    }
-
-    boundsArea = (x1 - x0) * (y1 - y0);
-    if (merge &&
-        (totalArea >= screenArea * mergeCoverage ||
-         boundsArea <= totalArea * mergeAreaRatio ||
-         boundsArea - totalArea <= mergePixelBudget * (list.length - 1))) {
-      return this.flushRect(x0, y0, x1 - x0, y1 - y0);
-    }
-
-    for (i = 0; i < list.length; i += 1) {
-      rect = list[i];
-      this.flushRect(rect.x, rect.y, rect.width, rect.height);
-    }
-    return this;
-  };
-
-  ST7789Display.prototype.flushRect = function (x, y, width, height) {
-    var perf = this.perfEnabled ? this.perfStats : null;
-    var flushStartUs = 0;
-    var stepStartUs = 0;
-    var payload;
+  ST7789Driver.prototype.presentRegion = function (frame, rect, options) {
+    var metrics = options.metrics === true;
+    var timings = { prepareUs: 0, panelUs: 0, transferUs: 0 };
+    var started = metrics ? nowUs() : 0;
+    var step = started;
+    var spanSource;
     var chunks;
-    var rows;
-    var rowsPerChunk;
-    var endY;
-    var chunkStats;
+    var payload;
+    var result;
+    var transferStart;
+    var sourceOptions = { byteOrder: "be" };
+    var writeOptions = {
+      queueDepth: own(options, "queueDepth")
+        ? options.queueDepth
+        : this.transport.queueDepth
+    };
 
-    if (!this.ready) {
-      return this;
+    if (frame.chunkBytes > 0) {
+      sourceOptions.chunkBytes = frame.chunkBytes;
+    }
+    this.setWindow(rect.x, rect.y, rect.width, rect.height);
+    if (metrics && step !== 0) {
+      timings.panelUs = nowUs() - step;
+      step = nowUs();
     }
 
-    x = system.clampInt(x, 0, this.width);
-    y = system.clampInt(y, 0, this.height);
-    width = system.clampInt(width, 0, this.width - x);
-    height = system.clampInt(height, 0, this.height - y);
-    if (width <= 0 || height <= 0) {
-      return this;
+    spanSource = this.transport.capabilities && this.transport.capabilities.source
+      ? frame.getSpanSource(sourceOptions)
+      : null;
+    if (spanSource && typeof this.transport.writeSource === "function") {
+      spanSource.setRect(rect.x, rect.y, rect.width, rect.height);
+      if (metrics && step !== 0) {
+        timings.prepareUs = nowUs() - step;
+        transferStart = nowUs();
+      }
+      result = this.transport.writeSource(spanSource, writeOptions);
+    } else if (this.transport.capabilities && this.transport.capabilities.chunks &&
+               typeof this.transport.writeChunks === "function") {
+      sourceOptions.reuse = true;
+      chunks = frame.readRectChunks(
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        sourceOptions
+      );
+      if (metrics && step !== 0) {
+        timings.prepareUs = nowUs() - step;
+        transferStart = nowUs();
+      }
+      result = this.transport.writeChunks(chunks, writeOptions);
+    } else {
+      payload = frame.readRect(
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        sourceOptions
+      );
+      if (metrics && step !== 0) {
+        timings.prepareUs = nowUs() - step;
+        transferStart = nowUs();
+      }
+      this.transport.write(payload);
+      result = {
+        chunks: 1,
+        bytes: rect.width * rect.height * 2,
+        direct: false
+      };
     }
-
-    endY = y + height;
-    rowsPerChunk = Math.max(1, (this.chunkBytes / (width * 2)) | 0);
-    if (perf) {
-      flushStartUs = nowUs();
-      perf.flushCalls += 1;
+    if (metrics && transferStart) {
+      timings.transferUs = nowUs() - transferStart;
     }
-    if (this.device && this.flushSource && typeof this.device.writeSource === "function") {
-      if (perf) {
-        stepStartUs = nowUs();
-      }
-      this._setWindow(x, y, width, height);
-      if (perf) {
-        perf.windowUs += nowUs() - stepStartUs;
-        stepStartUs = nowUs();
-      }
-      this.flushSource.setRect(x, y, width, height);
-      if (perf) {
-        perf.pixelUs += nowUs() - stepStartUs;
-        stepStartUs = nowUs();
-      }
-      writeGpio(this.dc, true);
-      chunkStats = this.device.writeSource(this.flushSource, {
-        queueDepth: this.deviceOptions.queueSize
-      });
-      if (perf) {
-        perf.dataUs += nowUs() - stepStartUs;
-        perf.chunks += chunkStats.chunks || 0;
-        perf.pixels += width * height;
-        perf.bytes += chunkStats.bytes || width * height * 2;
-        if (chunkStats.direct) {
-          perf.directFlushes += 1;
-        }
-        perf.totalFlushUs += nowUs() - flushStartUs;
-      }
-      return this;
-    }
-    if (this.device && typeof this.device.writeChunks === "function") {
-      if (perf) {
-        stepStartUs = nowUs();
-      }
-      this._setWindow(x, y, width, height);
-      if (perf) {
-        perf.windowUs += nowUs() - stepStartUs;
-        stepStartUs = nowUs();
-      }
-      chunks = this.nativeBuffer.readRectChunks(x, y, width, height, {
-        byteOrder: "be",
-        chunkBytes: this.chunkBytes,
-        reuse: true
-      });
-      if (perf) {
-        perf.pixelUs += nowUs() - stepStartUs;
-        stepStartUs = nowUs();
-      }
-      writeGpio(this.dc, true);
-      chunkStats = this.device.writeChunks(chunks, {
-        queueDepth: this.deviceOptions.queueSize
-      });
-      if (perf) {
-        perf.dataUs += nowUs() - stepStartUs;
-        perf.chunks += chunkStats.chunks || chunks.length || 0;
-        perf.pixels += width * height;
-        perf.bytes += chunkStats.bytes || width * height * 2;
-        if (chunkStats.direct) {
-          perf.directFlushes += 1;
-        }
-        perf.totalFlushUs += nowUs() - flushStartUs;
-      }
-      return this;
-    }
-    for (; y < endY; y += rows) {
-      rows = Math.min(rowsPerChunk, endY - y);
-      if (perf) {
-        stepStartUs = nowUs();
-      }
-      this._setWindow(x, y, width, rows);
-      if (perf) {
-        perf.windowUs += nowUs() - stepStartUs;
-        stepStartUs = nowUs();
-      }
-      payload = this._makePixelPayload(x, y, width, rows);
-      if (perf) {
-        perf.pixelUs += nowUs() - stepStartUs;
-        stepStartUs = nowUs();
-      }
-      this._data(payload);
-      payload = null;
-      if (perf) {
-        perf.dataUs += nowUs() - stepStartUs;
-        perf.chunks += 1;
-        perf.pixels += width * rows;
-        perf.bytes += width * rows * 2;
-      }
-    }
-    if (perf) {
-      perf.totalFlushUs += nowUs() - flushStartUs;
-    }
-    return this;
-  };
-
-  ST7789Display.prototype.resetPerf = function () {
-    this.perfStats = newPerfStats();
-    return this;
-  };
-
-  ST7789Display.prototype.getPerf = function () {
-    var stats = this.perfStats || newPerfStats();
-
     return {
-      flushCalls: stats.flushCalls,
-      chunks: stats.chunks,
-      pixels: stats.pixels,
-      bytes: stats.bytes,
-      totalFlushUs: stats.totalFlushUs,
-      windowUs: stats.windowUs,
-      pixelUs: stats.pixelUs,
-      dataUs: stats.dataUs,
-      directFlushes: stats.directFlushes
+      result: result,
+      timings: timings,
+      totalUs: metrics && started !== 0 ? nowUs() - started : 0
     };
   };
 
-  ST7789Display.prototype.on = function () {
-    return this._command(0x29);
+  ST7789Driver.prototype.present = function (frame, regions, options) {
+    var started;
+    var regionResult;
+    var result = {
+      regions: 0,
+      pixels: 0,
+      bytes: 0,
+      chunks: 0,
+      directTransfers: 0,
+      totalUs: 0,
+      prepareUs: 0,
+      panelUs: 0,
+      transferUs: 0
+    };
+    var rect;
+    var i;
+
+    this.requireOpen("ST7789Driver.present()");
+    if (!frame || frame.pixelFormat !== "rgb565" || frame.layout !== "linear") {
+      throw new TypeError("ST7789Driver.present() requires an rgb565 linear frame");
+    }
+    options = options || {};
+    started = options.metrics === true ? nowUs() : 0;
+    for (i = 0; i < regions.length; i += 1) {
+      rect = regions[i];
+      regionResult = this.presentRegion(frame, rect, options);
+      addResult(result, regionResult.result, rect.width * rect.height,
+        regionResult.timings);
+    }
+    result.totalUs = started !== 0 ? nowUs() - started : 0;
+    this._stats.presents += 1;
+    this._stats.regions += result.regions;
+    this._stats.pixels += result.pixels;
+    this._stats.bytes += result.bytes;
+    this._stats.chunks += result.chunks;
+    this._stats.directTransfers += result.directTransfers;
+    this._stats.totalUs += result.totalUs;
+    this._stats.prepareUs += result.prepareUs;
+    this._stats.panelUs += result.panelUs;
+    this._stats.transferUs += result.transferUs;
+    return result;
   };
 
-  ST7789Display.prototype.off = function () {
-    return this._command(0x28);
-  };
-
-  ST7789Display.prototype.invert = function (enabled) {
-    this.inverted = enabled !== false;
-    return this._command(this.inverted ? 0x21 : 0x20);
-  };
-
-  ST7789Display.prototype.backlight = function (enabled) {
-    writeGpio(this.backlightPin, enabled !== false ? this.backlightActive : !this.backlightActive);
+  ST7789Driver.prototype.setPower = function (enabled) {
+    this.requireOpen("ST7789Driver.setPower()");
+    this.transport.command(enabled !== false ? 0x29 : 0x28);
     return this;
   };
 
-  ST7789Display.prototype.close = function () {
-    this.backlight(false);
-    if (this.device) {
-      this.device.close();
-      this.device = null;
+  ST7789Driver.prototype.setInverted = function (enabled) {
+    this.requireOpen("ST7789Driver.setInverted()");
+    this.inverted = enabled !== false;
+    this.transport.command(this.inverted ? 0x21 : 0x20);
+    return this;
+  };
+
+  ST7789Driver.prototype.setBacklight = function (enabled) {
+    this.requireOpen("ST7789Driver.setBacklight()");
+    if (!this.capabilities.backlight) {
+      throw new Error("ST7789 driver transport does not manage a backlight");
     }
-    if (this.bus) {
-      this.bus.close();
-      this.bus = null;
+    this.transport.setBacklight(enabled !== false);
+    return this;
+  };
+
+  ST7789Driver.prototype.stats = function () {
+    return copyStats(this._stats);
+  };
+
+  ST7789Driver.prototype.resetStats = function () {
+    this._stats = newStats();
+    return this;
+  };
+
+  ST7789Driver.prototype.close = function () {
+    var firstError = null;
+
+    if (this.state === "closed") {
+      return true;
     }
-    if (this.nativeBuffer) {
-      if (this.commandBuffer) {
-        this.commandBuffer.close();
-        this.commandBuffer = null;
-        this.commandBatch = null;
+    if (this.state === "open") {
+      if (this.capabilities.backlight) {
+        try {
+          this.transport.setBacklight(false);
+        } catch (error) {
+          firstError = error;
+        }
       }
-      this.flushSource = null;
-      this.nativeBuffer.close();
-      this.nativeBuffer = null;
+      try {
+        this.transport.command(0x28);
+      } catch (error2) {
+        if (!firstError) {
+          firstError = error2;
+        }
+      }
     }
-    this.ready = false;
+    try {
+      this.transport.close();
+    } catch (error3) {
+      if (!firstError) {
+        firstError = error3;
+      }
+    }
+    this.state = "closed";
+    if (firstError) {
+      throw firstError;
+    }
     return true;
   };
 
-  display.rgb565 = display.rgb565 || rgb565;
-  display.ST7789 = ST7789Display;
-  display.registerDriver("st7789", function (options) {
-    options = copyOptions(options);
-    options.driverName = "st7789";
-    return new ST7789Display(options);
+  display.drivers.register("st7789", function (options) {
+    return new ST7789Driver(options);
   });
-  display.registerDriver("wlk1501spi8p", function (options) {
-    options = copyOptions(options);
-    if (!own(options, "width")) {
-      options.width = 240;
-    }
-    if (!own(options, "height")) {
-      options.height = 240;
-    }
-    options.driverName = "wlk1501spi8p";
-    return new ST7789Display(options);
-  });
-
-  system.st7789Loaded = true;
+  system.ST7789Driver = ST7789Driver;
+  system.st7789DriverLoaded = true;
 })(globalThis);

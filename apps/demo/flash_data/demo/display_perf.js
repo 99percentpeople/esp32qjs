@@ -1,6 +1,7 @@
-load("_sys/display.js");
+load("_sys/display/wlk1501spi8p.js");
 
 var PERF = globalThis.displayPerfConfig || {};
+var owns = Object.prototype.hasOwnProperty;
 var TRANSFER_BYTES = PERF.transferBytes || 32768;
 var USE_BATCH = PERF.batch === true;
 var HUD_H = 58;
@@ -35,35 +36,59 @@ var BAR_COLORS = [
   COLORS.blue
 ];
 
-function makeDisplayOptions() {
-  var base = PERF.display || globalThis.displayConfig || {};
-  var options = {
-    driver: "wlk1501spi8p",
-    sclk: spi.DEFAULT_SCLK,
-    mosi: spi.DEFAULT_MOSI,
-    miso: -1,
-    cs: spi.DEFAULT_CS >= 0 ? spi.DEFAULT_CS : 2,
-    dc: 4,
-    reset: 5,
-    backlight: 6,
-    freqHz: PERF.freqHz || 80000000,
-    maxTransferSize: TRANSFER_BYTES,
-    chunkBytes: TRANSFER_BYTES,
-    perf: true,
-    foreground: COLORS.text,
-    background: COLORS.bg
-  };
+function mergeOptions(defaults, overrides) {
+  var result = {};
   var key;
 
-  for (key in base) {
-    if (Object.prototype.hasOwnProperty.call(base, key)) {
-      options[key] = base[key];
+  defaults = defaults || {};
+  overrides = overrides || {};
+  for (key in defaults) {
+    if (owns.call(defaults, key)) {
+      result[key] = defaults[key];
     }
+  }
+  for (key in overrides) {
+    if (owns.call(overrides, key)) {
+      result[key] = overrides[key];
+    }
+  }
+  return result;
+}
+
+function makeDisplayOptions() {
+  var base = PERF.display || globalThis.displayConfig || {};
+  var transport = base.transport || {};
+  var options = {
+    transport: {
+      busOptions: mergeOptions({ maxTransferSize: TRANSFER_BYTES }, transport.busOptions),
+      deviceOptions: mergeOptions({
+        freqHz: PERF.freqHz || 80000000,
+        queueSize: 2
+      }, transport.deviceOptions),
+      pins: mergeOptions({}, transport.pins)
+    },
+    driver: mergeOptions({}, base.driver),
+    surface: mergeOptions({
+      chunkBytes: TRANSFER_BYTES,
+      foreground: COLORS.text,
+      background: COLORS.bg
+    }, base.surface),
+    display: mergeOptions({ metrics: true }, base.display)
+  };
+
+  if (owns.call(transport, "bus")) {
+    options.transport.bus = transport.bus;
+  }
+  if (owns.call(transport, "device")) {
+    options.transport.device = transport.device;
+  }
+  if (owns.call(transport, "backlightActive")) {
+    options.transport.backlightActive = transport.backlightActive;
   }
   return options;
 }
 
-var screen = display.open(makeDisplayOptions());
+var screen = display.profiles.open("wlk1501spi8p", makeDisplayOptions());
 var info = esp32.info();
 var width = screen.width | 0;
 var height = screen.height | 0;
@@ -128,6 +153,7 @@ var latestShape = {
   triangleUs: 0
 };
 var lastBatch = false;
+var lastCommandStats = null;
 
 var MODES = [
   { name: "FULL", label: "FULL SCREEN", fullFlush: true },
@@ -260,9 +286,7 @@ function setMode(index) {
   partialLastBox = null;
   partialHudUs = 0;
   partialOverlayUs = 0;
-  if (screen.resetPerf) {
-    screen.resetPerf();
-  }
+  screen.resetStats();
   print("[display:perf]", "mode=" + activeMode().name);
 }
 
@@ -587,43 +611,33 @@ function drawGraph(surface, dirty) {
 }
 
 function flushRects(dirty, fullFlush, options) {
-  var i;
-
-  if (fullFlush || typeof screen.flushRect !== "function") {
+  if (fullFlush) {
     screen.flush();
     return;
   }
-  if (typeof screen.flushRects === "function") {
-    screen.flushRects(dirty, options);
-    return;
-  }
-  for (i = 0; i < dirty.length; i += 1) {
-    screen.flushRect(dirty[i].x, dirty[i].y, dirty[i].w, dirty[i].h);
-  }
+  screen.present(dirty, options);
 }
 
 function publish(nowUs) {
   var wallUs = nowUs - reportLastUs;
   var frames = reportFrames || 1;
-  var stats = screen.getPerf ? screen.getPerf() : null;
-  var commandStats = screen.commandBuffer && screen.commandBuffer.stats
-    ? screen.commandBuffer.stats()
-    : null;
+  var stats = screen.stats();
+  var commandStats = lastCommandStats;
 
   latest.fps = wallUs > 0 ? (reportFrames * 1000000) / wallUs : 0;
   latest.frameUs = reportFrameUs / frames;
   latest.drawUs = reportDrawUs / frames;
   latest.flushUs = reportFlushUs / frames;
   latest.maxFrameUs = reportMaxFrameUs;
-  latest.flushCalls = stats ? stats.flushCalls : 0;
-  latest.flushTotalUs = stats ? stats.totalFlushUs / frames : 0;
-  latest.windowUs = stats ? stats.windowUs / frames : 0;
-  latest.pixelUs = stats ? stats.pixelUs / frames : 0;
-  latest.dataUs = stats ? stats.dataUs / frames : 0;
-  latest.directFlushes = stats ? stats.directFlushes : 0;
-  latest.chunks = stats ? stats.chunks : 0;
-  latest.pixels = stats ? stats.pixels : 0;
-  latest.bytes = stats ? stats.bytes : 0;
+  latest.flushCalls = stats.presents;
+  latest.flushTotalUs = stats.totalUs / frames;
+  latest.windowUs = stats.panelUs / frames;
+  latest.pixelUs = stats.prepareUs / frames;
+  latest.dataUs = stats.transferUs / frames;
+  latest.directFlushes = stats.directTransfers;
+  latest.chunks = stats.chunks;
+  latest.pixels = stats.pixels;
+  latest.bytes = stats.bytes;
   latest.heap = esp32.freeHeap();
   latest.batch = lastBatch;
   latest.commandCount = lastBatch && commandStats ? commandStats.count : 0;
@@ -675,9 +689,7 @@ function publish(nowUs) {
   reportShapeCurveUs = 0;
   reportShapeTriangleUs = 0;
   reportLastUs = nowUs;
-  if (screen.resetPerf) {
-    screen.resetPerf();
-  }
+  screen.resetStats();
 }
 
 function drawFrame() {
@@ -699,7 +711,7 @@ function drawFrame() {
   }
 
   partialMode = mode.name === "PART";
-  if (shouldUseBatch(mode) && typeof screen.beginBatch === "function") {
+  if (shouldUseBatch(mode) && screen.supports("batch")) {
     batch = screen.beginBatch();
     if (batch) {
       surface = batch;
@@ -737,8 +749,11 @@ function drawFrame() {
     drawGraph(surface, dirty);
     partialOverlayUs = frameStartUs;
   }
-  if (batch && typeof screen.endBatch === "function") {
+  if (batch) {
     screen.endBatch(batch);
+    lastCommandStats = batch.stats();
+  } else {
+    lastCommandStats = null;
   }
   lastDrawUs = esp32.micros() - drawStartUs;
 
@@ -784,13 +799,9 @@ cjk12 = loadCjk(12);
 cjk16 = loadCjk(16);
 cjk24 = loadCjk(24);
 initHistory();
-if (screen.resetPerf) {
-  screen.resetPerf();
-}
-screen.perfEnabled = true;
+screen.resetStats();
 setMode(0);
-drawFrame();
-timer = setTimeout(runFrame, FRAME_DELAY_MS);
+timer = setTimeout(runFrame, 0);
 
 globalThis.displayPerf = {
   screen: screen,

@@ -16,7 +16,22 @@ if(NOT "${ESP32QJS_FLASH_DATA_DIR}" STREQUAL "")
     if(NOT IS_DIRECTORY "${ESP32QJS_FLASH_DATA_DIR}")
         message(FATAL_ERROR "ESP32QJS_FLASH_DATA_DIR does not exist: ${ESP32QJS_FLASH_DATA_DIR}")
     endif()
-    set(_esp32qjs_effective_flash_data_dir "${ESP32QJS_FLASH_DATA_DIR}")
+    if(ESP32QJS_FLASH_DATA_INCLUDE_SHARED)
+        if(NOT IS_DIRECTORY "${ESP32QJS_SHARED_FLASH_DATA_DIR}")
+            message(FATAL_ERROR
+                "ESP32QJS_SHARED_FLASH_DATA_DIR does not exist: ${ESP32QJS_SHARED_FLASH_DATA_DIR}")
+        endif()
+        set(_esp32qjs_effective_flash_data_dir
+            "${CMAKE_BINARY_DIR}/esp32qjs_flash_data/override")
+        file(REMOVE_RECURSE "${_esp32qjs_effective_flash_data_dir}")
+        file(MAKE_DIRECTORY "${_esp32qjs_effective_flash_data_dir}")
+        file(COPY "${ESP32QJS_SHARED_FLASH_DATA_DIR}/"
+             DESTINATION "${_esp32qjs_effective_flash_data_dir}")
+        file(COPY "${ESP32QJS_FLASH_DATA_DIR}/"
+             DESTINATION "${_esp32qjs_effective_flash_data_dir}")
+    else()
+        set(_esp32qjs_effective_flash_data_dir "${ESP32QJS_FLASH_DATA_DIR}")
+    endif()
 else()
     if(NOT IS_DIRECTORY "${ESP32QJS_SHARED_FLASH_DATA_DIR}")
         message(FATAL_ERROR

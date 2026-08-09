@@ -86,6 +86,10 @@ class RemoteConfigTests(unittest.TestCase):
             "CONFIG_ESP32_MQUICKJS_DEBUG_GC=y",
             REMOTE.JS_TEST_SDKCONFIG_DEFAULTS.read_text(),
         )
+        self.assertIn(
+            "-DESP32QJS_FLASH_DATA_INCLUDE_SHARED=ON",
+            test_config.cmake_cache_entries,
+        )
 
     def test_complete_flash_data_override_is_preserved(self):
         override = ROOT / "tests" / "js" / "flash_data"

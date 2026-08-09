@@ -1,0 +1,234 @@
+(function (global) {
+  var system = global.__displaySystemV2;
+  var display = global.display;
+
+  if (!system || system.i2cTransportLoaded) {
+    return;
+  }
+
+  function own(value, key) {
+    return system.own(value, key);
+  }
+
+  function nowUs() {
+    return global.esp32 && typeof global.esp32.micros === "function"
+      ? global.esp32.micros()
+      : 0;
+  }
+
+  function bytesWithPrefix(prefix, first, second) {
+    var result = [prefix & 0xff];
+    var values;
+    var i;
+
+    if (first !== undefined && first !== null) {
+      values = typeof first === "number" ? [first] : first;
+      for (i = 0; i < values.length; i += 1) {
+        result.push(values[i] & 0xff);
+      }
+    }
+    if (second !== undefined && second !== null) {
+      values = typeof second === "number" ? [second] : second;
+      for (i = 0; i < values.length; i += 1) {
+        result.push(values[i] & 0xff);
+      }
+    }
+    return result;
+  }
+
+  function newStats() {
+    return {
+      commands: 0,
+      writes: 0,
+      chunks: 0,
+      bytes: 0,
+      totalUs: 0
+    };
+  }
+
+  function copyStats(stats) {
+    return {
+      commands: stats.commands,
+      writes: stats.writes,
+      chunks: stats.chunks,
+      bytes: stats.bytes,
+      totalUs: stats.totalUs
+    };
+  }
+
+  function I2CTransport(options) {
+    options = system.assertKnownOptions(options || {}, [
+      "bus",
+      "busOptions",
+      "address",
+      "commandPrefix",
+      "dataPrefix"
+    ], "display.transports.create(\"i2c\", options)");
+    this.kind = "i2c";
+    this.state = "created";
+    this.suppliedBus = options.bus || null;
+    this.bus = null;
+    this.ownedBus = false;
+    this.busOptions = system.copyObject(options.busOptions || {});
+    this.address = own(options, "address") ? options.address | 0 : 0x3c;
+    this.commandPrefix = own(options, "commandPrefix") ? options.commandPrefix | 0 : 0x00;
+    this.dataPrefix = own(options, "dataPrefix") ? options.dataPrefix | 0 : 0x40;
+    if (this.address < 0x03 || this.address > 0x77) {
+      throw new RangeError("I2C display address must be in 0x03..0x77");
+    }
+    this.capabilities = {
+      chunks: true,
+      source: false,
+      reset: false,
+      backlight: false
+    };
+    this._stats = newStats();
+  }
+
+  I2CTransport.prototype.requireOpen = function (apiName) {
+    if (this.state !== "open" || !this.bus) {
+      throw new Error(apiName + " requires an open I2C display transport");
+    }
+    return this.bus;
+  };
+
+  I2CTransport.prototype.open = function () {
+    var status;
+
+    if (this.state === "open") {
+      return this;
+    }
+    if (this.state === "closed") {
+      throw new Error("cannot reopen a closed I2C display transport");
+    }
+    if (this.suppliedBus) {
+      if (typeof this.suppliedBus.status !== "function") {
+        throw new TypeError("I2C transport bus must be an I2CBus");
+      }
+      status = this.suppliedBus.status();
+      if (!status.opened) {
+        throw new Error("I2C transport received a closed bus");
+      }
+      this.bus = this.suppliedBus;
+      this.ownedBus = false;
+    } else {
+      if (!global.i2c || typeof global.i2c.open !== "function") {
+        throw new Error("I2C display transport requires the i2c module");
+      }
+      this.bus = global.i2c.open(this.busOptions);
+      this.ownedBus = true;
+    }
+    this.state = "open";
+    return this;
+  };
+
+  I2CTransport.prototype.command = function (command, data) {
+    var bus = this.requireOpen("I2CTransport.command()");
+    var payload = bytesWithPrefix(this.commandPrefix, command, data);
+    var started = nowUs();
+    var result = bus.write(this.address, payload);
+
+    this._stats.commands += 1;
+    this._stats.writes += 1;
+    this._stats.chunks += 1;
+    this._stats.bytes += payload.length;
+    if (started !== 0) {
+      this._stats.totalUs += nowUs() - started;
+    }
+    return this;
+  };
+
+  I2CTransport.prototype.write = function (data) {
+    var bus = this.requireOpen("I2CTransport.write()");
+    var payload = bytesWithPrefix(this.dataPrefix, data);
+    var started = nowUs();
+    var result = bus.write(this.address, payload);
+
+    this._stats.writes += 1;
+    this._stats.chunks += 1;
+    this._stats.bytes += payload.length;
+    if (started !== 0) {
+      this._stats.totalUs += nowUs() - started;
+    }
+    return result;
+  };
+
+  I2CTransport.prototype.writeChunks = function (chunks) {
+    var bus = this.requireOpen("I2CTransport.writeChunks()");
+    var payloads = [];
+    var bytes = 0;
+    var started = nowUs();
+    var result;
+    var i;
+
+    for (i = 0; i < chunks.length; i += 1) {
+      payloads.push(bytesWithPrefix(this.dataPrefix, chunks[i]));
+      bytes += payloads[payloads.length - 1].length;
+    }
+    result = typeof bus.writeChunks === "function"
+      ? bus.writeChunks(this.address, payloads)
+      : null;
+    if (!result) {
+      for (i = 0; i < payloads.length; i += 1) {
+        bus.write(this.address, payloads[i]);
+      }
+      result = { chunks: payloads.length, bytes: bytes };
+    }
+    this._stats.writes += 1;
+    this._stats.chunks += result.chunks || payloads.length;
+    this._stats.bytes += result.bytes || bytes;
+    if (started !== 0) {
+      this._stats.totalUs += nowUs() - started;
+    }
+    return result;
+  };
+
+  I2CTransport.prototype.writeSource = function () {
+    throw new Error("I2C display transport does not support span sources");
+  };
+
+  I2CTransport.prototype.reset = function () {
+    throw new Error("I2C display transport does not manage a reset pin");
+  };
+
+  I2CTransport.prototype.setBacklight = function () {
+    throw new Error("I2C display transport does not manage a backlight pin");
+  };
+
+  I2CTransport.prototype.stats = function () {
+    return copyStats(this._stats);
+  };
+
+  I2CTransport.prototype.resetStats = function () {
+    this._stats = newStats();
+    return this;
+  };
+
+  I2CTransport.prototype.close = function () {
+    var firstError = null;
+
+    if (this.state === "closed") {
+      return true;
+    }
+    if (this.bus && this.ownedBus) {
+      try {
+        this.bus.close();
+      } catch (error) {
+        firstError = error;
+      }
+    }
+    this.bus = null;
+    this.ownedBus = false;
+    this.state = "closed";
+    if (firstError) {
+      throw firstError;
+    }
+    return true;
+  };
+
+  display.transports.register("i2c", function (options) {
+    return new I2CTransport(options);
+  });
+  system.I2CTransport = I2CTransport;
+  system.i2cTransportLoaded = true;
+})(globalThis);

@@ -1,6 +1,12 @@
 declare global {
 namespace ESP32QJS {
-  type ColorValue = boolean | number | null | undefined;
+  interface RGBColor {
+    r?: number;
+    g?: number;
+    b?: number;
+  }
+
+  type ColorValue = number | RGBColor | null | undefined;
 
   interface Point {
     x: number;
@@ -25,6 +31,8 @@ namespace ESP32QJS {
 
   interface DisplayFont {
     name: string;
+    map?: Record<string, number>;
+    fallbackCode?: number;
     width: number;
     height: number;
     advance: number;
@@ -36,14 +44,27 @@ namespace ESP32QJS {
     load(size: string | number, name?: string): DisplayFont;
   }
 
-  /**
-   * Base display surface options.
-   */
+  interface SurfaceMetadata {
+    width: number;
+    height: number;
+    pixelFormat: DisplayBufferFormat;
+    layout?: DisplayBufferLayout;
+  }
+
+  interface SurfaceCommandBufferOptions {
+    commandCapacity?: number;
+    textBytes?: number;
+  }
+
+  /** Hardware-independent framebuffer options. */
   interface SurfaceOptions {
-    driver?: string;
-    width?: number;
-    height?: number;
-    pixelFormat?: string;
+    storage?: DisplayBufferStorage;
+    fallbackStorage?: DisplayBufferStorage;
+    chunkBytes?: number;
+    foreground?: ColorValue;
+    background?: ColorValue;
+    spacing?: number;
+    commandBuffer?: boolean | SurfaceCommandBufferOptions;
   }
 
   /**
@@ -77,16 +98,20 @@ namespace ESP32QJS {
     segments?: number;
   }
 
-  interface DisplayPerformanceStats {
-    flushCalls: number;
-    chunks: number;
+  interface DisplayStats {
+    enabled: boolean;
+    presents: number;
+    regions: number;
     pixels: number;
     bytes: number;
-    totalFlushUs: number;
-    windowUs: number;
-    pixelUs: number;
-    dataUs: number;
-    directFlushes: number;
+    chunks: number;
+    directTransfers: number;
+    totalUs: number;
+    prepareUs: number;
+    panelUs: number;
+    transferUs: number;
+    driver: Record<string, unknown>;
+    transport: Record<string, unknown>;
   }
 
   /**
@@ -120,21 +145,213 @@ namespace ESP32QJS {
     flush(): this;
   }
 
-  /**
-   * Base display surface. Concrete drivers implement drawing methods.
-   */
+  type DisplayObjectState = "created" | "opening" | "open" | "closing" | "closed";
+
+  interface DisplayTransportCapabilities {
+    chunks: boolean;
+    source: boolean;
+    reset: boolean;
+    backlight: boolean;
+  }
+
+  interface DisplayTransport {
+    readonly kind: string;
+    state: DisplayObjectState;
+    readonly capabilities: DisplayTransportCapabilities;
+    open(): this;
+    command(command: number | ArrayLike<number>, data?: ByteSource): unknown;
+    write(data: ByteSource): unknown;
+    writeChunks?(chunks: ArrayLike<ByteSource>, options?: SPIWriteOptions): SPIWriteStats | I2CWriteChunksStats;
+    writeSource?(source: ByteSpanSource, options?: SPIWriteOptions): SPIWriteStats;
+    reset?(): this;
+    setBacklight?(enabled: boolean): this;
+    stats(): Record<string, unknown>;
+    resetStats(): this;
+    close(): boolean;
+  }
+
+  interface I2CDisplayTransportOptions {
+    bus?: I2CBus;
+    busOptions?: I2COpenOptions;
+    address?: number;
+    commandPrefix?: number;
+    dataPrefix?: number;
+  }
+
+  interface SPI4WirePins {
+    dc: number;
+    reset?: number;
+    backlight?: number;
+  }
+
+  interface SPI4WireDisplayTransportOptions {
+    bus?: SPIBus;
+    device?: SPIDevice;
+    busOptions?: SPIOpenBusOptions;
+    deviceOptions?: SPIOpenDeviceOptions;
+    pins: SPI4WirePins;
+    backlightActive?: boolean;
+  }
+
+  type DisplayTransportFactory = (options?: Record<string, unknown>) => DisplayTransport;
+
+  interface DisplayTransportRegistry {
+    register(name: string, factory: DisplayTransportFactory): this;
+    has(name: string): boolean;
+    list(): string[];
+    create(name: "i2c", options: I2CDisplayTransportOptions): DisplayTransport;
+    create(name: "spi4wire", options: SPI4WireDisplayTransportOptions): DisplayTransport;
+    create(name: string, options?: Record<string, unknown>): DisplayTransport;
+  }
+
+  interface PanelDriverCapabilities {
+    partialPresent: boolean;
+    multiRegion: boolean;
+    power: boolean;
+    inversion: boolean;
+    contrast: boolean;
+    backlight: boolean;
+  }
+
+  interface DisplayFrameSource {
+    readonly width: number;
+    readonly height: number;
+    readonly pixelFormat: string;
+    readonly layout: string;
+    readonly chunkBytes: number;
+    readRect(x: number, y: number, width: number, height: number, options?: DisplayBufferReadRectOptions): ByteView;
+    readRectChunks(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      options?: DisplayBufferReadRectChunksOptions,
+    ): ByteView[];
+    getSpanSource(options?: DisplaySpanSourceOptions): DisplayBufferSpanSource | null;
+  }
+
+  interface DisplayPresentResult {
+    regions?: number;
+    pixels?: number;
+    bytes?: number;
+    chunks?: number;
+    directTransfers?: number;
+    direct?: boolean;
+    totalUs?: number;
+    prepareUs?: number;
+    panelUs?: number;
+    transferUs?: number;
+  }
+
+  interface DisplayPresentOptions {
+    merge?: boolean;
+    mergeCoverage?: number;
+    mergeAreaRatio?: number;
+    mergePixelBudget?: number;
+    queueDepth?: number;
+    metrics?: boolean;
+  }
+
+  interface PanelDriver {
+    readonly name: string;
+    readonly transport: DisplayTransport;
+    readonly width: number;
+    readonly height: number;
+    readonly pixelFormat: DisplayBufferFormat;
+    readonly layout: DisplayBufferLayout;
+    readonly byteOrder: string;
+    readonly capabilities: PanelDriverCapabilities;
+    state: DisplayObjectState;
+    open(): this;
+    present(
+      frame: DisplayFrameSource,
+      regions: ArrayLike<Rect>,
+      options?: DisplayPresentOptions,
+    ): DisplayPresentResult;
+    setPower?(enabled: boolean): this;
+    setInverted?(enabled: boolean): this;
+    setContrast?(value: number): this;
+    setBacklight?(enabled: boolean): this;
+    stats?(): Record<string, unknown>;
+    resetStats?(): this;
+    close(): boolean;
+  }
+
+  interface SSD1306DriverOptions {
+    transport: DisplayTransport;
+    width?: number;
+    height?: number;
+  }
+
+  interface ST7789DriverOptions {
+    transport: DisplayTransport;
+    width?: number;
+    height?: number;
+    columnOffset?: number;
+    rowOffset?: number;
+    rotation?: number;
+    bgr?: boolean;
+    inverted?: boolean;
+  }
+
+  type PanelDriverFactory = (options?: Record<string, unknown>) => PanelDriver;
+
+  interface PanelDriverRegistry {
+    register(name: string, factory: PanelDriverFactory): this;
+    has(name: string): boolean;
+    list(): string[];
+    create(name: "ssd1306", options: SSD1306DriverOptions): PanelDriver;
+    create(name: "st7789", options: ST7789DriverOptions): PanelDriver;
+    create(name: string, options?: Record<string, unknown>): PanelDriver;
+  }
+
+  interface SPI4WireProfileTransportOptions {
+    bus?: SPIBus;
+    device?: SPIDevice;
+    busOptions?: SPIOpenBusOptions;
+    deviceOptions?: SPIOpenDeviceOptions;
+    pins?: Partial<SPI4WirePins>;
+    backlightActive?: boolean;
+  }
+
+  interface WLK1501SPI8PProfileOptions {
+    transport?: SPI4WireProfileTransportOptions;
+    driver?: Omit<ST7789DriverOptions, "transport">;
+    surface?: SurfaceOptions;
+    display?: Omit<DisplayOptions, "surface" | "profileName">;
+  }
+
+  type DisplayProfileFactory = (
+    options?: Record<string, unknown>,
+  ) => { driver: PanelDriver; options?: DisplayOptions } | Display;
+
+  interface DisplayProfileRegistry {
+    register(name: string, factory: DisplayProfileFactory): this;
+    has(name: string): boolean;
+    list(): string[];
+    create(name: "wlk1501spi8p", options?: WLK1501SPI8PProfileOptions): Display;
+    create(name: string, options?: Record<string, unknown>): Display;
+    open(name: "wlk1501spi8p", options?: WLK1501SPI8PProfileOptions): Display;
+    open(name: string, options?: Record<string, unknown>): Display;
+  }
+
+  /** Hardware-independent renderer around one native DisplayBuffer. */
   class Surface {
-    constructor(options?: SurfaceOptions);
-    driver: string;
-    width: number;
-    height: number;
-    pixelFormat: string;
+    constructor(metadata: SurfaceMetadata, options?: SurfaceOptions);
+    readonly width: number;
+    readonly height: number;
+    readonly pixelFormat: string;
+    readonly layout: string;
+    readonly foreground: number;
+    readonly background: number;
+    readonly spacing: number;
+    readonly chunkBytes: number;
+    readonly frame: DisplayFrameSource;
+    readonly nativeBuffer: DisplayBuffer;
+    readonly commandBuffer: DisplayCommandBuffer | null;
+    readonly commandBufferEnabled: boolean;
     ready: boolean;
-    perfEnabled?: boolean;
-    perf?: DisplayPerformanceStats;
-    commandBuffer?: DisplayCommandBuffer | null;
-    resetPerf?(): this;
-    getPerf?(): DisplayPerformanceStats;
+    closed: boolean;
     clear(color?: ColorValue): this;
     fill(color?: ColorValue): this;
     setPixel(x: number, y: number, color?: ColorValue): this;
@@ -239,53 +456,107 @@ namespace ESP32QJS {
     drawBitmap(x: number, y: number, bitmap: Bitmap, options?: BitmapStyle): this;
     drawChar(x: number, y: number, ch: string, options?: TextStyle): this;
     drawText(x: number, y: number, text: string, options?: TextStyle): this;
-    init(): this;
-    close(): boolean;
-    beginBatch?(options?: unknown): SurfaceBatch | null;
-    endBatch?(batch: SurfaceBatch, dirty?: Rect | null): this;
-    flush(): this;
-    flushRect?(x: number, y: number, width: number, height: number): this;
-    flushRects?(
-      rects: ArrayLike<Rect | [number, number, number, number]>,
-      options?: { merge?: boolean },
-    ): this;
+    getDirty(): Rect | null;
+    clearDirty(): this;
+    markDirty(x: number, y: number, width: number, height: number): this;
+    beginBatch(options?: unknown): SurfaceBatch | null;
+    endBatch(batch: SurfaceBatch): this;
     measureText(text: string, style?: TextStyle): TextMetrics;
+    close(): boolean;
   }
 
-  /**
-   * Display creation options shared by the JS display helpers.
-   */
-  interface DisplayOpenOptions extends I2COpenOptions {
-    driver: string;
-    address?: number;
-    width?: number;
-    height?: number;
-    spacing?: number;
-    [key: string]: unknown;
+  type DisplayCapability =
+    | "partialPresent"
+    | "multiRegion"
+    | "power"
+    | "inversion"
+    | "contrast"
+    | "backlight"
+    | "batch"
+    | "directSource";
+
+  interface DisplayOptions {
+    surface?: SurfaceOptions;
+    present?: DisplayPresentOptions;
+    metrics?: boolean;
+    profileName?: string;
   }
 
-  type DisplayDriverFactory<T extends Surface = Surface> = (
-    options: DisplayOpenOptions,
-  ) => T;
+  type DisplayRectInput = Rect | [number, number, number, number];
 
-  /**
-   * Display helper module loaded from `_sys/display.js`.
-   *
-   * @example
-   * ```js
-   * load("_sys/display.js");
-   * var oled = display.open({ driver: "ssd1306", sda: 5, scl: 6, address: 0x3c });
-   * oled.drawText(0, 0, "HELLO");
-   * oled.flush();
-   * ```
-   */
+  /** Public drawing facade composed from a Surface and PanelDriver. */
+  class Display {
+    constructor(driver: PanelDriver, options?: DisplayOptions);
+    readonly driver: PanelDriver;
+    readonly driverName: string;
+    readonly profileName: string | null;
+    readonly surface: Surface;
+    readonly width: number;
+    readonly height: number;
+    readonly pixelFormat: string;
+    readonly foreground: number;
+    readonly background: number;
+    readonly capabilities: Record<DisplayCapability, boolean>;
+    state: DisplayObjectState;
+    ready: boolean;
+    open(): this;
+    close(): boolean;
+    clear(color?: ColorValue): this;
+    fill(color?: ColorValue): this;
+    setPixel(x: number, y: number, color?: ColorValue): this;
+    getPixel(x: number, y: number): number;
+    fillRect(x: number, y: number, width: number, height: number, color?: ColorValue): this;
+    drawLine(x0: number, y0: number, x1: number, y1: number, color?: ColorValue): this;
+    drawRect(x: number, y: number, width: number, height: number, color?: ColorValue): this;
+    drawCircle(cx: number, cy: number, radius: number, color?: ColorValue): this;
+    fillCircle(cx: number, cy: number, radius: number, color?: ColorValue): this;
+    drawEllipse(cx: number, cy: number, rx: number, ry: number, color?: ColorValue, options?: CurveOptions): this;
+    fillEllipse(cx: number, cy: number, rx: number, ry: number, color?: ColorValue): this;
+    drawRoundRect(x: number, y: number, width: number, height: number, radius: number, color?: ColorValue): this;
+    fillRoundRect(x: number, y: number, width: number, height: number, radius: number, color?: ColorValue): this;
+    drawPolyline(points: PointList, color?: ColorValue): this;
+    drawPolygon(points: PointList, color?: ColorValue): this;
+    fillPolygon(points: PointList, color?: ColorValue): this;
+    drawTriangle(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, color?: ColorValue): this;
+    fillTriangle(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, color?: ColorValue): this;
+    drawQuadraticBezier(x0: number, y0: number, cx: number, cy: number, x1: number, y1: number, color?: ColorValue, options?: CurveOptions): this;
+    drawCubicBezier(x0: number, y0: number, c1x: number, c1y: number, c2x: number, c2y: number, x1: number, y1: number, color?: ColorValue, options?: CurveOptions): this;
+    drawBitmap(x: number, y: number, bitmap: Bitmap, options?: BitmapStyle): this;
+    drawChar(x: number, y: number, ch: string, options?: TextStyle): this;
+    drawText(x: number, y: number, text: string, options?: TextStyle): this;
+    measureText(text: string, style?: TextStyle): TextMetrics;
+    beginBatch(options?: unknown): SurfaceBatch | null;
+    endBatch(batch: SurfaceBatch): this;
+    present(
+      regions?: DisplayRectInput | ArrayLike<DisplayRectInput>,
+      options?: DisplayPresentOptions,
+    ): this;
+    flush(): this;
+    flushRect(x: number, y: number, width: number, height: number): this;
+    flushRects(
+      regions: ArrayLike<DisplayRectInput>,
+      options?: DisplayPresentOptions,
+    ): this;
+    supports(capability: DisplayCapability | string): boolean;
+    setPower(enabled: boolean): this;
+    setInverted(enabled: boolean): this;
+    setContrast(value: number): this;
+    setBacklight(enabled: boolean): this;
+    stats(): DisplayStats;
+    resetStats(): this;
+  }
+
+  /** Layered display helper module loaded from `_sys/display.js`. */
   interface DisplayModule {
-    readonly VERSION: string;
+    readonly VERSION: "0.5.0";
     __loaded: boolean;
-    ST7789?: Function;
-    readonly Surface: typeof Surface;
-    readonly fonts: Record<string, DisplayFont>;
-    readonly defaultFont: DisplayFont;
+    Display: typeof Display;
+    Surface: typeof Surface;
+    readonly transports: DisplayTransportRegistry;
+    readonly drivers: PanelDriverRegistry;
+    readonly profiles: DisplayProfileRegistry;
+    fonts: Record<string, DisplayFont>;
+    defaultFont: DisplayFont;
     mono1(value: number): number;
     gray4(value: number): number;
     gray8(value: number): number;
@@ -297,13 +568,8 @@ namespace ESP32QJS {
     loadFont(path: string, name?: string): DisplayFont;
     loadFontSet(path: string): DisplayFontSet;
     loadMappedFont(path: string, size: string | number, name?: string): DisplayFont;
-    listDrivers(): string[];
-    registerDriver<T extends Surface = Surface>(
-      name: string,
-      factory: DisplayDriverFactory<T>,
-    ): this;
-    create<T extends Surface = Surface>(options: DisplayOpenOptions): T;
-    open<T extends Surface = Surface>(options: DisplayOpenOptions): T;
+    create(driver: PanelDriver, options?: DisplayOptions): Display;
+    open(driver: PanelDriver, options?: DisplayOptions): Display;
   }
 
   /** Insets used by the UI helpers. */
@@ -474,7 +740,7 @@ namespace ESP32QJS {
   }
 
   interface UIContext {
-    surface: Surface;
+    surface: Display;
     focusedId: string | null;
     focusVisible: boolean;
     editingId: string | null;
@@ -494,10 +760,10 @@ namespace ESP32QJS {
       [name: string]: Required<UITheme>;
     };
     input(input?: UIInput): UIInput;
-    begin(surface: Surface, options?: UIFrameOptions): UIContext;
+    begin(surface: Display, options?: UIFrameOptions): UIContext;
     endFrame(): UIContext;
     frame(
-      surface: Surface,
+      surface: Display,
       render: (context: UIContext) => void,
       options?: UIFrameOptions,
     ): UIContext;

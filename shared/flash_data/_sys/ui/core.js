@@ -1330,8 +1330,10 @@
     var clear;
     var clearColor;
 
-    if (!surface || typeof surface !== "object") {
-      throw new Error("ui.begin(surface) expects a display surface");
+    if (!surface || typeof surface !== "object" ||
+        typeof surface.present !== "function" ||
+        typeof surface.supports !== "function") {
+      throw new Error("ui.begin(display) expects an open display.Display");
     }
     if (activeContext) {
       throw new Error("ui.endFrame() must be called before starting another UI frame");
@@ -1353,7 +1355,7 @@
     context.flush = options.flush !== false;
     context.dirtyFlushOptions = dirtyFlushOptions(surface, options);
     context.gcBeforeFlush = options.gcBeforeFlush !== false;
-    context.draw = options.batch === false || typeof surface.beginBatch !== "function"
+    context.draw = options.batch === false || !surface.supports("batch")
       ? surface
       : (surface.beginBatch(options.batch) || surface);
     context.theme = resolveTheme(surface, options.theme);
@@ -1408,7 +1410,7 @@
       activeContext = null;
       throw new Error("ui.end() is missing for an open layout");
     }
-    if (context.draw !== surface && typeof surface.endBatch === "function") {
+    if (context.draw !== surface) {
       surface.endBatch(context.draw, dirty);
     }
     if (context.flush && dirty) {
@@ -1419,13 +1421,11 @@
           typeof global.gc === "function") {
         global.gc();
       }
-      if (context.partial && typeof surface.flushRects === "function") {
+      if (context.partial && surface.supports("partialPresent")) {
         flushRects = resolveDirtyFlushRects(context, dirty, dirtyRects);
-        surface.flushRects(flushRects, {
+        surface.present(flushRects, {
           merge: false
         });
-      } else if (context.partial && typeof surface.flushRect === "function") {
-        surface.flushRect(dirty.x, dirty.y, dirty.width, dirty.height);
       } else {
         surface.flush();
       }

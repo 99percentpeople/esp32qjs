@@ -1,4 +1,4 @@
-load("_sys/display.js");
+load("_sys/display/wlk1501spi8p.js");
 load("_sys/ui.js");
 load("_sys/ui/control.js");
 load("_sys/ui/fps.js");
@@ -11,35 +11,56 @@ function own(obj, key) {
   return obj !== null && obj !== undefined && owns.call(obj, key);
 }
 
-function makeDisplayOptions() {
-  var base = CONFIG.display || globalThis.displayConfig || {};
-  var options = {
-    driver: "wlk1501spi8p",
-    sclk: spi.DEFAULT_SCLK,
-    mosi: spi.DEFAULT_MOSI,
-    miso: -1,
-    cs: spi.DEFAULT_CS >= 0 ? spi.DEFAULT_CS : 2,
-    dc: 4,
-    reset: 5,
-    backlight: 6,
-    freqHz: CONFIG.freqHz || 80000000,
-    maxTransferSize: TRANSFER_BYTES,
-    chunkBytes: TRANSFER_BYTES
-  };
+function mergeOptions(defaults, overrides) {
+  var result = {};
   var key;
 
-  for (key in base) {
-    if (Object.prototype.hasOwnProperty.call(base, key)) {
-      options[key] = base[key];
+  defaults = defaults || {};
+  overrides = overrides || {};
+  for (key in defaults) {
+    if (own(defaults, key)) {
+      result[key] = defaults[key];
     }
   }
-  if (CONFIG.queueSize !== undefined) {
-    options.queueSize = CONFIG.queueSize;
+  for (key in overrides) {
+    if (own(overrides, key)) {
+      result[key] = overrides[key];
+    }
+  }
+  return result;
+}
+
+function makeDisplayOptions() {
+  var base = CONFIG.display || globalThis.displayConfig || {};
+  var transport = base.transport || {};
+  var deviceDefaults = {
+    freqHz: CONFIG.freqHz || 80000000,
+    queueSize: CONFIG.queueSize === undefined ? 2 : CONFIG.queueSize
+  };
+  var options = {
+    transport: {
+      busOptions: mergeOptions({ maxTransferSize: TRANSFER_BYTES }, transport.busOptions),
+      deviceOptions: mergeOptions(deviceDefaults, transport.deviceOptions),
+      pins: mergeOptions({}, transport.pins)
+    },
+    driver: mergeOptions({}, base.driver),
+    surface: mergeOptions({ chunkBytes: TRANSFER_BYTES }, base.surface),
+    display: mergeOptions({ metrics: true }, base.display)
+  };
+
+  if (own(transport, "bus")) {
+    options.transport.bus = transport.bus;
+  }
+  if (own(transport, "device")) {
+    options.transport.device = transport.device;
+  }
+  if (own(transport, "backlightActive")) {
+    options.transport.backlightActive = transport.backlightActive;
   }
   return options;
 }
 
-var screen = display.open(makeDisplayOptions());
+var screen = display.profiles.open("wlk1501spi8p", makeDisplayOptions());
 var wifiEnabled = true;
 var showFps = true;
 var brightness = 45;
@@ -375,9 +396,7 @@ function benchmark(count, options) {
     clearTimeout(timer);
     timer = null;
   }
-  if (screen.resetPerf) {
-    screen.resetPerf();
-  }
+  screen.resetStats();
   startUs = nowUs();
   for (i = 0; i < count; i += 1) {
     drawFrame(options);
@@ -432,9 +451,9 @@ function benchmark(count, options) {
         afterRowUs: panelSums.afterRowUs / count
       }
     },
-    perf: screen.getPerf ? screen.getPerf() : null,
-    command: screen.commandBuffer && screen.commandBuffer.stats
-      ? screen.commandBuffer.stats()
+    perf: screen.stats(),
+    command: screen.surface.commandBuffer && screen.surface.commandBuffer.stats
+      ? screen.surface.commandBuffer.stats()
       : null
   };
 }
@@ -470,8 +489,7 @@ globalThis.uiDemo = {
   }
 };
 
-drawFrame();
-timer = setTimeout(runFrame, frameDelayMs);
+timer = setTimeout(runFrame, 0);
 print("[ui:demo] running",
       "press=ui.control.press(\"down\")",
       "encoder=ui.control.encoder(1)",

@@ -29,7 +29,9 @@ set(ESP32QJS_SHARED_FLASH_DATA_DIR "${CMAKE_SOURCE_DIR}/shared/flash_data" CACHE
 set(ESP32QJS_APP_FLASH_DATA_DIR "${CMAKE_SOURCE_DIR}/apps/${ESP32QJS_APP}/flash_data" CACHE PATH
     "Selected application files overlaid onto the LittleFS image")
 set(ESP32QJS_FLASH_DATA_DIR "" CACHE PATH
-    "Optional complete LittleFS source override (used by tests and compatibility workflows)")
+    "Optional LittleFS source override (used by tests and compatibility workflows)")
+set(ESP32QJS_FLASH_DATA_INCLUDE_SHARED OFF CACHE BOOL
+    "Overlay a LittleFS override onto shared framework resources")
 
 set(_esp32qjs_flash_data_files)
 foreach(_esp32qjs_flash_data_dir

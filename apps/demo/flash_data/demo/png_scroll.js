@@ -1,4 +1,4 @@
-load("_sys/display.js");
+load("_sys/display/st7789.js");
 
 (function (global) {
   if (global.pngScrollDemo && typeof global.pngScrollDemo.stop === "function") {
@@ -16,38 +16,86 @@ load("_sys/display.js");
     return Object.prototype.hasOwnProperty.call(CONFIG, name) ? CONFIG[name] : fallback;
   }
 
+  function mergeOptions(defaults, overrides) {
+    var result = {};
+    var key;
+
+    defaults = defaults || {};
+    overrides = overrides || {};
+    for (key in defaults) {
+      if (Object.prototype.hasOwnProperty.call(defaults, key)) {
+        result[key] = defaults[key];
+      }
+    }
+    for (key in overrides) {
+      if (Object.prototype.hasOwnProperty.call(overrides, key)) {
+        result[key] = overrides[key];
+      }
+    }
+    return result;
+  }
+
   function makeDisplayOptions() {
-    var defaults = {
-      driver: option("driver", "st7789"),
-      spi: option("spi", 2),
-      sclk: option("sclk", 7),
-      mosi: option("mosi", 9),
-      cs: option("cs", 44),
-      dc: option("dc", 8),
-      reset: option("reset", -1),
-      backlight: option("backlight", -1),
-      width: option("width", 240),
-      height: option("height", 240),
-      rotation: option("rotation", 0),
-      speed: option("speed", 40000000),
+    var base = CONFIG.display || {};
+    var transport = base.transport || {};
+    var transferBytes = option("maxTransferSize", 16384);
+    var options = {
+      transport: {
+        busOptions: mergeOptions({
+          host: option("spi", spi.DEFAULT_HOST),
+          sclk: option("sclk", 7),
+          mosi: option("mosi", 9),
+          miso: option("miso", -1),
+          maxTransferSize: transferBytes
+        }, transport.busOptions),
+        deviceOptions: mergeOptions({
+          cs: option("cs", 44),
+          mode: 0,
+          freqHz: option("speed", 40000000),
+          queueSize: option("queueSize", 2)
+        }, transport.deviceOptions),
+        pins: mergeOptions({
+          dc: option("dc", 8),
+          reset: option("reset", -1),
+          backlight: option("backlight", -1)
+        }, transport.pins)
+      },
+      driver: mergeOptions({
+        width: option("width", 240),
+        height: option("height", 240),
+        rotation: option("rotation", 0)
+      }, base.driver),
+      surface: mergeOptions({
+        storage: "dma",
+        fallbackStorage: "auto",
+        chunkBytes: option("chunkBytes", transferBytes)
+      }, base.surface),
+      display: mergeOptions({ metrics: true }, base.display)
     };
 
-    if (CONFIG.display) {
-      var displayOptions = { driver: defaults.driver };
-      for (var key in defaults) {
-        if (Object.prototype.hasOwnProperty.call(defaults, key)) {
-          displayOptions[key] = defaults[key];
-        }
-      }
-      for (var userKey in CONFIG.display) {
-        if (Object.prototype.hasOwnProperty.call(CONFIG.display, userKey)) {
-          displayOptions[userKey] = CONFIG.display[userKey];
-        }
-      }
-      return displayOptions;
+    if (Object.prototype.hasOwnProperty.call(transport, "bus")) {
+      options.transport.bus = transport.bus;
     }
+    if (Object.prototype.hasOwnProperty.call(transport, "device")) {
+      options.transport.device = transport.device;
+    }
+    if (Object.prototype.hasOwnProperty.call(transport, "backlightActive")) {
+      options.transport.backlightActive = transport.backlightActive;
+    }
+    return options;
+  }
 
-    return defaults;
+  function openDisplay() {
+    var options = makeDisplayOptions();
+    var transport = display.transports.create("spi4wire", options.transport);
+    var driverOptions = mergeOptions(options.driver, { transport: transport });
+    var driver = display.drivers.create("st7789", driverOptions);
+
+    return display.open(driver, {
+      surface: options.surface,
+      present: options.display.present,
+      metrics: options.display.metrics === true
+    });
   }
 
   function byteAt(data, index) {
@@ -322,20 +370,16 @@ load("_sys/display.js");
   }
 
   function readPerf(surface) {
-    if (!surface) {
-      return null;
-    }
-    if (typeof surface.getPerf === "function") {
-      return clonePerf(surface.getPerf());
-    }
-    return clonePerf(surface.perf);
+    return surface && typeof surface.stats === "function"
+      ? clonePerf(surface.stats())
+      : null;
   }
 
   var reusedScreen = CONFIG.screen ||
     (CONFIG.reuseUiDemoScreen !== false &&
       global.uiDemo &&
       global.uiDemo.screen);
-  var screen = reusedScreen || display.open(makeDisplayOptions());
+  var screen = reusedScreen || openDisplay();
   var pngSource = loadPngData();
   var image = readPngData(pngSource.data, pngSource.label);
   pngSource.data = null;
@@ -497,8 +541,8 @@ load("_sys/display.js");
   }
 
   function resetPerf() {
-    if (screen && typeof screen.resetPerf === "function") {
-      screen.resetPerf();
+    if (screen && typeof screen.resetStats === "function") {
+      screen.resetStats();
     }
   }
 

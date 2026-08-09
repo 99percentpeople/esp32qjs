@@ -114,6 +114,11 @@ JS_TEST_MODULES = (
         required_features=("displayBuffer",),
     ),
     JsTestModule(
+        "display",
+        (JsTestCase("modules/display/lifecycle.js"),),
+        required_features=("displayBuffer",),
+    ),
+    JsTestModule(
         "wifi",
         (
             JsTestCase("modules/wifi/offline.js"),
@@ -1734,9 +1739,11 @@ def js_test_build_config(config: ProjectConfig) -> ProjectConfig:
     build_dir = config.build_dir.parent / f"{config.build_dir.name}-js-test"
     cmake_entries = [
         entry for entry in config.cmake_cache_entries
-        if not entry.startswith("-DESP32QJS_FLASH_DATA_DIR=")
+        if not entry.startswith("-DESP32QJS_FLASH_DATA_DIR=") and
+        not entry.startswith("-DESP32QJS_FLASH_DATA_INCLUDE_SHARED=")
     ]
     cmake_entries.append(f"-DESP32QJS_FLASH_DATA_DIR={JS_TEST_FLASH_DATA_DIR}")
+    cmake_entries.append("-DESP32QJS_FLASH_DATA_INCLUDE_SHARED=ON")
 
     return replace(
         config,

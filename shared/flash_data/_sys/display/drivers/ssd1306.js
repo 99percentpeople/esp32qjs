@@ -1,425 +1,245 @@
 (function (global) {
-  var system = global.__displaySystem;
+  var system = global.__displaySystemV2;
   var display = global.display;
-  var DEFAULT_ADDRESS = 0x3c;
   var DEFAULT_WIDTH = 128;
   var DEFAULT_HEIGHT = 64;
-  var DEFAULT_SPACING = 0;
 
-  if (!system || system.ssd1306Loaded) {
+  if (!system || system.ssd1306DriverLoaded) {
     return;
   }
 
-  function own(obj, key) {
-    return system.own(obj, key);
+  function own(value, key) {
+    return system.own(value, key);
   }
 
-  function toBool(value, fallback) {
-    return system.toBool(value, fallback);
+  function nowUs() {
+    return global.esp32 && typeof global.esp32.micros === "function"
+      ? global.esp32.micros()
+      : 0;
   }
 
-  function monoColor(value, fallback, apiName) {
-    return system.normalizeMonoColor(value, fallback, apiName);
-  }
-
-  function styleOptions(value, apiName) {
-    return system.styleOptions(value, apiName);
-  }
-
-  function textFontFromStyle(style) {
-    var font = display.defaultFont;
-
-    if (style && typeof style === "object" && own(style, "font")) {
-      font = style.font;
-    }
-    return font;
-  }
-
-  function nativeTextOptions(surface, style) {
-    var options = {};
-    var font = textFontFromStyle(style);
-
-    if (style && typeof style === "object") {
-      if (own(style, "spacing")) {
-        options.spacing = style.spacing;
-      }
-      if (own(style, "background")) {
-        options.background = style.background === null
-          ? null
-          : monoColor(style.background, surface.background, "SSD1306 text background");
-      }
-    } else if (style !== undefined) {
-      options.spacing = style;
-    }
-    if (font) {
-      options.font = font.native || font;
-    }
-    if (!own(options, "spacing")) {
-      options.spacing = surface.spacing;
-    }
-    return options;
-  }
-
-  function nativeText(text, style) {
-    if (display && typeof display.encodeText === "function") {
-      return display.encodeText(text, textFontFromStyle(style));
-    }
-    return String(text);
-  }
-
-  function requireDisplayBuffer() {
-    if (typeof displayBuffer !== "object" ||
-        !displayBuffer ||
-        typeof displayBuffer.create !== "function") {
-      throw new Error("ssd1306 display driver requires the displayBuffer module");
-    }
-  }
-
-  function busMatches(bus, desired) {
-    var status;
-
-    if (!bus) {
-      return false;
-    }
-
-    try {
-      status = bus.status();
-    } catch (error) {
-      return false;
-    }
-
-    return status.opened &&
-      status.sda === desired.sda &&
-      status.scl === desired.scl &&
-      status.freqHz === desired.freqHz &&
-      status.timeoutMs === desired.timeoutMs &&
-      status.internalPullup === desired.internalPullup;
-  }
-
-  function ensureI2CBus(options, currentBus) {
-    var desired = {
-      sda: own(options, "sda") ? options.sda : i2c.DEFAULT_SDA,
-      scl: own(options, "scl") ? options.scl : i2c.DEFAULT_SCL,
-      freqHz: own(options, "freqHz") ? options.freqHz : i2c.DEFAULT_FREQ_HZ,
-      timeoutMs: own(options, "timeoutMs") ? options.timeoutMs : i2c.DEFAULT_TIMEOUT_MS,
-      internalPullup: toBool(options.internalPullup, true)
-    };
-    var bus = currentBus;
-
-    if (!busMatches(bus, desired)) {
-      if (bus) {
-        try {
-          bus.close();
-        } catch (error) {
-        }
-      }
-      bus = i2c.open(desired);
-    }
-
-    return bus;
-  }
-
-  function makeDataPayload(buffer) {
-    var payload = new Array(buffer.length + 1);
-    var i;
-
-    payload[0] = 0x40;
-    for (i = 0; i < buffer.length; i += 1) {
-      payload[i + 1] = buffer[i];
-    }
-    return payload;
-  }
-
-  function writeCommand(bus, address, payload) {
-    var command = [0x00];
-    var i;
-
-    if (typeof payload === "number") {
-      command.push(payload & 0xff);
-    } else {
-      for (i = 0; i < payload.length; i += 1) {
-        command.push(payload[i] & 0xff);
-      }
-    }
-
-    return bus.write(address, command);
-  }
-
-  function SSD1306Display(options) {
-    options = options || {};
-    requireDisplayBuffer();
-
-    display.Surface.call(this, {
-      driver: "ssd1306",
-      width: own(options, "width") ? options.width : DEFAULT_WIDTH,
-      height: own(options, "height") ? options.height : DEFAULT_HEIGHT,
-      pixelFormat: "mono1"
-    });
-    this.pages = Math.ceil(this.height / 8);
-    this.spacing = own(options, "spacing") ? options.spacing : DEFAULT_SPACING;
-    this.nativeBuffer = displayBuffer.create({
-      width: this.width,
-      height: this.height,
-      format: displayBuffer.MONO1,
-      layout: "page-y8",
-      storage: own(options, "storage") ? options.storage : "auto",
-      foreground: display.mono1(1),
-      background: display.mono1(0)
-    });
-    this.foreground = display.mono1(1);
-    this.background = display.mono1(0);
-    this.address = own(options, "address") ? options.address : DEFAULT_ADDRESS;
-    this.busOptions = {
-      sda: own(options, "sda") ? options.sda : i2c.DEFAULT_SDA,
-      scl: own(options, "scl") ? options.scl : i2c.DEFAULT_SCL,
-      freqHz: own(options, "freqHz") ? options.freqHz : i2c.DEFAULT_FREQ_HZ,
-      timeoutMs: own(options, "timeoutMs") ? options.timeoutMs : i2c.DEFAULT_TIMEOUT_MS,
-      internalPullup: toBool(options.internalPullup, true)
+  function newStats() {
+    return {
+      presents: 0,
+      regions: 0,
+      pixels: 0,
+      bytes: 0,
+      totalUs: 0
     };
   }
 
-  system.inherit(SSD1306Display, display.Surface);
-
-  SSD1306Display.prototype.clear = function (color) {
-    color = monoColor(color, this.background, "SSD1306.clear(color)");
-    this.nativeBuffer.clear(color);
-    return this;
-  };
-
-  SSD1306Display.prototype.fill = function (color) {
-    return this.clear(color);
-  };
-
-  SSD1306Display.prototype.setPixel = function (x, y, color) {
-    color = monoColor(color, this.foreground, "SSD1306.setPixel(x, y, color)");
-    this.nativeBuffer.setPixel(x, y, color);
-    return this;
-  };
-
-  SSD1306Display.prototype.getPixel = function (x, y) {
-    return this.nativeBuffer.getPixel(x, y);
-  };
-
-  SSD1306Display.prototype.fillRect = function (x, y, width, height, color) {
-    color = monoColor(color, this.foreground, "SSD1306.fillRect(x, y, width, height, color)");
-    this.nativeBuffer.fillRect(x, y, width, height, color);
-    return this;
-  };
-
-  SSD1306Display.prototype.drawCircle = function (cx, cy, radius, color) {
-    color = monoColor(color, this.foreground, "SSD1306.drawCircle(cx, cy, radius, color)");
-    this.nativeBuffer.drawCircle(cx, cy, radius, color);
-    return this;
-  };
-
-  SSD1306Display.prototype.fillCircle = function (cx, cy, radius, color) {
-    color = monoColor(color, this.foreground, "SSD1306.fillCircle(cx, cy, radius, color)");
-    this.nativeBuffer.fillCircle(cx, cy, radius, color);
-    return this;
-  };
-
-  SSD1306Display.prototype.drawEllipse = function (cx, cy, rx, ry, color, options) {
-    color = monoColor(color, this.foreground, "SSD1306.drawEllipse(cx, cy, rx, ry, color)");
-    this.nativeBuffer.drawEllipse(cx, cy, rx, ry, color, options);
-    return this;
-  };
-
-  SSD1306Display.prototype.fillEllipse = function (cx, cy, rx, ry, color) {
-    color = monoColor(color, this.foreground, "SSD1306.fillEllipse(cx, cy, rx, ry, color)");
-    this.nativeBuffer.fillEllipse(cx, cy, rx, ry, color);
-    return this;
-  };
-
-  SSD1306Display.prototype.drawLine = function (x0, y0, x1, y1, color) {
-    color = monoColor(color, this.foreground, "SSD1306.drawLine(x0, y0, x1, y1, color)");
-    this.nativeBuffer.drawLine(x0, y0, x1, y1, color);
-    return this;
-  };
-
-  SSD1306Display.prototype.drawRect = function (x, y, width, height, color) {
-    color = monoColor(color, this.foreground, "SSD1306.drawRect(x, y, width, height, color)");
-    this.nativeBuffer.drawRect(x, y, width, height, color);
-    return this;
-  };
-
-  SSD1306Display.prototype.drawRoundRect = function (x, y, width, height, radius, color) {
-    color = monoColor(color, this.foreground, "SSD1306.drawRoundRect(x, y, width, height, radius, color)");
-    this.nativeBuffer.drawRoundRect(x, y, width, height, radius, color);
-    return this;
-  };
-
-  SSD1306Display.prototype.fillRoundRect = function (x, y, width, height, radius, color) {
-    color = monoColor(color, this.foreground, "SSD1306.fillRoundRect(x, y, width, height, radius, color)");
-    this.nativeBuffer.fillRoundRect(x, y, width, height, radius, color);
-    return this;
-  };
-
-  SSD1306Display.prototype.fillPolygon = function (points, color) {
-    color = monoColor(color, this.foreground, "SSD1306.fillPolygon(points, color)");
-    this.nativeBuffer.fillPolygon(points, color);
-    return this;
-  };
-
-  SSD1306Display.prototype.fillTriangle = function (x0, y0, x1, y1, x2, y2, color) {
-    color = monoColor(color, this.foreground, "SSD1306.fillTriangle(x0, y0, x1, y1, x2, y2, color)");
-    this.nativeBuffer.fillTriangle(x0, y0, x1, y1, x2, y2, color);
-    return this;
-  };
-
-  SSD1306Display.prototype.drawPolyline = function (points, color) {
-    color = monoColor(color, this.foreground, "SSD1306.drawPolyline(points, color)");
-    this.nativeBuffer.drawPolyline(points, color);
-    return this;
-  };
-
-  SSD1306Display.prototype.drawPolygon = function (points, color) {
-    color = monoColor(color, this.foreground, "SSD1306.drawPolygon(points, color)");
-    this.nativeBuffer.drawPolygon(points, color);
-    return this;
-  };
-
-  SSD1306Display.prototype.drawTriangle = function (x0, y0, x1, y1, x2, y2, color) {
-    color = monoColor(color, this.foreground, "SSD1306.drawTriangle(x0, y0, x1, y1, x2, y2, color)");
-    this.nativeBuffer.drawTriangle(x0, y0, x1, y1, x2, y2, color);
-    return this;
-  };
-
-  SSD1306Display.prototype.drawQuadraticBezier = function (x0, y0, cx, cy, x1, y1, color, options) {
-    color = monoColor(color, this.foreground, "SSD1306.drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color)");
-    this.nativeBuffer.drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color, options);
-    return this;
-  };
-
-  SSD1306Display.prototype.drawCubicBezier = function (x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options) {
-    color = monoColor(color, this.foreground, "SSD1306.drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color)");
-    this.nativeBuffer.drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options);
-    return this;
-  };
-
-  SSD1306Display.prototype.drawBitmap = function (x, y, bitmap, options) {
-    var style = styleOptions(options, "SSD1306.drawBitmap(x, y, bitmap, options)");
-    var color = monoColor(style.color, this.foreground, "SSD1306.drawBitmap(x, y, bitmap, options).color");
-    var nativeOptions = {
-      color: color
+  function copyStats(stats) {
+    return {
+      presents: stats.presents,
+      regions: stats.regions,
+      pixels: stats.pixels,
+      bytes: stats.bytes,
+      totalUs: stats.totalUs
     };
+  }
 
-    if (style.background !== undefined) {
-      nativeOptions.background = style.background === null
-        ? null
-        : monoColor(style.background, this.background, "SSD1306 bitmap background");
+  function requireTransport(transport) {
+    if (!transport || typeof transport.open !== "function" ||
+        typeof transport.command !== "function" ||
+        typeof transport.write !== "function" ||
+        typeof transport.close !== "function") {
+      throw new TypeError("SSD1306 driver requires an I2C display transport");
     }
+    if (transport.kind !== "i2c") {
+      throw new TypeError("SSD1306 driver transport must be kind 'i2c'");
+    }
+    return transport;
+  }
 
-    this.nativeBuffer.drawBitmap(x, y, bitmap, nativeOptions);
+  function SSD1306Driver(options) {
+    options = system.assertKnownOptions(options || {}, [
+      "transport",
+      "width",
+      "height"
+    ], "display.drivers.create(\"ssd1306\", options)");
+
+    this.name = "ssd1306";
+    this.transport = requireTransport(options.transport);
+    this.width = own(options, "width") ? options.width | 0 : DEFAULT_WIDTH;
+    this.height = own(options, "height") ? options.height | 0 : DEFAULT_HEIGHT;
+    if (this.width <= 0 || this.width > 256 ||
+        this.height <= 0 || this.height > 64) {
+      throw new RangeError("SSD1306 dimensions must fit within 256x64");
+    }
+    this.pixelFormat = "mono1";
+    this.layout = "page-y8";
+    this.byteOrder = "native";
+    this.capabilities = {
+      partialPresent: true,
+      multiRegion: true,
+      power: true,
+      inversion: true,
+      contrast: true,
+      backlight: false
+    };
+    this.state = "created";
+    this._stats = newStats();
+  }
+
+  SSD1306Driver.prototype.requireOpen = function (apiName) {
+    if (this.state !== "open") {
+      throw new Error(apiName + " requires an open SSD1306 driver");
+    }
     return this;
   };
 
-  SSD1306Display.prototype.drawChar = function (x, y, ch, options) {
-    var style = styleOptions(options, "SSD1306.drawChar(x, y, ch, options)");
-    var color = monoColor(style.color, this.foreground, "SSD1306.drawChar(x, y, ch, options).color");
-    var nativeOptions;
-
-    nativeOptions = nativeTextOptions(this, style);
-    nativeOptions.color = color;
-    this.nativeBuffer.drawText(x, y, String(ch).charAt(0), nativeOptions);
-    return this;
-  };
-
-  SSD1306Display.prototype.drawText = function (x, y, text, options) {
-    var style = styleOptions(options, "SSD1306.drawText(x, y, text, options)");
-    var color = monoColor(style.color, this.foreground, "SSD1306.drawText(x, y, text, options).color");
-    var nativeOptions;
-
-    nativeOptions = nativeTextOptions(this, style);
-    nativeOptions.color = color;
-    this.nativeBuffer.drawText(x, y, nativeText(text, style), nativeOptions);
-    return this;
-  };
-
-  SSD1306Display.prototype.measureText = function (text, style) {
-    return this.nativeBuffer.measureText(nativeText(text, style), nativeTextOptions(this, style));
-  };
-
-  SSD1306Display.prototype.command = function (payload) {
-    this.bus = ensureI2CBus(this.busOptions, this.bus);
-    writeCommand(this.bus, this.address, payload);
-    return this;
-  };
-
-  SSD1306Display.prototype.init = function () {
+  SSD1306Driver.prototype.open = function () {
     var contrast = this.height <= 32 ? 0x8f : 0xcf;
     var comPins = this.height <= 32 ? 0x02 : 0x12;
 
-    this.bus = ensureI2CBus(this.busOptions, this.bus);
-    this.command([
-      0xae,
-      0xd5, 0x80,
-      0xa8, this.height - 1,
-      0xd3, 0x00,
-      0x40,
-      0x8d, 0x14,
-      0x20, 0x00,
-      0xa1,
-      0xc8,
-      0xda, comPins,
-      0x81, contrast,
-      0xd9, 0xf1,
-      0xdb, 0x40,
-      0xa4,
-      0xa6,
-      0x2e,
-      0xaf
-    ]);
-
-    this.ready = true;
-    return this.clear().flush();
+    if (this.state === "open") {
+      return this;
+    }
+    if (this.state === "closed") {
+      throw new Error("cannot reopen a closed SSD1306 driver");
+    }
+    try {
+      this.transport.open();
+      this.transport.command([
+        0xae,
+        0xd5, 0x80,
+        0xa8, this.height - 1,
+        0xd3, 0x00,
+        0x40,
+        0x8d, 0x14,
+        0x20, 0x00,
+        0xa1,
+        0xc8,
+        0xda, comPins,
+        0x81, contrast,
+        0xd9, 0xf1,
+        0xdb, 0x40,
+        0xa4,
+        0xa6,
+        0x2e,
+        0xaf
+      ]);
+      this.state = "open";
+      return this;
+    } catch (error) {
+      try {
+        this.transport.close();
+      } catch (cleanupError) {
+      }
+      this.state = "closed";
+      throw error;
+    }
   };
 
-  SSD1306Display.prototype.on = function () {
-    return this.command(0xaf);
+  SSD1306Driver.prototype.present = function (frame, regions) {
+    var started;
+    var rect;
+    var y0;
+    var y1;
+    var page0;
+    var page1;
+    var payload;
+    var pixels = 0;
+    var bytes = 0;
+    var i;
+    var totalUs = 0;
+
+    this.requireOpen("SSD1306Driver.present()");
+    if (!frame || frame.pixelFormat !== "mono1" || frame.layout !== "page-y8") {
+      throw new TypeError("SSD1306Driver.present() requires a mono1 page-y8 frame");
+    }
+    started = nowUs();
+    for (i = 0; i < regions.length; i += 1) {
+      rect = regions[i];
+      y0 = (rect.y >> 3) << 3;
+      y1 = Math.min(this.height, ((rect.y + rect.height + 7) >> 3) << 3);
+      page0 = y0 >> 3;
+      page1 = (y1 >> 3) - 1;
+      this.transport.command([
+        0x21, rect.x, rect.x + rect.width - 1,
+        0x22, page0, page1
+      ]);
+      payload = frame.readRect(rect.x, y0, rect.width, y1 - y0).toArray();
+      this.transport.write(payload);
+      pixels += rect.width * (y1 - y0);
+      bytes += payload.length;
+    }
+    if (started !== 0) {
+      totalUs = nowUs() - started;
+    }
+    this._stats.presents += 1;
+    this._stats.regions += regions.length;
+    this._stats.pixels += pixels;
+    this._stats.bytes += bytes;
+    this._stats.totalUs += totalUs;
+    return {
+      regions: regions.length,
+      pixels: pixels,
+      bytes: bytes,
+      chunks: regions.length,
+      directTransfers: 0,
+      totalUs: totalUs,
+      transferUs: totalUs
+    };
   };
 
-  SSD1306Display.prototype.off = function () {
-    return this.command(0xae);
-  };
-
-  SSD1306Display.prototype.invert = function (enabled) {
-    return this.command(enabled ? 0xa7 : 0xa6);
-  };
-
-  SSD1306Display.prototype.contrast = function (value) {
-    var level = system.clampInt(value, 0, 255);
-
-    return this.command([0x81, level]);
-  };
-
-  SSD1306Display.prototype.flush = function () {
-    var buffer = this.nativeBuffer.readRect(0, 0, this.width, this.height).toArray();
-
-    this.bus = ensureI2CBus(this.busOptions, this.bus);
-    this.command([
-      0x21, 0x00, this.width - 1,
-      0x22, 0x00, this.pages - 1
-    ]);
-    this.bus.write(this.address, makeDataPayload(buffer));
+  SSD1306Driver.prototype.setPower = function (enabled) {
+    this.requireOpen("SSD1306Driver.setPower()");
+    this.transport.command(enabled !== false ? 0xaf : 0xae);
     return this;
   };
 
-  SSD1306Display.prototype.close = function () {
-    if (this.nativeBuffer) {
-      this.nativeBuffer.close();
-      this.nativeBuffer = null;
+  SSD1306Driver.prototype.setInverted = function (enabled) {
+    this.requireOpen("SSD1306Driver.setInverted()");
+    this.transport.command(enabled !== false ? 0xa7 : 0xa6);
+    return this;
+  };
+
+  SSD1306Driver.prototype.setContrast = function (value) {
+    this.requireOpen("SSD1306Driver.setContrast()");
+    this.transport.command([0x81, system.clampInt(value, 0, 255)]);
+    return this;
+  };
+
+  SSD1306Driver.prototype.stats = function () {
+    return copyStats(this._stats);
+  };
+
+  SSD1306Driver.prototype.resetStats = function () {
+    this._stats = newStats();
+    return this;
+  };
+
+  SSD1306Driver.prototype.close = function () {
+    var firstError = null;
+
+    if (this.state === "closed") {
+      return true;
     }
-    if (this.bus) {
-      this.bus.close();
-      this.bus = null;
+    if (this.state === "open") {
+      try {
+        this.transport.command(0xae);
+      } catch (error) {
+        firstError = error;
+      }
     }
-    this.ready = false;
+    try {
+      this.transport.close();
+    } catch (error2) {
+      if (!firstError) {
+        firstError = error2;
+      }
+    }
+    this.state = "closed";
+    if (firstError) {
+      throw firstError;
+    }
     return true;
   };
 
-  display.registerDriver("ssd1306", function (options) {
-    return new SSD1306Display(options || {});
+  display.drivers.register("ssd1306", function (options) {
+    return new SSD1306Driver(options);
   });
-
-  system.ssd1306Loaded = true;
+  system.SSD1306Driver = SSD1306Driver;
+  system.ssd1306DriverLoaded = true;
 })(globalThis);
