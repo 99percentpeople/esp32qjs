@@ -169,9 +169,16 @@ static JSValue dac_make_status_array(JSContext *ctx)
     return JS_PopGCRef(ctx, &array_ref);
 }
 
+void esp32_mquickjs_deinit_dac_runtime(void)
+{
+    for (int i = 0; i < SOC_DAC_CHAN_NUM; ++i) {
+        dac_close_channel_state((dac_channel_t)i);
+    }
+}
+
 void esp32_mquickjs_init_dac_runtime(void)
 {
-    memset(s_dac_channels, 0, sizeof(s_dac_channels));
+    esp32_mquickjs_deinit_dac_runtime();
 }
 
 JSValue js_dac_open(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

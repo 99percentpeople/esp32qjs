@@ -1191,6 +1191,24 @@ bool esp32_mquickjs_destroy(JSContext *ctx,
 #if CONFIG_ESP32_MQUICKJS_FEATURE_GPIO
     esp32_mquickjs_deinit_gpio_runtime(ctx);
 #endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_ADC
+    esp32_mquickjs_deinit_adc_runtime();
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_DAC
+    esp32_mquickjs_deinit_dac_runtime();
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_LEDC
+    esp32_mquickjs_deinit_ledc_runtime();
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_I2C
+    esp32_mquickjs_deinit_i2c_runtime();
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_SPI
+    esp32_mquickjs_deinit_spi_runtime();
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_UART
+    esp32_mquickjs_deinit_uart_runtime();
+#endif
 
     esp32_mquickjs_deinit_timer_state(ctx, runtime);
     if (ctx != NULL) {

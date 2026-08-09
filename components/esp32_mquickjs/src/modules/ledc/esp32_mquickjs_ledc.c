@@ -34,6 +34,7 @@ typedef struct {
 static esp32_mquickjs_ledc_timer_state_t s_ledc_timers[SOC_LEDC_TIMER_NUM];
 static esp32_mquickjs_ledc_channel_state_t s_ledc_channels[SOC_LEDC_CHANNEL_NUM];
 static bool s_ledc_fade_service_installed;
+static bool s_ledc_fade_service_owned;
 
 static int js_value_to_u32(JSContext *ctx, JSValue value, uint32_t *out_value)
 {
@@ -228,8 +229,14 @@ static bool ledc_ensure_fade_service(JSContext *ctx)
     }
 
     err = ledc_fade_func_install(0);
-    if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
+    if (err == ESP_OK) {
         s_ledc_fade_service_installed = true;
+        s_ledc_fade_service_owned = true;
+        return true;
+    }
+    if (err == ESP_ERR_INVALID_STATE) {
+        s_ledc_fade_service_installed = true;
+        s_ledc_fade_service_owned = false;
         return true;
     }
 
@@ -332,21 +339,54 @@ static bool ledc_read_bool_option(JSContext *ctx,
     return true;
 }
 
-void esp32_mquickjs_init_ledc_runtime(void)
+void esp32_mquickjs_deinit_ledc_runtime(void)
 {
+    for (size_t i = 0; i < SOC_LEDC_CHANNEL_NUM; ++i) {
+        if (s_ledc_channels[i].configured) {
+            ledc_channel_config_t config = {
+                .speed_mode = LEDC_LOW_SPEED_MODE,
+                .channel = (ledc_channel_t)i,
+                .deconfigure = true,
+            };
+
+            (void)ledc_stop(LEDC_LOW_SPEED_MODE, (ledc_channel_t)i, 0);
+            (void)ledc_channel_config(&config);
+        }
+    }
+    for (size_t i = 0; i < SOC_LEDC_TIMER_NUM; ++i) {
+        if (s_ledc_timers[i].configured) {
+            ledc_timer_config_t config = {
+                .speed_mode = LEDC_LOW_SPEED_MODE,
+                .timer_num = (ledc_timer_t)i,
+                .deconfigure = true,
+            };
+
+            (void)ledc_timer_pause(LEDC_LOW_SPEED_MODE, (ledc_timer_t)i);
+            (void)ledc_timer_config(&config);
+        }
+    }
+    if (s_ledc_fade_service_owned) {
+        ledc_fade_func_uninstall();
+    }
+
     memset(s_ledc_timers, 0, sizeof(s_ledc_timers));
     memset(s_ledc_channels, 0, sizeof(s_ledc_channels));
     s_ledc_fade_service_installed = false;
+    s_ledc_fade_service_owned = false;
 
     for (size_t i = 0; i < SOC_LEDC_CHANNEL_NUM; ++i) {
         s_ledc_channels[i].pin = -1;
         s_ledc_channels[i].timer = (ledc_timer_t)-1;
         s_ledc_channels[i].sleep_mode = LEDC_SLEEP_MODE_NO_ALIVE_NO_PD;
     }
-
     for (size_t i = 0; i < SOC_LEDC_TIMER_NUM; ++i) {
         s_ledc_timers[i].clock = LEDC_AUTO_CLK;
     }
+}
+
+void esp32_mquickjs_init_ledc_runtime(void)
+{
+    esp32_mquickjs_deinit_ledc_runtime();
 }
 
 JSValue js_ledc_timerConfig(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

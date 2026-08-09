@@ -344,15 +344,17 @@ fail:
     return JS_EXCEPTION;
 }
 
+void esp32_mquickjs_deinit_adc_runtime(void)
+{
+    for (int unit = 0; unit < SOC_ADC_PERIPH_NUM; ++unit) {
+        adc_close_unit_state((adc_unit_t)unit);
+    }
+    s_adc_cali_schemes = 0;
+}
+
 void esp32_mquickjs_init_adc_runtime(void)
 {
-    memset(s_adc_units, 0, sizeof(s_adc_units));
-    s_adc_cali_schemes = 0;
-
-    for (int unit = 0; unit < SOC_ADC_PERIPH_NUM; ++unit) {
-        adc_reset_unit_state((adc_unit_t)unit);
-    }
-
+    esp32_mquickjs_deinit_adc_runtime();
     if (adc_cali_check_scheme(&s_adc_cali_schemes) != ESP_OK) {
         s_adc_cali_schemes = 0;
     }

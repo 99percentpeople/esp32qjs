@@ -868,7 +868,7 @@ static JSValue uart_open(JSContext *ctx, int argc, JSValue *argv)
     return result;
 }
 
-void esp32_mquickjs_init_uart_runtime(void)
+void esp32_mquickjs_deinit_uart_runtime(void)
 {
     int32_t i;
 
@@ -878,6 +878,11 @@ void esp32_mquickjs_init_uart_runtime(void)
         }
     }
     uart_reset_slots();
+}
+
+void esp32_mquickjs_init_uart_runtime(void)
+{
+    esp32_mquickjs_deinit_uart_runtime();
 }
 
 JSValue js_uart_port_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

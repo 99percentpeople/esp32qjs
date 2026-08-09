@@ -681,7 +681,7 @@ static JSValue i2c_open(JSContext *ctx, int argc, JSValue *argv)
     return result;
 }
 
-void esp32_mquickjs_init_i2c_runtime(void)
+void esp32_mquickjs_deinit_i2c_runtime(void)
 {
     int32_t i;
 
@@ -691,6 +691,11 @@ void esp32_mquickjs_init_i2c_runtime(void)
         }
     }
     i2c_reset_slots();
+}
+
+void esp32_mquickjs_init_i2c_runtime(void)
+{
+    esp32_mquickjs_deinit_i2c_runtime();
 }
 
 JSValue js_i2c_bus_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

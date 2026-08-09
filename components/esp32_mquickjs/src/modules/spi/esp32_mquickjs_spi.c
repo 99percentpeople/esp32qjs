@@ -1175,7 +1175,7 @@ static JSValue spi_open_bus(JSContext *ctx, int argc, JSValue *argv)
     return result;
 }
 
-void esp32_mquickjs_init_spi_runtime(void)
+void esp32_mquickjs_deinit_spi_runtime(void)
 {
     int32_t i;
 
@@ -1190,6 +1190,11 @@ void esp32_mquickjs_init_spi_runtime(void)
         }
     }
     spi_reset_slots();
+}
+
+void esp32_mquickjs_init_spi_runtime(void)
+{
+    esp32_mquickjs_deinit_spi_runtime();
 }
 
 JSValue js_spi_bus_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

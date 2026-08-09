@@ -5,6 +5,7 @@
 #if CONFIG_ESP32_MQUICKJS_FEATURE_LEDC
 
 void esp32_mquickjs_init_ledc_runtime(void);
+void esp32_mquickjs_deinit_ledc_runtime(void);
 
 JSValue js_ledc_timerConfig(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_ledc_channelConfig(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

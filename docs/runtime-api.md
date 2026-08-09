@@ -39,8 +39,9 @@ Available operations:
 - `esp32qjs_runtime_stop(runtime, timeout_ms)`
   Request a stop and wait for the task. Passing `0` uses the configured default.
 - `esp32qjs_runtime_destroy(runtime)`
-  Stop HTTP servers, detach GPIO/Wi-Fi callbacks, release the context and native
-  timer/poller state, unmount LittleFS, and free the JS heap. The runtime must
+  Stop HTTP servers, detach GPIO/Wi-Fi callbacks, deinitialize ADC, DAC, LEDC,
+  I2C, SPI, and UART resources, release the context and native timer/poller
+  state, unmount LittleFS, and free the JS heap. The runtime must
   already be stopped. It returns `ESP_ERR_INVALID_STATE` while an outgoing
   asynchronous HTTP worker is still active; retry after that worker completes.
 - `esp32qjs_runtime_context(runtime)` / `esp32qjs_runtime_engine(runtime)`
