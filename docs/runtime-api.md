@@ -39,8 +39,8 @@ Available operations:
 - `esp32qjs_runtime_stop(runtime, timeout_ms)`
   Request a stop and wait for the task. Passing `0` uses the configured default.
 - `esp32qjs_runtime_destroy(runtime)`
-  Stop HTTP servers, detach GPIO/Wi-Fi callbacks, deinitialize ADC, DAC, LEDC,
-  I2C, SPI, and UART resources, release the context and native timer/poller
+  Stop HTTP/WebSocket clients and servers, detach USB serial and GPIO/Wi-Fi
+  callbacks, deinitialize ADC, DAC, LEDC, I2C, SPI, and UART resources, release the context and native timer/poller
   state, unmount LittleFS, and free the JS heap. The runtime must
   already be stopped. It requests cancellation and returns
   `ESP_ERR_INVALID_STATE` while an outgoing asynchronous HTTP worker is still
@@ -59,6 +59,11 @@ Available operations:
 - startup script and autorun
 - REPL enablement
 - application-specific global installation
+
+The REPL is a build-time optional frontend. With
+`CONFIG_ESP32QJS_ENABLE_REPL=n`, its editor sources are not compiled and
+`config.enable_repl` must remain false. Headless builds may instead enable the
+mutually exclusive `CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL` framed transport.
 
 The configuration and pointed-to application state must remain valid through
 `esp32qjs_runtime_create()`. String fields are copied by the runtime.

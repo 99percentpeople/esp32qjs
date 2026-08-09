@@ -2,7 +2,7 @@
 
 ESP32QJS is an ESP-IDF framework for running trusted JavaScript applications on
 ESP32 boards with mquickjs. It provides feature-gated native APIs for GPIO,
-I2C, SPI, UART, Wi-Fi, HTTP, LittleFS, timers, and display buffers, plus
+I2C, SPI, UART, USB serial frames, Wi-Fi, HTTP, WebSocket, LittleFS, timers, and display buffers, plus
 versioned JavaScript display and immediate-mode UI libraries.
 
 Framework version: **0.1.0**
@@ -19,7 +19,7 @@ shared/flash_data/_sys/     JavaScript libraries shared by applications
 configs/boards/             board targets, pins, features, and memory defaults
 components/esp32_mquickjs/  mquickjs adapter and native Host API
 components/esp32qjs_runtime reusable runtime lifecycle component
-components/esp32qjs_interactive serial REPL frontend
+components/esp32qjs_interactive optional serial REPL frontend
 main/                       minimal firmware entry point
 tests/                      host C and board-backed JavaScript tests
 ```
@@ -154,8 +154,8 @@ python scripts/remote.py test --scope c
 python scripts/remote.py test
 ```
 
-The default board-backed baseline flashes the latest firmware and a dedicated
-test LittleFS image. Network and physical loopback cases are opt-in:
+The default board-backed baseline builds and flashes the latest code with the
+dedicated JS test sdkconfig defaults, then flashes a dedicated test LittleFS image. Network and physical loopback cases are opt-in:
 
 ```bash
 python scripts/remote.py test --scope js --module wifi --module http --network

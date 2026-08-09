@@ -448,6 +448,43 @@ TEST_JS_CONFIG='{"uartLoopback":{"port":1,"tx":43,"rx":44}}' \
 python scripts/remote.py test --scope js --module uart --loopback
 ```
 
+## `usbSerial` Module
+
+`usbSerial` is a bounded USB Serial/JTAG text-frame transport for headless
+applications. It is compiled only when `esp32.info().features.usbSerial` is
+true and is mutually exclusive with `CONFIG_ESP32QJS_ENABLE_REPL`, because both
+consume the same USB input stream.
+
+- `usbSerial.MAX_FRAME_BYTES`
+  Compile-time upper bound for one UTF-8 line.
+- `usbSerial.open(callback)` / `usbSerial.open(options, callback)`
+  Start receiving lines. `options.maxFrameBytes` may select a smaller bound.
+  The callback is `callback(error, data)`: exactly one argument is defined.
+  CR, LF, and CRLF terminate a frame. Oversized input is discarded through the
+  next terminator and reported as an error.
+- `usbSerial.send(text)`
+  Send one text frame and append a line terminator. Embedded CR/LF and oversized
+  strings are rejected.
+- `usbSerial.status()`
+  Return `{ open, connected, maxFrameBytes, receivedFrames, sentFrames,
+  overflowFrames, callbackErrors }`.
+- `usbSerial.close()`
+  Release the callback and line buffer. Repeated close is safe.
+
+```js
+usbSerial.open({ maxFrameBytes: 4096 }, function (error, line) {
+  if (error !== undefined) {
+    usbSerial.send(JSON.stringify({ type: "protocol.error", error: error }));
+    return;
+  }
+  usbSerial.send(line);
+});
+```
+
+Boot and framework logs can precede protocol traffic. Host clients should wait
+for an application-level ready envelope rather than assuming the first serial
+line is JSON.
+
 ## `displayBuffer` Module
 
 This module exposes native display buffers for heavy pixel work. It is registered only when `esp32.info().features.displayBuffer` is enabled. The JS `Surface` owns rendering, `PanelDriver` owns controller sequencing, and `DisplayTransport` owns SPI/I2C/GPIO operations; `displayBuffer` only owns pixels and export bytes.
@@ -951,7 +988,7 @@ if (ref) {
 - `esp32.info()`
   Return board/chip identity plus memory/runtime fields:
   `{ runtimeVersion, hostApiVersion, board, chip, features, userLedPin, userLedActiveLow, scriptsDir, flashSize, psramEnabled, psramSize, freePsram, totalInternalHeap, freeInternalHeap, jsHeapSize, jsHeapRegion, littlefsMounted, replEnabled, autoRunIndexJs, formatLittlefsOnMountFail, freeHeap, jsTimeMs }`. `runtimeVersion` follows framework SemVer; `hostApiVersion` is the integer native compatibility level.
-  `features` is `{ fs, gpio, ledc, adc, dac, i2c, spi, uart, displayBuffer, wifi, http, httpServer, staticFileHandler }` and is the stable way to discover which optional host modules or composite helpers were compiled into the firmware for the current board.
+  `features` is `{ fs, gpio, ledc, adc, dac, i2c, spi, uart, usbSerial, websocket, displayBuffer, wifi, http, httpServer, staticFileHandler }` and is the stable way to discover which optional host modules or composite helpers were compiled into the firmware for the current board.
 - `esp32.millis()`
   Return monotonic milliseconds from `esp_timer`.
 - `esp32.micros()`
@@ -1005,6 +1042,56 @@ wifi.async.connect("your-ssid", "your-password", function (status, error) {
 print(JSON.stringify(wifi.status()));
 wifi.disconnect();
 ```
+
+## `websocketClient` Module
+
+`websocketClient` is a singleton outbound text client backed by Espressif's
+managed `esp_websocket_client` component. It is exposed only when
+`esp32.info().features.websocket` is enabled. Connect after Wi-Fi is ready.
+
+- `websocketClient.MAX_MESSAGE_BYTES`
+  Compile-time upper bound for complete inbound and outbound text messages.
+- `websocketClient.open(options, callback)`
+  Start an asynchronous connection. Required `options.url` must use `ws://` or
+  `wss://`. Options include `authorization`, `subprotocol`, `autoReconnect`,
+  `reconnectMs`, `networkTimeoutMs`, `sendTimeoutMs`, `pingIntervalSec`,
+  `maxMessageBytes`, and `useCertBundle`. Authorization values containing CR/LF
+  are rejected. `wss://` uses the ESP certificate bundle by default.
+- Callback events:
+  `{ type: "open" }`, `{ type: "message", data }`, or
+  `{ type: "close" | "error", code, message, reconnecting }`.
+- `websocketClient.send(text)`
+  Send one complete WebSocket text message while connected.
+- `websocketClient.status()`
+  Return `{ open, connected, maxMessageBytes, openedEvents, receivedMessages,
+  sentMessages, droppedEvents, oversizedMessages, callbackErrors }`.
+- `websocketClient.close()`
+  Stop reconnect attempts, close the socket, release queued messages and remove
+  the callback. Repeated close is safe.
+
+```js
+wifi.async.connect("your-ssid", "your-password", function (status, error) {
+  if (error !== undefined) {
+    print(error);
+    return;
+  }
+  websocketClient.open({
+    url: "wss://agent.example/ws",
+    authorization: "Bearer paired-device-token",
+    autoReconnect: true
+  }, function (event) {
+    if (event.type === "open") {
+      websocketClient.send(JSON.stringify({ type: "protocol.ping", id: 1 }));
+    } else if (event.type === "message") {
+      print(event.data);
+    }
+  });
+});
+```
+
+Only complete text messages are accepted in the first version. Binary and
+fragmented WebSocket messages are rejected. Automatic reconnect preserves the
+registered callback until explicit `close()`.
 
 ## `http` Module
 

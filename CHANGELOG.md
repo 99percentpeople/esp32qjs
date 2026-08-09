@@ -23,5 +23,7 @@ Versioning; the native Host API uses a separate integer compatibility version.
   WLK1501SPI8P wiring into a profile.
 - Align display/UI declarations with runtime return values, optional colors,
   batching, capabilities, presentation statistics, and explicit close behavior.
+- Add mutually exclusive headless USB serial framing and optional REPL builds,
+  plus an outbound WebSocket text client with bounded callbacks and cleanup.
 - Publish Host API version `1` through `esp32.info()`.
 - Establish Apache-2.0 licensing and initial framework documentation.

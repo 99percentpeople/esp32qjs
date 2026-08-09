@@ -67,6 +67,8 @@ Recommended feature symbols:
 - `CONFIG_ESP32_MQUICKJS_FEATURE_I2C`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_SPI`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_UART`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_WIFI`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_HTTP`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER`
@@ -80,6 +82,8 @@ Recommended dependency rules:
 - `FEATURE_LEDC` depends on `SOC_LEDC_SUPPORTED`
 - `FEATURE_SPI` depends on `SOC_GPSPI_SUPPORTED`
 - `FEATURE_UART` depends on `SOC_UART_SUPPORTED`
+- `FEATURE_USB_SERIAL` depends on `SOC_USB_SERIAL_JTAG_SUPPORTED` and conflicts with the REPL frontend
+- `FEATURE_WEBSOCKET` depends on `FEATURE_WIFI`
 - `FEATURE_WIFI` depends on `SOC_WIFI_SUPPORTED`
 - `FEATURE_HTTP` depends on `FEATURE_WIFI` in the current firmware, unless another network backend is introduced later
 - `FEATURE_HTTP_SERVER` depends on `FEATURE_WIFI` in the current firmware
@@ -103,6 +107,8 @@ print(JSON.stringify(esp32.info().features));
 //   i2c: true,
 //   spi: true,
 //   uart: true,
+//   usbSerial: false,
+//   websocket: false,
 //   displayBuffer: true,
 //   wifi: true,
 //   http: true,
@@ -175,10 +181,10 @@ Built-in modules and types currently in scope:
 - Filesystem/runtime modules: `fs`, `esp32`
 - Peripheral modules: `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`
 - Low-level graphics buffer modules: `displayBuffer`
-- Connectivity modules: `wifi`, `http`, `HttpServer`, `StaticFileHandler`
+- Transport/connectivity modules: `usbSerial`, `websocketClient`, `wifi`, `http`, `HttpServer`, `StaticFileHandler`
 - JS-side libraries outside the firmware ABI: `display`, `ui`
 
-In the long-term plan, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `displayBuffer`, `wifi`, `http`, and `httpServer` should all be treated as optional host features rather than unconditional globals.
+In the long-term plan, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `usbSerial`, `websocketClient`, `displayBuffer`, `wifi`, `http`, and `httpServer` should all be treated as optional host features rather than unconditional globals.
 
 ## Freeze Principles By Area
 
