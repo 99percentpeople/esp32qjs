@@ -16,7 +16,7 @@ It does not treat JS-side LittleFS libraries such as `display` and `ui` as firmw
 
 The stable API should satisfy these rules:
 
-- Module names stay small and literal. Prefer raw ESP-IDF or platform names such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `wifi`, `http`, `esp32`, `fs`.
+- Module names stay small and literal. Prefer raw ESP-IDF or platform names such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `wifi`, `http`, `esp32`, `fs`, `nvs`.
 - Built-in host APIs stay low-level. Board-independent drivers, widgets, protocol stacks, debounce logic, animation helpers, and other policy belong in JavaScript.
 - Additive change is preferred. Once a module shape is frozen, new fields and methods may be added, but existing names and semantics should not be renamed or weakened.
 - Host modules should be board-selectable features. Each optional module should be enabled or disabled by a `CONFIG_...` feature macro and chosen per board profile under `configs/boards/<board>/sdkconfig.defaults`.
@@ -60,6 +60,7 @@ Recommended compile-time model:
 Recommended feature symbols:
 
 - `CONFIG_ESP32_MQUICKJS_FEATURE_FS`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_NVS`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_GPIO`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_LEDC`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_ADC`
@@ -76,6 +77,7 @@ Recommended feature symbols:
 
 Recommended dependency rules:
 
+- `FEATURE_NVS` has no peripheral dependency and conditionally links `nvs_flash`
 - `FEATURE_ADC` depends on `SOC_ADC_SUPPORTED`
 - `FEATURE_DAC` depends on `SOC_DAC_SUPPORTED`
 - `FEATURE_I2C` depends on `SOC_I2C_SUPPORTED`
@@ -100,6 +102,7 @@ print(JSON.stringify(esp32.info().features));
 // Example:
 // {
 //   fs: true,
+//   nvs: false,
 //   gpio: true,
 //   ledc: true,
 //   adc: true,
@@ -178,13 +181,13 @@ Built-in modules and types currently in scope:
 
 - Global helpers: `help`, `load`, `defer`, `waitFor`, `sleep`, `delay`, `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`, `gc`
 - Data/runtime types: `Headers`, `Request`, `Response`, `Stream`
-- Filesystem/runtime modules: `fs`, `esp32`
+- Filesystem/runtime modules: `fs`, `nvs`, `esp32`
 - Peripheral modules: `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`
 - Low-level graphics buffer modules: `displayBuffer`
 - Transport/connectivity modules: `usbSerial`, `websocketClient`, `wifi`, `http`, `HttpServer`, `StaticFileHandler`
 - JS-side libraries outside the firmware ABI: `display`, `ui`
 
-In the long-term plan, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `usbSerial`, `websocketClient`, `displayBuffer`, `wifi`, `http`, and `httpServer` should all be treated as optional host features rather than unconditional globals.
+In the long-term plan, `nvs`, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `usbSerial`, `websocketClient`, `displayBuffer`, `wifi`, `http`, and `httpServer` should all be treated as optional host features rather than unconditional globals.
 
 ## Freeze Principles By Area
 
@@ -231,6 +234,26 @@ Adjustments that can still be additive later:
 - Add byte-oriented helpers later if binary workloads become common.
 - Do not change existing string-returning APIs to return arrays or typed arrays.
 
+### `nvs`
+
+Status: `Candidate for freeze`
+
+The optional module exposes only bounded strings in the default NVS partition:
+`getString`, `setString`, `erase`, `clear`, `status`, and a 2048-byte limit.
+Namespace/key syntax is intentionally restricted, updates and erases use purge
+mode, and no partition erase, iteration, blob, or encryption-key API is
+available.
+
+Freeze recommendations:
+
+- Keep NVS encryption provisioning outside this convenience binding; report the
+  compiled encryption state explicitly through `status()`.
+- Keep values bounded and keep namespace/key access explicit.
+- Keep the module absent unless `FEATURE_NVS` is enabled.
+- Treat this as trusted application persistence, not a per-namespace security
+  sandbox.
+- Add power-loss and encrypted-partition coverage before declaring it stable.
+
 ### `Headers`, `Request`, and `Response`
 
 Status: `Stable now`
@@ -252,7 +275,7 @@ Status: `Stable now`
 
 Why:
 
-- `esp32.info()`, `millis()`, `micros()`, and `freeHeap()` are generic runtime/platform inspection helpers.
+- `esp32.info()`, `millis()`, `micros()`, `freeHeap()`, and bounded `randomHex()` are generic runtime/platform helpers.
 - `esp32.withTimeout()` provides a scoped execution budget without extending an outer native callback deadline.
 - The module is not overloaded with peripheral control.
 
@@ -668,7 +691,7 @@ Recommended order for stabilization:
 1. Freeze now:
    `help/load/defer/waitFor/timers`, `fs`, `Stream`, `Headers`, `Request`, `Response`, `esp32`, `gpio`, `adc`
 2. Candidate for freeze after focused validation:
-   `i2c`, `spi`, `uart`, `displayBuffer`, `wifi`, `http`
+   `nvs`, `i2c`, `spi`, `uart`, `displayBuffer`, `wifi`, `http`
 3. Adjust before freeze:
    `ledc`, `dac`
 

@@ -2,7 +2,7 @@
 
 ESP32QJS is an ESP-IDF framework for running trusted JavaScript applications on
 ESP32 boards with mquickjs. It provides feature-gated native APIs for GPIO,
-I2C, SPI, UART, USB serial frames, Wi-Fi, HTTP, WebSocket, LittleFS, timers, and display buffers, plus
+I2C, SPI, UART, USB serial frames, Wi-Fi, HTTP, WebSocket, LittleFS, bounded NVS strings, timers, and display buffers, plus
 versioned JavaScript display and immediate-mode UI libraries.
 
 Framework version: **0.1.0**
@@ -158,6 +158,7 @@ The default board-backed baseline builds and flashes the latest code with the
 dedicated JS test sdkconfig defaults, then flashes a dedicated test LittleFS image. Network and physical loopback cases are opt-in:
 
 ```bash
+python scripts/remote.py test --scope js --module nvs
 python scripts/remote.py test --scope js --module wifi --module http --network
 python scripts/remote.py test --scope js --module spi --module uart --loopback
 ```
@@ -181,8 +182,10 @@ Semantic Versioning. JavaScript libraries retain their own version fields.
 
 The default profiles are development-oriented. Before product deployment,
 review REPL enablement, LittleFS formatting, secure boot, flash encryption,
-OTA/rollback, resource signing, and secret provisioning. JavaScript code is
-trusted application code and is not security-sandboxed.
+encrypted NVS/key provisioning, OTA/rollback, resource signing, and secret
+provisioning. Enabling the optional `nvs` binding does not itself enable NVS
+encryption. JavaScript code is trusted application code and is not
+security-sandboxed.
 
 ## License
 

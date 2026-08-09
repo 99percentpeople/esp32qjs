@@ -66,7 +66,10 @@ The REPL is a build-time optional frontend. With
 mutually exclusive `CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL` framed transport.
 
 The configuration and pointed-to application state must remain valid through
-`esp32qjs_runtime_create()`. String fields are copied by the runtime.
+`esp32qjs_runtime_create()`. String fields are copied by the runtime. Creation
+seeds the process-lifetime secure random DRBG by temporarily owning the SoC SAR
+ADC entropy source; native applications must create the runtime before another
+task starts RF or ADC hardware.
 
 ## Installing Application Globals
 

@@ -26,5 +26,8 @@ Versioning; the native Host API uses a separate integer compatibility version.
   batching, capabilities, presentation statistics, and explicit close behavior.
 - Add mutually exclusive headless USB serial framing and optional REPL builds,
   plus an outbound WebSocket text client with bounded callbacks and cleanup.
+- Add an optional bounded NVS string module with purge updates and explicit
+  encryption status, plus a true-entropy-seeded `esp32.randomHex()` DRBG for
+  device identity and credential material.
 - Publish Host API version `1` through `esp32.info()`.
 - Establish Apache-2.0 licensing and initial framework documentation.
