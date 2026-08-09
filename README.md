@@ -75,8 +75,9 @@ python scripts/remote.py --app demo flash-fs
 ```
 
 `check-js` builds a cached host parser from the vendored MQuickJS sources and
-validates application, shared, test, and runnable API-documentation snippets
-without executing them. The JS test scope runs the same check automatically.
+validates bundled applications, the selected external application, shared/test
+sources, and runnable API-documentation snippets without executing them. The JS
+test scope runs the same check automatically.
 
 A complete LittleFS source directory can be supplied for compatibility or test
 workflows with `--flash-data-dir PATH`. One-off application inputs can be
@@ -97,6 +98,7 @@ apps/my_app/flash_data/index.js
 Example `app.env`:
 
 ```dotenv
+APP_ID=my_app
 APP_LABEL=My application
 FLASH_DATA_DIR=flash_data
 APP_SDKCONFIG_DEFAULTS=sdkconfig.defaults
@@ -105,9 +107,23 @@ PARTITION_TABLE=partitions/{board}.csv
 
 `{board}` and `{idf_target}` are expanded from the selected board profile.
 Application defaults control behavior such as REPL/autorun policy, while board
-defaults retain target, pin, feature, and memory settings. Select the app with
-`--app my_app` or `APP=my_app` in `.env`. Shared libraries remain
-available under `_sys/`, for example:
+defaults retain target, pin, feature, and memory settings. `APP_ID` is the
+stable build identifier and must contain only letters, digits, `.`, `_`, or
+`-`. Select a bundled app with `--app my_app` or `APP=my_app` in `.env`.
+
+An application may also live outside this repository. Pass its directory or
+`app.env` path relative to the framework root (or as an absolute path):
+
+```bash
+python scripts/remote.py --app ../agent/device show-config
+python scripts/remote.py --app ../agent/device --assume y build
+python scripts/remote.py --app ../agent/device flash-fs
+```
+
+External profiles own the same `app.env`, `sdkconfig.defaults`, board-specific
+partition files, and `flash_data/` layout as bundled profiles. Set `APP_FILE`
+in `.env` for a persistent direct path. Shared libraries remain available
+under `_sys/`, for example:
 
 ```js
 load("_sys/display/wlk1501spi8p.js");

@@ -17,7 +17,11 @@ file(GLOB_RECURSE _esp32qjs_profile_config_files CONFIGURE_DEPENDS
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_esp32qjs_profile_config_files})
 
 set(ESP32QJS_BOARD "xiao_esp32s3" CACHE STRING "Default board profile under configs/boards/")
-set(ESP32QJS_APP "minimal" CACHE STRING "Selected application profile under apps/")
+set(ESP32QJS_APP "minimal" CACHE STRING "Selected application identifier")
+set(ESP32QJS_APP_PROFILE_DIR "${CMAKE_SOURCE_DIR}/apps/${ESP32QJS_APP}" CACHE PATH
+    "Selected bundled or external application profile directory")
+get_filename_component(ESP32QJS_APP_PROFILE_DIR "${ESP32QJS_APP_PROFILE_DIR}"
+    ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
 set(ESP32QJS_BOARD_SDKCONFIG_DEFAULTS "" CACHE FILEPATH
     "Optional board sdkconfig defaults override")
 set(ESP32QJS_APP_SDKCONFIG_DEFAULTS "" CACHE FILEPATH
@@ -26,12 +30,19 @@ set(ESP32QJS_PARTITION_TABLE "" CACHE FILEPATH
     "Optional application partition table override")
 set(ESP32QJS_SHARED_FLASH_DATA_DIR "${CMAKE_SOURCE_DIR}/shared/flash_data" CACHE PATH
     "Shared files copied into every application LittleFS image")
-set(ESP32QJS_APP_FLASH_DATA_DIR "${CMAKE_SOURCE_DIR}/apps/${ESP32QJS_APP}/flash_data" CACHE PATH
+set(ESP32QJS_APP_FLASH_DATA_DIR "${ESP32QJS_APP_PROFILE_DIR}/flash_data" CACHE PATH
     "Selected application files overlaid onto the LittleFS image")
 set(ESP32QJS_FLASH_DATA_DIR "" CACHE PATH
     "Optional LittleFS source override (used by tests and compatibility workflows)")
 set(ESP32QJS_FLASH_DATA_INCLUDE_SHARED OFF CACHE BOOL
     "Overlay a LittleFS override onto shared framework resources")
+
+file(GLOB_RECURSE _esp32qjs_selected_app_config_files CONFIGURE_DEPENDS
+    "${ESP32QJS_APP_PROFILE_DIR}/app.env"
+    "${ESP32QJS_APP_PROFILE_DIR}/sdkconfig.defaults"
+    "${ESP32QJS_APP_PROFILE_DIR}/partitions/*.csv")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${_esp32qjs_selected_app_config_files})
 
 set(_esp32qjs_flash_data_files)
 foreach(_esp32qjs_flash_data_dir
@@ -54,7 +65,7 @@ endif()
 set(_esp32qjs_app_defaults "${ESP32QJS_APP_SDKCONFIG_DEFAULTS}")
 if(_esp32qjs_app_defaults STREQUAL "")
     set(_esp32qjs_app_defaults
-        "${CMAKE_SOURCE_DIR}/apps/${ESP32QJS_APP}/sdkconfig.defaults")
+        "${ESP32QJS_APP_PROFILE_DIR}/sdkconfig.defaults")
 endif()
 if(NOT DEFINED SDKCONFIG_DEFAULTS OR SDKCONFIG_DEFAULTS STREQUAL "")
     foreach(_esp32qjs_defaults "${_esp32qjs_board_defaults}" "${_esp32qjs_app_defaults}")
@@ -67,7 +78,7 @@ endif()
 set(_esp32qjs_partition_table "${ESP32QJS_PARTITION_TABLE}")
 if(_esp32qjs_partition_table STREQUAL "")
     set(_esp32qjs_partition_table
-        "${CMAKE_SOURCE_DIR}/apps/${ESP32QJS_APP}/partitions/${ESP32QJS_BOARD}.csv")
+        "${ESP32QJS_APP_PROFILE_DIR}/partitions/${ESP32QJS_BOARD}.csv")
 endif()
 get_filename_component(_esp32qjs_partition_table "${_esp32qjs_partition_table}"
     ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")

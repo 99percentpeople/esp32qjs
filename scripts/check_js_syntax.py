@@ -242,7 +242,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "paths",
         nargs="*",
         type=Path,
-        help="Files or directories to check. Defaults to apps/, shared/flash_data/, and tests/js/flash_data/.",
+        help="Files or directories to check instead of the default first-party roots.",
+    )
+    parser.add_argument(
+        "--extra-path",
+        action="append",
+        default=[],
+        type=Path,
+        help="Add a file or directory to the default or explicitly selected source roots. Repeatable.",
     )
     parser.add_argument("--build-dir", type=Path, default=DEFAULT_BUILD_DIR)
     parser.add_argument("--cc", help="Host C compiler command. Defaults to CC, cc, gcc, or clang.")
@@ -263,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         tool = build_checker(build_dir, compiler=args.cc, rebuild=args.rebuild)
         verify_checker_dialect(tool, build_dir)
-        paths = args.paths if args.paths else list(DEFAULT_SOURCE_ROOTS)
+        paths = [*(args.paths if args.paths else DEFAULT_SOURCE_ROOTS), *args.extra_path]
         source_files = iter_js_files(paths)
         snippets = [] if args.no_docs or args.paths else extract_documented_js(build_dir)
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:

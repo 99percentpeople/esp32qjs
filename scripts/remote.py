@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Unified helper for local and remote ESP32QJS application development.
 
-The script combines a board profile from `configs/boards/*/.env` with an
-application profile from `apps/*/app.env`. That keeps hardware configuration
-independent from application behavior, partitions, and LittleFS resources.
+The script combines a board profile from `configs/boards/*/.env` with a
+bundled or directly referenced application profile. That keeps hardware
+configuration independent from application behavior, partitions, and
+LittleFS resources.
 """
 
 from __future__ import annotations
@@ -60,6 +61,7 @@ JS_REPL_BANNER_MARKER = "Run help() for usage."
 MONITOR_READY_MARKER = "--- Quit:"
 ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])")
 CTEST_SUMMARY_RE = re.compile(r"(?m)^(\d+)% tests passed, (\d+) tests failed out of (\d+)$")
+APP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 TEST_SCOPE_ORDER = ("c", "js")
 
 
@@ -248,6 +250,7 @@ class AppProfile:
     reference: str
     name: str
     file: Path
+    directory: Path
     label: str
     flash_data_dir: Path
     sdkconfig_defaults: Path | None
@@ -261,6 +264,7 @@ class ProjectConfig:
     board_label: str
     app: str
     app_file: Path
+    app_profile_dir: Path
     app_label: str
     shared_flash_data_dir: Path
     app_flash_data_dir: Path
@@ -514,6 +518,11 @@ def load_app_profile(
     app_file = resolve_app_file(reference)
     app_dir = app_file.parent
     app_env = load_dotenv(app_file)
+    app_name = app_env.get("APP_ID", app_dir.name).strip()
+    if not APP_ID_RE.fullmatch(app_name):
+        raise SystemExit(
+            f"{app_file} APP_ID must match {APP_ID_RE.pattern!r}; got {app_name!r}."
+        )
 
     flash_data_raw = app_env.get("FLASH_DATA_DIR", "flash_data")
     flash_data_dir = resolve_app_profile_path(
@@ -558,9 +567,10 @@ def load_app_profile(
 
     return AppProfile(
         reference=reference,
-        name=app_dir.name,
+        name=app_name,
         file=app_file,
-        label=app_env.get("APP_LABEL", app_dir.name),
+        directory=app_dir,
+        label=app_env.get("APP_LABEL", app_name),
         flash_data_dir=flash_data_dir,
         sdkconfig_defaults=app_defaults,
         partition_table=partition_table,
@@ -1327,25 +1337,35 @@ def list_boards(selected_board: str) -> None:
 
 
 def list_apps(selected_app: str) -> None:
-    """Print application profiles bundled with the repository."""
+    """Print bundled application profiles and the selected external profile."""
     profiles = available_app_profiles()
-    if not profiles:
-        print("No application profiles found.")
-        return
-
     selected = resolve_app_file(selected_app)
+    selected_is_bundled = False
+
     for app_file in profiles:
         app_env = load_dotenv(app_file)
-        marker = "*" if app_file.resolve() == selected else " "
-        label = app_env.get("APP_LABEL", app_file.parent.name)
+        is_selected = app_file.resolve() == selected
+        selected_is_bundled = selected_is_bundled or is_selected
+        marker = "*" if is_selected else " "
+        app_name = app_env.get("APP_ID", app_file.parent.name)
+        label = app_env.get("APP_LABEL", app_name)
         flash_data = app_env.get("FLASH_DATA_DIR", "flash_data")
         app_defaults = app_env.get("APP_SDKCONFIG_DEFAULTS", "sdkconfig.defaults")
         partition_table = app_env.get(
             "PARTITION_TABLE", "partitions/{board}.csv"
         )
         print(
-            f"{marker} {app_file.parent.name}: {label} "
+            f"{marker} {app_name}: {label} "
             f"[{flash_data}, {app_defaults}, {partition_table}]"
+        )
+
+    if not selected_is_bundled:
+        app_env = load_dotenv(selected)
+        app_name = app_env.get("APP_ID", selected.parent.name)
+        label = app_env.get("APP_LABEL", app_name)
+        print(
+            f"* {app_name}: {label} "
+            f"[external: {selected.parent}]"
         )
 
 
@@ -1357,6 +1377,7 @@ def show_config(config: ProjectConfig) -> None:
     print(f"board_label={config.board_label}")
     print(f"app={config.app}")
     print(f"app_file={config.app_file}")
+    print(f"app_profile_dir={config.app_profile_dir}")
     print(f"app_label={config.app_label}")
     print(f"shared_flash_data_dir={format_path(config.shared_flash_data_dir)}")
     print(f"app_flash_data_dir={format_path(config.app_flash_data_dir)}")
@@ -2155,9 +2176,12 @@ def run_js_tests(config: ProjectConfig,
         close_monitor_session(session)
 
 
-def run_js_syntax_check() -> None:
-    """Parse first-party JS and runnable docs with the firmware's MQuickJS engine."""
-    returncode, _ = run_streaming([sys.executable, str(JS_SYNTAX_CHECK_SCRIPT)], cwd=ROOT_DIR)
+def run_js_syntax_check(app_flash_data_dir: Path | None = None) -> None:
+    """Parse framework, selected-app, test, and documented JavaScript."""
+    command = [sys.executable, str(JS_SYNTAX_CHECK_SCRIPT)]
+    if app_flash_data_dir is not None:
+        command.extend(("--extra-path", str(app_flash_data_dir)))
+    returncode, _ = run_streaming(command, cwd=ROOT_DIR)
     if returncode != 0:
         raise SystemExit("MQuickJS JavaScript syntax validation failed.")
 
@@ -2180,7 +2204,7 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
             raise SystemExit("`--no-flash-fs` requires JS scope.")
 
     if "js" in scopes:
-        run_js_syntax_check()
+        run_js_syntax_check(config.app_flash_data_dir)
 
     stage_errors: list[str] = []
 
@@ -2259,6 +2283,7 @@ def build_project_config(
     cmake_entries = (
         f"-DESP32QJS_BOARD={profile.name}",
         f"-DESP32QJS_APP={app_profile.name}",
+        f"-DESP32QJS_APP_PROFILE_DIR={app_profile.directory}",
         f"-DESP32QJS_SHARED_FLASH_DATA_DIR={shared_flash_data_dir}",
         f"-DESP32QJS_APP_FLASH_DATA_DIR={app_profile.flash_data_dir}",
         f"-DESP32QJS_FLASH_DATA_DIR={flash_data_override or ''}",
@@ -2277,6 +2302,7 @@ def build_project_config(
         board_label=profile.label,
         app=app_profile.name,
         app_file=app_profile.file,
+        app_profile_dir=app_profile.directory,
         app_label=app_profile.label,
         shared_flash_data_dir=shared_flash_data_dir,
         app_flash_data_dir=app_profile.flash_data_dir,
@@ -2490,7 +2516,7 @@ def main() -> int:
         return 0
 
     if args.command == "check-js":
-        run_js_syntax_check()
+        run_js_syntax_check(config.app_flash_data_dir)
         return 0
 
     if args.command == "chip-id":

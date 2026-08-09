@@ -25,6 +25,7 @@ Use the repo scripts for normal development; do not default to direct `idf.py` w
 - `TEST_JS_CONFIG='{"spiLoopback":{"sclk":1,"mosi":2,"miso":2}}' python scripts/remote.py test --scope js --module spi --loopback` overrides the default SPI loopback pins.
 - `python scripts/remote.py --board esp32c3_supermini build` switches boards without editing `.env`.
 - `python scripts/remote.py --app demo build` builds the display demo while the default `minimal` app remains board-neutral.
+- `python scripts/remote.py --app ../agent/device build` builds a sibling external application profile without copying it into `apps/`.
 
 Keep `idf.py menuconfig` for configuration work and `cmake --build build --target update_mquickjs_headers` as a manual fallback for generated headers, but they are not the primary day-to-day workflow.
 

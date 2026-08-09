@@ -1,7 +1,12 @@
 import importlib.util
+import io
+import os
 import sys
+import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -14,11 +19,48 @@ SPEC.loader.exec_module(REMOTE)
 
 
 class RemoteConfigTests(unittest.TestCase):
+    def write_external_app(self, root: Path, app_id: str = "external_agent") -> Path:
+        app_dir = root / "device"
+        (app_dir / "flash_data").mkdir(parents=True)
+        (app_dir / "partitions").mkdir()
+        (app_dir / "app.env").write_text(
+            "\n".join(
+                (
+                    f"APP_ID={app_id}",
+                    "APP_LABEL=External Agent",
+                    "FLASH_DATA_DIR=flash_data",
+                    "APP_SDKCONFIG_DEFAULTS=sdkconfig.defaults",
+                    "PARTITION_TABLE=partitions/{board}.csv",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        (app_dir / "flash_data" / "index.js").write_text(
+            'print("external agent");\n', encoding="utf-8"
+        )
+        (app_dir / "sdkconfig.defaults").write_text(
+            "CONFIG_ESP32QJS_AUTORUN_INDEX_JS=y\n", encoding="utf-8"
+        )
+        (app_dir / "partitions" / "xiao_esp32s3.csv").write_text(
+            "storage,data,littlefs,,0x100000,\n", encoding="utf-8"
+        )
+        return app_dir
+
     def test_check_js_command_is_available(self):
         args, _, _ = REMOTE.parse_args(["check-js"])
 
         self.assertEqual(args.command, "check-js")
         self.assertTrue(REMOTE.JS_SYNTAX_CHECK_SCRIPT.is_file())
+
+    def test_js_syntax_check_includes_selected_application(self):
+        selected = ROOT / "apps" / "minimal" / "flash_data"
+        with patch.object(REMOTE, "run_streaming", return_value=(0, "")) as streaming:
+            REMOTE.run_js_syntax_check(selected)
+
+        command = streaming.call_args.args[0]
+        self.assertEqual(command[-2:], ["--extra-path", str(selected)])
+        self.assertEqual(streaming.call_args.kwargs["cwd"], ROOT)
 
     def test_bundled_application_profiles_are_valid(self):
         minimal = REMOTE.load_app_profile(
@@ -27,6 +69,7 @@ class RemoteConfigTests(unittest.TestCase):
         demo = REMOTE.load_app_profile("demo", "xiao_esp32s3", "esp32s3")
 
         self.assertEqual(minimal.name, "minimal")
+        self.assertEqual(minimal.directory, ROOT / "apps" / "minimal")
         self.assertTrue((minimal.flash_data_dir / "index.js").is_file())
         self.assertTrue(minimal.sdkconfig_defaults.is_file())
         self.assertEqual(minimal.partition_table.name, "xiao_esp32s3.csv")
@@ -46,6 +89,11 @@ class RemoteConfigTests(unittest.TestCase):
         self.assertEqual(config.app, "demo")
         self.assertIn("-DESP32QJS_BOARD=xiao_esp32s3", config.cmake_cache_entries)
         self.assertIn("-DESP32QJS_APP=demo", config.cmake_cache_entries)
+        self.assertEqual(config.app_profile_dir, app.directory)
+        self.assertIn(
+            f"-DESP32QJS_APP_PROFILE_DIR={app.directory}",
+            config.cmake_cache_entries,
+        )
         self.assertIn(
             f"-DESP32QJS_APP_FLASH_DATA_DIR={app.flash_data_dir}",
             config.cmake_cache_entries,
@@ -67,6 +115,55 @@ class RemoteConfigTests(unittest.TestCase):
             "sdkconfig.xiao_esp32s3.demo",
         )
         self.assertIn("-DESP32QJS_FLASH_DATA_DIR=", config.cmake_cache_entries)
+
+    def test_external_application_profile_is_resolved_by_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_dir = self.write_external_app(Path(temp_dir))
+            args, board, app = REMOTE.parse_args([
+                "--board", "xiao_esp32s3",
+                "--app", str(app_dir),
+                "show-config",
+            ])
+            config = REMOTE.build_project_config(args, board, app)
+
+            self.assertEqual(app.name, "external_agent")
+            self.assertEqual(app.directory, app_dir.resolve())
+            self.assertEqual(config.app, "external_agent")
+            self.assertEqual(config.app_profile_dir, app_dir.resolve())
+            self.assertEqual(config.app_flash_data_dir, app_dir / "flash_data")
+            self.assertEqual(
+                config.generated_sdkconfig.name,
+                "sdkconfig.xiao_esp32s3.external_agent",
+            )
+            self.assertIn(
+                f"-DESP32QJS_APP_PROFILE_DIR={app_dir.resolve()}",
+                config.cmake_cache_entries,
+            )
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                REMOTE.list_apps(str(app_dir))
+            self.assertIn("* external_agent: External Agent", output.getvalue())
+            self.assertIn("[external:", output.getvalue())
+
+    def test_app_file_environment_selects_external_profile(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_dir = self.write_external_app(Path(temp_dir))
+            with patch.dict(os.environ, {"APP_FILE": str(app_dir)}, clear=True):
+                app = REMOTE.load_app_profile(None, "xiao_esp32s3", "esp32s3")
+                self.assertEqual(app.name, "external_agent")
+                self.assertEqual(app.directory, app_dir.resolve())
+
+                overridden = REMOTE.load_app_profile(
+                    "minimal", "xiao_esp32s3", "esp32s3"
+                )
+                self.assertEqual(overridden.name, "minimal")
+
+    def test_invalid_external_app_id_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_dir = self.write_external_app(Path(temp_dir), app_id="bad app")
+            with self.assertRaisesRegex(SystemExit, "APP_ID"):
+                REMOTE.load_app_profile(str(app_dir), "xiao_esp32s3", "esp32s3")
 
     def test_js_test_build_enables_debug_gc(self):
         args, board, app = REMOTE.parse_args([

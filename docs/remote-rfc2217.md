@@ -42,11 +42,12 @@ python scripts/remote.py test
 python scripts/remote.py --assume n build
 ```
 
-Board profiles live under [`configs/boards/<board>/`](../configs/boards) and carry hardware target, pin, feature, and memory defaults. Application profiles live under `apps/<app>/` and carry `app.env`, behavior `sdkconfig.defaults`, board-specific `partitions/<board>.csv`, and `flash_data/`. Board defaults are applied before application defaults, while shared `_sys` libraries come from `shared/flash_data` and application files overlay them. For example:
+Board profiles live under [`configs/boards/<board>/`](../configs/boards) and carry hardware target, pin, feature, and memory defaults. Bundled application profiles live under `apps/<app>/`; external applications may be selected by passing their directory or `app.env` path to `--app`, or by setting `APP_FILE`. Each application carries `app.env`, behavior `sdkconfig.defaults`, board-specific `partitions/<board>.csv`, and `flash_data/`. Its optional `APP_ID` provides a stable build identifier and is restricted to letters, digits, `.`, `_`, and `-`. Board defaults are applied before application defaults, while shared `_sys` libraries come from `shared/flash_data` and application files overlay them. For example:
 
 ```bash
 python scripts/remote.py --board xiao_esp32s3 --app minimal flash-monitor
 python scripts/remote.py --board xiao_esp32s3 --app demo build
+python scripts/remote.py --board xiao_esp32s3 --app ../agent/device build
 python scripts/remote.py --board esp32c3_supermini build
 python scripts/remote.py --board esp32c3_supermini chip-id
 python scripts/remote.py --board esp32c3_supermini test --scope js --module fs --module stream
@@ -74,7 +75,7 @@ The script flashes the files listed in the selected build directory's `flasher_a
 - `build/esp32qjs.bin` at `0x10000`
 - `build/storage.bin` at the selected partition table's `storage` offset (currently `0x210000` for the bundled boards)
 
-`show-config` prints the exact board/application defaults, combination-specific generated sdkconfig, partition table, and resource paths. App paths may use `{board}` and `{idf_target}` placeholders; missing inputs fail before ESP-IDF starts. One-off overrides are available through `--app-sdkconfig-defaults`, `--partition-table`, and `--flash-data-dir`.
+`show-config` prints the exact board/application profile directory, defaults, combination-specific generated sdkconfig, partition table, and resource paths. Relative direct app references are resolved from the framework repository root. App-owned paths may use `{board}` and `{idf_target}` placeholders; missing inputs fail before ESP-IDF starts. One-off overrides are available through `--app-sdkconfig-defaults`, `--partition-table`, and `--flash-data-dir`.
 
 For JavaScript-only changes under `shared/flash_data` or `apps/<app>/flash_data`, use the faster filesystem-only path:
 

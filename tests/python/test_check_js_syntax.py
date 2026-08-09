@@ -25,6 +25,19 @@ class JavaScriptSyntaxToolTests(unittest.TestCase):
         self.assertIn("tests/js/flash_data/index.js", relative)
         self.assertFalse(any("vendor/" in path for path in relative))
 
+    def test_extra_paths_extend_default_sources(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            extra = Path(temp_dir) / "external.js"
+            extra.write_text("var externalApp = true;\n", encoding="utf-8")
+            args = CHECKER.parse_args(["--extra-path", str(extra)])
+            files = CHECKER.iter_js_files([
+                *CHECKER.DEFAULT_SOURCE_ROOTS,
+                *args.extra_path,
+            ])
+
+            self.assertIn(extra.resolve(), files)
+            self.assertTrue(args.extra_path)
+
     def test_document_snippets_keep_source_line_numbers(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             snippets = CHECKER.extract_documented_js(Path(temp_dir))
