@@ -12,6 +12,9 @@ JSValue js_http_server_create(JSContext *ctx, JSValue *this_val, int argc, JSVal
 JSValue js_http_server_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_http_server_start(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_http_server_stop(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_http_server_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_http_server_remove_route(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_http_server_clear_routes(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_http_server_get(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_http_server_post(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_http_server_put(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

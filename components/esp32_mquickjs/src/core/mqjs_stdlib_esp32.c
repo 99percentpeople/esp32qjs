@@ -529,6 +529,7 @@ static const JSClassDef js_wifi_obj =
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
 static const JSPropDef js_http_async[] = {
     JS_CFUNC_DEF("fetch", 3, js_http_async_fetch),
+    JS_CFUNC_DEF("cancel", 1, js_http_async_cancel),
     JS_PROP_END,
 };
 
@@ -539,6 +540,7 @@ static const JSClassDef js_http_async_obj =
 static const JSPropDef js_http[] = {
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
     JS_CGETSET_DEF("DEFAULT_TIMEOUT_MS", js_http_get_default_timeout_ms, NULL),
+    JS_CGETSET_DEF("MAX_BODY_BYTES", js_http_get_max_body_bytes, NULL),
     JS_CFUNC_DEF("fetch", 2, js_http_fetch),
     JS_PROP_CLASS_DEF("async", &js_http_async_obj),
 #endif
@@ -559,6 +561,9 @@ static const JSClassDef js_http_obj =
 static const JSPropDef js_http_server_proto[] = {
     JS_CFUNC_DEF("start", 0, js_http_server_start),
     JS_CFUNC_DEF("stop", 0, js_http_server_stop),
+    JS_CFUNC_DEF("close", 0, js_http_server_close),
+    JS_CFUNC_DEF("removeRoute", 2, js_http_server_remove_route),
+    JS_CFUNC_DEF("clearRoutes", 0, js_http_server_clear_routes),
     JS_CFUNC_DEF("get", 2, js_http_server_get),
     JS_CFUNC_DEF("post", 2, js_http_server_post),
     JS_CFUNC_DEF("put", 2, js_http_server_put),

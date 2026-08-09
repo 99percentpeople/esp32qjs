@@ -34,6 +34,7 @@ typedef struct {
 typedef struct {
     bool allocated;
     uint8_t server_id;
+    uint32_t generation;
     uint16_t port;
     uint16_t ctrl_port;
     char *host;
@@ -82,6 +83,8 @@ typedef struct {
 typedef struct {
     bool initialized;
     bool shutting_down;
+    bool dispatching_request;
+    uint8_t dispatching_request_id;
     esp32_mquickjs_runtime_t *runtime;
     QueueHandle_t queue;
     SemaphoreHandle_t lock;
@@ -217,10 +220,15 @@ static void http_server_free_response(esp32_mquickjs_http_server_response_t *res
 
 static void http_server_cleanup_request(esp32_mquickjs_http_server_request_t *request)
 {
+    uint8_t request_id;
+    uint32_t generation;
+
     if (request == NULL || !request->allocated) {
         return;
     }
 
+    request_id = request->request_id;
+    generation = request->generation;
     if (request->async_req != NULL) {
         httpd_req_async_handler_complete(request->async_req);
     }
@@ -229,7 +237,11 @@ static void http_server_cleanup_request(esp32_mquickjs_http_server_request_t *re
     heap_caps_free(request->query_string);
     heap_caps_free(request->body);
     http_server_free_headers(request->headers, request->header_count);
+    http_server_lock();
     memset(request, 0, sizeof(*request));
+    request->request_id = request_id;
+    request->generation = generation;
+    http_server_unlock();
 }
 
 static void http_server_cleanup_route(JSContext *ctx, esp32_mquickjs_http_server_route_t *route)
@@ -256,11 +268,18 @@ static void http_server_cleanup_route(JSContext *ctx, esp32_mquickjs_http_server
 
 static void http_server_cleanup_server(esp32_mquickjs_http_server_slot_t *server)
 {
+    uint8_t server_id;
+    uint32_t generation;
+
     if (server == NULL || !server->allocated) {
         return;
     }
+    server_id = server->server_id;
+    generation = server->generation;
     heap_caps_free(server->host);
     memset(server, 0, sizeof(*server));
+    server->server_id = server_id;
+    server->generation = generation;
 }
 
 static const char *http_server_status_text(int32_t status)
@@ -356,6 +375,13 @@ static bool http_server_init_state(esp32_mquickjs_runtime_t *runtime)
                                              sizeof(esp32_mquickjs_http_server_event_t));
     s_http_server_state.lock = xSemaphoreCreateMutex();
     if (s_http_server_state.queue == NULL || s_http_server_state.lock == NULL) {
+        if (s_http_server_state.queue != NULL) {
+            vQueueDelete(s_http_server_state.queue);
+        }
+        if (s_http_server_state.lock != NULL) {
+            vSemaphoreDelete(s_http_server_state.lock);
+        }
+        memset(&s_http_server_state, 0, sizeof(s_http_server_state));
         return false;
     }
 
@@ -387,16 +413,23 @@ static esp32_mquickjs_http_server_slot_t *http_server_get_slot(int32_t server_id
 
 static esp32_mquickjs_http_server_request_t *http_server_alloc_request(void)
 {
+    esp32_mquickjs_http_server_request_t *request = NULL;
     int i;
 
+    http_server_lock();
     for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN; ++i) {
         if (!s_http_server_state.requests[i].allocated) {
-            s_http_server_state.requests[i].allocated = true;
-            s_http_server_state.requests[i].generation++;
-            return &s_http_server_state.requests[i];
+            request = &s_http_server_state.requests[i];
+            request->allocated = true;
+            request->generation++;
+            if (request->generation == 0) {
+                request->generation++;
+            }
+            break;
         }
     }
-    return NULL;
+    http_server_unlock();
+    return request;
 }
 
 static bool http_server_parse_path_and_query(const char *uri, char **out_path, char **out_query)
@@ -1603,13 +1636,57 @@ static void http_server_stop_slot(esp32_mquickjs_http_server_slot_t *server)
     }
 }
 
+static int http_server_clear_routes_for_server(JSContext *ctx, uint8_t server_id)
+{
+    int cleared = 0;
+    int i;
+
+    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_ROUTES; ++i) {
+        if (s_http_server_state.routes[i].allocated &&
+            s_http_server_state.routes[i].server_id == server_id) {
+            http_server_cleanup_route(ctx, &s_http_server_state.routes[i]);
+            cleared++;
+        }
+    }
+    return cleared;
+}
+
+static void http_server_cleanup_requests_for_server(uint8_t server_id)
+{
+    int i;
+
+    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN; ++i) {
+        if (s_http_server_state.requests[i].allocated &&
+            s_http_server_state.requests[i].server_id == server_id &&
+            (!s_http_server_state.dispatching_request ||
+             s_http_server_state.dispatching_request_id != (uint8_t)i)) {
+            http_server_cleanup_request(&s_http_server_state.requests[i]);
+        }
+    }
+}
+
+static void http_server_close_slot(JSContext *ctx, esp32_mquickjs_http_server_slot_t *server)
+{
+    if (server == NULL) {
+        return;
+    }
+    http_server_stop_slot(server);
+    http_server_cleanup_requests_for_server(server->server_id);
+    (void)http_server_clear_routes_for_server(ctx, server->server_id);
+    http_server_cleanup_server(server);
+}
+
 static int http_server_server_id_from_object(JSContext *ctx,
                                              JSValue server_value,
                                              const char *api_name,
                                              int32_t *out_server_id)
 {
     JSGCRef server_id_ref;
+    JSGCRef generation_ref;
     JSValue *server_id_value;
+    JSValue *generation_value;
+    esp32_mquickjs_http_server_slot_t *server;
+    uint32_t generation = 0;
     int server_id = -1;
 
     if (out_server_id == NULL || JS_GetClassID(ctx, server_value) != JS_CLASS_HTTP_SERVER) {
@@ -1618,13 +1695,25 @@ static int http_server_server_id_from_object(JSContext *ctx,
     }
 
     server_id_value = JS_PushGCRef(ctx, &server_id_ref);
+    generation_value = JS_PushGCRef(ctx, &generation_ref);
     *server_id_value = JS_GetPropertyStr(ctx, server_value, "serverId");
-    if (JS_IsException(*server_id_value) || JS_ToInt32(ctx, &server_id, *server_id_value) != 0) {
+    *generation_value = JS_GetPropertyStr(ctx, server_value, "serverGeneration");
+    if (JS_IsException(*server_id_value) || JS_IsException(*generation_value) ||
+        JS_ToInt32(ctx, &server_id, *server_id_value) != 0 ||
+        JS_ToUint32(ctx, &generation, *generation_value) != 0) {
+        JS_PopGCRef(ctx, &generation_ref);
         JS_PopGCRef(ctx, &server_id_ref);
         JS_ThrowTypeError(ctx, "%s expects a valid HttpServer instance", api_name);
         return -1;
     }
+    JS_PopGCRef(ctx, &generation_ref);
     JS_PopGCRef(ctx, &server_id_ref);
+
+    server = http_server_get_slot(server_id);
+    if (server == NULL || server->generation != generation) {
+        JS_ThrowInternalError(ctx, "%s cannot use a closed or stale HttpServer", api_name);
+        return -1;
+    }
     *out_server_id = server_id;
     return 0;
 }
@@ -1643,6 +1732,10 @@ static JSValue http_server_make_server_object(JSContext *ctx, JSValue global_obj
     }
 
     if (!esp32_mquickjs_set_property(ctx, *server_obj, "serverId", JS_NewInt32(ctx, server_id)) ||
+        !esp32_mquickjs_set_property(ctx,
+                                     *server_obj,
+                                     "serverGeneration",
+                                     JS_NewUint32(ctx, server->generation)) ||
         !esp32_mquickjs_set_property(ctx, *server_obj, "port", JS_NewInt32(ctx, server->port)) ||
         !esp32_mquickjs_set_property(ctx, *server_obj, "ctrlPort", JS_NewInt32(ctx, server->ctrl_port)) ||
         !esp32_mquickjs_set_property(ctx,
@@ -1652,7 +1745,8 @@ static JSValue http_server_make_server_object(JSContext *ctx, JSValue global_obj
                                                   server->host != NULL
                                                       ? server->host
                                                       : "0.0.0.0")) ||
-        !esp32_mquickjs_set_property(ctx, *server_obj, "started", JS_NewBool(server->started))) {
+        !esp32_mquickjs_set_property(ctx, *server_obj, "started", JS_NewBool(server->started)) ||
+        !esp32_mquickjs_set_property(ctx, *server_obj, "closed", JS_FALSE)) {
         goto fail;
     }
 
@@ -1844,6 +1938,130 @@ JSValue js_http_server_stop(JSContext *ctx, JSValue *this_val, int argc, JSValue
     return JS_UNDEFINED;
 }
 
+JSValue js_http_server_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    JSGCRef closed_ref;
+    JSValue *closed_value;
+    int32_t server_id = -1;
+
+    (void)argc;
+    (void)argv;
+    if (JS_GetClassID(ctx, *this_val) != JS_CLASS_HTTP_SERVER) {
+        return JS_ThrowTypeError(ctx, "server.close expects an HttpServer instance");
+    }
+    closed_value = JS_PushGCRef(ctx, &closed_ref);
+    *closed_value = JS_GetPropertyStr(ctx, *this_val, "closed");
+    if (JS_IsException(*closed_value)) {
+        JS_PopGCRef(ctx, &closed_ref);
+        return JS_EXCEPTION;
+    }
+    if (*closed_value == JS_TRUE) {
+        JS_PopGCRef(ctx, &closed_ref);
+        return JS_UNDEFINED;
+    }
+    JS_PopGCRef(ctx, &closed_ref);
+
+    if (http_server_server_id_from_object(ctx, *this_val, "server.close", &server_id) != 0) {
+        return JS_EXCEPTION;
+    }
+    http_server_close_slot(ctx, http_server_get_slot(server_id));
+    if (!esp32_mquickjs_set_property(ctx, *this_val, "started", JS_FALSE) ||
+        !esp32_mquickjs_set_property(ctx, *this_val, "closed", JS_TRUE)) {
+        return JS_EXCEPTION;
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue js_http_server_clear_routes(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    int32_t server_id = -1;
+    int cleared;
+
+    (void)argc;
+    (void)argv;
+    if (http_server_server_id_from_object(ctx, *this_val, "server.clearRoutes", &server_id) != 0) {
+        return JS_EXCEPTION;
+    }
+    cleared = http_server_clear_routes_for_server(ctx, (uint8_t)server_id);
+    return JS_NewInt32(ctx, cleared);
+}
+
+JSValue js_http_server_remove_route(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    esp32_mquickjs_http_server_route_t pattern = {0};
+    JSGCRef pattern_ref;
+    JSValue *rooted_pattern;
+    httpd_method_t method = HTTP_ANY;
+    bool filter_method = false;
+    int32_t server_id = -1;
+    int removed = 0;
+    int i;
+
+    if (http_server_server_id_from_object(ctx, *this_val, "server.removeRoute", &server_id) != 0) {
+        return JS_EXCEPTION;
+    }
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "server.removeRoute(pathOrPattern, method?) expects a route pattern");
+    }
+    if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+        JSCStringBuf method_buf;
+        const char *method_name;
+
+        if (!JS_IsString(ctx, argv[1])) {
+            return JS_ThrowTypeError(ctx, "server.removeRoute(..., method) expects an HTTP method string");
+        }
+        method_name = JS_ToCString(ctx, argv[1], &method_buf);
+        if (method_name == NULL) {
+            return JS_EXCEPTION;
+        }
+        if (strcasecmp(method_name, "GET") == 0) {
+            method = HTTP_GET;
+        } else if (strcasecmp(method_name, "POST") == 0) {
+            method = HTTP_POST;
+        } else if (strcasecmp(method_name, "PUT") == 0) {
+            method = HTTP_PUT;
+        } else if (strcasecmp(method_name, "PATCH") == 0) {
+            method = HTTP_PATCH;
+        } else if (strcasecmp(method_name, "DELETE") == 0) {
+            method = HTTP_DELETE;
+        } else if (strcasecmp(method_name, "HEAD") == 0) {
+            method = HTTP_HEAD;
+        } else if (strcasecmp(method_name, "OPTIONS") == 0) {
+            method = HTTP_OPTIONS;
+        } else if (strcasecmp(method_name, "ANY") != 0 && strcasecmp(method_name, "ALL") != 0) {
+            return JS_ThrowTypeError(ctx, "server.removeRoute(..., method) received an unsupported HTTP method");
+        }
+        filter_method = true;
+    }
+
+    rooted_pattern = JS_PushGCRef(ctx, &pattern_ref);
+    *rooted_pattern = argv[0];
+    pattern.allocated = true;
+    if (!http_server_compile_route_pattern(ctx, rooted_pattern, &pattern)) {
+        http_server_cleanup_route(ctx, &pattern);
+        JS_PopGCRef(ctx, &pattern_ref);
+        return JS_ThrowTypeError(ctx, "server.removeRoute(pathOrPattern, method?) expects a string path or RegExp");
+    }
+
+    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_ROUTES; ++i) {
+        esp32_mquickjs_http_server_route_t *route = &s_http_server_state.routes[i];
+
+        if (!route->allocated || route->server_id != (uint8_t)server_id ||
+            route->match_with_regex != pattern.match_with_regex ||
+            route->pattern_ref_added != pattern.pattern_ref_added ||
+            route->uri == NULL || pattern.uri == NULL || strcmp(route->uri, pattern.uri) != 0 ||
+            (filter_method && route->method != method)) {
+            continue;
+        }
+        http_server_cleanup_route(ctx, route);
+        removed++;
+    }
+
+    http_server_cleanup_route(ctx, &pattern);
+    JS_PopGCRef(ctx, &pattern_ref);
+    return JS_NewInt32(ctx, removed);
+}
+
 JSValue js_http_server_get(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     return http_server_route_method(ctx, *this_val, "server.get", "GET", argc, argv);
@@ -1969,6 +2187,10 @@ JSValue js_http_server_create(JSContext *ctx, JSValue *this_val, int argc, JSVal
         if (!s_http_server_state.servers[i].allocated) {
             server = &s_http_server_state.servers[i];
             server->allocated = true;
+            server->generation++;
+            if (server->generation == 0) {
+                server->generation++;
+            }
             server->port = (uint16_t)port;
             server->ctrl_port = (uint16_t)(ctrl_port + i);
             server->host = http_server_strdup(host);
@@ -1993,6 +2215,10 @@ JSValue js_http_server_create(JSContext *ctx, JSValue *this_val, int argc, JSVal
 
     {
         JSValue result = http_server_make_server_object(ctx, *global_obj, server->server_id);
+
+        if (JS_IsException(result)) {
+            http_server_close_slot(ctx, server);
+        }
         JS_PopGCRef(ctx, &global_ref);
         JS_PopGCRef(ctx, &host_ref);
         JS_PopGCRef(ctx, &port_ref);
@@ -2289,12 +2515,15 @@ static bool http_server_async_poller(JSContext *ctx,
             continue;
         }
 
+        s_http_server_state.dispatching_request = true;
+        s_http_server_state.dispatching_request_id = request->request_id;
         *callback_result = http_server_call_function(
             ctx,
             *callback_fn,
             route->callback_this_ref_added ? route->callback_this.val : JS_NULL,
             1,
             req_obj);
+        s_http_server_state.dispatching_request = false;
         if (JS_IsException(*callback_result)) {
             esp32_mquickjs_print_exception(ctx);
             http_server_send_error(request->async_req, 500, "handler exception");

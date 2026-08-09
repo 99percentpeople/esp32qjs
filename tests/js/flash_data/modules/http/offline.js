@@ -21,6 +21,7 @@ test("http/offline", function () {
   var entries;
   var globalFetchError = "";
   var moduleFetchError = "";
+  var maxBodyError = "";
 
   test.equal(headers.get("foo"), "Bar", "headers should normalize names");
   test.ok(headers.has("foo"), "headers.has should find normalized key");
@@ -61,7 +62,10 @@ test("http/offline", function () {
   test.equal(http.async.__probe, 7, "http.async should preserve object properties");
   delete http.async.__probe;
   test.ok(typeof http.async.fetch === "function", "http.async.fetch should exist");
+  test.ok(typeof http.async.cancel === "function", "http.async.cancel should exist");
   test.ok(typeof http.DEFAULT_TIMEOUT_MS === "number", "http timeout constant");
+  test.ok(typeof http.MAX_BODY_BYTES === "number" && http.MAX_BODY_BYTES > 0,
+    "http response body limit constant");
 
   try {
     fetch("https://example.com", function () {});
@@ -76,6 +80,16 @@ test("http/offline", function () {
     moduleFetchError = moduleFailure && moduleFailure.message ? moduleFailure.message : String(moduleFailure);
   }
   test.ok(moduleFetchError.indexOf("http.async.fetch") >= 0, "http.fetch callback form should direct callers to http.async.fetch");
+
+  try {
+    http.fetch("https://example.com", { maxBodyBytes: 0 });
+  } catch (maxBodyFailure) {
+    maxBodyError = maxBodyFailure && maxBodyFailure.message
+      ? maxBodyFailure.message
+      : String(maxBodyFailure);
+  }
+  test.ok(maxBodyError.indexOf("maxBodyBytes") >= 0,
+    "fetch should reject a non-positive response body limit before starting a worker");
 
   return { method: request.method, status: response.status };
 });

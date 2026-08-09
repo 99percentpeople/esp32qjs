@@ -42,8 +42,9 @@ Available operations:
   Stop HTTP servers, detach GPIO/Wi-Fi callbacks, deinitialize ADC, DAC, LEDC,
   I2C, SPI, and UART resources, release the context and native timer/poller
   state, unmount LittleFS, and free the JS heap. The runtime must
-  already be stopped. It returns `ESP_ERR_INVALID_STATE` while an outgoing
-  asynchronous HTTP worker is still active; retry after that worker completes.
+  already be stopped. It requests cancellation and returns
+  `ESP_ERR_INVALID_STATE` while an outgoing asynchronous HTTP worker is still
+  unwinding; retry after that worker completes.
 - `esp32qjs_runtime_context(runtime)` / `esp32qjs_runtime_engine(runtime)`
   Access low-level handles for trusted native integration.
 

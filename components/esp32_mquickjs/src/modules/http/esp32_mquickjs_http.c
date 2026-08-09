@@ -20,13 +20,126 @@
 #define ESP32_MQUICKJS_HTTP_MAX_RESPONSE_HEADERS 16
 #define ESP32_MQUICKJS_HTTP_USER_AGENT "esp32qjs/1.0"
 
+struct esp32_mquickjs_http_operation {
+    SemaphoreHandle_t lock;
+    esp_http_client_handle_t client;
+    bool cancel_requested;
+};
+
 typedef struct {
     esp32_mquickjs_http_response_t *response;
     size_t body_len;
     size_t body_cap;
+    size_t max_body_bytes;
     esp_err_t error;
+    bool body_limit_exceeded;
     bool drop_headers;
 } esp32_mquickjs_http_capture_t;
+
+static void http_operation_lock(esp32_mquickjs_http_operation_t *operation)
+{
+    if (operation != NULL && operation->lock != NULL) {
+        xSemaphoreTake(operation->lock, portMAX_DELAY);
+    }
+}
+
+static void http_operation_unlock(esp32_mquickjs_http_operation_t *operation)
+{
+    if (operation != NULL && operation->lock != NULL) {
+        xSemaphoreGive(operation->lock);
+    }
+}
+
+esp32_mquickjs_http_operation_t *esp32_mquickjs_http_operation_create(void)
+{
+    esp32_mquickjs_http_operation_t *operation =
+        heap_caps_calloc(1, sizeof(*operation), MALLOC_CAP_8BIT);
+
+    if (operation == NULL) {
+        return NULL;
+    }
+    operation->lock = xSemaphoreCreateMutex();
+    if (operation->lock == NULL) {
+        heap_caps_free(operation);
+        return NULL;
+    }
+    return operation;
+}
+
+void esp32_mquickjs_http_operation_destroy(esp32_mquickjs_http_operation_t *operation)
+{
+    if (operation == NULL) {
+        return;
+    }
+    if (operation->lock != NULL) {
+        vSemaphoreDelete(operation->lock);
+    }
+    heap_caps_free(operation);
+}
+
+bool esp32_mquickjs_http_operation_cancel(esp32_mquickjs_http_operation_t *operation)
+{
+    bool changed;
+
+    if (operation == NULL) {
+        return false;
+    }
+    http_operation_lock(operation);
+    changed = !operation->cancel_requested;
+    operation->cancel_requested = true;
+    if (operation->client != NULL) {
+        (void)esp_http_client_cancel_request(operation->client);
+    }
+    http_operation_unlock(operation);
+    return changed;
+}
+
+bool esp32_mquickjs_http_operation_is_cancelled(esp32_mquickjs_http_operation_t *operation)
+{
+    bool cancelled;
+
+    if (operation == NULL) {
+        return false;
+    }
+    http_operation_lock(operation);
+    cancelled = operation->cancel_requested;
+    http_operation_unlock(operation);
+    return cancelled;
+}
+
+static bool http_operation_attach_client(esp32_mquickjs_http_operation_t *operation,
+                                         esp_http_client_handle_t client)
+{
+    bool attached = true;
+
+    if (operation == NULL) {
+        return true;
+    }
+    http_operation_lock(operation);
+    if (operation->cancel_requested) {
+        attached = false;
+    } else {
+        operation->client = client;
+    }
+    http_operation_unlock(operation);
+    return attached;
+}
+
+static void http_operation_cleanup_client(esp32_mquickjs_http_operation_t *operation,
+                                          esp_http_client_handle_t client)
+{
+    if (client == NULL) {
+        return;
+    }
+    if (operation != NULL) {
+        http_operation_lock(operation);
+        if (operation->client == client) {
+            operation->client = NULL;
+        }
+        http_operation_unlock(operation);
+    }
+    esp_http_client_cleanup(client);
+}
 
 char *esp32_mquickjs_http_strdup(const char *value)
 {
@@ -86,6 +199,7 @@ int esp32_mquickjs_http_clone_request(const esp32_mquickjs_http_request_t *sourc
 
     memset(target, 0, sizeof(*target));
     target->timeout_ms = source->timeout_ms;
+    target->max_body_bytes = source->max_body_bytes;
 
     if (source->url != NULL) {
         target->url = esp32_mquickjs_http_strdup(source->url);
@@ -264,6 +378,12 @@ static esp_err_t http_capture_append_body(esp32_mquickjs_http_capture_t *capture
         return ESP_OK;
     }
 
+    if (data_len > capture->max_body_bytes ||
+        capture->body_len > capture->max_body_bytes - data_len) {
+        capture->body_limit_exceeded = true;
+        return ESP_ERR_INVALID_SIZE;
+    }
+
     needed_cap = capture->body_len + data_len + 1;
     if (capture->body_cap < needed_cap) {
         size_t new_cap = needed_cap;
@@ -272,6 +392,9 @@ static esp_err_t http_capture_append_body(esp32_mquickjs_http_capture_t *capture
             new_cap = growth_step;
         } else {
             new_cap = ((new_cap + growth_step - 1) / growth_step) * growth_step;
+        }
+        if (new_cap > capture->max_body_bytes + 1) {
+            new_cap = capture->max_body_bytes + 1;
         }
 
         body = heap_caps_realloc(capture->response->body, new_cap, MALLOC_CAP_8BIT);
@@ -343,6 +466,9 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
     if (capture == NULL) {
         return ESP_OK;
     }
+    if (capture->error != ESP_OK) {
+        return capture->error;
+    }
 
     switch (evt->event_id) {
     case HTTP_EVENT_ON_HEADER:
@@ -378,6 +504,7 @@ static esp32_mquickjs_http_response_t *http_alloc_response(void)
 }
 
 esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_mquickjs_http_request_t *request,
+                                                                    esp32_mquickjs_http_operation_t *operation,
                                                                     esp_err_t *out_err,
                                                                     char *error_text,
                                                                     size_t error_text_size)
@@ -415,6 +542,7 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
     }
 
     capture.response = response;
+    capture.max_body_bytes = request->max_body_bytes;
     config.url = request->url;
     config.method = method;
     config.timeout_ms = (int)request->timeout_ms;
@@ -431,6 +559,13 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
         esp32_mquickjs_http_free_response(response);
         return NULL;
     }
+    if (!http_operation_attach_client(operation, client)) {
+        *out_err = ESP_ERR_INVALID_STATE;
+        snprintf(error_text, error_text_size, "fetch cancelled");
+        http_operation_cleanup_client(operation, client);
+        esp32_mquickjs_http_free_response(response);
+        return NULL;
+    }
 
     for (i = 0; i < request->header_count; ++i) {
         if (esp_http_client_set_header(client,
@@ -439,7 +574,7 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
             *out_err = ESP_FAIL;
             snprintf(error_text, error_text_size, "failed to set request header: %s",
                      request->headers[i].key);
-            esp_http_client_cleanup(client);
+            http_operation_cleanup_client(operation, client);
             esp32_mquickjs_http_free_response(response);
             return NULL;
         }
@@ -456,7 +591,7 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
                          error_text_size,
                          "failed to set default Content-Type for request body: %s",
                          esp_err_to_name(body_err));
-                esp_http_client_cleanup(client);
+                http_operation_cleanup_client(operation, client);
                 esp32_mquickjs_http_free_response(response);
                 return NULL;
             }
@@ -469,25 +604,39 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
                      error_text_size,
                      "failed to set request body: %s",
                      esp_err_to_name(body_err));
-            esp_http_client_cleanup(client);
+            http_operation_cleanup_client(operation, client);
             esp32_mquickjs_http_free_response(response);
             return NULL;
         }
     }
 
     *out_err = esp_http_client_perform(client);
-    if (*out_err != ESP_OK) {
-        snprintf(error_text, error_text_size, "esp_http_client_perform() failed: %s",
-                 esp_err_to_name(*out_err));
-        esp_http_client_cleanup(client);
+    if (esp32_mquickjs_http_operation_is_cancelled(operation)) {
+        *out_err = ESP_ERR_INVALID_STATE;
+        snprintf(error_text, error_text_size, "fetch cancelled");
+        http_operation_cleanup_client(operation, client);
         esp32_mquickjs_http_free_response(response);
         return NULL;
     }
     if (capture.error != ESP_OK) {
         *out_err = capture.error;
-        snprintf(error_text, error_text_size, "failed to capture HTTP response: %s",
-                 esp_err_to_name(capture.error));
-        esp_http_client_cleanup(client);
+        if (capture.body_limit_exceeded) {
+            snprintf(error_text,
+                     error_text_size,
+                     "HTTP response body exceeds maxBodyBytes (%u)",
+                     (unsigned)request->max_body_bytes);
+        } else {
+            snprintf(error_text, error_text_size, "failed to capture HTTP response: %s",
+                     esp_err_to_name(capture.error));
+        }
+        http_operation_cleanup_client(operation, client);
+        esp32_mquickjs_http_free_response(response);
+        return NULL;
+    }
+    if (*out_err != ESP_OK) {
+        snprintf(error_text, error_text_size, "esp_http_client_perform() failed: %s",
+                 esp_err_to_name(*out_err));
+        http_operation_cleanup_client(operation, client);
         esp32_mquickjs_http_free_response(response);
         return NULL;
     }
@@ -499,7 +648,7 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
     if (response->status_text == NULL) {
         *out_err = ESP_ERR_NO_MEM;
         snprintf(error_text, error_text_size, "out of memory while storing status text");
-        esp_http_client_cleanup(client);
+        http_operation_cleanup_client(operation, client);
         esp32_mquickjs_http_free_response(response);
         return NULL;
     }
@@ -509,7 +658,7 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
         if (response->url == NULL) {
             *out_err = ESP_ERR_NO_MEM;
             snprintf(error_text, error_text_size, "out of memory while storing response url");
-            esp_http_client_cleanup(client);
+            http_operation_cleanup_client(operation, client);
             esp32_mquickjs_http_free_response(response);
             return NULL;
         }
@@ -519,13 +668,13 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
         if (response->url == NULL) {
             *out_err = ESP_ERR_NO_MEM;
             snprintf(error_text, error_text_size, "out of memory while storing response url");
-            esp_http_client_cleanup(client);
+            http_operation_cleanup_client(operation, client);
             esp32_mquickjs_http_free_response(response);
             return NULL;
         }
     }
 
-    esp_http_client_cleanup(client);
+    http_operation_cleanup_client(operation, client);
     return response;
 }
 
@@ -612,6 +761,24 @@ static int http_parse_timeout(JSContext *ctx,
     }
 
     *out_timeout_ms = (uint32_t)timeout_ms;
+    return 0;
+}
+
+static int http_parse_max_body_bytes(JSContext *ctx,
+                                     JSValue value,
+                                     size_t *out_max_body_bytes)
+{
+    int max_body_bytes = 0;
+
+    if (JS_IsUndefined(value) || JS_IsNull(value)) {
+        *out_max_body_bytes = CONFIG_ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BODY_BYTES;
+        return 0;
+    }
+    if (JS_ToInt32(ctx, &max_body_bytes, value) != 0 || max_body_bytes <= 0) {
+        return -1;
+    }
+
+    *out_max_body_bytes = (size_t)max_body_bytes;
     return 0;
 }
 
@@ -786,10 +953,12 @@ static int http_parse_options(JSContext *ctx,
     JSGCRef method_ref;
     JSGCRef body_ref;
     JSGCRef timeout_ref;
+    JSGCRef max_body_ref;
     JSGCRef headers_ref;
     JSValue *method_value;
     JSValue *body_value;
     JSValue *timeout_value;
+    JSValue *max_body_value;
     JSValue *headers_value;
     JSCStringBuf method_buf;
     JSCStringBuf body_buf;
@@ -807,14 +976,17 @@ static int http_parse_options(JSContext *ctx,
     method_value = JS_PushGCRef(ctx, &method_ref);
     body_value = JS_PushGCRef(ctx, &body_ref);
     timeout_value = JS_PushGCRef(ctx, &timeout_ref);
+    max_body_value = JS_PushGCRef(ctx, &max_body_ref);
     headers_value = JS_PushGCRef(ctx, &headers_ref);
     *method_value = JS_GetPropertyStr(ctx, *options_value, "method");
     *body_value = JS_GetPropertyStr(ctx, *options_value, "body");
     *timeout_value = JS_GetPropertyStr(ctx, *options_value, "timeoutMs");
+    *max_body_value = JS_GetPropertyStr(ctx, *options_value, "maxBodyBytes");
     *headers_value = JS_GetPropertyStr(ctx, *options_value, "headers");
 
     if (JS_IsException(*method_value) || JS_IsException(*body_value) ||
-        JS_IsException(*timeout_value) || JS_IsException(*headers_value)) {
+        JS_IsException(*timeout_value) || JS_IsException(*max_body_value) ||
+        JS_IsException(*headers_value)) {
         goto fail;
     }
 
@@ -872,11 +1044,17 @@ static int http_parse_options(JSContext *ctx,
         goto fail;
     }
 
+    if (http_parse_max_body_bytes(ctx, *max_body_value, &request->max_body_bytes) != 0) {
+        JS_ThrowTypeError(ctx, "fetch(url, options.maxBodyBytes) expects a positive integer");
+        goto fail;
+    }
+
     if (http_parse_headers(ctx, headers_value, &request->headers, &request->header_count) != 0) {
         goto fail;
     }
 
     JS_PopGCRef(ctx, &headers_ref);
+    JS_PopGCRef(ctx, &max_body_ref);
     JS_PopGCRef(ctx, &timeout_ref);
     JS_PopGCRef(ctx, &body_ref);
     JS_PopGCRef(ctx, &method_ref);
@@ -884,6 +1062,7 @@ static int http_parse_options(JSContext *ctx,
 
 fail:
     JS_PopGCRef(ctx, &headers_ref);
+    JS_PopGCRef(ctx, &max_body_ref);
     JS_PopGCRef(ctx, &timeout_ref);
     JS_PopGCRef(ctx, &body_ref);
     JS_PopGCRef(ctx, &method_ref);
@@ -893,6 +1072,7 @@ fail:
 typedef struct {
     const esp32_mquickjs_http_request_t *request;
     esp32_mquickjs_http_response_t *response;
+    esp32_mquickjs_http_operation_t *operation;
     SemaphoreHandle_t done;
     esp_err_t err;
     char error_text[ESP32_MQUICKJS_HTTP_ERROR_TEXT_LEN];
@@ -903,6 +1083,7 @@ static void http_sync_worker_task(void *opaque)
     esp32_mquickjs_http_sync_job_t *job = opaque;
 
     job->response = esp32_mquickjs_http_perform_request(job->request,
+                                                        job->operation,
                                                         &job->err,
                                                         job->error_text,
                                                         sizeof(job->error_text));
@@ -926,8 +1107,13 @@ static JSValue http_fetch_sync(JSContext *ctx,
         return JS_ThrowOutOfMemory(ctx);
     }
     job->request = request;
+    job->operation = esp32_mquickjs_http_operation_create();
     job->done = xSemaphoreCreateBinary();
-    if (job->done == NULL) {
+    if (job->operation == NULL || job->done == NULL) {
+        esp32_mquickjs_http_operation_destroy(job->operation);
+        if (job->done != NULL) {
+            vSemaphoreDelete(job->done);
+        }
         heap_caps_free(job);
         return JS_ThrowOutOfMemory(ctx);
     }
@@ -938,6 +1124,7 @@ static JSValue http_fetch_sync(JSContext *ctx,
                     tskIDLE_PRIORITY + 4,
                     NULL) != pdPASS) {
         vSemaphoreDelete(job->done);
+        esp32_mquickjs_http_operation_destroy(job->operation);
         heap_caps_free(job);
         return JS_ThrowInternalError(ctx, "failed to start synchronous HTTP worker task");
     }
@@ -949,6 +1136,7 @@ static JSValue http_fetch_sync(JSContext *ctx,
     while (xSemaphoreTake(job->done, wait_ticks) != pdTRUE) {
         if (!esp32_mquickjs_cooperate(runtime)) {
             interrupted = true;
+            (void)esp32_mquickjs_http_operation_cancel(job->operation);
         }
     }
     if (!esp32_mquickjs_cooperate(runtime)) {
@@ -967,6 +1155,7 @@ static JSValue http_fetch_sync(JSContext *ctx,
         esp32_mquickjs_http_free_response(response);
     }
     vSemaphoreDelete(job->done);
+    esp32_mquickjs_http_operation_destroy(job->operation);
     heap_caps_free(job);
     return result;
 }
@@ -980,11 +1169,13 @@ static int http_parse_request_object(JSContext *ctx,
     JSGCRef headers_ref;
     JSGCRef body_ref;
     JSGCRef timeout_ref;
+    JSGCRef max_body_ref;
     JSValue *method_value;
     JSValue *url_value;
     JSValue *headers_value;
     JSValue *body_value;
     JSValue *timeout_value;
+    JSValue *max_body_value;
     JSCStringBuf method_buf;
     JSCStringBuf url_buf;
     const char *method;
@@ -995,14 +1186,16 @@ static int http_parse_request_object(JSContext *ctx,
     headers_value = JS_PushGCRef(ctx, &headers_ref);
     body_value = JS_PushGCRef(ctx, &body_ref);
     timeout_value = JS_PushGCRef(ctx, &timeout_ref);
+    max_body_value = JS_PushGCRef(ctx, &max_body_ref);
     *method_value = JS_GetPropertyStr(ctx, *request_value, "method");
     *url_value = JS_GetPropertyStr(ctx, *request_value, "url");
     *headers_value = JS_GetPropertyStr(ctx, *request_value, "headers");
     *body_value = JS_GetPropertyStr(ctx, *request_value, "body");
     *timeout_value = JS_GetPropertyStr(ctx, *request_value, "timeoutMs");
+    *max_body_value = JS_GetPropertyStr(ctx, *request_value, "maxBodyBytes");
 
     if (JS_IsException(*method_value) || JS_IsException(*url_value) || JS_IsException(*headers_value) ||
-        JS_IsException(*body_value) || JS_IsException(*timeout_value)) {
+        JS_IsException(*body_value) || JS_IsException(*timeout_value) || JS_IsException(*max_body_value)) {
         goto fail;
     }
     if (!JS_IsString(ctx, *method_value) || !JS_IsString(ctx, *url_value)) {
@@ -1026,6 +1219,7 @@ static int http_parse_request_object(JSContext *ctx,
     }
     request->url = esp32_mquickjs_http_strdup(url);
     request->timeout_ms = ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS;
+    request->max_body_bytes = CONFIG_ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BODY_BYTES;
     if (request->url == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto fail;
@@ -1033,6 +1227,10 @@ static int http_parse_request_object(JSContext *ctx,
 
     if (http_parse_timeout(ctx, *timeout_value, &request->timeout_ms) != 0) {
         JS_ThrowTypeError(ctx, "fetch(request) expects Request.timeoutMs to be a non-negative integer");
+        goto fail;
+    }
+    if (http_parse_max_body_bytes(ctx, *max_body_value, &request->max_body_bytes) != 0) {
+        JS_ThrowTypeError(ctx, "fetch(request) expects Request.maxBodyBytes to be a positive integer");
         goto fail;
     }
     if (http_parse_headers(ctx, headers_value, &request->headers, &request->header_count) != 0) {
@@ -1065,6 +1263,7 @@ static int http_parse_request_object(JSContext *ctx,
         }
     }
 
+    JS_PopGCRef(ctx, &max_body_ref);
     JS_PopGCRef(ctx, &timeout_ref);
     JS_PopGCRef(ctx, &body_ref);
     JS_PopGCRef(ctx, &headers_ref);
@@ -1073,6 +1272,7 @@ static int http_parse_request_object(JSContext *ctx,
     return 0;
 
 fail:
+    JS_PopGCRef(ctx, &max_body_ref);
     JS_PopGCRef(ctx, &timeout_ref);
     JS_PopGCRef(ctx, &body_ref);
     JS_PopGCRef(ctx, &headers_ref);
@@ -1123,6 +1323,7 @@ int esp32_mquickjs_http_build_request_from_args(JSContext *ctx,
     request->url = esp32_mquickjs_http_strdup(url);
     request->method = esp32_mquickjs_http_strdup("GET");
     request->timeout_ms = ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS;
+    request->max_body_bytes = CONFIG_ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BODY_BYTES;
     if (request->url == NULL || request->method == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return -1;
@@ -1143,6 +1344,14 @@ JSValue js_http_get_default_timeout_ms(JSContext *ctx, JSValue *this_val, int ar
     (void)argc;
     (void)argv;
     return JS_NewUint32(ctx, ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS);
+}
+
+JSValue js_http_get_max_body_bytes(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewUint32(ctx, CONFIG_ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BODY_BYTES);
 }
 
 JSValue js_http_fetch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

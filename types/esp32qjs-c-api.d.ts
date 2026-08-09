@@ -12,6 +12,8 @@ declare namespace ESP32QJS {
 
   /** Opaque generation-checked token returned by the timer globals. */
   type TimerHandle = number & { readonly __timerHandleBrand: never };
+  /** Opaque generation-checked token returned by `http.async.fetch(...)`. */
+  type HttpRequestHandle = number & { readonly __httpRequestHandleBrand: never };
 
   /**
    * Byte payload accepted by low-level transports.
@@ -1390,6 +1392,7 @@ declare namespace ESP32QJS {
    */
   interface FetchOptions extends RequestInit {
     timeoutMs?: number;
+    maxBodyBytes?: number;
   }
 
   type FetchInput = string | Request;
@@ -1400,12 +1403,13 @@ declare namespace ESP32QJS {
   }
 
   interface HttpAsyncModule {
-    fetch(input: FetchInput, callback: FetchCallback): void;
+    fetch(input: FetchInput, callback: FetchCallback): HttpRequestHandle;
     fetch(
       input: FetchInput,
       options: FetchOptions,
       callback: FetchCallback,
-    ): void;
+    ): HttpRequestHandle;
+    cancel(handle: HttpRequestHandle): boolean;
   }
 
   /**
@@ -1439,12 +1443,17 @@ declare namespace ESP32QJS {
   class HttpServer {
     private constructor();
     readonly serverId: number;
+    readonly serverGeneration: number;
     readonly port: number;
     readonly ctrlPort: number;
     readonly host: string;
     started: boolean;
+    closed: boolean;
     start(): void;
     stop(): void;
+    close(): void;
+    removeRoute(pathOrPattern: RoutePattern, method?: string): number;
+    clearRoutes(): number;
     get(pathOrPattern: RoutePattern, handler: HttpRouteHandler): void;
     post(pathOrPattern: RoutePattern, handler: HttpRouteHandler): void;
     put(pathOrPattern: RoutePattern, handler: HttpRouteHandler): void;
@@ -1486,6 +1495,7 @@ declare namespace ESP32QJS {
    */
   interface HttpModule {
     readonly DEFAULT_TIMEOUT_MS?: number;
+    readonly MAX_BODY_BYTES?: number;
     fetch?: HttpFetchFunction;
     async?: HttpAsyncModule;
     server?(options?: HttpServerOptions): HttpServer;

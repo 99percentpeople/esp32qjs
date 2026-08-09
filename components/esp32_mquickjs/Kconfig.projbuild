@@ -359,6 +359,15 @@ config ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS
     help
         Default timeout used by fetch() and http.fetch().
 
+config ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BODY_BYTES
+    int "Default maximum HTTP response body size (bytes)"
+    range 1024 4194304
+    default 65536
+    depends on ESP32_MQUICKJS_FEATURE_HTTP
+    help
+        Stop fetch response capture after this many bytes. Individual requests
+        can select a smaller or larger positive limit with maxBodyBytes.
+
 config ESP32_MQUICKJS_HTTP_TASK_STACK_SIZE
     int "HTTP async worker task stack size (bytes)"
     range 4096 32768

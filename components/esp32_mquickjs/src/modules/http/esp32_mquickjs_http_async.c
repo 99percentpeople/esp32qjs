@@ -15,6 +15,11 @@
 
 #define ESP32_MQUICKJS_HTTP_MAX_ASYNC_REQUESTS 4
 #define ESP32_MQUICKJS_HTTP_ASYNC_QUEUE_LEN 4
+#define ESP32_MQUICKJS_HTTP_HANDLE_ID_BITS 2U
+#define ESP32_MQUICKJS_HTTP_HANDLE_ID_MASK ((1U << ESP32_MQUICKJS_HTTP_HANDLE_ID_BITS) - 1U)
+#define ESP32_MQUICKJS_HTTP_HANDLE_MAX \
+    (((uint64_t)UINT32_MAX << ESP32_MQUICKJS_HTTP_HANDLE_ID_BITS) | \
+     ESP32_MQUICKJS_HTTP_HANDLE_ID_MASK)
 
 typedef struct esp32_mquickjs_http_async_slot esp32_mquickjs_http_async_slot_t;
 
@@ -32,6 +37,7 @@ struct esp32_mquickjs_http_async_slot {
     uint32_t generation;
     JSGCRef callback;
     esp32_mquickjs_http_request_t request;
+    esp32_mquickjs_http_operation_t *operation;
 };
 
 typedef struct {
@@ -66,6 +72,37 @@ static void http_unlock(void)
     }
 }
 
+static uint64_t http_async_handle(const esp32_mquickjs_http_async_slot_t *slot)
+{
+    return ((uint64_t)slot->generation << ESP32_MQUICKJS_HTTP_HANDLE_ID_BITS) |
+           (uint64_t)slot->slot_id;
+}
+
+static bool http_decode_async_handle(JSContext *ctx,
+                                     JSValue value,
+                                     uint8_t *out_slot_id,
+                                     uint32_t *out_generation)
+{
+    double raw_handle;
+    uint64_t handle;
+
+    if (JS_ToNumber(ctx, &raw_handle, value) != 0 ||
+        !(raw_handle > 0) ||
+        raw_handle > (double)ESP32_MQUICKJS_HTTP_HANDLE_MAX) {
+        return false;
+    }
+    handle = (uint64_t)raw_handle;
+    if ((double)handle != raw_handle) {
+        return false;
+    }
+    *out_slot_id = (uint8_t)(handle & ESP32_MQUICKJS_HTTP_HANDLE_ID_MASK);
+    *out_generation = (uint32_t)(handle >> ESP32_MQUICKJS_HTTP_HANDLE_ID_BITS);
+    return *out_generation != 0 &&
+           *out_slot_id < ESP32_MQUICKJS_HTTP_MAX_ASYNC_REQUESTS &&
+           handle == (((uint64_t)*out_generation << ESP32_MQUICKJS_HTTP_HANDLE_ID_BITS) |
+                      (uint64_t)*out_slot_id);
+}
+
 static bool http_init_state(void)
 {
     int i;
@@ -79,6 +116,13 @@ static bool http_init_state(void)
                                       sizeof(esp32_mquickjs_http_async_event_t));
     s_http_state.lock = xSemaphoreCreateMutex();
     if (s_http_state.queue == NULL || s_http_state.lock == NULL) {
+        if (s_http_state.queue != NULL) {
+            vQueueDelete(s_http_state.queue);
+        }
+        if (s_http_state.lock != NULL) {
+            vSemaphoreDelete(s_http_state.lock);
+        }
+        memset(&s_http_state, 0, sizeof(s_http_state));
         return false;
     }
 
@@ -97,6 +141,8 @@ static void http_async_cleanup_slot(JSContext *ctx, esp32_mquickjs_http_async_sl
 
     JS_DeleteGCRef(ctx, &slot->callback);
     esp32_mquickjs_http_free_request(&slot->request);
+    esp32_mquickjs_http_operation_destroy(slot->operation);
+    slot->operation = NULL;
     slot->allocated = false;
 }
 
@@ -115,6 +161,7 @@ static void http_worker_task(void *opaque)
     event.slot_id = slot->slot_id;
     event.generation = args->generation;
     event.response = esp32_mquickjs_http_perform_request(&slot->request,
+                                                         slot->operation,
                                                          &event.err,
                                                          event.error_text,
                                                          sizeof(event.error_text));
@@ -151,6 +198,9 @@ static JSValue http_fetch_async(JSContext *ctx,
             slot = &s_http_state.slots[i];
             slot->allocated = true;
             slot->generation++;
+            if (slot->generation == 0) {
+                slot->generation++;
+            }
             break;
         }
     }
@@ -163,6 +213,11 @@ static JSValue http_fetch_async(JSContext *ctx,
     callback_ref = JS_AddGCRef(ctx, &slot->callback);
     *callback_ref = callback;
     if (esp32_mquickjs_http_clone_request(request, &slot->request) != 0) {
+        http_async_cleanup_slot(ctx, slot);
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    slot->operation = esp32_mquickjs_http_operation_create();
+    if (slot->operation == NULL) {
         http_async_cleanup_slot(ctx, slot);
         return JS_ThrowOutOfMemory(ctx);
     }
@@ -185,7 +240,7 @@ static JSValue http_fetch_async(JSContext *ctx,
         return JS_ThrowInternalError(ctx, "failed to start fetch worker task");
     }
 
-    return JS_UNDEFINED;
+    return JS_NewInt64(ctx, (int64_t)http_async_handle(slot));
 }
 
 bool esp32_mquickjs_init_http_async_runtime(JSContext *ctx,
@@ -224,6 +279,27 @@ JSValue js_http_async_fetch(JSContext *ctx, JSValue *this_val, int argc, JSValue
     return result;
 }
 
+JSValue js_http_async_cancel(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    esp32_mquickjs_http_operation_t *operation = NULL;
+    uint8_t slot_id;
+    uint32_t generation;
+
+    (void)this_val;
+    if (argc < 1 || !http_decode_async_handle(ctx, argv[0], &slot_id, &generation)) {
+        return JS_ThrowTypeError(ctx, "http.async.cancel(handle) expects a request handle");
+    }
+
+    http_lock();
+    if (s_http_state.initialized &&
+        s_http_state.slots[slot_id].allocated &&
+        s_http_state.slots[slot_id].generation == generation) {
+        operation = s_http_state.slots[slot_id].operation;
+    }
+    http_unlock();
+    return JS_NewBool(esp32_mquickjs_http_operation_cancel(operation));
+}
+
 bool esp32_mquickjs_deinit_http_runtime(JSContext *ctx)
 {
     esp32_mquickjs_http_async_event_t event;
@@ -248,7 +324,7 @@ bool esp32_mquickjs_deinit_http_runtime(JSContext *ctx)
     for (i = 0; i < ESP32_MQUICKJS_HTTP_MAX_ASYNC_REQUESTS; ++i) {
         if (s_http_state.slots[i].allocated) {
             pending = true;
-            break;
+            (void)esp32_mquickjs_http_operation_cancel(s_http_state.slots[i].operation);
         }
     }
     http_unlock();
@@ -271,7 +347,7 @@ static bool http_async_poller(JSContext *ctx,
                               void *opaque)
 {
     esp32_mquickjs_http_async_event_t event;
-    bool needs_redraw = false;
+    bool handled = false;
 
     (void)opaque;
     (void)runtime;
@@ -297,8 +373,15 @@ static bool http_async_poller(JSContext *ctx,
             continue;
         }
 
+        handled = true;
         callback_fn = JS_PushGCRef(ctx, &callback_ref);
         *callback_fn = slot->callback.val;
+        if (esp32_mquickjs_http_operation_is_cancelled(slot->operation)) {
+            esp32_mquickjs_http_free_response(event.response);
+            event.response = NULL;
+            event.err = ESP_ERR_INVALID_STATE;
+            snprintf(event.error_text, sizeof(event.error_text), "fetch cancelled");
+        }
         http_async_cleanup_slot(ctx, slot);
 
         if (event.err != ESP_OK) {
@@ -317,14 +400,13 @@ static bool http_async_poller(JSContext *ctx,
         callback_result = esp32_mquickjs_http_call_function(ctx, *callback_fn, JS_NULL, 2, argv);
         if (JS_IsException(callback_result)) {
             esp32_mquickjs_print_exception(ctx);
-            needs_redraw = true;
         }
 
         JS_PopGCRef(ctx, &callback_ref);
         esp32_mquickjs_http_free_response(event.response);
     }
 
-    return needs_redraw;
+    return handled;
 }
 
 #endif

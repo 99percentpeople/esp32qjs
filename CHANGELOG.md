@@ -14,5 +14,7 @@ Versioning; the native Host API uses a separate integer compatibility version.
 - Add optional runtime-task watchdog integration.
 - Make timer handles generation-checked, clamp tight intervals, and cancel
   repeating timers whose callbacks fail.
+- Bound HTTP response capture, add cancellable asynchronous requests, and add
+  explicit server/route release methods.
 - Publish Host API version `1` through `esp32.info()`.
 - Establish Apache-2.0 licensing and initial framework documentation.

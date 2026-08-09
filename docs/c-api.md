@@ -1012,12 +1012,21 @@ The `http` namespace is exposed when either the HTTP client feature or the HTTP 
 
 - `http.DEFAULT_TIMEOUT_MS`
   Default request timeout in milliseconds. Exposed only when `esp32.info().features.http` is enabled.
+- `http.MAX_BODY_BYTES`
+  Default maximum captured response body size. Exposed only when
+  `esp32.info().features.http` is enabled.
 - `http.server(options?)`
   Create a lightweight HTTP server object backed by `esp_http_server`. Exposed only when `esp32.info().features.httpServer` is enabled.
 - `http.fetch(input, options?)`
   Alias of global `fetch(input, options?)`. Exposed only when `esp32.info().features.http` is enabled.
 - `http.async.fetch(input, callback)` / `http.async.fetch(input, options, callback)`
-  Run an asynchronous HTTP request and call `callback(response, error)` on completion. Exposed only when `esp32.info().features.http` is enabled.
+  Run an asynchronous HTTP request, return an opaque generation-checked request
+  handle, and call `callback(response, error)` on completion. Exposed only when
+  `esp32.info().features.http` is enabled.
+- `http.async.cancel(handle)`
+  Cancel an active asynchronous request. Return `true` only when the handle
+  still identifies an active request; stale handles cannot cancel a reused
+  worker slot. The completion callback receives a cancellation error.
 
 Supported `fetch` options:
 
@@ -1029,6 +1038,10 @@ Supported `fetch` options:
   UTF-8 string request body or `Stream`.
 - `timeoutMs`
   Per-request timeout in milliseconds.
+- `maxBodyBytes`
+  Positive maximum number of response body bytes to retain. The request fails
+  with an explicit `maxBodyBytes` error instead of growing the response buffer
+  beyond this boundary.
 
 Examples:
 
@@ -1036,9 +1049,10 @@ Examples:
 var response = fetch("http://example.com");
 print(response.status, response.ok, response.text().length);
 
-http.async.fetch("https://example.com", function (response, error) {
-  print(error === undefined, response.status, response.text().length);
+var requestHandle = http.async.fetch("https://example.com", function (response, error) {
+  print(error === undefined, response && response.status);
 });
+// http.async.cancel(requestHandle);
 
 var head = http.fetch("http://example.com", {
   method: "HEAD",
@@ -1073,6 +1087,15 @@ print(response.text());
   Create a static file handler suitable for routes such as `server.get("/assets/*", staticFileHandler("./www"))`. Exposed only when both `esp32.info().features.httpServer` and `esp32.info().features.fs` are enabled.
 - `server.start()`
 - `server.stop()`
+  Stop listening while retaining the server slot and registered routes.
+- `server.removeRoute(pathOrPattern, method?)`
+  Remove matching routes and return the number removed. Omit `method` to remove
+  every method for the pattern; use names such as `"GET"` or `"ANY"` to filter.
+- `server.clearRoutes()`
+  Release all route callbacks owned by this server and return the number removed.
+- `server.close()`
+  Stop listening, finish pending request bookkeeping, release every route, and
+  return the native server slot for reuse. Calling `close()` again is safe.
 
 Handler shape:
 
@@ -1080,6 +1103,8 @@ Handler shape:
   - a function `(req) => Response`
   - or an object with `handle(req)` that returns a `Response`
 - `req` is always a `Request`
+- request bodies larger than 8192 bytes are rejected with HTTP 413 before a
+  JavaScript handler runs
 - route handlers must return a `Response`
 
 Route patterns:

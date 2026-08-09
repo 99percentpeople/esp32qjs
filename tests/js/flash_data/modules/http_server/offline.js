@@ -1,6 +1,8 @@
 test("http_server/offline", function () {
   var features = esp32.info().features;
   var server;
+  var replacementServer;
+  var staleServerError = "";
   var fileHandler;
 
   test.ok(typeof http === "object" && http !== null, "http namespace should exist");
@@ -11,6 +13,9 @@ test("http_server/offline", function () {
   test.ok(typeof server.post === "function", "server.post should exist");
   test.ok(typeof server.start === "function", "server.start should exist");
   test.ok(typeof server.stop === "function", "server.stop should exist");
+  test.ok(typeof server.close === "function", "server.close should exist");
+  test.ok(typeof server.removeRoute === "function", "server.removeRoute should exist");
+  test.ok(typeof server.clearRoutes === "function", "server.clearRoutes should exist");
   server.get("/ping", function () {
     return Response.text("pong");
   });
@@ -44,6 +49,35 @@ test("http_server/offline", function () {
     test.equal(typeof staticFileHandler, "undefined",
       "global staticFileHandler should stay hidden without fs support");
   }
+
+  test.equal(server.removeRoute("/ping", "GET"), 1,
+    "removeRoute should release a matching method route");
+  test.equal(server.removeRoute("/ping", "GET"), 0,
+    "removeRoute should ignore an already removed route");
+  test.equal(server.removeRoute(/^\/items\/.+$/), 1,
+    "removeRoute should match equivalent RegExp routes");
+
+  server.get("/one", function () { return Response.text("one"); });
+  server.post("/two", function () { return Response.text("two"); });
+  test.equal(server.clearRoutes(), 2, "clearRoutes should release every server route");
+  test.equal(server.clearRoutes(), 0, "clearRoutes should be idempotent");
+
+  server.close();
+  server.close();
+  test.ok(server.closed, "close should mark the server closed");
+  test.ok(!server.started, "close should stop the server");
+
+  replacementServer = http.server({ port: 8080 });
+  try {
+    server.start();
+  } catch (staleFailure) {
+    staleServerError = staleFailure && staleFailure.message
+      ? staleFailure.message
+      : String(staleFailure);
+  }
+  test.ok(staleServerError.indexOf("closed or stale") >= 0,
+    "a closed server object should not control a reused native slot");
+  replacementServer.close();
 
   return {
     port: server.port,
