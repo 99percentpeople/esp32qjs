@@ -945,6 +945,34 @@ bool esp32_mquickjs_init_wifi_runtime(JSContext *ctx,
     return esp32_mquickjs_init_wifi_async_runtime(ctx, runtime);
 }
 
+void esp32_mquickjs_deinit_wifi_runtime(JSContext *ctx)
+{
+    if (!s_wifi_state.initialized) {
+        return;
+    }
+
+    wifi_stop_connect_timeout_timer();
+    if (s_wifi_state.scan_in_progress) {
+        esp_wifi_scan_stop();
+    }
+
+    wifi_lock();
+    s_wifi_state.scan_generation++;
+    s_wifi_state.connect_generation++;
+    s_wifi_state.scan_in_progress = false;
+    s_wifi_state.connect_in_progress = false;
+    wifi_unlock();
+
+    wifi_clear_scan_callback(ctx);
+    wifi_clear_connect_callback(ctx);
+    if (s_wifi_state.scan_queue != NULL) {
+        xQueueReset(s_wifi_state.scan_queue);
+    }
+    if (s_wifi_state.connect_queue != NULL) {
+        xQueueReset(s_wifi_state.connect_queue);
+    }
+}
+
 JSValue js_wifi_get_default_timeout_ms(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;

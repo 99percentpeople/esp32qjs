@@ -53,17 +53,30 @@ void esp32qjs_interactive_console_init(const esp32qjs_interactive_host_t *host)
 
 size_t esp32qjs_interactive_task_stack_size(void)
 {
-    return (size_t)CONFIG_ESP32QJS_REPL_TASK_STACK_SIZE;
+    return (size_t)CONFIG_ESP32QJS_RUNTIME_TASK_STACK_SIZE;
 }
 
 void esp32qjs_interactive_install_log_bridge(const esp32qjs_interactive_host_t *host)
 {
 #ifdef CONFIG_ESP32QJS_ENABLE_REPL
     s_active_host = host;
-    s_log_vprintf = esp_log_set_vprintf(esp32qjs_interactive_log_vprintf);
+    if (s_log_vprintf == NULL) {
+        s_log_vprintf = esp_log_set_vprintf(esp32qjs_interactive_log_vprintf);
+    }
 #else
     (void)host;
 #endif
+}
+
+void esp32qjs_interactive_uninstall_log_bridge(void)
+{
+#ifdef CONFIG_ESP32QJS_ENABLE_REPL
+    if (s_log_vprintf != NULL) {
+        esp_log_set_vprintf(s_log_vprintf);
+        s_log_vprintf = NULL;
+    }
+#endif
+    s_active_host = NULL;
 }
 
 void esp32qjs_interactive_prepare_output(void *opaque)
@@ -81,6 +94,11 @@ static uint32_t host_output_generation(const esp32qjs_interactive_host_t *host)
         return 0;
     }
     return host->output_generation(host->opaque);
+}
+
+static bool host_should_stop(const esp32qjs_interactive_host_t *host)
+{
+    return host != NULL && host->should_stop != NULL && host->should_stop(host->opaque);
 }
 
 void esp32qjs_interactive_run(const esp32qjs_interactive_host_t *host,
@@ -117,7 +135,7 @@ void esp32qjs_interactive_run(const esp32qjs_interactive_host_t *host,
     }
 #endif
 
-    while (true) {
+    while (!host_should_stop(host)) {
         if (host != NULL && host->poll != NULL) {
             poll_result = host->poll(host->opaque);
         } else {
@@ -157,5 +175,8 @@ void esp32qjs_interactive_run(const esp32qjs_interactive_host_t *host,
             host->wait_for_activity != NULL) {
             host->wait_for_activity(host->opaque, wait_ms);
         }
+    }
+    if (s_active_host == host) {
+        s_active_host = NULL;
     }
 }

@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 
 # Runtime/resource tuning options live in component Kconfig files.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/main/Kconfig.projbuild"
+    "${CMAKE_SOURCE_DIR}/components/esp32qjs_runtime/Kconfig.projbuild"
     "${CMAKE_SOURCE_DIR}/components/esp32_mquickjs/Kconfig.projbuild"
     "${CMAKE_SOURCE_DIR}/components/esp32qjs_interactive/Kconfig.projbuild")
 

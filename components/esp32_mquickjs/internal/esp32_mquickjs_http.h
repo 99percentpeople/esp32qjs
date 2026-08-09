@@ -34,6 +34,7 @@ bool esp32_mquickjs_init_http_runtime(JSContext *ctx,
                                       esp32_mquickjs_runtime_t *runtime);
 bool esp32_mquickjs_init_http_async_runtime(JSContext *ctx,
                                             esp32_mquickjs_runtime_t *runtime);
+bool esp32_mquickjs_deinit_http_runtime(JSContext *ctx);
 
 JSValue js_http_fetch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_http_async_fetch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

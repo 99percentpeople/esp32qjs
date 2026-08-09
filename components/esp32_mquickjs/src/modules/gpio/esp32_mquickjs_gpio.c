@@ -376,18 +376,12 @@ static JSValue gpio_call_function(JSContext *ctx,
                                   int argc,
                                   JSValue *argv)
 {
-    int i;
-
-    if (JS_StackCheck(ctx, (uint32_t)(argc + 2))) {
-        return JS_EXCEPTION;
-    }
-
-    for (i = argc - 1; i >= 0; --i) {
-        JS_PushArg(ctx, argv[i]);
-    }
-    JS_PushArg(ctx, func);
-    JS_PushArg(ctx, this_val);
-    return JS_Call(ctx, argc);
+    return esp32_mquickjs_call(ctx,
+                               esp32_mquickjs_get_active_runtime(),
+                               func,
+                               this_val,
+                               argc,
+                               argv);
 }
 
 static esp_err_t gpio_interrupt_ensure_queue(void)
@@ -1170,6 +1164,32 @@ JSValue js_gpio_get_user_led_active_low(JSContext *ctx, JSValue *this_val, int a
     (void)argc;
     (void)argv;
     return JS_NewBool(ESP32_MQUICKJS_USER_LED_ACTIVE_LOW);
+}
+
+void esp32_mquickjs_deinit_gpio_runtime(JSContext *ctx)
+{
+    int pin;
+
+    for (pin = 0; pin < GPIO_NUM_MAX; ++pin) {
+        gpio_interrupt_slot_t *slot = &s_gpio_interrupt_slots[pin];
+
+        if (!GPIO_IS_VALID_GPIO(pin) ||
+            (!slot->attached && !slot->handler_installed &&
+             !slot->callback_registered)) {
+            continue;
+        }
+        (void)gpio_interrupt_release_slot(ctx, (gpio_num_t)pin, NULL);
+        gpio_interrupt_clear_callback(ctx, slot);
+        slot->attached = false;
+        slot->handler_installed = false;
+    }
+
+    if (s_gpio_interrupt_queue != NULL) {
+        QueueHandle_t queue = s_gpio_interrupt_queue;
+
+        s_gpio_interrupt_queue = NULL;
+        vQueueDelete(queue);
+    }
 }
 
 #endif

@@ -295,6 +295,15 @@ bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed)
     return true;
 }
 
+void esp32_mquickjs_unmount_littlefs(void)
+{
+    if (!s_littlefs_mounted) {
+        return;
+    }
+    esp_vfs_littlefs_unregister(ESP32_MQUICKJS_LITTLEFS_PARTITION_LABEL);
+    s_littlefs_mounted = false;
+}
+
 JSValue esp32_mquickjs_load_from_littlefs(JSContext *ctx,
                                           esp32_mquickjs_runtime_t *runtime,
                                           const char *script_path)

@@ -231,11 +231,12 @@ static bool wifi_async_poller(JSContext *ctx,
             continue;
         }
 
-        JS_PushArg(ctx, argv[1]);
-        JS_PushArg(ctx, argv[0]);
-        JS_PushArg(ctx, *callback_fn);
-        JS_PushArg(ctx, JS_NULL);
-        callback_ret = JS_Call(ctx, 2);
+        callback_ret = esp32_mquickjs_call(ctx,
+                                            runtime,
+                                            *callback_fn,
+                                            JS_NULL,
+                                            2,
+                                            argv);
         if (JS_IsException(callback_ret)) {
             esp32_mquickjs_print_exception(ctx);
         }
@@ -302,11 +303,12 @@ static bool wifi_async_poller(JSContext *ctx,
             argv[1] = JS_NewString(ctx, message);
         }
 
-        JS_PushArg(ctx, argv[1]);
-        JS_PushArg(ctx, argv[0]);
-        JS_PushArg(ctx, *callback_fn);
-        JS_PushArg(ctx, JS_NULL);
-        callback_ret = JS_Call(ctx, 2);
+        callback_ret = esp32_mquickjs_call(ctx,
+                                            runtime,
+                                            *callback_fn,
+                                            JS_NULL,
+                                            2,
+                                            argv);
         if (JS_IsException(callback_ret)) {
             esp32_mquickjs_print_exception(ctx);
             needs_redraw = true;

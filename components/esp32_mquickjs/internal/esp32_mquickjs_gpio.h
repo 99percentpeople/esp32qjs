@@ -4,6 +4,8 @@
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_GPIO
 
+void esp32_mquickjs_deinit_gpio_runtime(JSContext *ctx);
+
 JSValue js_gpio_pinMode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_gpio_isValid(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_gpio_isOutputCapable(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

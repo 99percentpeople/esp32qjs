@@ -226,6 +226,48 @@ JSValue js_http_async_fetch(JSContext *ctx, JSValue *this_val, int argc, JSValue
     return result;
 }
 
+bool esp32_mquickjs_deinit_http_runtime(JSContext *ctx)
+{
+    esp32_mquickjs_http_async_event_t event;
+    bool pending = false;
+    int i;
+
+    if (s_http_state.queue != NULL) {
+        while (xQueueReceive(s_http_state.queue, &event, 0) == pdTRUE) {
+            if (event.slot_id < ESP32_MQUICKJS_HTTP_MAX_ASYNC_REQUESTS) {
+                esp32_mquickjs_http_async_slot_t *slot =
+                    &s_http_state.slots[event.slot_id];
+
+                if (slot->allocated && slot->generation == event.generation) {
+                    http_async_cleanup_slot(ctx, slot);
+                }
+            }
+            esp32_mquickjs_http_free_response(event.response);
+        }
+    }
+
+    http_lock();
+    for (i = 0; i < ESP32_MQUICKJS_HTTP_MAX_ASYNC_REQUESTS; ++i) {
+        if (s_http_state.slots[i].allocated) {
+            pending = true;
+            break;
+        }
+    }
+    http_unlock();
+    if (pending) {
+        return false;
+    }
+
+    if (s_http_state.queue != NULL) {
+        vQueueDelete(s_http_state.queue);
+    }
+    if (s_http_state.lock != NULL) {
+        vSemaphoreDelete(s_http_state.lock);
+    }
+    memset(&s_http_state, 0, sizeof(s_http_state));
+    return true;
+}
+
 static bool http_async_poller(JSContext *ctx,
                               esp32_mquickjs_runtime_t *runtime,
                               void *opaque)

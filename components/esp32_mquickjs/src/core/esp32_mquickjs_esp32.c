@@ -105,19 +105,11 @@ static JSValue esp32_make_info_object(JSContext *ctx)
     uint32_t js_heap_size = runtime != NULL ? (uint32_t)runtime->js_heap_size : 0;
     const char *js_heap_region = (runtime != NULL && runtime->js_heap_in_psram) ? "psram" : "internal";
     bool littlefs_mounted = runtime != NULL && runtime->littlefs_mounted;
-    bool auto_run_index_js = false;
-    bool format_littlefs_on_mount_fail = false;
-    bool repl_enabled = false;
+    bool auto_run_index_js = runtime != NULL && runtime->auto_run_startup_script;
+    bool format_littlefs_on_mount_fail =
+        runtime != NULL && runtime->format_littlefs_on_mount_fail;
+    bool repl_enabled = runtime != NULL && runtime->repl_enabled;
 
-#ifdef CONFIG_ESP32QJS_AUTORUN_INDEX_JS
-    auto_run_index_js = true;
-#endif
-#ifdef CONFIG_ESP32QJS_LITTLEFS_FORMAT_ON_MOUNT_FAIL
-    format_littlefs_on_mount_fail = true;
-#endif
-#ifdef CONFIG_ESP32QJS_ENABLE_REPL
-    repl_enabled = true;
-#endif
 #ifdef CONFIG_SPIRAM
     psram_enabled = esp_psram_is_initialized();
     total_psram = psram_enabled ? esp_psram_get_size() : 0;
@@ -138,7 +130,11 @@ static JSValue esp32_make_info_object(JSContext *ctx)
     if (JS_IsException(*features)) {
         goto fail;
     }
-    if (!esp32_mquickjs_set_property(ctx, *info, "board",
+    if (!esp32_mquickjs_set_property(ctx, *info, "runtimeVersion",
+                                     JS_NewString(ctx, ESP32QJS_VERSION)) ||
+        !esp32_mquickjs_set_property(ctx, *info, "hostApiVersion",
+                                     JS_NewUint32(ctx, ESP32QJS_HOST_API_VERSION)) ||
+        !esp32_mquickjs_set_property(ctx, *info, "board",
                                      JS_NewString(ctx, ESP32_MQUICKJS_BOARD_NAME)) ||
         !esp32_mquickjs_set_property(ctx, *info, "chip",
                                      JS_NewString(ctx, esp32_chip_model_name())) ||

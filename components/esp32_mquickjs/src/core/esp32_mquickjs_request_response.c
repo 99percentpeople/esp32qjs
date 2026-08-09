@@ -18,18 +18,12 @@ static JSValue rr_call_function(JSContext *ctx,
                                 int argc,
                                 JSValue *argv)
 {
-    int i;
-
-    if (JS_StackCheck(ctx, (uint32_t)(argc + 2))) {
-        return JS_EXCEPTION;
-    }
-
-    for (i = argc - 1; i >= 0; --i) {
-        JS_PushArg(ctx, argv[i]);
-    }
-    JS_PushArg(ctx, func);
-    JS_PushArg(ctx, this_val);
-    return JS_Call(ctx, argc);
+    return esp32_mquickjs_call(ctx,
+                               esp32_mquickjs_get_active_runtime(),
+                               func,
+                               this_val,
+                               argc,
+                               argv);
 }
 
 static char *rr_strdup(const char *value)

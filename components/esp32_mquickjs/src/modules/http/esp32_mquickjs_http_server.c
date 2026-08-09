@@ -81,6 +81,7 @@ typedef struct {
 
 typedef struct {
     bool initialized;
+    bool shutting_down;
     esp32_mquickjs_runtime_t *runtime;
     QueueHandle_t queue;
     SemaphoreHandle_t lock;
@@ -141,18 +142,12 @@ static JSValue http_server_call_function(JSContext *ctx,
                                          int argc,
                                          JSValue *argv)
 {
-    int i;
-
-    if (JS_StackCheck(ctx, (uint32_t)(argc + 2))) {
-        return JS_EXCEPTION;
-    }
-
-    for (i = argc - 1; i >= 0; --i) {
-        JS_PushArg(ctx, argv[i]);
-    }
-    JS_PushArg(ctx, func);
-    JS_PushArg(ctx, this_val);
-    return JS_Call(ctx, argc);
+    return esp32_mquickjs_call(ctx,
+                               esp32_mquickjs_get_active_runtime(),
+                               func,
+                               this_val,
+                               argc,
+                               argv);
 }
 
 static bool http_server_is_object(JSContext *ctx, JSValue value)
@@ -808,7 +803,11 @@ static esp_err_t http_server_dispatch_handler(httpd_req_t *req)
     char *path = NULL;
     char *query_string = NULL;
 
-    if (server == NULL || !server->allocated) {
+    if (server == NULL || !server->allocated ||
+        s_http_server_state.shutting_down) {
+        if (req != NULL) {
+            http_server_send_error(req, 503, "server shutting down");
+        }
         return ESP_FAIL;
     }
     if (!http_server_parse_path_and_query(req->uri, &path, &query_string)) {
@@ -2134,6 +2133,45 @@ static JSValue http_server_static_file_handler_handle_internal(JSContext *ctx,
     return response_obj;
 }
 #endif
+
+void esp32_mquickjs_deinit_http_server_runtime(JSContext *ctx)
+{
+    int i;
+
+    if (!s_http_server_state.initialized) {
+        if (s_http_server_state.queue != NULL) {
+            vQueueDelete(s_http_server_state.queue);
+        }
+        if (s_http_server_state.lock != NULL) {
+            vSemaphoreDelete(s_http_server_state.lock);
+        }
+        memset(&s_http_server_state, 0, sizeof(s_http_server_state));
+        return;
+    }
+
+    s_http_server_state.shutting_down = true;
+    s_http_server_state.runtime = NULL;
+    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_SERVERS; ++i) {
+        http_server_stop_slot(&s_http_server_state.servers[i]);
+    }
+    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN; ++i) {
+        http_server_cleanup_request(&s_http_server_state.requests[i]);
+    }
+    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_ROUTES; ++i) {
+        http_server_cleanup_route(ctx, &s_http_server_state.routes[i]);
+    }
+    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_SERVERS; ++i) {
+        http_server_cleanup_server(&s_http_server_state.servers[i]);
+    }
+
+    if (s_http_server_state.queue != NULL) {
+        vQueueDelete(s_http_server_state.queue);
+    }
+    if (s_http_server_state.lock != NULL) {
+        vSemaphoreDelete(s_http_server_state.lock);
+    }
+    memset(&s_http_server_state, 0, sizeof(s_http_server_state));
+}
 
 static bool http_server_async_poller(JSContext *ctx,
                                      esp32_mquickjs_runtime_t *runtime,

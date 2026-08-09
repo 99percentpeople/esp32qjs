@@ -1,0 +1,57 @@
+menu "ESP32QJS Runtime"
+
+config ESP32QJS_ENABLE_REPL
+    bool "Enable serial JavaScript REPL"
+    default y
+    help
+        Enable the USB Serial/JTAG REPL frontend. Disable this for headless or
+        production firmware that should only run the selected application.
+
+config ESP32QJS_JS_HEAP_SIZE
+    int "JavaScript heap size (bytes)"
+    range 65536 4194304
+    default 163840
+    help
+        Size of the dedicated heap buffer passed to mquickjs.
+
+config ESP32QJS_JS_HEAP_PREFER_PSRAM
+    bool "Prefer PSRAM for the JavaScript heap"
+    default y
+    help
+        Try PSRAM first and fall back to internal memory.
+
+config ESP32QJS_LITTLEFS_FORMAT_ON_MOUNT_FAIL
+    bool "Format LittleFS when mount fails"
+    default n
+    help
+        Development convenience that may erase application data. Production
+        profiles should leave this disabled.
+
+config ESP32QJS_AUTORUN_INDEX_JS
+    bool "Auto-run /littlefs/index.js at boot"
+    default y
+
+config ESP32QJS_RUNTIME_TASK_STACK_SIZE
+    int "JavaScript runtime task stack size (bytes)"
+    range 4096 32768
+    default 8192
+
+config ESP32QJS_RUNTIME_TASK_PRIORITY
+    int "JavaScript runtime task priority"
+    range 1 24
+    default 1
+
+config ESP32QJS_RUNTIME_STOP_TIMEOUT_MS
+    int "Default runtime stop timeout (ms)"
+    range 100 30000
+    default 5000
+
+config ESP32QJS_RUNTIME_TASK_WATCHDOG
+    bool "Subscribe the JavaScript runtime task to the task watchdog"
+    default y if ESP_TASK_WDT_EN
+    depends on ESP_TASK_WDT_EN
+    help
+        Use the ESP-IDF task watchdog as a final recovery layer. JavaScript
+        callback deadlines should normally interrupt runaway code first.
+
+endmenu

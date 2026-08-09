@@ -3,7 +3,7 @@ set(srcs
 )
 
 set(requires
-    esp32_mquickjs
+    esp32qjs_runtime
 )
 
 idf_component_register(
@@ -11,10 +11,6 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES ${requires}
 )
-
-if(CONFIG_ESP32QJS_ENABLE_REPL)
-    idf_component_optional_requires(PRIVATE esp32qjs_interactive)
-endif()
 
 if(NOT "${ESP32QJS_FLASH_DATA_DIR}" STREQUAL "")
     if(NOT IS_DIRECTORY "${ESP32QJS_FLASH_DATA_DIR}")

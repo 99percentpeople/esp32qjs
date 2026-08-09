@@ -60,6 +60,7 @@ bool esp32_mquickjs_init_wifi_runtime(JSContext *ctx,
                                       esp32_mquickjs_runtime_t *runtime);
 bool esp32_mquickjs_init_wifi_async_runtime(JSContext *ctx,
                                             esp32_mquickjs_runtime_t *runtime);
+void esp32_mquickjs_deinit_wifi_runtime(JSContext *ctx);
 
 JSValue js_wifi_connect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_wifi_disconnect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

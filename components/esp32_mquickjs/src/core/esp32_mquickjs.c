@@ -164,6 +164,15 @@ void esp32_mquickjs_attach_current_task(esp32_mquickjs_runtime_t *runtime)
     }
 }
 
+void esp32_mquickjs_detach_current_task(esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+
+    if (state != NULL) {
+        state->task_handle = NULL;
+    }
+}
+
 void esp32_mquickjs_notify_activity(esp32_mquickjs_runtime_t *runtime)
 {
     esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
@@ -248,24 +257,41 @@ static int js_interrupt_handler(JSContext *ctx, void *opaque)
     return esp_timer_get_time() > runtime->deadline_us;
 }
 
-static JSValue js_call_function(JSContext *ctx,
-                                JSValue func,
-                                JSValue this_val,
-                                int argc,
-                                JSValue *argv)
+JSValue esp32_mquickjs_call(JSContext *ctx,
+                            esp32_mquickjs_runtime_t *runtime,
+                            JSValue function,
+                            JSValue this_value,
+                            int argc,
+                            JSValue *argv)
 {
+    uint64_t previous_deadline = runtime != NULL ? runtime->deadline_us : 0;
+    JSValue result;
     int i;
 
-    if (JS_StackCheck(ctx, (uint32_t)(argc + 2))) {
+    if (ctx == NULL || argc < 0 || JS_StackCheck(ctx, (uint32_t)(argc + 2))) {
         return JS_EXCEPTION;
+    }
+
+    if (runtime != NULL && runtime->eval_timeout_ms > 0) {
+        uint64_t call_deadline = esp_timer_get_time() +
+                                 ((uint64_t)runtime->eval_timeout_ms * 1000ULL);
+
+        if (previous_deadline == 0 || call_deadline < previous_deadline) {
+            runtime->deadline_us = call_deadline;
+        }
     }
 
     for (i = argc - 1; i >= 0; --i) {
         JS_PushArg(ctx, argv[i]);
     }
-    JS_PushArg(ctx, func);
-    JS_PushArg(ctx, this_val);
-    return JS_Call(ctx, argc);
+    JS_PushArg(ctx, function);
+    JS_PushArg(ctx, this_value);
+    result = JS_Call(ctx, argc);
+
+    if (runtime != NULL) {
+        runtime->deadline_us = previous_deadline;
+    }
+    return result;
 }
 
 bool esp32_mquickjs_set_property(JSContext *ctx,
@@ -347,13 +373,11 @@ static void js_call_best_effort(JSContext *ctx, JSValue func)
 {
     JSValue ret;
 
-    if (!JS_IsFunction(ctx, func) || JS_StackCheck(ctx, 2)) {
+    if (!JS_IsFunction(ctx, func)) {
         return;
     }
 
-    JS_PushArg(ctx, func);
-    JS_PushArg(ctx, JS_NULL);
-    ret = JS_Call(ctx, 0);
+    ret = esp32_mquickjs_call(ctx, s_active_runtime, func, JS_NULL, 0, NULL);
     if (JS_IsException(ret)) {
         esp32_mquickjs_print_exception(ctx);
     }
@@ -396,7 +420,7 @@ static JSValue js_bind_method(JSContext *ctx, JSValue target_obj, const char *me
     }
 
     bind_args[0] = target_obj;
-    result = js_call_function(ctx, *bind_fn, *method_fn, 1, bind_args);
+    result = esp32_mquickjs_call(ctx, s_active_runtime, *bind_fn, *method_fn, 1, bind_args);
 
 done:
     JS_PopGCRef(ctx, &bind_ref);
@@ -576,7 +600,7 @@ static JSValue js_wait_for(JSContext *ctx, int argc, JSValue *argv)
     start_args[0] = resolve_fn;
     start_args[1] = reject_fn;
     start_args[2] = *deferred_obj;
-    start_result = js_call_function(ctx, argv[0], JS_NULL, 3, start_args);
+    start_result = esp32_mquickjs_call(ctx, s_active_runtime, argv[0], JS_NULL, 3, start_args);
     if (JS_IsException(start_result)) {
         JS_PopGCRef(ctx, &deferred_ref);
         return JS_EXCEPTION;
@@ -775,6 +799,48 @@ static void esp32_mquickjs_cancel_timer(JSContext *ctx, esp32_mquickjs_timer_slo
     slot->pending = false;
 }
 
+static void esp32_mquickjs_deinit_timer_state(JSContext *ctx,
+                                               esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_timer_state_t *state = esp32_mquickjs_timer_state(runtime);
+    int i;
+
+    if (state == NULL) {
+        return;
+    }
+    if (state->slots != NULL) {
+        for (i = 0; i < ESP32_MQUICKJS_MAX_TIMERS; ++i) {
+            esp32_mquickjs_timer_slot_t *slot = &state->slots[i];
+
+            if (slot->allocated && ctx != NULL) {
+                esp32_mquickjs_cancel_timer(ctx, slot);
+            } else if (slot->handle != NULL) {
+                esp_timer_stop(slot->handle);
+                esp_timer_delete(slot->handle);
+                slot->handle = NULL;
+            }
+        }
+    }
+    if (state->queue != NULL) {
+        vQueueDelete(state->queue);
+    }
+    heap_caps_free(state->slots);
+    heap_caps_free(state);
+    runtime->timer_state = NULL;
+}
+
+static void esp32_mquickjs_deinit_async_state(esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+
+    if (state == NULL) {
+        return;
+    }
+    heap_caps_free(state->pollers);
+    heap_caps_free(state);
+    runtime->async_state = NULL;
+}
+
 static JSValue esp32_mquickjs_create_timer(JSContext *ctx,
                                            esp32_mquickjs_runtime_t *runtime,
                                            JSValue *callback,
@@ -854,7 +920,7 @@ JSContext *esp32_mquickjs_create(void *mem_start,
 {
     JSContext *ctx;
 
-    if (runtime == NULL) {
+    if (runtime == NULL || s_active_runtime != NULL) {
         return NULL;
     }
 
@@ -862,6 +928,19 @@ JSContext *esp32_mquickjs_create(void *mem_start,
     runtime->eval_timeout_ms = eval_timeout_ms;
     runtime->async_generation = 0;
     runtime->output_generation = 0;
+    runtime->littlefs_mounted = false;
+    runtime->repl_enabled = false;
+    runtime->auto_run_startup_script = false;
+    runtime->format_littlefs_on_mount_fail = false;
+#ifdef CONFIG_ESP32QJS_ENABLE_REPL
+    runtime->repl_enabled = true;
+#endif
+#ifdef CONFIG_ESP32QJS_AUTORUN_INDEX_JS
+    runtime->auto_run_startup_script = true;
+#endif
+#ifdef CONFIG_ESP32QJS_LITTLEFS_FORMAT_ON_MOUNT_FAIL
+    runtime->format_littlefs_on_mount_fail = true;
+#endif
     runtime->prepare_output = NULL;
     runtime->prepare_output_opaque = NULL;
     runtime->timer_state = NULL;
@@ -870,11 +949,14 @@ JSContext *esp32_mquickjs_create(void *mem_start,
         return NULL;
     }
     if (!esp32_mquickjs_init_timer_state(runtime)) {
+        esp32_mquickjs_deinit_async_state(runtime);
         return NULL;
     }
 
     ctx = JS_NewContext(mem_start, mem_size, &js_stdlib);
     if (ctx == NULL) {
+        esp32_mquickjs_deinit_timer_state(NULL, runtime);
+        esp32_mquickjs_deinit_async_state(runtime);
         return NULL;
     }
 
@@ -884,6 +966,46 @@ JSContext *esp32_mquickjs_create(void *mem_start,
     JS_SetRandomSeed(ctx, (uint64_t)esp_timer_get_time());
     s_active_runtime = runtime;
     return ctx;
+}
+
+bool esp32_mquickjs_destroy(JSContext *ctx,
+                            esp32_mquickjs_runtime_t *runtime)
+{
+    if (runtime == NULL) {
+        return false;
+    }
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
+    if (!esp32_mquickjs_deinit_http_runtime(ctx)) {
+        return false;
+    }
+#endif
+    if (s_active_runtime == runtime) {
+        s_active_runtime = NULL;
+    }
+#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
+    esp32_mquickjs_deinit_http_server_runtime(ctx);
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
+    esp32_mquickjs_deinit_wifi_runtime(ctx);
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_GPIO
+    esp32_mquickjs_deinit_gpio_runtime(ctx);
+#endif
+
+    esp32_mquickjs_deinit_timer_state(ctx, runtime);
+    if (ctx != NULL) {
+        JS_FreeContext(ctx);
+    }
+    esp32_mquickjs_deinit_async_state(runtime);
+    runtime->deadline_us = 0;
+    runtime->littlefs_mounted = false;
+    runtime->repl_enabled = false;
+    runtime->auto_run_startup_script = false;
+    runtime->format_littlefs_on_mount_fail = false;
+    runtime->prepare_output = NULL;
+    runtime->prepare_output_opaque = NULL;
+    return true;
 }
 
 void esp32_mquickjs_set_eval_timeout(esp32_mquickjs_runtime_t *runtime,
@@ -901,17 +1023,22 @@ JSValue esp32_mquickjs_eval(JSContext *ctx,
                             const char *filename,
                             int eval_flags)
 {
+    uint64_t previous_deadline = runtime != NULL ? runtime->deadline_us : 0;
     JSValue result;
 
     if (runtime != NULL && runtime->eval_timeout_ms > 0) {
-        runtime->deadline_us = esp_timer_get_time() +
-                               ((uint64_t)runtime->eval_timeout_ms * 1000ULL);
+        uint64_t eval_deadline = esp_timer_get_time() +
+                                 ((uint64_t)runtime->eval_timeout_ms * 1000ULL);
+
+        if (previous_deadline == 0 || eval_deadline < previous_deadline) {
+            runtime->deadline_us = eval_deadline;
+        }
     }
 
     result = JS_Eval(ctx, source, strlen(source), filename, eval_flags);
 
     if (runtime != NULL) {
-        runtime->deadline_us = 0;
+        runtime->deadline_us = previous_deadline;
     }
     return result;
 }
@@ -1015,6 +1142,8 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
 
     while (xQueueReceive(state->queue, &event, 0) == pdTRUE) {
         esp32_mquickjs_timer_slot_t *slot;
+        JSGCRef callback_ref;
+        JSValue *callback;
         JSValue ret;
 
         if (event.timer_id >= ESP32_MQUICKJS_MAX_TIMERS) {
@@ -1037,17 +1166,17 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
             continue;
         }
 
-        JS_PushArg(ctx, slot->callback.val);
-        JS_PushArg(ctx, JS_NULL);
-
+        callback = JS_PushGCRef(ctx, &callback_ref);
+        *callback = slot->callback.val;
         if (!slot->repeating) {
             esp32_mquickjs_cancel_timer(ctx, slot);
         }
 
-        ret = JS_Call(ctx, 0);
+        ret = esp32_mquickjs_call(ctx, runtime, *callback, JS_NULL, 0, NULL);
         if (JS_IsException(ret)) {
             esp32_mquickjs_print_exception(ctx);
         }
+        JS_PopGCRef(ctx, &callback_ref);
     }
 
     async_handled = esp32_mquickjs_poll_registered(ctx, runtime);

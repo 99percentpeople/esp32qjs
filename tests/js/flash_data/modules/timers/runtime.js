@@ -20,6 +20,7 @@ test("timers/runtime", function () {
   var clearedIntervalTicks;
   var deferredRejectedCaught = false;
   var waitForRejectedCaught = false;
+  var callbackTimeoutRecovery;
 
   clearedTimeoutResult = waitFor(function (resolve) {
     var ran = false;
@@ -77,6 +78,18 @@ test("timers/runtime", function () {
     waitForRejectedCaught = String(waitForError).indexOf("waitFor-fail") >= 0;
   }
   test.ok(waitForRejectedCaught, "waitFor reject should surface");
+
+  callbackTimeoutRecovery = waitFor(function (resolve) {
+    setTimeout(function () {
+      while (true) {
+        // The native callback deadline must interrupt this loop.
+      }
+    }, 10);
+    setTimeout(function () {
+      resolve("recovered");
+    }, 40);
+  }, 1000);
+  test.equal(callbackTimeoutRecovery, "recovered", "runtime should recover after a timed-out timer callback");
 
   return { intervalTicks: intervalTicks, timeoutValue: timeoutValue };
 });

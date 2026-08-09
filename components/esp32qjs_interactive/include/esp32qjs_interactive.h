@@ -22,6 +22,7 @@ typedef struct {
     esp32qjs_interactive_poll_result_t (*poll)(void *opaque);
     void (*handle_line)(void *opaque, const char *line);
     bool (*wait_for_activity)(void *opaque, uint32_t timeout_ms);
+    bool (*should_stop)(void *opaque);
     void (*notify_activity)(void *opaque);
     void (*notify_activity_from_isr)(void *opaque, int *task_woken);
     void *opaque;
@@ -30,6 +31,7 @@ typedef struct {
 void esp32qjs_interactive_console_init(const esp32qjs_interactive_host_t *host);
 
 void esp32qjs_interactive_install_log_bridge(const esp32qjs_interactive_host_t *host);
+void esp32qjs_interactive_uninstall_log_bridge(void);
 
 void esp32qjs_interactive_prepare_output(void *opaque);
 
