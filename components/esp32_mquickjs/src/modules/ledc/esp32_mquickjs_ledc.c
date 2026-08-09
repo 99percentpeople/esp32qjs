@@ -262,17 +262,17 @@ static JSValue ledc_make_timer_status(JSContext *ctx, ledc_timer_t timer)
         return JS_EXCEPTION;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *status_obj, "timer", JS_NewInt32(ctx, (int32_t)timer)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "configured", JS_NewBool(state->configured)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "paused", JS_NewBool(state->paused)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "freqHz", JS_NewUint32(ctx, state->configured ? state->freq_hz : 0)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "dutyResolution",
+    if (!esp32_mquickjs_set_property_ref(ctx, status_obj, "timer", JS_NewInt32(ctx, (int32_t)timer)) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "configured", JS_NewBool(state->configured)) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "paused", JS_NewBool(state->paused)) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "freqHz", JS_NewUint32(ctx, state->configured ? state->freq_hz : 0)) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "dutyResolution",
                                      JS_NewInt32(ctx, state->configured ? (int32_t)state->duty_resolution : 0)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "maxDuty",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "maxDuty",
                                      JS_NewUint32(ctx, state->configured
                                                            ? ledc_resolution_to_max_duty(state->duty_resolution)
                                                            : 0)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "clock",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "clock",
                                      JS_NewString(ctx, ledc_clock_to_string(state->clock)))) {
         JS_PopGCRef(ctx, &status_ref);
         return JS_EXCEPTION;
@@ -295,22 +295,22 @@ static JSValue ledc_make_channel_status(JSContext *ctx, ledc_channel_t channel)
         return JS_EXCEPTION;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *status_obj, "channel", JS_NewInt32(ctx, (int32_t)channel)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "configured", JS_NewBool(state->configured)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "pin", JS_NewInt32(ctx, (int32_t)state->pin)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "timer",
+    if (!esp32_mquickjs_set_property_ref(ctx, status_obj, "channel", JS_NewInt32(ctx, (int32_t)channel)) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "configured", JS_NewBool(state->configured)) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "pin", JS_NewInt32(ctx, (int32_t)state->pin)) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "timer",
                                      JS_NewInt32(ctx, state->configured ? (int32_t)state->timer : -1)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "duty",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "duty",
                                      JS_NewUint32(ctx, state->configured ? state->duty : 0)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "hpoint",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "hpoint",
                                      JS_NewUint32(ctx, state->configured ? state->hpoint : 0)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "maxDuty",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "maxDuty",
                                      JS_NewUint32(ctx, state->configured && timer_state != NULL && timer_state->configured
                                                            ? ledc_resolution_to_max_duty(timer_state->duty_resolution)
                                                            : 0)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "outputInvert",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "outputInvert",
                                      JS_NewBool(state->configured && state->output_invert)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "sleepMode",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "sleepMode",
                                      JS_NewString(ctx, ledc_sleep_mode_to_string(state->sleep_mode)))) {
         JS_PopGCRef(ctx, &status_ref);
         return JS_EXCEPTION;

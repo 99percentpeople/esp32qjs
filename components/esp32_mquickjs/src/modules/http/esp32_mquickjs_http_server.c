@@ -957,8 +957,8 @@ static bool http_server_make_request_object(JSContext *ctx,
     }
 
     for (i = 0; i < request->header_count; ++i) {
-        if (!esp32_mquickjs_set_property(ctx,
-                                         *headers_plain,
+        if (!esp32_mquickjs_set_property_ref(ctx,
+                                         headers_plain,
                                          request->headers[i].key,
                                          JS_NewString(ctx, request->headers[i].value))) {
             goto fail;
@@ -1012,7 +1012,7 @@ static bool http_server_make_request_object(JSContext *ctx,
                 goto fail;
             }
             if (key[0] != '\0' &&
-                !esp32_mquickjs_set_property(ctx, *query_obj, key, JS_NewString(ctx, value))) {
+                !esp32_mquickjs_set_property_ref(ctx, query_obj, key, JS_NewString(ctx, value))) {
                 heap_caps_free(key);
                 heap_caps_free(value);
                 goto fail;
@@ -1490,7 +1490,7 @@ static JSValue http_server_make_static_handler(JSContext *ctx, const char *root_
     handler_obj = JS_PushGCRef(ctx, &handler_ref);
     *handler_obj = JS_NewObjectClassUser(ctx, JS_CLASS_STATIC_FILE_HANDLER);
     if (JS_IsException(*handler_obj) ||
-        !esp32_mquickjs_set_property(ctx, *handler_obj, "root", JS_NewString(ctx, root_copy))) {
+        !esp32_mquickjs_set_property_ref(ctx, handler_obj, "root", JS_NewString(ctx, root_copy))) {
         heap_caps_free(root_copy);
         JS_PopGCRef(ctx, &handler_ref);
         return JS_EXCEPTION;
@@ -1681,8 +1681,10 @@ static int http_server_server_id_from_object(JSContext *ctx,
                                              const char *api_name,
                                              int32_t *out_server_id)
 {
+    JSGCRef object_ref;
     JSGCRef server_id_ref;
     JSGCRef generation_ref;
+    JSValue *server_obj;
     JSValue *server_id_value;
     JSValue *generation_value;
     esp32_mquickjs_http_server_slot_t *server;
@@ -1694,20 +1696,24 @@ static int http_server_server_id_from_object(JSContext *ctx,
         return -1;
     }
 
+    server_obj = JS_PushGCRef(ctx, &object_ref);
     server_id_value = JS_PushGCRef(ctx, &server_id_ref);
     generation_value = JS_PushGCRef(ctx, &generation_ref);
-    *server_id_value = JS_GetPropertyStr(ctx, server_value, "serverId");
-    *generation_value = JS_GetPropertyStr(ctx, server_value, "serverGeneration");
+    *server_obj = server_value;
+    *server_id_value = JS_GetPropertyStr(ctx, *server_obj, "serverId");
+    *generation_value = JS_GetPropertyStr(ctx, *server_obj, "serverGeneration");
     if (JS_IsException(*server_id_value) || JS_IsException(*generation_value) ||
         JS_ToInt32(ctx, &server_id, *server_id_value) != 0 ||
         JS_ToUint32(ctx, &generation, *generation_value) != 0) {
         JS_PopGCRef(ctx, &generation_ref);
         JS_PopGCRef(ctx, &server_id_ref);
+        JS_PopGCRef(ctx, &object_ref);
         JS_ThrowTypeError(ctx, "%s expects a valid HttpServer instance", api_name);
         return -1;
     }
     JS_PopGCRef(ctx, &generation_ref);
     JS_PopGCRef(ctx, &server_id_ref);
+    JS_PopGCRef(ctx, &object_ref);
 
     server = http_server_get_slot(server_id);
     if (server == NULL || server->generation != generation) {
@@ -1731,22 +1737,22 @@ static JSValue http_server_make_server_object(JSContext *ctx, JSValue global_obj
         goto fail;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *server_obj, "serverId", JS_NewInt32(ctx, server_id)) ||
-        !esp32_mquickjs_set_property(ctx,
-                                     *server_obj,
+    if (!esp32_mquickjs_set_property_ref(ctx, server_obj, "serverId", JS_NewInt32(ctx, server_id)) ||
+        !esp32_mquickjs_set_property_ref(ctx,
+                                     server_obj,
                                      "serverGeneration",
                                      JS_NewUint32(ctx, server->generation)) ||
-        !esp32_mquickjs_set_property(ctx, *server_obj, "port", JS_NewInt32(ctx, server->port)) ||
-        !esp32_mquickjs_set_property(ctx, *server_obj, "ctrlPort", JS_NewInt32(ctx, server->ctrl_port)) ||
-        !esp32_mquickjs_set_property(ctx,
-                                     *server_obj,
+        !esp32_mquickjs_set_property_ref(ctx, server_obj, "port", JS_NewInt32(ctx, server->port)) ||
+        !esp32_mquickjs_set_property_ref(ctx, server_obj, "ctrlPort", JS_NewInt32(ctx, server->ctrl_port)) ||
+        !esp32_mquickjs_set_property_ref(ctx,
+                                     server_obj,
                                      "host",
                                      JS_NewString(ctx,
                                                   server->host != NULL
                                                       ? server->host
                                                       : "0.0.0.0")) ||
-        !esp32_mquickjs_set_property(ctx, *server_obj, "started", JS_NewBool(server->started)) ||
-        !esp32_mquickjs_set_property(ctx, *server_obj, "closed", JS_FALSE)) {
+        !esp32_mquickjs_set_property_ref(ctx, server_obj, "started", JS_NewBool(server->started)) ||
+        !esp32_mquickjs_set_property_ref(ctx, server_obj, "closed", JS_FALSE)) {
         goto fail;
     }
 
@@ -1920,7 +1926,7 @@ JSValue js_http_server_start(JSContext *ctx, JSValue *this_val, int argc, JSValu
     if (!http_server_start_slot(server)) {
         return JS_ThrowInternalError(ctx, "failed to start HTTP server");
     }
-    esp32_mquickjs_set_property(ctx, *this_val, "started", JS_TRUE);
+    esp32_mquickjs_set_property_ref(ctx, this_val, "started", JS_TRUE);
     return JS_UNDEFINED;
 }
 
@@ -1934,7 +1940,7 @@ JSValue js_http_server_stop(JSContext *ctx, JSValue *this_val, int argc, JSValue
         return JS_EXCEPTION;
     }
     http_server_stop_slot(http_server_get_slot(server_id));
-    esp32_mquickjs_set_property(ctx, *this_val, "started", JS_FALSE);
+    esp32_mquickjs_set_property_ref(ctx, this_val, "started", JS_FALSE);
     return JS_UNDEFINED;
 }
 
@@ -1965,8 +1971,8 @@ JSValue js_http_server_close(JSContext *ctx, JSValue *this_val, int argc, JSValu
         return JS_EXCEPTION;
     }
     http_server_close_slot(ctx, http_server_get_slot(server_id));
-    if (!esp32_mquickjs_set_property(ctx, *this_val, "started", JS_FALSE) ||
-        !esp32_mquickjs_set_property(ctx, *this_val, "closed", JS_TRUE)) {
+    if (!esp32_mquickjs_set_property_ref(ctx, this_val, "started", JS_FALSE) ||
+        !esp32_mquickjs_set_property_ref(ctx, this_val, "closed", JS_TRUE)) {
         return JS_EXCEPTION;
     }
     return JS_UNDEFINED;
@@ -2382,8 +2388,8 @@ static JSValue http_server_static_file_handler_handle_internal(JSContext *ctx,
             JS_PopGCRef(ctx, &root_ref);
             return JS_EXCEPTION;
         }
-        if (!esp32_mquickjs_set_property(ctx,
-                                         *headers_obj,
+        if (!esp32_mquickjs_set_property_ref(ctx,
+                                         headers_obj,
                                          "content-type",
                                          JS_NewString(ctx, content_type))) {
             JS_PopGCRef(ctx, &stream_ref);

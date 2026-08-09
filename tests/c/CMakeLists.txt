@@ -31,3 +31,10 @@ add_executable(test_byte_span
 target_include_directories(test_byte_span PRIVATE ../../components/esp32_mquickjs/internal)
 target_include_directories(test_byte_span PRIVATE ../../components/esp32_mquickjs/vendor/mquickjs)
 add_test(NAME test_byte_span COMMAND test_byte_span)
+
+add_executable(test_line_framer
+    test_line_framer.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_line_framer.c
+)
+target_include_directories(test_line_framer PRIVATE ../../components/esp32_mquickjs/internal)
+add_test(NAME test_line_framer COMMAND test_line_framer)

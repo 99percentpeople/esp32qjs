@@ -721,8 +721,10 @@ static bool parse_point_list(JSContext *ctx,
                              uint32_t *out_count,
                              bool *out_owned)
 {
+    JSGCRef points_ref;
     JSGCRef item_ref;
     JSGCRef property_ref;
+    JSValue *rooted_points;
     JSValue *item;
     JSValue *property;
     display_buffer_point_t *points = NULL;
@@ -734,17 +736,21 @@ static bool parse_point_list(JSContext *ctx,
     *out_points = NULL;
     *out_count = 0;
     *out_owned = false;
-    if (!point_list_get_length(ctx, points_value, api_name, &length)) {
+    rooted_points = JS_PushGCRef(ctx, &points_ref);
+    *rooted_points = points_value;
+    if (!point_list_get_length(ctx, *rooted_points, api_name, &length)) {
+        JS_PopGCRef(ctx, &points_ref);
         return false;
     }
     if (length == 0) {
         *out_points = stack_points;
+        JS_PopGCRef(ctx, &points_ref);
         return true;
     }
 
     item = JS_PushGCRef(ctx, &item_ref);
     property = JS_PushGCRef(ctx, &property_ref);
-    *item = JS_GetPropertyUint32(ctx, points_value, 0);
+    *item = JS_GetPropertyUint32(ctx, *rooted_points, 0);
     if (JS_IsException(*item)) {
         goto fail_exception;
     }
@@ -762,6 +768,7 @@ static bool parse_point_list(JSContext *ctx,
         *out_points = stack_points;
         JS_PopGCRef(ctx, &property_ref);
         JS_PopGCRef(ctx, &item_ref);
+        JS_PopGCRef(ctx, &points_ref);
         return true;
     }
     if (count <= stack_capacity) {
@@ -781,12 +788,12 @@ static bool parse_point_list(JSContext *ctx,
 
     if (flat) {
         for (i = 0; i < count; ++i) {
-            *item = JS_GetPropertyUint32(ctx, points_value, i * 2U);
+            *item = JS_GetPropertyUint32(ctx, *rooted_points, i * 2U);
             if (JS_IsException(*item) || !value_to_i32(ctx, *item, &points[i].x)) {
                 JS_ThrowTypeError(ctx, "%s expects numeric point coordinates", api_name);
                 goto fail;
             }
-            *item = JS_GetPropertyUint32(ctx, points_value, i * 2U + 1U);
+            *item = JS_GetPropertyUint32(ctx, *rooted_points, i * 2U + 1U);
             if (JS_IsException(*item) || !value_to_i32(ctx, *item, &points[i].y)) {
                 JS_ThrowTypeError(ctx, "%s expects numeric point coordinates", api_name);
                 goto fail;
@@ -794,7 +801,7 @@ static bool parse_point_list(JSContext *ctx,
         }
     } else {
         for (i = 0; i < count; ++i) {
-            *item = JS_GetPropertyUint32(ctx, points_value, i);
+            *item = JS_GetPropertyUint32(ctx, *rooted_points, i);
             if (JS_IsException(*item)) {
                 goto fail_exception;
             }
@@ -837,6 +844,7 @@ static bool parse_point_list(JSContext *ctx,
     *out_count = count;
     JS_PopGCRef(ctx, &property_ref);
     JS_PopGCRef(ctx, &item_ref);
+    JS_PopGCRef(ctx, &points_ref);
     return true;
 
 fail_exception:
@@ -852,6 +860,7 @@ fail:
     *out_owned = false;
     JS_PopGCRef(ctx, &property_ref);
     JS_PopGCRef(ctx, &item_ref);
+    JS_PopGCRef(ctx, &points_ref);
     return false;
 }
 

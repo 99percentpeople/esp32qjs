@@ -110,14 +110,14 @@ JS_TEST_MODULES = (
     JsTestModule(
         "displayBuffer",
         (
-            JsTestCase("modules/display_buffer/basic.js"),
+            JsTestCase("modules/display_buffer/basic.js", timeout_seconds=60.0),
             JsTestCase("modules/display_buffer/font.js"),
         ),
         required_features=("displayBuffer",),
     ),
     JsTestModule(
         "display",
-        (JsTestCase("modules/display/lifecycle.js"),),
+        (JsTestCase("modules/display/lifecycle.js", timeout_seconds=90.0),),
         required_features=("displayBuffer",),
     ),
     JsTestModule(
@@ -140,6 +140,14 @@ JS_TEST_MODULES = (
         "http_server",
         (JsTestCase("modules/http_server/offline.js"),),
         required_features=("httpServer",),
+    ),
+    JsTestModule(
+        "websocket",
+        (
+            JsTestCase("modules/websocket/offline.js"),
+            JsTestCase("modules/websocket/network.js", required_capabilities=("network",), timeout_seconds=30.0),
+        ),
+        required_features=("websocket",),
     ),
 )
 JS_TEST_MODULE_MAP = {module.name: module for module in JS_TEST_MODULES}
@@ -1758,6 +1766,10 @@ def send_js_command(session: MonitorSession, command: str) -> None:
 def js_test_build_config(config: ProjectConfig) -> ProjectConfig:
     """Return a build config that enables test instrumentation and test LittleFS."""
     build_dir = config.build_dir.parent / f"{config.build_dir.name}-js-test"
+    target_defaults = JS_TEST_DIR / f"sdkconfig.{config.idf_target}.defaults"
+    test_defaults = (JS_TEST_SDKCONFIG_DEFAULTS,)
+    if target_defaults.is_file():
+        test_defaults += (target_defaults,)
     cmake_entries = [
         entry for entry in config.cmake_cache_entries
         if not entry.startswith("-DESP32QJS_FLASH_DATA_DIR=") and
@@ -1770,7 +1782,7 @@ def js_test_build_config(config: ProjectConfig) -> ProjectConfig:
         config,
         build_dir=build_dir,
         generated_sdkconfig=build_dir / config.generated_sdkconfig.name,
-        sdkconfig_defaults=config.sdkconfig_defaults + (JS_TEST_SDKCONFIG_DEFAULTS,),
+        sdkconfig_defaults=config.sdkconfig_defaults + test_defaults,
         flash_data_override=JS_TEST_FLASH_DATA_DIR,
         cmake_cache_entries=tuple(cmake_entries),
     )
@@ -2046,9 +2058,9 @@ def run_js_tests(config: ProjectConfig,
     js_config = js_test_build_config(config)
 
     if flash_firmware_first:
-        print("Flashing latest firmware before JS tests (leaving storage for the JS test image)", flush=True)
+        print("Flashing dedicated JS test firmware (leaving storage for the JS test image)", flush=True)
         try:
-            flash(config, build_first=True, exclude_entries=("storage",))
+            flash(js_config, build_first=True, exclude_entries=("storage",))
         except subprocess.CalledProcessError as exc:
             summary.status = "failed"
             summary.note = f"firmware flash exited with code {exc.returncode}"
@@ -2071,7 +2083,7 @@ def run_js_tests(config: ProjectConfig,
         print_test_stage_summary(summary)
         raise TestStageError(summary, "Board-backed JS tests currently require a POSIX host because they run through a PTY monitor session.")
 
-    session = start_monitor_session(config)
+    session = start_monitor_session(js_config)
     try:
         try:
             startup_output = read_monitor_until_text(session, MONITOR_READY_MARKER, 10.0, "the ESP-IDF monitor banner")

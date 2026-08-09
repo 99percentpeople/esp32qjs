@@ -12,6 +12,8 @@
 #include "esp32_mquickjs_spi.h"
 #include "esp32_mquickjs_stream.h"
 #include "esp32_mquickjs_uart.h"
+#include "esp32_mquickjs_usb_serial.h"
+#include "esp32_mquickjs_websocket.h"
 #include "esp32_mquickjs_wifi.h"
 #include "js_stdlib.h"
 
@@ -386,13 +388,39 @@ JSValue esp32_mquickjs_call(JSContext *ctx,
                             JSValue *argv)
 {
     uint64_t previous_deadline = runtime != NULL ? runtime->deadline_us : 0;
-    JSValue result;
+    JSGCRef function_ref;
+    JSGCRef this_ref;
+    JSGCRef *argument_refs = NULL;
+    JSValue *rooted_function;
+    JSValue *rooted_this;
+    JSValue result = JS_EXCEPTION;
     int i;
 
-    if (ctx == NULL || argc < 0 || JS_StackCheck(ctx, (uint32_t)(argc + 2))) {
+    if (ctx == NULL || argc < 0 || (argc > 0 && argv == NULL)) {
         return JS_EXCEPTION;
     }
+    if (argc > 0) {
+        argument_refs = heap_caps_calloc((size_t)argc,
+                                         sizeof(*argument_refs),
+                                         MALLOC_CAP_8BIT);
+        if (argument_refs == NULL) {
+            return JS_ThrowOutOfMemory(ctx);
+        }
+    }
 
+    rooted_function = JS_PushGCRef(ctx, &function_ref);
+    rooted_this = JS_PushGCRef(ctx, &this_ref);
+    *rooted_function = function;
+    *rooted_this = this_value;
+    for (i = 0; i < argc; ++i) {
+        JSValue *rooted_argument = JS_PushGCRef(ctx, &argument_refs[i]);
+
+        *rooted_argument = argv[i];
+    }
+
+    if (JS_StackCheck(ctx, (uint32_t)(argc + 2))) {
+        goto done;
+    }
     if (runtime != NULL && runtime->eval_timeout_ms > 0) {
         uint64_t call_deadline = esp_timer_get_time() +
                                  ((uint64_t)runtime->eval_timeout_ms * 1000ULL);
@@ -403,15 +431,23 @@ JSValue esp32_mquickjs_call(JSContext *ctx,
     }
 
     for (i = argc - 1; i >= 0; --i) {
-        JS_PushArg(ctx, argv[i]);
+        JS_PushArg(ctx, argument_refs[i].val);
     }
-    JS_PushArg(ctx, function);
-    JS_PushArg(ctx, this_value);
+    JS_PushArg(ctx, *rooted_function);
+    JS_PushArg(ctx, *rooted_this);
     result = JS_Call(ctx, argc);
 
     if (runtime != NULL) {
         runtime->deadline_us = previous_deadline;
     }
+
+done:
+    for (i = argc - 1; i >= 0; --i) {
+        JS_PopGCRef(ctx, &argument_refs[i]);
+    }
+    JS_PopGCRef(ctx, &this_ref);
+    JS_PopGCRef(ctx, &function_ref);
+    heap_caps_free(argument_refs);
     return result;
 }
 
@@ -421,6 +457,15 @@ bool esp32_mquickjs_set_property(JSContext *ctx,
                                  JSValue value)
 {
     return !JS_IsException(JS_SetPropertyStr(ctx, target_obj, name, value));
+}
+
+bool esp32_mquickjs_set_property_ref(JSContext *ctx,
+                                     JSValue *target_obj,
+                                     const char *name,
+                                     JSValue value)
+{
+    return target_obj != NULL &&
+           !JS_IsException(JS_SetPropertyStr(ctx, *target_obj, name, value));
 }
 
 static int js_timeout_arg(JSContext *ctx,
@@ -486,18 +531,18 @@ static bool js_settle_deferred(JSContext *ctx,
         goto done;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *rooted_deferred, "settled", JS_NewBool(true)) ||
-        !esp32_mquickjs_set_property(ctx, *rooted_deferred, "done", JS_NewBool(true)) ||
-        !esp32_mquickjs_set_property(ctx, *rooted_deferred, "ok", JS_NewBool(ok))) {
+    if (!esp32_mquickjs_set_property_ref(ctx, rooted_deferred, "settled", JS_NewBool(true)) ||
+        !esp32_mquickjs_set_property_ref(ctx, rooted_deferred, "done", JS_NewBool(true)) ||
+        !esp32_mquickjs_set_property_ref(ctx, rooted_deferred, "ok", JS_NewBool(ok))) {
         goto done;
     }
 
     if (ok) {
-        result = esp32_mquickjs_set_property(ctx, *rooted_deferred, "value", *rooted_payload) &&
-                 esp32_mquickjs_set_property(ctx, *rooted_deferred, "error", JS_UNDEFINED);
+        result = esp32_mquickjs_set_property_ref(ctx, rooted_deferred, "value", *rooted_payload) &&
+                 esp32_mquickjs_set_property_ref(ctx, rooted_deferred, "error", JS_UNDEFINED);
     } else {
-        result = esp32_mquickjs_set_property(ctx, *rooted_deferred, "error", *rooted_payload) &&
-                 esp32_mquickjs_set_property(ctx, *rooted_deferred, "value", JS_UNDEFINED);
+        result = esp32_mquickjs_set_property_ref(ctx, rooted_deferred, "error", *rooted_payload) &&
+                 esp32_mquickjs_set_property_ref(ctx, rooted_deferred, "value", JS_UNDEFINED);
     }
 
 done:
@@ -719,16 +764,16 @@ static JSValue js_make_deferred(JSContext *ctx)
         goto fail;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *deferred_obj, "settled", JS_NewBool(false)) ||
-        !esp32_mquickjs_set_property(ctx, *deferred_obj, "done", JS_NewBool(false)) ||
-        !esp32_mquickjs_set_property(ctx, *deferred_obj, "ok", JS_NewBool(false)) ||
-        !esp32_mquickjs_set_property(ctx, *deferred_obj, "value", JS_UNDEFINED) ||
-        !esp32_mquickjs_set_property(ctx, *deferred_obj, "error", JS_UNDEFINED) ||
-        !esp32_mquickjs_set_property(ctx, *deferred_obj, "_cancel", JS_UNDEFINED) ||
-        !esp32_mquickjs_set_property(ctx, *deferred_obj, "resolve", *resolve_fn) ||
-        !esp32_mquickjs_set_property(ctx, *deferred_obj, "reject", *reject_fn) ||
-        !esp32_mquickjs_set_property(ctx, *deferred_obj, "callback", *callback_fn) ||
-        !esp32_mquickjs_set_property(ctx, *deferred_obj, "wait", *wait_fn)) {
+    if (!esp32_mquickjs_set_property_ref(ctx, deferred_obj, "settled", JS_NewBool(false)) ||
+        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "done", JS_NewBool(false)) ||
+        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "ok", JS_NewBool(false)) ||
+        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "value", JS_UNDEFINED) ||
+        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "error", JS_UNDEFINED) ||
+        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "_cancel", JS_UNDEFINED) ||
+        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "resolve", *resolve_fn) ||
+        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "reject", *reject_fn) ||
+        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "callback", *callback_fn) ||
+        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "wait", *wait_fn)) {
         goto fail;
     }
 
@@ -789,7 +834,7 @@ static JSValue js_wait_for(JSContext *ctx, int argc, JSValue *argv)
         goto done;
     }
     if (JS_IsFunction(ctx, *start_result) &&
-        !esp32_mquickjs_set_property(ctx, *deferred_obj, "_cancel", *start_result)) {
+        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "_cancel", *start_result)) {
         *start_result = JS_EXCEPTION;
         goto done;
     }
@@ -1219,10 +1264,16 @@ bool esp32_mquickjs_destroy(JSContext *ctx,
         return false;
     }
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
+    esp32_mquickjs_deinit_websocket_runtime(ctx);
+#endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
     if (!esp32_mquickjs_deinit_http_runtime(ctx)) {
         return false;
     }
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
+    esp32_mquickjs_deinit_usb_serial_runtime(ctx);
 #endif
     if (s_active_runtime == runtime) {
         s_active_runtime = NULL;
@@ -1356,8 +1407,20 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
 #if CONFIG_ESP32_MQUICKJS_FEATURE_UART
     esp32_mquickjs_init_uart_runtime();
 #endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
+    if (!esp32_mquickjs_init_usb_serial_runtime(ctx, runtime)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
+#endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     if (!esp32_mquickjs_init_wifi_runtime(ctx, runtime)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
+    if (!esp32_mquickjs_init_websocket_runtime(ctx, runtime)) {
         esp32_mquickjs_print_exception(ctx);
         return false;
     }

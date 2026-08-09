@@ -277,9 +277,9 @@ JSValue js_display_buffer_measure_text(JSContext *ctx, JSValue *this_val, int ar
         JS_PopGCRef(ctx, &object_ref);
         return JS_EXCEPTION;
     }
-    if (!esp32_mquickjs_set_property(ctx, *object, "width", JS_NewUint32(ctx, (uint32_t)width)) ||
-        !esp32_mquickjs_set_property(ctx, *object, "height", JS_NewUint32(ctx, (uint32_t)height)) ||
-        !esp32_mquickjs_set_property(ctx, *object, "lines", JS_NewUint32(ctx, (uint32_t)lines))) {
+    if (!esp32_mquickjs_set_property_ref(ctx, object, "width", JS_NewUint32(ctx, (uint32_t)width)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "height", JS_NewUint32(ctx, (uint32_t)height)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "lines", JS_NewUint32(ctx, (uint32_t)lines))) {
         JS_PopGCRef(ctx, &object_ref);
         return JS_EXCEPTION;
     }

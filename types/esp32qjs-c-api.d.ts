@@ -972,6 +972,8 @@ namespace ESP32QJS {
     i2c: boolean;
     spi: boolean;
     uart: boolean;
+    usbSerial: boolean;
+    websocket: boolean;
     displayBuffer: boolean;
     wifi: boolean;
     http: boolean;
@@ -1299,6 +1301,79 @@ namespace ESP32QJS {
     open(options?: UARTOpenOptions): UARTPort;
   }
 
+  interface USBSerialOpenOptions {
+    maxFrameBytes?: number;
+  }
+
+  interface USBSerialStatus {
+    open: boolean;
+    connected: boolean;
+    maxFrameBytes: number;
+    receivedFrames: number;
+    sentFrames: number;
+    overflowFrames: number;
+    callbackErrors: number;
+  }
+
+  type USBSerialCallback = (error?: string, data?: string) => void;
+
+  /** Headless USB Serial/JTAG NDJSON transport; mutually exclusive with the REPL. */
+  interface USBSerialModule {
+    readonly MAX_FRAME_BYTES: number;
+    open(callback: USBSerialCallback): boolean;
+    open(options: USBSerialOpenOptions, callback: USBSerialCallback): boolean;
+    close(): boolean;
+    send(text: string): number;
+    status(): USBSerialStatus;
+  }
+
+  interface WebSocketClientOpenOptions {
+    url: string;
+    authorization?: string;
+    subprotocol?: string;
+    autoReconnect?: boolean;
+    reconnectMs?: number;
+    networkTimeoutMs?: number;
+    sendTimeoutMs?: number;
+    pingIntervalSec?: number;
+    maxMessageBytes?: number;
+    useCertBundle?: boolean;
+  }
+
+  type WebSocketClientEvent =
+    | { type: "open" }
+    | { type: "message"; data: string }
+    | {
+        type: "close" | "error";
+        code: number;
+        message: string;
+        reconnecting: boolean;
+      };
+
+  interface WebSocketClientStatus {
+    open: boolean;
+    connected: boolean;
+    maxMessageBytes: number;
+    openedEvents: number;
+    receivedMessages: number;
+    sentMessages: number;
+    droppedEvents: number;
+    oversizedMessages: number;
+    callbackErrors: number;
+  }
+
+  /** Singleton outbound WebSocket text client. */
+  interface WebSocketClientModule {
+    readonly MAX_MESSAGE_BYTES: number;
+    open(
+      options: WebSocketClientOpenOptions,
+      callback: (event: WebSocketClientEvent) => void,
+    ): boolean;
+    close(): boolean;
+    send(text: string): number;
+    status(): WebSocketClientStatus;
+  }
+
   /**
    * Current Wi-Fi station status.
    */
@@ -1613,6 +1688,10 @@ namespace ESP32QJS {
   var spi: ESP32QJS.SPIModule;
   /** Synchronous UART port helpers. */
   var uart: ESP32QJS.UARTModule;
+  /** Headless USB Serial/JTAG framed transport; unavailable when the REPL is compiled in. */
+  var usbSerial: ESP32QJS.USBSerialModule;
+  /** Outbound WebSocket text client. */
+  var websocketClient: ESP32QJS.WebSocketClientModule;
   /** Native display-buffer helpers. Exposed only when `esp32.info().features.displayBuffer` is enabled. */
   var displayBuffer: ESP32QJS.DisplayBufferModule;
   /** Wi-Fi station helpers. */

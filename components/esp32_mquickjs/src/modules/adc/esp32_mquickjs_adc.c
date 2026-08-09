@@ -273,19 +273,19 @@ static JSValue adc_make_channel_object(JSContext *ctx,
         return JS_EXCEPTION;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *channel_obj, "channel", JS_NewInt32(ctx, (int32_t)channel)) ||
-        !esp32_mquickjs_set_property(ctx, *channel_obj, "configured", JS_NewBool(channel_state->configured)) ||
-        !esp32_mquickjs_set_property(ctx, *channel_obj, "atten",
+    if (!esp32_mquickjs_set_property_ref(ctx, channel_obj, "channel", JS_NewInt32(ctx, (int32_t)channel)) ||
+        !esp32_mquickjs_set_property_ref(ctx, channel_obj, "configured", JS_NewBool(channel_state->configured)) ||
+        !esp32_mquickjs_set_property_ref(ctx, channel_obj, "atten",
                                      channel_state->configured
                                          ? JS_NewInt32(ctx, (int32_t)channel_state->atten)
                                          : JS_NULL) ||
-        !esp32_mquickjs_set_property(ctx, *channel_obj, "bitwidth",
+        !esp32_mquickjs_set_property_ref(ctx, channel_obj, "bitwidth",
                                      channel_state->configured
                                          ? JS_NewInt32(ctx, (int32_t)channel_state->bitwidth)
                                          : JS_NULL) ||
-        !esp32_mquickjs_set_property(ctx, *channel_obj, "pin",
+        !esp32_mquickjs_set_property_ref(ctx, channel_obj, "pin",
                                      mapped ? JS_NewInt32(ctx, pin) : JS_NULL) ||
-        !esp32_mquickjs_set_property(ctx, *channel_obj, "calibrated",
+        !esp32_mquickjs_set_property_ref(ctx, channel_obj, "calibrated",
                                      JS_NewBool(channel_state->cali_handle != NULL))) {
         JS_PopGCRef(ctx, &channel_ref);
         return JS_EXCEPTION;
@@ -328,10 +328,10 @@ static JSValue adc_make_status_object(JSContext *ctx, adc_unit_t unit)
         JS_PopGCRef(ctx, &channel_ref);
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *status_obj, "unit", JS_NewInt32(ctx, adc_unit_to_number(unit))) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "opened", JS_NewBool(unit_state->opened)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "channelCount", JS_NewInt32(ctx, adc_channel_count(unit))) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "channels", *channels_array)) {
+    if (!esp32_mquickjs_set_property_ref(ctx, status_obj, "unit", JS_NewInt32(ctx, adc_unit_to_number(unit))) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "opened", JS_NewBool(unit_state->opened)) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "channelCount", JS_NewInt32(ctx, adc_channel_count(unit))) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "channels", *channels_array)) {
         goto fail;
     }
 
@@ -554,8 +554,8 @@ JSValue js_adc_ioToChannel(JSContext *ctx, JSValue *this_val, int argc, JSValue 
         return JS_EXCEPTION;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *mapping_obj, "unit", JS_NewInt32(ctx, adc_unit_to_number(unit))) ||
-        !esp32_mquickjs_set_property(ctx, *mapping_obj, "channel", JS_NewInt32(ctx, (int32_t)channel))) {
+    if (!esp32_mquickjs_set_property_ref(ctx, mapping_obj, "unit", JS_NewInt32(ctx, adc_unit_to_number(unit))) ||
+        !esp32_mquickjs_set_property_ref(ctx, mapping_obj, "channel", JS_NewInt32(ctx, (int32_t)channel))) {
         JS_PopGCRef(ctx, &mapping_ref);
         return JS_EXCEPTION;
     }

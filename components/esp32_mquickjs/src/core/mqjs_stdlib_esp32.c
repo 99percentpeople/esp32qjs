@@ -501,6 +501,34 @@ static const JSClassDef js_uart_obj =
     JS_OBJECT_DEF("uart", js_uart);
 #endif
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
+static const JSPropDef js_usb_serial[] = {
+    JS_CGETSET_DEF("MAX_FRAME_BYTES", js_usb_serial_get_max_frame_bytes, NULL),
+    JS_CFUNC_DEF("open", 2, js_usb_serial_open),
+    JS_CFUNC_DEF("close", 0, js_usb_serial_close),
+    JS_CFUNC_DEF("send", 1, js_usb_serial_send),
+    JS_CFUNC_DEF("status", 0, js_usb_serial_status),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_usb_serial_obj =
+    JS_OBJECT_DEF("usbSerial", js_usb_serial);
+#endif
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
+static const JSPropDef js_websocket_client[] = {
+    JS_CGETSET_DEF("MAX_MESSAGE_BYTES", js_websocket_get_max_message_bytes, NULL),
+    JS_CFUNC_DEF("open", 2, js_websocket_open),
+    JS_CFUNC_DEF("close", 0, js_websocket_close),
+    JS_CFUNC_DEF("send", 1, js_websocket_send),
+    JS_CFUNC_DEF("status", 0, js_websocket_status),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_websocket_client_obj =
+    JS_OBJECT_DEF("websocketClient", js_websocket_client);
+#endif
+
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
 static const JSPropDef js_wifi_async[] = {
     JS_CFUNC_DEF("connect", 4, js_wifi_async_connect),
@@ -635,6 +663,12 @@ static const JSPropDef js_global_object_extra[] = {
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     JS_PROP_CLASS_DEF("wifi", &js_wifi_obj),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
+    JS_PROP_CLASS_DEF("usbSerial", &js_usb_serial_obj),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
+    JS_PROP_CLASS_DEF("websocketClient", &js_websocket_client_obj),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP || CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
     JS_PROP_CLASS_DEF("http", &js_http_obj),

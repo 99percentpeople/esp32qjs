@@ -120,13 +120,13 @@ static JSValue fs_make_stat_object(JSContext *ctx, const char *path, const struc
     if (JS_IsException(*entry)) {
         goto fail;
     }
-    if (!esp32_mquickjs_set_property(ctx, *entry, "name",
+    if (!esp32_mquickjs_set_property_ref(ctx, entry, "name",
                                      JS_NewString(ctx, esp32_mquickjs_fs_path_basename(path))) ||
-        !esp32_mquickjs_set_property(ctx, *entry, "path",
+        !esp32_mquickjs_set_property_ref(ctx, entry, "path",
                                      JS_NewString(ctx, path)) ||
-        !esp32_mquickjs_set_property(ctx, *entry, "isDir",
+        !esp32_mquickjs_set_property_ref(ctx, entry, "isDir",
                                      JS_NewBool(S_ISDIR(st->st_mode))) ||
-        !esp32_mquickjs_set_property(ctx, *entry, "size",
+        !esp32_mquickjs_set_property_ref(ctx, entry, "size",
                                      JS_NewInt64(ctx, (int64_t)st->st_size))) {
         goto fail;
     }

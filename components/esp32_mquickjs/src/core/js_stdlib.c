@@ -12,6 +12,8 @@
 #include "esp32_mquickjs_ledc.h"
 #include "esp32_mquickjs_spi.h"
 #include "esp32_mquickjs_uart.h"
+#include "esp32_mquickjs_usb_serial.h"
+#include "esp32_mquickjs_websocket.h"
 #include "utils/esp32_mquickjs_request_response.h"
 #include "esp32_mquickjs_stream.h"
 #include "esp32_mquickjs_wifi.h"

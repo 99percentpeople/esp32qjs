@@ -1,0 +1,2 @@
+# Keep the moving heap compact enough for DEBUG_GC on PSRAM-backed S3 boards.
+CONFIG_ESP32QJS_JS_HEAP_SIZE=524288

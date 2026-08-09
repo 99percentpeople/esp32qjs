@@ -352,7 +352,7 @@ static bool keep_font_alive(JSContext *ctx,
     if (JS_IsUndefined(*fonts) || JS_IsNull(*fonts) || JS_GetClassID(ctx, *fonts) != JS_CLASS_ARRAY) {
         *fonts = JS_NewArray(ctx, 0);
         if (JS_IsException(*fonts) ||
-            !esp32_mquickjs_set_property(ctx, *rooted_owner, DISPLAY_COMMAND_BUFFER_FONTS_KEY, *fonts)) {
+            !esp32_mquickjs_set_property_ref(ctx, rooted_owner, DISPLAY_COMMAND_BUFFER_FONTS_KEY, *fonts)) {
             JS_PopGCRef(ctx, &fonts_ref);
             JS_PopGCRef(ctx, &font_ref);
             JS_PopGCRef(ctx, &owner_ref);
@@ -622,7 +622,7 @@ JSValue js_display_command_buffer_reset(JSContext *ctx, JSValue *this_val, int a
         return JS_EXCEPTION;
     }
     display_command_buffer_reset_internal(ctx, command_buffer);
-    if (!esp32_mquickjs_set_property(ctx, *this_val, DISPLAY_COMMAND_BUFFER_FONTS_KEY, JS_UNDEFINED)) {
+    if (!esp32_mquickjs_set_property_ref(ctx, this_val, DISPLAY_COMMAND_BUFFER_FONTS_KEY, JS_UNDEFINED)) {
         return JS_EXCEPTION;
     }
     return *this_val;
@@ -640,7 +640,7 @@ JSValue js_display_command_buffer_close(JSContext *ctx, JSValue *this_val, int a
     }
     command_buffer = JS_GetOpaque(ctx, *this_val);
     display_command_buffer_close_internal(ctx, command_buffer);
-    if (!esp32_mquickjs_set_property(ctx, *this_val, DISPLAY_COMMAND_BUFFER_FONTS_KEY, JS_UNDEFINED)) {
+    if (!esp32_mquickjs_set_property_ref(ctx, this_val, DISPLAY_COMMAND_BUFFER_FONTS_KEY, JS_UNDEFINED)) {
         return JS_EXCEPTION;
     }
     return JS_TRUE;
@@ -1284,10 +1284,10 @@ JSValue js_display_command_buffer_stats(JSContext *ctx, JSValue *this_val, int a
         JS_PopGCRef(ctx, &object_ref);
         return JS_EXCEPTION;
     }
-    if (!esp32_mquickjs_set_property(ctx, *object, "count", JS_NewUint32(ctx, (uint32_t)command_buffer->count)) ||
-        !esp32_mquickjs_set_property(ctx, *object, "capacity", JS_NewUint32(ctx, (uint32_t)command_buffer->capacity)) ||
-        !esp32_mquickjs_set_property(ctx, *object, "textBytes", JS_NewUint32(ctx, (uint32_t)command_buffer->text_length)) ||
-        !esp32_mquickjs_set_property(ctx, *object, "textCapacity", JS_NewUint32(ctx, (uint32_t)command_buffer->text_capacity))) {
+    if (!esp32_mquickjs_set_property_ref(ctx, object, "count", JS_NewUint32(ctx, (uint32_t)command_buffer->count)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "capacity", JS_NewUint32(ctx, (uint32_t)command_buffer->capacity)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "textBytes", JS_NewUint32(ctx, (uint32_t)command_buffer->text_length)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "textCapacity", JS_NewUint32(ctx, (uint32_t)command_buffer->text_capacity))) {
         JS_PopGCRef(ctx, &object_ref);
         return JS_EXCEPTION;
     }

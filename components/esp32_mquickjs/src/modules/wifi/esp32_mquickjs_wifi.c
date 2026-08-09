@@ -571,27 +571,27 @@ static JSValue wifi_make_status_object(JSContext *ctx)
         goto fail;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *status_obj, "initialized",
+    if (!esp32_mquickjs_set_property_ref(ctx, status_obj, "initialized",
                                      JS_NewBool(status.initialized)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "started",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "started",
                                      JS_NewBool(status.started)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "connected",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "connected",
                                      JS_NewBool(status.connected)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "scanning",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "scanning",
                                      JS_NewBool(status.scanning)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "ssid",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "ssid",
                                      JS_NewString(ctx, status.ssid)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "hostname",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "hostname",
                                      JS_NewString(ctx, status.hostname)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "ip",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "ip",
                                      JS_NewString(ctx, status.ip)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "netmask",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "netmask",
                                      JS_NewString(ctx, status.netmask)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "gateway",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "gateway",
                                      JS_NewString(ctx, status.gateway)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "lastDisconnectReason",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "lastDisconnectReason",
                                      JS_NewInt32(ctx, status.last_disconnect_reason)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "lastDisconnectReasonName",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "lastDisconnectReasonName",
                                      JS_NewString(ctx, wifi_reason_to_string(status.last_disconnect_reason)))) {
         goto fail;
     }
@@ -881,17 +881,17 @@ static JSValue wifi_make_scan_entry_object(JSContext *ctx, const wifi_ap_record_
     }
 
     snprintf(bssid, sizeof(bssid), MACSTR, MAC2STR(record->bssid));
-    if (!esp32_mquickjs_set_property(ctx, *entry, "ssid",
+    if (!esp32_mquickjs_set_property_ref(ctx, entry, "ssid",
                                      JS_NewString(ctx, (const char *)record->ssid)) ||
-        !esp32_mquickjs_set_property(ctx, *entry, "bssid",
+        !esp32_mquickjs_set_property_ref(ctx, entry, "bssid",
                                      JS_NewString(ctx, bssid)) ||
-        !esp32_mquickjs_set_property(ctx, *entry, "rssi",
+        !esp32_mquickjs_set_property_ref(ctx, entry, "rssi",
                                      JS_NewInt32(ctx, record->rssi)) ||
-        !esp32_mquickjs_set_property(ctx, *entry, "channel",
+        !esp32_mquickjs_set_property_ref(ctx, entry, "channel",
                                      JS_NewInt32(ctx, record->primary)) ||
-        !esp32_mquickjs_set_property(ctx, *entry, "authMode",
+        !esp32_mquickjs_set_property_ref(ctx, entry, "authMode",
                                      JS_NewString(ctx, wifi_authmode_to_string(record->authmode))) ||
-        !esp32_mquickjs_set_property(ctx, *entry, "hidden",
+        !esp32_mquickjs_set_property_ref(ctx, entry, "hidden",
                                      JS_NewBool(record->ssid[0] == '\0'))) {
         goto fail;
     }

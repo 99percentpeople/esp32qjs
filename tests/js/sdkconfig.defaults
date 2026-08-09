@@ -1,2 +1,4 @@
 # Exercise native bindings with a compacting collection before every JS allocation.
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
 CONFIG_ESP32_MQUICKJS_DEBUG_GC=y
+CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET=y

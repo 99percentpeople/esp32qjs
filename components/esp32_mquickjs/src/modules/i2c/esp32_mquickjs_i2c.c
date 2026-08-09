@@ -170,17 +170,17 @@ static JSValue i2c_make_status_object(JSContext *ctx, const esp32_mquickjs_i2c_s
         return JS_EXCEPTION;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *status_obj, "opened",
+    if (!esp32_mquickjs_set_property_ref(ctx, status_obj, "opened",
                                      JS_NewBool(slot != NULL && slot->allocated)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "sda",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "sda",
                                      JS_NewInt32(ctx, slot != NULL ? (int32_t)slot->sda_pin : ESP32_MQUICKJS_I2C_DEFAULT_SDA_PIN)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "scl",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "scl",
                                      JS_NewInt32(ctx, slot != NULL ? (int32_t)slot->scl_pin : ESP32_MQUICKJS_I2C_DEFAULT_SCL_PIN)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "freqHz",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "freqHz",
                                      JS_NewUint32(ctx, slot != NULL ? slot->freq_hz : ESP32_MQUICKJS_I2C_DEFAULT_FREQ_HZ)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "timeoutMs",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "timeoutMs",
                                      JS_NewUint32(ctx, slot != NULL ? slot->timeout_ms : ESP32_MQUICKJS_I2C_DEFAULT_TIMEOUT_MS)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "internalPullup",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "internalPullup",
                                      JS_NewBool(slot != NULL ? slot->internal_pullup : ESP32_MQUICKJS_I2C_ENABLE_INTERNAL_PULLUP))) {
         JS_PopGCRef(ctx, &status_ref);
         return JS_EXCEPTION;
@@ -399,9 +399,9 @@ static JSValue i2c_make_write_chunks_stats(JSContext *ctx,
         return JS_EXCEPTION;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *stats, "chunks", JS_NewUint32(ctx, chunks)) ||
-        !esp32_mquickjs_set_property(ctx, *stats, "bytes", JS_NewInt64(ctx, (int64_t)bytes)) ||
-        !esp32_mquickjs_set_property(ctx, *stats, "totalUs", JS_NewInt64(ctx, (int64_t)total_us))) {
+    if (!esp32_mquickjs_set_property_ref(ctx, stats, "chunks", JS_NewUint32(ctx, chunks)) ||
+        !esp32_mquickjs_set_property_ref(ctx, stats, "bytes", JS_NewInt64(ctx, (int64_t)bytes)) ||
+        !esp32_mquickjs_set_property_ref(ctx, stats, "totalUs", JS_NewInt64(ctx, (int64_t)total_us))) {
         JS_PopGCRef(ctx, &stats_ref);
         return JS_EXCEPTION;
     }

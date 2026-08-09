@@ -127,12 +127,12 @@ static JSValue dac_make_status_object(JSContext *ctx, dac_channel_t channel)
         return JS_EXCEPTION;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *status_obj, "channel", JS_NewInt32(ctx, (int32_t)channel)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "opened", JS_NewBool(state->opened)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "pin", JS_NewInt32(ctx, dac_channel_to_pin(channel))) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "resolutionBits", JS_NewInt32(ctx, dac_resolution_bits())) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "maxValue", JS_NewUint32(ctx, dac_max_value())) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "lastValue", JS_NewUint32(ctx, state->last_value))) {
+    if (!esp32_mquickjs_set_property_ref(ctx, status_obj, "channel", JS_NewInt32(ctx, (int32_t)channel)) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "opened", JS_NewBool(state->opened)) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "pin", JS_NewInt32(ctx, dac_channel_to_pin(channel))) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "resolutionBits", JS_NewInt32(ctx, dac_resolution_bits())) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "maxValue", JS_NewUint32(ctx, dac_max_value())) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "lastValue", JS_NewUint32(ctx, state->last_value))) {
         JS_PopGCRef(ctx, &status_ref);
         return JS_EXCEPTION;
     }
@@ -285,8 +285,8 @@ JSValue js_dac_ioToChannel(JSContext *ctx, JSValue *this_val, int argc, JSValue 
             return JS_EXCEPTION;
         }
 
-        if (!esp32_mquickjs_set_property(ctx, *mapping_obj, "channel", JS_NewInt32(ctx, i)) ||
-            !esp32_mquickjs_set_property(ctx, *mapping_obj, "pin", JS_NewInt32(ctx, pin))) {
+        if (!esp32_mquickjs_set_property_ref(ctx, mapping_obj, "channel", JS_NewInt32(ctx, i)) ||
+            !esp32_mquickjs_set_property_ref(ctx, mapping_obj, "pin", JS_NewInt32(ctx, pin))) {
             JS_PopGCRef(ctx, &mapping_ref);
             return JS_EXCEPTION;
         }

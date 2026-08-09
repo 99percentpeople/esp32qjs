@@ -92,6 +92,24 @@ config ESP32_MQUICKJS_FEATURE_HTTP_SERVER
         helpers. Composite helpers such as staticFileHandler() may add
         further feature requirements such as fs.
 
+config ESP32_MQUICKJS_FEATURE_USB_SERIAL
+    bool "Enable USB Serial/JTAG message transport"
+    default n
+    depends on SOC_USB_SERIAL_JTAG_SUPPORTED && !ESP32QJS_ENABLE_REPL
+    help
+        Enable the bounded usbSerial callback/send API for headless JSON-line
+        protocols. The REPL and this transport are mutually exclusive because
+        they consume the same USB Serial/JTAG input stream.
+
+config ESP32_MQUICKJS_FEATURE_WEBSOCKET
+    bool "Enable WebSocket client module"
+    default n
+    depends on ESP32_MQUICKJS_FEATURE_WIFI
+    help
+        Enable the outbound websocketClient callback/send API. Applications
+        connect only after Wi-Fi is ready and remain responsible for pairing
+        and authorization policy.
+
 config ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
     bool "Enable displayBuffer module"
     default y
@@ -375,5 +393,47 @@ config ESP32_MQUICKJS_HTTP_TASK_STACK_SIZE
     depends on ESP32_MQUICKJS_FEATURE_HTTP
     help
         Stack size used by the async HTTP worker task.
+
+config ESP32_MQUICKJS_USB_SERIAL_MAX_FRAME_BYTES
+    int "Maximum USB serial protocol frame size (bytes)"
+    range 256 16384
+    default 8192
+    depends on ESP32_MQUICKJS_FEATURE_USB_SERIAL
+    help
+        Maximum complete NDJSON line accepted or sent by usbSerial. Oversized
+        input is discarded through the next line boundary and reported to the
+        registered callback.
+
+config ESP32_MQUICKJS_USB_SERIAL_RX_BUFFER_SIZE
+    int "USB serial driver RX buffer size (bytes)"
+    range 256 16384
+    default 2048
+    depends on ESP32_MQUICKJS_FEATURE_USB_SERIAL
+
+config ESP32_MQUICKJS_USB_SERIAL_TX_BUFFER_SIZE
+    int "USB serial driver TX buffer size (bytes)"
+    range 256 16384
+    default 2048
+    depends on ESP32_MQUICKJS_FEATURE_USB_SERIAL
+
+config ESP32_MQUICKJS_WEBSOCKET_MAX_MESSAGE_BYTES
+    int "Maximum WebSocket text message size (bytes)"
+    range 256 32768
+    default 8192
+    depends on ESP32_MQUICKJS_FEATURE_WEBSOCKET
+    help
+        Maximum reassembled inbound text message and outbound send size.
+
+config ESP32_MQUICKJS_WEBSOCKET_EVENT_QUEUE_LEN
+    int "WebSocket event queue length"
+    range 2 32
+    default 8
+    depends on ESP32_MQUICKJS_FEATURE_WEBSOCKET
+
+config ESP32_MQUICKJS_WEBSOCKET_TASK_STACK_SIZE
+    int "WebSocket client task stack size (bytes)"
+    range 4096 32768
+    default 6144
+    depends on ESP32_MQUICKJS_FEATURE_WEBSOCKET
 
 endmenu

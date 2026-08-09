@@ -172,6 +172,7 @@ static void runtime_attach_current_task(void *opaque)
     }
 }
 
+#if CONFIG_ESP32QJS_ENABLE_REPL
 static uint32_t runtime_output_generation(void *opaque)
 {
     esp32qjs_runtime_t *runtime = opaque;
@@ -183,6 +184,7 @@ static void runtime_startup_callback(void *opaque)
 {
     runtime_run_startup(opaque);
 }
+#endif
 
 static bool runtime_cooperate(void *opaque)
 {
@@ -249,6 +251,7 @@ static bool runtime_wait_for_activity(void *opaque, uint32_t timeout_ms)
     return runtime != NULL && esp32_mquickjs_wait_for_activity(&runtime->engine, timeout_ms);
 }
 
+#if CONFIG_ESP32QJS_ENABLE_REPL
 static bool runtime_should_stop(void *opaque)
 {
     esp32qjs_runtime_t *runtime = opaque;
@@ -270,6 +273,7 @@ static void runtime_notify_activity_from_isr(void *opaque, int *task_woken)
     (void)opaque;
     esp32_mquickjs_notify_active_runtime_from_isr(task_woken);
 }
+#endif
 
 static void runtime_task(void *opaque)
 {

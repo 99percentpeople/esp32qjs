@@ -1873,10 +1873,10 @@ JSValue js_display_buffer_get_dirty(JSContext *ctx, JSValue *this_val, int argc,
         JS_PopGCRef(ctx, &object_ref);
         return JS_EXCEPTION;
     }
-    if (!esp32_mquickjs_set_property(ctx, *object, "x", JS_NewInt32(ctx, buffer->dirty_x0)) ||
-        !esp32_mquickjs_set_property(ctx, *object, "y", JS_NewInt32(ctx, buffer->dirty_y0)) ||
-        !esp32_mquickjs_set_property(ctx, *object, "width", JS_NewInt32(ctx, buffer->dirty_x1 - buffer->dirty_x0)) ||
-        !esp32_mquickjs_set_property(ctx, *object, "height", JS_NewInt32(ctx, buffer->dirty_y1 - buffer->dirty_y0))) {
+    if (!esp32_mquickjs_set_property_ref(ctx, object, "x", JS_NewInt32(ctx, buffer->dirty_x0)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "y", JS_NewInt32(ctx, buffer->dirty_y0)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "width", JS_NewInt32(ctx, buffer->dirty_x1 - buffer->dirty_x0)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "height", JS_NewInt32(ctx, buffer->dirty_y1 - buffer->dirty_y0))) {
         JS_PopGCRef(ctx, &object_ref);
         return JS_EXCEPTION;
     }

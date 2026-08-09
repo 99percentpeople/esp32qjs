@@ -6,6 +6,10 @@ bool esp32_mquickjs_set_property(JSContext *ctx,
                                  JSValue target_obj,
                                  const char *name,
                                  JSValue value);
+bool esp32_mquickjs_set_property_ref(JSContext *ctx,
+                                     JSValue *target_obj,
+                                     const char *name,
+                                     JSValue value);
 
 esp32_mquickjs_runtime_t *esp32_mquickjs_get_active_runtime(void);
 

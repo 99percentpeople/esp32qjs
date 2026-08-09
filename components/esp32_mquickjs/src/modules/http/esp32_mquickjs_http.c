@@ -707,8 +707,8 @@ JSValue esp32_mquickjs_http_make_response_object(JSContext *ctx,
         size_t i;
 
         for (i = 0; i < response->header_count; ++i) {
-            if (!esp32_mquickjs_set_property(ctx,
-                                             *headers_obj,
+            if (!esp32_mquickjs_set_property_ref(ctx,
+                                             headers_obj,
                                              response->headers[i].key,
                                              JS_NewString(ctx, response->headers[i].value))) {
                 goto done;

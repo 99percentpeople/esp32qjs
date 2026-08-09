@@ -52,32 +52,36 @@ static JSValue esp32_make_features_object(JSContext *ctx)
         goto fail;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *features, "fs",
+    if (!esp32_mquickjs_set_property_ref(ctx, features, "fs",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_FS)) ||
-        !esp32_mquickjs_set_property(ctx, *features, "gpio",
+        !esp32_mquickjs_set_property_ref(ctx, features, "gpio",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_GPIO)) ||
-        !esp32_mquickjs_set_property(ctx, *features, "ledc",
+        !esp32_mquickjs_set_property_ref(ctx, features, "ledc",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_LEDC)) ||
-        !esp32_mquickjs_set_property(ctx, *features, "adc",
+        !esp32_mquickjs_set_property_ref(ctx, features, "adc",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_ADC)) ||
-        !esp32_mquickjs_set_property(ctx, *features, "dac",
+        !esp32_mquickjs_set_property_ref(ctx, features, "dac",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_DAC)) ||
-        !esp32_mquickjs_set_property(ctx, *features, "i2c",
+        !esp32_mquickjs_set_property_ref(ctx, features, "i2c",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_I2C)) ||
-        !esp32_mquickjs_set_property(ctx, *features, "spi",
+        !esp32_mquickjs_set_property_ref(ctx, features, "spi",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_SPI)) ||
-        !esp32_mquickjs_set_property(ctx, *features, "uart",
+        !esp32_mquickjs_set_property_ref(ctx, features, "uart",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_UART)) ||
-        !esp32_mquickjs_set_property(ctx, *features, "wifi",
+        !esp32_mquickjs_set_property_ref(ctx, features, "usbSerial",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL)) ||
+        !esp32_mquickjs_set_property_ref(ctx, features, "websocket",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET)) ||
+        !esp32_mquickjs_set_property_ref(ctx, features, "wifi",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_WIFI)) ||
-        !esp32_mquickjs_set_property(ctx, *features, "httpServer",
+        !esp32_mquickjs_set_property_ref(ctx, features, "httpServer",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER)) ||
-        !esp32_mquickjs_set_property(ctx, *features, "staticFileHandler",
+        !esp32_mquickjs_set_property_ref(ctx, features, "staticFileHandler",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER &&
                                                 CONFIG_ESP32_MQUICKJS_FEATURE_FS)) ||
-        !esp32_mquickjs_set_property(ctx, *features, "displayBuffer",
+        !esp32_mquickjs_set_property_ref(ctx, features, "displayBuffer",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER)) ||
-        !esp32_mquickjs_set_property(ctx, *features, "http",
+        !esp32_mquickjs_set_property_ref(ctx, features, "http",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_HTTP))) {
         goto fail;
     }
@@ -130,49 +134,49 @@ static JSValue esp32_make_info_object(JSContext *ctx)
     if (JS_IsException(*features)) {
         goto fail;
     }
-    if (!esp32_mquickjs_set_property(ctx, *info, "runtimeVersion",
-                                     JS_NewString(ctx, ESP32QJS_VERSION)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "hostApiVersion",
-                                     JS_NewUint32(ctx, ESP32QJS_HOST_API_VERSION)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "board",
-                                     JS_NewString(ctx, ESP32_MQUICKJS_BOARD_NAME)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "chip",
-                                     JS_NewString(ctx, esp32_chip_model_name())) ||
-        !esp32_mquickjs_set_property(ctx, *info, "features", *features) ||
-        !esp32_mquickjs_set_property(ctx, *info, "userLedPin",
-                                     JS_NewInt32(ctx, ESP32_MQUICKJS_USER_LED_PIN)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "userLedActiveLow",
-                                     JS_NewBool(ESP32_MQUICKJS_USER_LED_ACTIVE_LOW)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "scriptsDir",
-                                     JS_NewString(ctx, ESP32_MQUICKJS_LITTLEFS_BASE_PATH)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "flashSize",
-                                     JS_NewUint32(ctx, flash_size)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "psramEnabled",
-                                     JS_NewBool(psram_enabled)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "psramSize",
-                                     JS_NewUint32(ctx, (uint32_t)total_psram)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "freePsram",
-                                     JS_NewUint32(ctx, (uint32_t)free_psram)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "totalInternalHeap",
-                                     JS_NewUint32(ctx, (uint32_t)total_internal_heap)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "freeInternalHeap",
-                                     JS_NewUint32(ctx, (uint32_t)free_internal_heap)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "jsHeapSize",
-                                     JS_NewUint32(ctx, js_heap_size)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "jsHeapRegion",
-                                     JS_NewString(ctx, js_heap_region)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "littlefsMounted",
-                                     JS_NewBool(littlefs_mounted)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "replEnabled",
-                                     JS_NewBool(repl_enabled)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "autoRunIndexJs",
-                                     JS_NewBool(auto_run_index_js)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "formatLittlefsOnMountFail",
-                                     JS_NewBool(format_littlefs_on_mount_fail)) ||
-        !esp32_mquickjs_set_property(ctx, *info, "freeHeap",
-                                     JS_NewUint32(ctx, esp_get_free_heap_size())) ||
-        !esp32_mquickjs_set_property(ctx, *info, "jsTimeMs",
-                                     JS_NewInt64(ctx, esp_timer_get_time() / 1000))) {
+    if (!esp32_mquickjs_set_property_ref(ctx, info, "runtimeVersion",
+                                         JS_NewString(ctx, ESP32QJS_VERSION)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "hostApiVersion",
+                                         JS_NewUint32(ctx, ESP32QJS_HOST_API_VERSION)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "board",
+                                         JS_NewString(ctx, ESP32_MQUICKJS_BOARD_NAME)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "chip",
+                                         JS_NewString(ctx, esp32_chip_model_name())) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "features", *features) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "userLedPin",
+                                         JS_NewInt32(ctx, ESP32_MQUICKJS_USER_LED_PIN)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "userLedActiveLow",
+                                         JS_NewBool(ESP32_MQUICKJS_USER_LED_ACTIVE_LOW)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "scriptsDir",
+                                         JS_NewString(ctx, ESP32_MQUICKJS_LITTLEFS_BASE_PATH)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "flashSize",
+                                         JS_NewUint32(ctx, flash_size)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "psramEnabled",
+                                         JS_NewBool(psram_enabled)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "psramSize",
+                                         JS_NewUint32(ctx, (uint32_t)total_psram)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "freePsram",
+                                         JS_NewUint32(ctx, (uint32_t)free_psram)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "totalInternalHeap",
+                                         JS_NewUint32(ctx, (uint32_t)total_internal_heap)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "freeInternalHeap",
+                                         JS_NewUint32(ctx, (uint32_t)free_internal_heap)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "jsHeapSize",
+                                         JS_NewUint32(ctx, js_heap_size)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "jsHeapRegion",
+                                         JS_NewString(ctx, js_heap_region)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "littlefsMounted",
+                                         JS_NewBool(littlefs_mounted)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "replEnabled",
+                                         JS_NewBool(repl_enabled)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "autoRunIndexJs",
+                                         JS_NewBool(auto_run_index_js)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "formatLittlefsOnMountFail",
+                                         JS_NewBool(format_littlefs_on_mount_fail)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "freeHeap",
+                                         JS_NewUint32(ctx, esp_get_free_heap_size())) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "jsTimeMs",
+                                         JS_NewInt64(ctx, esp_timer_get_time() / 1000))) {
         goto fail;
     }
 

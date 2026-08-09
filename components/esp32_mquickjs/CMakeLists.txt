@@ -18,6 +18,8 @@ set(ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
+    CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
+    CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
     CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
 )
 
@@ -237,6 +239,9 @@ set(ESP32_MQUICKJS_PRIV_REQUIRES
     esp_timer
     spi_flash
     esp_psram
+    # IDF resolves component include paths during early expansion, before the
+    # application feature sdkconfig is always available.
+    esp_driver_usb_serial_jtag
 )
 
 esp32_mquickjs_append_feature_component(
@@ -335,6 +340,30 @@ esp32_mquickjs_append_feature_component(
         esp_wifi
         nvs_flash
 )
+
+esp32_mquickjs_append_feature_component(
+    CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
+    "src/core/esp32_mquickjs_line_framer.c"
+    "src/modules/usb_serial/esp32_mquickjs_usb_serial.c"
+    PRIV_REQUIRES
+        esp_driver_usb_serial_jtag
+)
+
+if(DEFINED CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL AND CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL)
+    list(APPEND ESP32_MQUICKJS_PRIV_REQUIRES esp_driver_usb_serial_jtag)
+endif()
+
+esp32_mquickjs_append_feature_component(
+    CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
+    "src/modules/websocket/esp32_mquickjs_websocket.c"
+    PRIV_REQUIRES
+        esp_websocket_client
+        mbedtls
+)
+
+if(DEFINED CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET AND CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET)
+    list(APPEND ESP32_MQUICKJS_PRIV_REQUIRES esp_websocket_client mbedtls)
+endif()
 
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER

@@ -490,20 +490,20 @@ static JSValue spi_make_bus_status_object(JSContext *ctx, const esp32_mquickjs_s
         return JS_EXCEPTION;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *status_obj, "opened",
+    if (!esp32_mquickjs_set_property_ref(ctx, status_obj, "opened",
                                      JS_NewBool(slot != NULL && slot->allocated)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "host",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "host",
                                      JS_NewInt32(ctx, slot != NULL ? slot->host_number : ESP32_MQUICKJS_SPI_DEFAULT_HOST_NUMBER)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "sclk",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "sclk",
                                      JS_NewInt32(ctx, slot != NULL ? slot->sclk_pin : ESP32_MQUICKJS_SPI_DEFAULT_SCLK_PIN)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "mosi",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "mosi",
                                      JS_NewInt32(ctx, slot != NULL ? slot->mosi_pin : ESP32_MQUICKJS_SPI_DEFAULT_MOSI_PIN)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "miso",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "miso",
                                      JS_NewInt32(ctx, slot != NULL ? slot->miso_pin : ESP32_MQUICKJS_SPI_DEFAULT_MISO_PIN)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "maxTransferSize",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "maxTransferSize",
                                      JS_NewUint32(ctx, slot != NULL ? slot->max_transfer_size
                                                                     : ESP32_MQUICKJS_SPI_DEFAULT_MAX_TRANSFER_SIZE)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "deviceCount",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "deviceCount",
                                      JS_NewUint32(ctx, slot != NULL ? slot->open_devices : 0))) {
         JS_PopGCRef(ctx, &status_ref);
         return JS_EXCEPTION;
@@ -526,23 +526,23 @@ static JSValue spi_make_device_status_object(JSContext *ctx,
         return JS_EXCEPTION;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *status_obj, "opened",
+    if (!esp32_mquickjs_set_property_ref(ctx, status_obj, "opened",
                                      JS_NewBool(device_slot != NULL && device_slot->allocated)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "host",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "host",
                                      JS_NewInt32(ctx, bus_slot != NULL ? bus_slot->host_number : ESP32_MQUICKJS_SPI_DEFAULT_HOST_NUMBER)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "cs",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "cs",
                                      JS_NewInt32(ctx, device_slot != NULL ? device_slot->cs_pin : ESP32_MQUICKJS_SPI_DEFAULT_CS_PIN)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "mode",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "mode",
                                      JS_NewInt32(ctx, device_slot != NULL ? device_slot->mode : 0)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "freqHz",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "freqHz",
                                      JS_NewUint32(ctx, device_slot != NULL ? device_slot->freq_hz
                                                                            : ESP32_MQUICKJS_SPI_DEFAULT_FREQ_HZ)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "queueSize",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "queueSize",
                                      JS_NewUint32(ctx, device_slot != NULL ? device_slot->queue_size
                                                                            : ESP32_MQUICKJS_SPI_DEFAULT_QUEUE_SIZE)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "csHigh",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "csHigh",
                                      JS_NewBool(device_slot != NULL && device_slot->cs_high)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "lsbFirst",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "lsbFirst",
                                      JS_NewBool(device_slot != NULL && device_slot->lsb_first))) {
         JS_PopGCRef(ctx, &status_ref);
         return JS_EXCEPTION;
@@ -885,16 +885,16 @@ static JSValue spi_make_write_chunks_stats(JSContext *ctx,
         return JS_EXCEPTION;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *stats, "chunks", JS_NewUint32(ctx, chunks)) ||
-        !esp32_mquickjs_set_property(ctx, *stats, "bytes", JS_NewInt64(ctx, (int64_t)bytes)) ||
-        !esp32_mquickjs_set_property(ctx, *stats, "prepUs", JS_NewInt64(ctx, (int64_t)prep_us)) ||
-        !esp32_mquickjs_set_property(ctx, *stats, "queueUs", JS_NewInt64(ctx, (int64_t)queue_us)) ||
-        !esp32_mquickjs_set_property(ctx, *stats, "waitUs", JS_NewInt64(ctx, (int64_t)wait_us)) ||
-        !esp32_mquickjs_set_property(ctx, *stats, "transferUs",
+    if (!esp32_mquickjs_set_property_ref(ctx, stats, "chunks", JS_NewUint32(ctx, chunks)) ||
+        !esp32_mquickjs_set_property_ref(ctx, stats, "bytes", JS_NewInt64(ctx, (int64_t)bytes)) ||
+        !esp32_mquickjs_set_property_ref(ctx, stats, "prepUs", JS_NewInt64(ctx, (int64_t)prep_us)) ||
+        !esp32_mquickjs_set_property_ref(ctx, stats, "queueUs", JS_NewInt64(ctx, (int64_t)queue_us)) ||
+        !esp32_mquickjs_set_property_ref(ctx, stats, "waitUs", JS_NewInt64(ctx, (int64_t)wait_us)) ||
+        !esp32_mquickjs_set_property_ref(ctx, stats, "transferUs",
                                      JS_NewInt64(ctx, (int64_t)(total_us > prep_us ? total_us - prep_us : 0U))) ||
-        !esp32_mquickjs_set_property(ctx, *stats, "totalUs", JS_NewInt64(ctx, (int64_t)total_us)) ||
-        !esp32_mquickjs_set_property(ctx, *stats, "queueDepth", JS_NewUint32(ctx, queue_depth)) ||
-        !esp32_mquickjs_set_property(ctx, *stats, "direct", direct ? JS_TRUE : JS_FALSE)) {
+        !esp32_mquickjs_set_property_ref(ctx, stats, "totalUs", JS_NewInt64(ctx, (int64_t)total_us)) ||
+        !esp32_mquickjs_set_property_ref(ctx, stats, "queueDepth", JS_NewUint32(ctx, queue_depth)) ||
+        !esp32_mquickjs_set_property_ref(ctx, stats, "direct", direct ? JS_TRUE : JS_FALSE)) {
         JS_PopGCRef(ctx, &stats_ref);
         return JS_EXCEPTION;
     }

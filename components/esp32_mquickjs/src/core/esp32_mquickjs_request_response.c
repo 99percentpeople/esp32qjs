@@ -182,11 +182,9 @@ static int rr_copy_object_properties(JSContext *ctx,
         JSGCRef value_ref;
         JSValue *key_value;
         JSValue *value_value;
-        JSCStringBuf key_buf;
-        JSCStringBuf value_buf;
-        const char *key_str;
-        const char *value_str;
+        char *source_name = NULL;
         char *prop_name = NULL;
+        char *value_copy = NULL;
 
         key_value = JS_PushGCRef(ctx, &key_ref);
         value_value = JS_PushGCRef(ctx, &value_ref);
@@ -198,49 +196,57 @@ static int rr_copy_object_properties(JSContext *ctx,
             goto done;
         }
 
-        key_str = JS_ToCString(ctx, *key_value, &key_buf);
-        if (key_str == NULL) {
+        source_name = rr_value_to_string_copy(ctx, *key_value);
+        if (source_name == NULL) {
             JS_PopGCRef(ctx, &value_ref);
             JS_PopGCRef(ctx, &key_ref);
             goto done;
         }
-        prop_name = normalize_keys ? rr_normalize_header_key(key_str) : rr_strdup(key_str);
+        prop_name = normalize_keys ? rr_normalize_header_key(source_name) : rr_strdup(source_name);
         if (prop_name == NULL) {
+            heap_caps_free(source_name);
             JS_PopGCRef(ctx, &value_ref);
             JS_PopGCRef(ctx, &key_ref);
             JS_ThrowOutOfMemory(ctx);
             goto done;
         }
 
-        *value_value = JS_GetPropertyStr(ctx, *source_obj, key_str);
+        *value_value = JS_GetPropertyStr(ctx, *source_obj, source_name);
         if (JS_IsException(*value_value)) {
             heap_caps_free(prop_name);
+            heap_caps_free(source_name);
             JS_PopGCRef(ctx, &value_ref);
             JS_PopGCRef(ctx, &key_ref);
             goto done;
         }
         if (JS_IsUndefined(*value_value)) {
             heap_caps_free(prop_name);
+            heap_caps_free(source_name);
             JS_PopGCRef(ctx, &value_ref);
             JS_PopGCRef(ctx, &key_ref);
             continue;
         }
 
-        value_str = JS_ToCString(ctx, *value_value, &value_buf);
-        if (value_str == NULL) {
+        value_copy = rr_value_to_string_copy(ctx, *value_value);
+        if (value_copy == NULL) {
             heap_caps_free(prop_name);
+            heap_caps_free(source_name);
             JS_PopGCRef(ctx, &value_ref);
             JS_PopGCRef(ctx, &key_ref);
             goto done;
         }
 
-        if (!esp32_mquickjs_set_property(ctx, *target_obj, prop_name, JS_NewString(ctx, value_str))) {
+        if (!esp32_mquickjs_set_property_ref(ctx, target_obj, prop_name, JS_NewString(ctx, value_copy))) {
+            heap_caps_free(value_copy);
             heap_caps_free(prop_name);
+            heap_caps_free(source_name);
             JS_PopGCRef(ctx, &value_ref);
             JS_PopGCRef(ctx, &key_ref);
             goto done;
         }
+        heap_caps_free(value_copy);
         heap_caps_free(prop_name);
+        heap_caps_free(source_name);
         JS_PopGCRef(ctx, &value_ref);
         JS_PopGCRef(ctx, &key_ref);
     }
@@ -292,10 +298,14 @@ static JSValue rr_get_object_keys(JSContext *ctx, JSValue *object_value)
         goto fail;
     }
 
-    JS_PopGCRef(ctx, &keys_ref);
-    JS_PopGCRef(ctx, &object_ref);
-    JS_PopGCRef(ctx, &global_ref);
-    return JS_PopGCRef(ctx, &array_ref);
+    {
+        JSValue result = JS_PopGCRef(ctx, &array_ref);
+
+        JS_PopGCRef(ctx, &keys_ref);
+        JS_PopGCRef(ctx, &object_ref);
+        JS_PopGCRef(ctx, &global_ref);
+        return result;
+    }
 
 fail:
     JS_PopGCRef(ctx, &array_ref);
@@ -395,7 +405,7 @@ JSValue esp32_mquickjs_make_headers_object(JSContext *ctx, JSValue global_obj, J
         goto fail;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *headers_obj, ESP32_MQUICKJS_HEADERS_STORE_KEY, *store_obj)) {
+    if (!esp32_mquickjs_set_property_ref(ctx, headers_obj, ESP32_MQUICKJS_HEADERS_STORE_KEY, *store_obj)) {
         goto fail;
     }
 
@@ -484,7 +494,7 @@ static JSValue rr_make_query_object(JSContext *ctx, const char *query_string)
             goto fail;
         }
         if (key[0] != '\0' &&
-            !esp32_mquickjs_set_property(ctx, *query_obj, key, JS_NewString(ctx, value))) {
+            !esp32_mquickjs_set_property_ref(ctx, query_obj, key, JS_NewString(ctx, value))) {
             heap_caps_free(key);
             heap_caps_free(value);
             goto fail;
@@ -591,23 +601,35 @@ static JSValue rr_body_to_stream(JSContext *ctx,
                                  JSValue body_value,
                                  const char *api_name)
 {
+    JSGCRef global_ref;
+    JSGCRef body_ref;
+    JSValue *rooted_global;
+    JSValue *rooted_body;
     JSCStringBuf body_buf;
     const char *body_str;
+    JSValue result;
 
-    if (JS_IsUndefined(body_value) || JS_IsNull(body_value)) {
-        return esp32_mquickjs_make_text_body_stream(ctx, global_obj, "");
+    rooted_global = JS_PushGCRef(ctx, &global_ref);
+    rooted_body = JS_PushGCRef(ctx, &body_ref);
+    *rooted_global = global_obj;
+    *rooted_body = body_value;
+
+    if (JS_IsUndefined(*rooted_body) || JS_IsNull(*rooted_body)) {
+        result = esp32_mquickjs_make_text_body_stream(ctx, *rooted_global, "");
+    } else if (JS_IsString(ctx, *rooted_body)) {
+        body_str = JS_ToCString(ctx, *rooted_body, &body_buf);
+        result = body_str != NULL
+                     ? esp32_mquickjs_make_text_body_stream(ctx, *rooted_global, body_str)
+                     : JS_EXCEPTION;
+    } else if (esp32_mquickjs_stream_is_stream(ctx, *rooted_body)) {
+        result = esp32_mquickjs_stream_clone(ctx, *rooted_global, *rooted_body);
+    } else {
+        result = JS_ThrowTypeError(ctx, "%s expects body to be a string or Stream", api_name);
     }
-    if (esp32_mquickjs_stream_is_stream(ctx, body_value)) {
-        return esp32_mquickjs_stream_clone(ctx, global_obj, body_value);
-    }
-    if (!JS_IsString(ctx, body_value)) {
-        return JS_ThrowTypeError(ctx, "%s expects body to be a string or Stream", api_name);
-    }
-    body_str = JS_ToCString(ctx, body_value, &body_buf);
-    if (body_str == NULL) {
-        return JS_EXCEPTION;
-    }
-    return esp32_mquickjs_make_text_body_stream(ctx, global_obj, body_str);
+
+    JS_PopGCRef(ctx, &body_ref);
+    JS_PopGCRef(ctx, &global_ref);
+    return result;
 }
 
 JSValue esp32_mquickjs_make_request_object(JSContext *ctx,
@@ -680,20 +702,20 @@ JSValue esp32_mquickjs_make_request_object(JSContext *ctx,
         goto fail;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *request_obj, "method", JS_NewString(ctx, method != NULL ? method : "GET")) ||
-        !esp32_mquickjs_set_property(ctx, *request_obj, "url", JS_NewString(ctx, url != NULL ? url : "")) ||
-        !esp32_mquickjs_set_property(ctx, *request_obj, "path", JS_NewString(ctx, path != NULL ? path : "/")) ||
-        !esp32_mquickjs_set_property(ctx, *request_obj, "route",
+    if (!esp32_mquickjs_set_property_ref(ctx, request_obj, "method", JS_NewString(ctx, method != NULL ? method : "GET")) ||
+        !esp32_mquickjs_set_property_ref(ctx, request_obj, "url", JS_NewString(ctx, url != NULL ? url : "")) ||
+        !esp32_mquickjs_set_property_ref(ctx, request_obj, "path", JS_NewString(ctx, path != NULL ? path : "/")) ||
+        !esp32_mquickjs_set_property_ref(ctx, request_obj, "route",
                                      JS_NewString(ctx, route != NULL ? route : (path != NULL ? path : "/"))) ||
-        !esp32_mquickjs_set_property(ctx, *request_obj, "mountPath",
+        !esp32_mquickjs_set_property_ref(ctx, request_obj, "mountPath",
                                      JS_NewString(ctx, mount_path != NULL ? mount_path : "")) ||
-        !esp32_mquickjs_set_property(ctx, *request_obj, "relativePath",
+        !esp32_mquickjs_set_property_ref(ctx, request_obj, "relativePath",
                                      JS_NewString(ctx, relative_path != NULL ? relative_path : "")) ||
-        !esp32_mquickjs_set_property(ctx, *request_obj, "queryString",
+        !esp32_mquickjs_set_property_ref(ctx, request_obj, "queryString",
                                      JS_NewString(ctx, query_string != NULL ? query_string : "")) ||
-        !esp32_mquickjs_set_property(ctx, *request_obj, "query", *query_obj) ||
-        !esp32_mquickjs_set_property(ctx, *request_obj, "headers", *headers_obj) ||
-        !esp32_mquickjs_set_property(ctx, *request_obj, "body", *body_obj)) {
+        !esp32_mquickjs_set_property_ref(ctx, request_obj, "query", *query_obj) ||
+        !esp32_mquickjs_set_property_ref(ctx, request_obj, "headers", *headers_obj) ||
+        !esp32_mquickjs_set_property_ref(ctx, request_obj, "body", *body_obj)) {
         goto fail;
     }
     *query_obj = JS_UNDEFINED;
@@ -821,13 +843,13 @@ JSValue esp32_mquickjs_make_response_object(JSContext *ctx,
         goto fail;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *response_obj, "ok", JS_NewBool(ok)) ||
-        !esp32_mquickjs_set_property(ctx, *response_obj, "status", JS_NewInt32(ctx, status)) ||
-        !esp32_mquickjs_set_property(ctx, *response_obj, "statusText",
+    if (!esp32_mquickjs_set_property_ref(ctx, response_obj, "ok", JS_NewBool(ok)) ||
+        !esp32_mquickjs_set_property_ref(ctx, response_obj, "status", JS_NewInt32(ctx, status)) ||
+        !esp32_mquickjs_set_property_ref(ctx, response_obj, "statusText",
                                      JS_NewString(ctx, status_text != NULL ? status_text : rr_status_text(status))) ||
-        !esp32_mquickjs_set_property(ctx, *response_obj, "url", JS_NewString(ctx, url != NULL ? url : "")) ||
-        !esp32_mquickjs_set_property(ctx, *response_obj, "headers", *headers_obj) ||
-        !esp32_mquickjs_set_property(ctx, *response_obj, "body", *body_obj)) {
+        !esp32_mquickjs_set_property_ref(ctx, response_obj, "url", JS_NewString(ctx, url != NULL ? url : "")) ||
+        !esp32_mquickjs_set_property_ref(ctx, response_obj, "headers", *headers_obj) ||
+        !esp32_mquickjs_set_property_ref(ctx, response_obj, "body", *body_obj)) {
         goto fail;
     }
     *headers_obj = JS_UNDEFINED;
@@ -952,10 +974,8 @@ static JSValue rr_make_text_result(JSContext *ctx, JSValue target_value, const c
     if (esp32_mquickjs_stream_read_all_text(ctx, *body_value, api_name, &text, &text_len) != 0) {
         goto done;
     }
+    esp32_mquickjs_stream_close_value(ctx, *body_value);
     result = JS_NewStringLen(ctx, text, text_len);
-    if (!JS_IsException(result)) {
-        esp32_mquickjs_stream_close_value(ctx, *body_value);
-    }
 
 done:
     heap_caps_free(text);
@@ -1177,12 +1197,14 @@ done:
 static JSValue rr_make_response_from_args(JSContext *ctx, JSValue global_obj, int argc, JSValue *argv)
 {
     JSGCRef global_ref;
+    JSGCRef body_input_ref;
     JSGCRef init_ref;
     JSGCRef status_ref;
     JSGCRef status_text_ref;
     JSGCRef headers_ref;
     JSGCRef url_ref;
     JSValue *rooted_global;
+    JSValue *body_input;
     JSValue *init_value;
     JSValue *status_value;
     JSValue *status_text_value;
@@ -1194,12 +1216,14 @@ static JSValue rr_make_response_from_args(JSContext *ctx, JSValue global_obj, in
     JSValue result = JS_EXCEPTION;
 
     rooted_global = JS_PushGCRef(ctx, &global_ref);
+    body_input = JS_PushGCRef(ctx, &body_input_ref);
     init_value = JS_PushGCRef(ctx, &init_ref);
     status_value = JS_PushGCRef(ctx, &status_ref);
     status_text_value = JS_PushGCRef(ctx, &status_text_ref);
     headers_value = JS_PushGCRef(ctx, &headers_ref);
     url_value = JS_PushGCRef(ctx, &url_ref);
     *rooted_global = global_obj;
+    *body_input = argc >= 1 ? argv[0] : JS_UNDEFINED;
     *init_value = argc >= 2 ? argv[1] : JS_UNDEFINED;
     *status_value = JS_UNDEFINED;
     *status_text_value = JS_UNDEFINED;
@@ -1249,7 +1273,7 @@ static JSValue rr_make_response_from_args(JSContext *ctx, JSValue global_obj, in
                                                  status_text,
                                                  url,
                                                  *headers_value,
-                                                 argc >= 1 ? argv[0] : JS_UNDEFINED);
+                                                 *body_input);
 
 done:
     heap_caps_free(status_text);
@@ -1259,6 +1283,7 @@ done:
     JS_PopGCRef(ctx, &status_text_ref);
     JS_PopGCRef(ctx, &status_ref);
     JS_PopGCRef(ctx, &init_ref);
+    JS_PopGCRef(ctx, &body_input_ref);
     JS_PopGCRef(ctx, &global_ref);
     return result;
 }
@@ -1367,9 +1392,9 @@ static JSValue rr_make_response_json_factory(JSContext *ctx, JSValue global_obj,
     }
     *plain_headers = esp32_mquickjs_headers_to_plain_object(ctx, *headers_obj);
     if (JS_IsException(*plain_headers) ||
-        !esp32_mquickjs_set_property(ctx, *plain_headers, "content-type",
+        !esp32_mquickjs_set_property_ref(ctx, plain_headers, "content-type",
                                      JS_NewString(ctx, "application/json; charset=utf-8")) ||
-        !esp32_mquickjs_set_property(ctx, *init_obj, "headers", *plain_headers)) {
+        !esp32_mquickjs_set_property_ref(ctx, init_obj, "headers", *plain_headers)) {
         goto done;
     }
 
@@ -1539,7 +1564,7 @@ JSValue js_headers_set(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
     }
     store_obj = JS_PushGCRef(ctx, &store_ref);
     *store_obj = rr_get_headers_store(ctx, *this_val);
-    if (!esp32_mquickjs_set_property(ctx, *store_obj, normalized, JS_NewString(ctx, value_copy))) {
+    if (!esp32_mquickjs_set_property_ref(ctx, store_obj, normalized, JS_NewString(ctx, value_copy))) {
         heap_caps_free(value_copy);
         heap_caps_free(normalized);
         JS_PopGCRef(ctx, &store_ref);
@@ -1611,7 +1636,7 @@ JSValue js_headers_delete(JSContext *ctx, JSValue *this_val, int argc, JSValue *
     previous = JS_GetPropertyStr(ctx, *store_obj, normalized);
     existed = !JS_IsException(previous) && !JS_IsUndefined(previous) && !JS_IsNull(previous);
     if (JS_IsException(previous) ||
-        !esp32_mquickjs_set_property(ctx, *store_obj, normalized, JS_UNDEFINED)) {
+        !esp32_mquickjs_set_property_ref(ctx, store_obj, normalized, JS_UNDEFINED)) {
         heap_caps_free(normalized);
         JS_PopGCRef(ctx, &store_ref);
         return JS_EXCEPTION;
@@ -1667,8 +1692,7 @@ JSValue js_headers_entries(JSContext *ctx, JSValue *this_val, int argc, JSValue 
         JSValue *pair;
         JSValue *key;
         JSValue *value;
-        JSCStringBuf key_buf;
-        const char *key_str;
+        char *key_name;
 
         pair = JS_PushGCRef(ctx, &pair_ref);
         key = JS_PushGCRef(ctx, &key_ref);
@@ -1682,14 +1706,15 @@ JSValue js_headers_entries(JSContext *ctx, JSValue *this_val, int argc, JSValue 
             JS_PopGCRef(ctx, &pair_ref);
             goto fail;
         }
-        key_str = JS_ToCString(ctx, *key, &key_buf);
-        if (key_str == NULL) {
+        key_name = rr_value_to_string_copy(ctx, *key);
+        if (key_name == NULL) {
             JS_PopGCRef(ctx, &value_ref);
             JS_PopGCRef(ctx, &key_ref);
             JS_PopGCRef(ctx, &pair_ref);
             goto fail;
         }
-        *value = JS_GetPropertyStr(ctx, *plain_obj, key_str);
+        *value = JS_GetPropertyStr(ctx, *plain_obj, key_name);
+        heap_caps_free(key_name);
         if (JS_IsException(*value) ||
             JS_IsException(JS_SetPropertyUint32(ctx, *pair, 0, *key)) ||
             JS_IsException(JS_SetPropertyUint32(ctx, *pair, 1, *value)) ||

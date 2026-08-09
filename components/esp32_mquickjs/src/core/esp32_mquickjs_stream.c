@@ -160,8 +160,10 @@ static int stream_ref_from_object(JSContext *ctx,
                                   const char *api_name,
                                   esp32_mquickjs_fs_stream_ref_t *out_ref)
 {
+    JSGCRef object_ref;
     JSGCRef id_ref;
     JSGCRef generation_ref;
+    JSValue *object;
     JSValue *id_value;
     JSValue *generation_value;
     int stream_id;
@@ -175,24 +177,29 @@ static int stream_ref_from_object(JSContext *ctx,
         return -1;
     }
 
+    object = JS_PushGCRef(ctx, &object_ref);
     id_value = JS_PushGCRef(ctx, &id_ref);
     generation_value = JS_PushGCRef(ctx, &generation_ref);
-    *id_value = JS_GetPropertyStr(ctx, value, ESP32_MQUICKJS_FS_STREAM_ID_KEY);
-    *generation_value = JS_GetPropertyStr(ctx, value, ESP32_MQUICKJS_FS_STREAM_GENERATION_KEY);
+    *object = value;
+    *id_value = JS_GetPropertyStr(ctx, *object, ESP32_MQUICKJS_FS_STREAM_ID_KEY);
+    *generation_value = JS_GetPropertyStr(ctx, *object, ESP32_MQUICKJS_FS_STREAM_GENERATION_KEY);
     if (JS_IsException(*id_value) || JS_IsException(*generation_value)) {
         JS_PopGCRef(ctx, &generation_ref);
         JS_PopGCRef(ctx, &id_ref);
+        JS_PopGCRef(ctx, &object_ref);
         return -1;
     }
     if (JS_ToInt32(ctx, &stream_id, *id_value) != 0 || JS_ToUint32(ctx, &generation, *generation_value) != 0) {
         JS_PopGCRef(ctx, &generation_ref);
         JS_PopGCRef(ctx, &id_ref);
+        JS_PopGCRef(ctx, &object_ref);
         JS_ThrowTypeError(ctx, "%s expects a Stream object", api_name);
         return -1;
     }
 
     JS_PopGCRef(ctx, &generation_ref);
     JS_PopGCRef(ctx, &id_ref);
+    JS_PopGCRef(ctx, &object_ref);
     out_ref->stream_id = stream_id;
     out_ref->generation = generation;
     return 0;
@@ -202,8 +209,10 @@ static int stream_ref_try_from_object(JSContext *ctx,
                                       JSValue value,
                                       esp32_mquickjs_fs_stream_ref_t *out_ref)
 {
+    JSGCRef object_ref;
     JSGCRef id_ref;
     JSGCRef generation_ref;
+    JSValue *object;
     JSValue *id_value;
     JSValue *generation_value;
     int stream_id;
@@ -213,20 +222,24 @@ static int stream_ref_try_from_object(JSContext *ctx,
         return -1;
     }
 
+    object = JS_PushGCRef(ctx, &object_ref);
     id_value = JS_PushGCRef(ctx, &id_ref);
     generation_value = JS_PushGCRef(ctx, &generation_ref);
-    *id_value = JS_GetPropertyStr(ctx, value, ESP32_MQUICKJS_FS_STREAM_ID_KEY);
-    *generation_value = JS_GetPropertyStr(ctx, value, ESP32_MQUICKJS_FS_STREAM_GENERATION_KEY);
+    *object = value;
+    *id_value = JS_GetPropertyStr(ctx, *object, ESP32_MQUICKJS_FS_STREAM_ID_KEY);
+    *generation_value = JS_GetPropertyStr(ctx, *object, ESP32_MQUICKJS_FS_STREAM_GENERATION_KEY);
     if (JS_IsException(*id_value) || JS_IsException(*generation_value) ||
         JS_ToInt32(ctx, &stream_id, *id_value) != 0 ||
         JS_ToUint32(ctx, &generation, *generation_value) != 0) {
         JS_PopGCRef(ctx, &generation_ref);
         JS_PopGCRef(ctx, &id_ref);
+        JS_PopGCRef(ctx, &object_ref);
         return -1;
     }
 
     JS_PopGCRef(ctx, &generation_ref);
     JS_PopGCRef(ctx, &id_ref);
+    JS_PopGCRef(ctx, &object_ref);
     out_ref->stream_id = stream_id;
     out_ref->generation = generation;
     return 0;
@@ -277,21 +290,21 @@ static JSValue stream_make_object(JSContext *ctx,
         goto fail;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *stream_obj, "kind",
+    if (!esp32_mquickjs_set_property_ref(ctx, stream_obj, "kind",
                                      JS_NewString(ctx, stream_kind_name(slot->kind))) ||
-        !esp32_mquickjs_set_property(ctx, *stream_obj, "mode",
+        !esp32_mquickjs_set_property_ref(ctx, stream_obj, "mode",
                                      JS_NewString(ctx, slot->mode[0] != '\0' ? slot->mode : "r")) ||
-        !esp32_mquickjs_set_property(ctx, *stream_obj, "path",
+        !esp32_mquickjs_set_property_ref(ctx, stream_obj, "path",
                                      JS_NewString(ctx, slot->path != NULL ? slot->path : "")) ||
-        !esp32_mquickjs_set_property(ctx, *stream_obj, "readable",
+        !esp32_mquickjs_set_property_ref(ctx, stream_obj, "readable",
                                      JS_NewBool(slot->readable)) ||
-        !esp32_mquickjs_set_property(ctx, *stream_obj, "writable",
+        !esp32_mquickjs_set_property_ref(ctx, stream_obj, "writable",
                                      JS_NewBool(slot->writable)) ||
-        !esp32_mquickjs_set_property(ctx, *stream_obj, "seekable",
+        !esp32_mquickjs_set_property_ref(ctx, stream_obj, "seekable",
                                      JS_NewBool(slot->seekable)) ||
-        !esp32_mquickjs_set_property(ctx, *stream_obj, ESP32_MQUICKJS_FS_STREAM_ID_KEY,
+        !esp32_mquickjs_set_property_ref(ctx, stream_obj, ESP32_MQUICKJS_FS_STREAM_ID_KEY,
                                      JS_NewInt32(ctx, slot->stream_id)) ||
-        !esp32_mquickjs_set_property(ctx, *stream_obj, ESP32_MQUICKJS_FS_STREAM_GENERATION_KEY,
+        !esp32_mquickjs_set_property_ref(ctx, stream_obj, ESP32_MQUICKJS_FS_STREAM_GENERATION_KEY,
                                      JS_NewUint32(ctx, slot->generation))) {
         goto fail;
     }

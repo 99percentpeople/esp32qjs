@@ -175,18 +175,72 @@ class RemoteConfigTests(unittest.TestCase):
         test_config = REMOTE.js_test_build_config(config)
 
         self.assertEqual(test_config.flash_data_override, REMOTE.JS_TEST_FLASH_DATA_DIR)
-        self.assertEqual(
-            test_config.sdkconfig_defaults[-1],
+        self.assertIn(
             REMOTE.JS_TEST_SDKCONFIG_DEFAULTS,
+            test_config.sdkconfig_defaults,
+        )
+        self.assertEqual(
+            test_config.sdkconfig_defaults[-1].name,
+            "sdkconfig.esp32s3.defaults",
         )
         self.assertIn(
-            "CONFIG_ESP32_MQUICKJS_DEBUG_GC=y",
-            REMOTE.JS_TEST_SDKCONFIG_DEFAULTS.read_text(),
+            "CONFIG_ESP32QJS_JS_HEAP_SIZE=524288",
+            test_config.sdkconfig_defaults[-1].read_text(),
         )
+        test_defaults = REMOTE.JS_TEST_SDKCONFIG_DEFAULTS.read_text()
+        self.assertIn("CONFIG_ESP32_MQUICKJS_DEBUG_GC=y", test_defaults)
+        self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET=y", test_defaults)
+        self.assertIn("websocket", REMOTE.JS_TEST_MODULE_MAP)
         self.assertIn(
             "-DESP32QJS_FLASH_DATA_INCLUDE_SHARED=ON",
             test_config.cmake_cache_entries,
         )
+
+    def test_c3_js_test_build_keeps_the_board_heap_budget(self):
+        args, board, app = REMOTE.parse_args([
+            "--board", "esp32c3_supermini",
+            "--app", "minimal",
+            "show-config",
+        ])
+        config = REMOTE.build_project_config(args, board, app)
+        test_config = REMOTE.js_test_build_config(config)
+
+        self.assertEqual(
+            test_config.sdkconfig_defaults[-1],
+            REMOTE.JS_TEST_SDKCONFIG_DEFAULTS,
+        )
+        self.assertFalse(
+            any(path.name == "sdkconfig.esp32c3.defaults"
+                for path in test_config.sdkconfig_defaults)
+        )
+
+    def test_js_tests_flash_and_monitor_the_instrumented_build(self):
+        args, board, app = REMOTE.parse_args([
+            "--board", "xiao_esp32s3",
+            "--app", "minimal",
+            "show-config",
+        ])
+        config = REMOTE.build_project_config(args, board, app)
+        session = object()
+
+        with (
+            patch.object(REMOTE, "flash") as flash,
+            patch.object(REMOTE, "start_monitor_session", return_value=session) as start,
+            patch.object(REMOTE, "read_monitor_until_text", return_value="ready"),
+            patch.object(REMOTE, "wait_for_optional_js_repl_banner"),
+            patch.object(REMOTE, "probe_js_runtime_features", return_value={"fs": True}),
+            patch.object(REMOTE, "close_monitor_session") as close,
+        ):
+            REMOTE.run_js_tests(config, (), False, set(), True, False)
+
+        flashed_config = flash.call_args.args[0]
+        self.assertEqual(flashed_config.build_dir.name, "build-js-test")
+        self.assertIn(
+            REMOTE.JS_TEST_SDKCONFIG_DEFAULTS,
+            flashed_config.sdkconfig_defaults,
+        )
+        start.assert_called_once_with(flashed_config)
+        close.assert_called_once_with(session)
 
     def test_complete_flash_data_override_is_preserved(self):
         override = ROOT / "tests" / "js" / "flash_data"

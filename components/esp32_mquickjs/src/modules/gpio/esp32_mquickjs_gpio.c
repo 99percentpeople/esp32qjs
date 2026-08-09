@@ -516,10 +516,10 @@ static JSValue gpio_make_interrupt_event(JSContext *ctx, gpio_num_t pin, gpio_in
         return JS_EXCEPTION;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *event_obj, "pin", JS_NewInt32(ctx, (int32_t)pin)) ||
-        !esp32_mquickjs_set_property(ctx, *event_obj, "level",
+    if (!esp32_mquickjs_set_property_ref(ctx, event_obj, "pin", JS_NewInt32(ctx, (int32_t)pin)) ||
+        !esp32_mquickjs_set_property_ref(ctx, event_obj, "level",
                                      JS_NewBool(gpio_get_level(pin) != 0)) ||
-        !esp32_mquickjs_set_property(ctx, *event_obj, "mode",
+        !esp32_mquickjs_set_property_ref(ctx, event_obj, "mode",
                                      JS_NewString(ctx, gpio_interrupt_mode_to_string(intr_type)))) {
         JS_PopGCRef(ctx, &event_ref);
         return JS_EXCEPTION;
@@ -623,47 +623,47 @@ static JSValue gpio_make_status(JSContext *ctx, gpio_num_t pin)
         return JS_EXCEPTION;
     }
 
-    if (!esp32_mquickjs_set_property(ctx, *status_obj, "pin", JS_NewInt32(ctx, (int32_t)pin)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "valid", JS_NewBool(true)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "outputCapable",
+    if (!esp32_mquickjs_set_property_ref(ctx, status_obj, "pin", JS_NewInt32(ctx, (int32_t)pin)) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "valid", JS_NewBool(true)) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "outputCapable",
                                      JS_NewBool(GPIO_IS_VALID_OUTPUT_GPIO(pin))) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "mode",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "mode",
                                      JS_NewString(ctx, gpio_mode_to_string(io_config.ie, io_config.oe, io_config.od))) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "pull",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "pull",
                                      JS_NewString(ctx, gpio_pull_to_string(io_config.pu, io_config.pd))) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "level",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "level",
                                      JS_NewBool(gpio_get_level(pin) != 0)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "inputEnabled",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "inputEnabled",
                                      JS_NewBool(io_config.ie)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "outputEnabled",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "outputEnabled",
                                      JS_NewBool(io_config.oe)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "openDrain",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "openDrain",
                                      JS_NewBool(io_config.od)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "pullup",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "pullup",
                                      JS_NewBool(io_config.pu)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "pulldown",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "pulldown",
                                      JS_NewBool(io_config.pd)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "driveStrength",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "driveStrength",
                                      JS_NewInt32(ctx, (int32_t)io_config.drv)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "held",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "held",
                                      JS_NewBool(s_gpio_hold_state[pin])) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "functionSelect",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "functionSelect",
                                      JS_NewUint32(ctx, io_config.fun_sel)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "signalOut",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "signalOut",
                                      JS_NewUint32(ctx, io_config.sig_out)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "outputControlledByPeripheral",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "outputControlledByPeripheral",
                                      JS_NewBool(io_config.oe_ctrl_by_periph)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "outputEnableInverted",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "outputEnableInverted",
                                      JS_NewBool(io_config.oe_inv)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "sleepEnabled",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "sleepEnabled",
                                      JS_NewBool(io_config.slp_sel)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "interruptAttached",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "interruptAttached",
                                      JS_NewBool(interrupt_attached)) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "interruptMode",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "interruptMode",
                                      interrupt_attached
                                          ? JS_NewString(ctx, gpio_interrupt_mode_to_string(intr_type))
                                          : JS_NULL) ||
-        !esp32_mquickjs_set_property(ctx, *status_obj, "interruptDropped",
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "interruptDropped",
                                      JS_NewUint32(ctx, interrupt_dropped))) {
         JS_PopGCRef(ctx, &status_ref);
         return JS_EXCEPTION;
