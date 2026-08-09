@@ -8,6 +8,7 @@ set(MQUICKJS_STDLIB_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/core/mqjs_stdlib_esp32
 set(MQUICKJS_HOST_BUILD_SOURCE "${MQUICKJS_HOST_BUILD_DIR}/mquickjs_build.host.c")
 set(ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS
     CONFIG_ESP32_MQUICKJS_FEATURE_FS
+    CONFIG_ESP32_MQUICKJS_FEATURE_NVS
     CONFIG_ESP32_MQUICKJS_FEATURE_GPIO
     CONFIG_ESP32_MQUICKJS_FEATURE_LEDC
     CONFIG_ESP32_MQUICKJS_FEATURE_ADC
@@ -236,12 +237,21 @@ set(ESP32_MQUICKJS_PUBLIC_REQUIRES
 )
 
 set(ESP32_MQUICKJS_PRIV_REQUIRES
+    bootloader_support
     esp_timer
+    mbedtls
     spi_flash
     esp_psram
     # IDF resolves component include paths during early expansion, before the
     # application feature sdkconfig is always available.
     esp_driver_usb_serial_jtag
+)
+
+esp32_mquickjs_append_feature_component(
+    CONFIG_ESP32_MQUICKJS_FEATURE_NVS
+    "src/modules/nvs/esp32_mquickjs_nvs.c"
+    PRIV_REQUIRES
+        nvs_flash
 )
 
 esp32_mquickjs_append_feature_component(

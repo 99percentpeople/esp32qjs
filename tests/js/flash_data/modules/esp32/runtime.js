@@ -5,6 +5,9 @@ test("esp32/runtime", function () {
   var microsBefore = esp32.micros();
   var heap = esp32.freeHeap();
   var scopedResult;
+  var randomA = esp32.randomHex(16);
+  var randomB = esp32.randomHex(16);
+  var randomLimitError = "";
   var timeoutError = "";
   var timeoutStarted;
   var timeoutElapsed;
@@ -18,6 +21,12 @@ test("esp32/runtime", function () {
   function expectFeature(name, available) {
     test.ok(typeof features[name] === "boolean", "info.features." + name + " should be boolean");
     test.equal(features[name], available, "feature " + name + " should match global availability");
+  }
+
+  try {
+    esp32.randomHex(65);
+  } catch (randomError) {
+    randomLimitError = String(randomError);
   }
 
   scopedResult = esp32.withTimeout(100, function () {
@@ -48,6 +57,11 @@ test("esp32/runtime", function () {
   test.ok(typeof info.freeHeap === "number" && info.freeHeap >= 0, "info.freeHeap should be numeric");
   test.ok(typeof heap === "number" && heap >= 0, "esp32.freeHeap() should be numeric");
   test.equal(scopedResult, 42, "esp32.withTimeout() should return the callback result");
+  test.equal(randomA.length, 32, "esp32.randomHex() should return two characters per byte");
+  test.ok(/^[0-9a-f]+$/.test(randomA), "esp32.randomHex() should return lowercase hex");
+  test.ok(randomA !== randomB, "esp32.randomHex() should return fresh random data");
+  test.ok(randomLimitError.indexOf("1..64") >= 0,
+    "esp32.randomHex() should reject oversized requests");
   test.ok(timeoutError.indexOf("deadline exceeded") >= 0,
     "esp32.withTimeout() should report runaway JavaScript as a catchable deadline error");
   test.ok(timeoutElapsed >= 10 && timeoutElapsed < 200,
@@ -56,6 +70,7 @@ test("esp32/runtime", function () {
   test.ok(microsAfter >= microsBefore, "esp32.micros() should be monotonic");
 
   expectFeature("fs", hasObject("fs"));
+  expectFeature("nvs", hasObject("nvs"));
   expectFeature("gpio", hasObject("gpio"));
   expectFeature("ledc", hasObject("ledc"));
   expectFeature("adc", hasObject("adc"));

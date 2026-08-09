@@ -15,6 +15,14 @@ config ESP32_MQUICKJS_FEATURE_FS
     help
         Enable the LittleFS-backed fs module and related script-path settings.
 
+config ESP32_MQUICKJS_FEATURE_NVS
+    bool "Enable bounded NVS string module"
+    default n
+    help
+        Enable atomic bounded string storage in the default NVS partition.
+        This does not enable NVS encryption; production profiles must configure
+        their ESP-IDF NVS security provider explicitly.
+
 config ESP32_MQUICKJS_FEATURE_GPIO
     bool "Enable gpio module"
     default y

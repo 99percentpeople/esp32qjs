@@ -250,6 +250,21 @@ static const JSClassDef js_fs_obj =
     JS_OBJECT_DEF("fs", js_fs);
 #endif
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_NVS
+static const JSPropDef js_nvs[] = {
+    JS_CGETSET_DEF("MAX_VALUE_BYTES", js_nvs_get_max_value_bytes, NULL),
+    JS_CFUNC_DEF("getString", 2, js_nvs_getString),
+    JS_CFUNC_DEF("setString", 3, js_nvs_setString),
+    JS_CFUNC_DEF("erase", 2, js_nvs_erase),
+    JS_CFUNC_DEF("clear", 1, js_nvs_clear),
+    JS_CFUNC_DEF("status", 0, js_nvs_status),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_nvs_obj =
+    JS_OBJECT_DEF("nvs", js_nvs);
+#endif
+
 #if CONFIG_ESP32_MQUICKJS_FEATURE_GPIO
 static const JSPropDef js_gpio[] = {
     JS_PROP_STRING_DEF("DISABLED", "disabled", 0),
@@ -388,6 +403,7 @@ static const JSPropDef js_esp32[] = {
     JS_CFUNC_DEF("millis", 0, js_esp32_millis),
     JS_CFUNC_DEF("micros", 0, js_esp32_micros),
     JS_CFUNC_DEF("freeHeap", 0, js_esp32_freeHeap),
+    JS_CFUNC_DEF("randomHex", 1, js_esp32_randomHex),
     JS_CFUNC_DEF("withTimeout", 2, js_esp32_withTimeout),
     JS_PROP_END,
 };
@@ -635,6 +651,9 @@ static const JSPropDef js_global_object_extra[] = {
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
     JS_PROP_CLASS_DEF("fs", &js_fs_obj),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_NVS
+    JS_PROP_CLASS_DEF("nvs", &js_nvs_obj),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_GPIO
     JS_PROP_CLASS_DEF("gpio", &js_gpio_obj),

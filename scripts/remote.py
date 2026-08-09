@@ -105,6 +105,7 @@ JS_TEST_MODULES = (
     ),
     JsTestModule("timers", (JsTestCase("modules/timers/runtime.js"),)),
     JsTestModule("fs", (JsTestCase("modules/fs/filesystem.js"),), required_features=("fs",)),
+    JsTestModule("nvs", (JsTestCase("modules/nvs/basic.js"),), required_features=("nvs",)),
     JsTestModule("stream", (JsTestCase("modules/stream/stream.js"),)),
     JsTestModule("load", (JsTestCase("modules/load/load.js"),), required_features=("fs",)),
     JsTestModule(

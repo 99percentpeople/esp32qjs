@@ -423,6 +423,22 @@ namespace ESP32QJS {
     remove(path: string): boolean;
   }
 
+  interface NVSStatus {
+    initialized: boolean;
+    encrypted: boolean;
+    maxValueBytes: number;
+  }
+
+  /** Bounded atomic string storage in the default NVS partition. */
+  interface NVSModule {
+    readonly MAX_VALUE_BYTES: number;
+    getString(namespace: string, key: string): string | null;
+    setString(namespace: string, key: string, value: string): number;
+    erase(namespace: string, key: string): boolean;
+    clear(namespace: string): boolean;
+    status(): NVSStatus;
+  }
+
   type GpioMode =
     | "disabled"
     | "input"
@@ -965,6 +981,7 @@ namespace ESP32QJS {
    */
   interface Esp32Features {
     fs: boolean;
+    nvs: boolean;
     gpio: boolean;
     ledc: boolean;
     adc: boolean;
@@ -1023,6 +1040,8 @@ namespace ESP32QJS {
     millis(): number;
     micros(): number;
     freeHeap(): number;
+    /** Return 1..64 cryptographically strong random bytes as lowercase hexadecimal. */
+    randomHex(byteLength: number): string;
     /**
      * Run a callback under a scoped deadline. Nested calls may only shorten an
      * already active runtime deadline; they never extend it.
@@ -1677,6 +1696,8 @@ namespace ESP32QJS {
 
   /** File-system helpers bound to `/littlefs`. */
   var fs: ESP32QJS.FsModule;
+  /** Bounded strings in the default NVS partition. */
+  var nvs: ESP32QJS.NVSModule;
   /** GPIO helpers for the active board profile. */
   var gpio: ESP32QJS.GpioModule;
   /** LEDC PWM timer/channel helpers. */

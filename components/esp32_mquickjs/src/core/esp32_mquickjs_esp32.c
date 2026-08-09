@@ -1,14 +1,61 @@
 #include "esp32_mquickjs_esp32.h"
 #include "esp32_mquickjs_core.h"
 
+#include <limits.h>
 #include <string.h>
 
+#include "bootloader_random.h"
 #include "esp_chip_info.h"
 #include "esp_flash.h"
 #include "esp_heap_caps.h"
 #include "esp_psram.h"
+#include "esp_random.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "mbedtls/private/ctr_drbg.h"
+#include "mbedtls/platform_util.h"
+
+static mbedtls_ctr_drbg_context s_secure_random;
+static bool s_secure_random_initialized;
+
+static int esp32_secure_random_entropy(void *opaque,
+                                       unsigned char *output,
+                                       size_t output_length)
+{
+    (void)opaque;
+    esp_fill_random(output, output_length);
+    return 0;
+}
+
+bool esp32_mquickjs_init_secure_random(JSContext *ctx)
+{
+    static const unsigned char personalization[] = "esp32qjs.randomHex.v1";
+    int result;
+
+    if (s_secure_random_initialized) {
+        return true;
+    }
+
+    mbedtls_ctr_drbg_init(&s_secure_random);
+    /* Seed before any JS-visible RF or ADC module can start using the SAR ADC. */
+    bootloader_random_enable();
+    result = mbedtls_ctr_drbg_seed(&s_secure_random,
+                                   esp32_secure_random_entropy,
+                                   NULL,
+                                   personalization,
+                                   sizeof(personalization) - 1U);
+    bootloader_random_disable();
+    if (result != 0) {
+        mbedtls_ctr_drbg_free(&s_secure_random);
+        JS_ThrowInternalError(ctx, "failed to initialize secure random generator: %d", result);
+        return false;
+    }
+
+    /* Avoid reseeding later while Wi-Fi or ADC may own the entropy hardware. */
+    mbedtls_ctr_drbg_set_reseed_interval(&s_secure_random, INT_MAX);
+    s_secure_random_initialized = true;
+    return true;
+}
 
 static const char *esp32_chip_model_name(void)
 {
@@ -54,6 +101,8 @@ static JSValue esp32_make_features_object(JSContext *ctx)
 
     if (!esp32_mquickjs_set_property_ref(ctx, features, "fs",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_FS)) ||
+        !esp32_mquickjs_set_property_ref(ctx, features, "nvs",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_NVS)) ||
         !esp32_mquickjs_set_property_ref(ctx, features, "gpio",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_GPIO)) ||
         !esp32_mquickjs_set_property_ref(ctx, features, "ledc",
@@ -219,6 +268,50 @@ JSValue js_esp32_freeHeap(JSContext *ctx, JSValue *this_val, int argc, JSValue *
     (void)argc;
     (void)argv;
     return JS_NewUint32(ctx, esp_get_free_heap_size());
+}
+
+JSValue js_esp32_randomHex(JSContext *ctx,
+                           JSValue *this_val,
+                           int argc,
+                           JSValue *argv)
+{
+    static const char hex_digits[] = "0123456789abcdef";
+    uint8_t bytes[64];
+    char encoded[(sizeof(bytes) * 2U) + 1U];
+    int byte_count;
+    int i;
+    int random_result;
+    JSValue result;
+
+    (void)this_val;
+    if (argc != 1 || JS_ToInt32(ctx, &byte_count, argv[0]) != 0 ||
+        byte_count < 1 || byte_count > (int)sizeof(bytes)) {
+        return JS_ThrowRangeError(ctx,
+                                  "esp32.randomHex(byteLength) expects 1..%u bytes",
+                                  (unsigned)sizeof(bytes));
+    }
+
+    if (!s_secure_random_initialized) {
+        return JS_ThrowInternalError(ctx, "secure random generator is not initialized");
+    }
+    random_result = mbedtls_ctr_drbg_random(&s_secure_random,
+                                            bytes,
+                                            (size_t)byte_count);
+    if (random_result != 0) {
+        mbedtls_platform_zeroize(bytes, sizeof(bytes));
+        return JS_ThrowInternalError(ctx,
+                                     "secure random generation failed: %d",
+                                     random_result);
+    }
+    for (i = 0; i < byte_count; ++i) {
+        encoded[i * 2] = hex_digits[bytes[i] >> 4];
+        encoded[(i * 2) + 1] = hex_digits[bytes[i] & 0x0f];
+    }
+    encoded[byte_count * 2] = '\0';
+    result = JS_NewStringLen(ctx, encoded, (size_t)byte_count * 2U);
+    mbedtls_platform_zeroize(bytes, sizeof(bytes));
+    mbedtls_platform_zeroize(encoded, sizeof(encoded));
+    return result;
 }
 
 JSValue js_esp32_withTimeout(JSContext *ctx,

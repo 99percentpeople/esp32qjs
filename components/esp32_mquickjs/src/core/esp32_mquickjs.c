@@ -9,6 +9,7 @@
 #include "esp32_mquickjs_http_server.h"
 #include "esp32_mquickjs_i2c.h"
 #include "esp32_mquickjs_ledc.h"
+#include "esp32_mquickjs_nvs.h"
 #include "esp32_mquickjs_spi.h"
 #include "esp32_mquickjs_stream.h"
 #include "esp32_mquickjs_uart.h"
@@ -1389,6 +1390,16 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
         return false;
     }
 
+    if (!esp32_mquickjs_init_secure_random(ctx)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
+#if CONFIG_ESP32_MQUICKJS_FEATURE_NVS
+    if (!esp32_mquickjs_init_nvs_runtime(ctx)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
+#endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_LEDC
     esp32_mquickjs_init_ledc_runtime();
 #endif
