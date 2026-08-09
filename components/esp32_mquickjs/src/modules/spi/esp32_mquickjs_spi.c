@@ -66,6 +66,13 @@ static esp32_mquickjs_spi_bus_slot_t s_spi_bus_slots[ESP32_MQUICKJS_SPI_BUS_SLOT
 static esp32_mquickjs_spi_device_slot_t s_spi_device_slots[ESP32_MQUICKJS_SPI_DEVICE_SLOT_COUNT];
 static uint32_t s_spi_next_generation = 1;
 
+static esp_err_t spi_queue_transaction_cooperatively(spi_device_handle_t handle,
+                                                     spi_transaction_t *transaction);
+static esp_err_t spi_wait_queued_write(spi_device_handle_t handle,
+                                       uint64_t *wait_us);
+static esp_err_t spi_transmit_cooperatively(spi_device_handle_t handle,
+                                            spi_transaction_t *transaction);
+
 static bool js_value_to_u32(JSContext *ctx, JSValue value, uint32_t *out_value)
 {
     int raw_value = 0;
@@ -651,7 +658,7 @@ static JSValue spi_transmit(JSContext *ctx,
     transaction.tx_buffer = tx_bytes;
     transaction.rx_buffer = rx_bytes;
 
-    err = spi_device_transmit(device_slot->handle, &transaction);
+    err = spi_transmit_cooperatively(device_slot->handle, &transaction);
     if (err != ESP_OK) {
         heap_caps_free(rx_bytes);
         return spi_throw_error(ctx, err, "SPI transaction failed");
@@ -795,14 +802,67 @@ static bool spi_ensure_tx_dma_buffer(esp32_mquickjs_spi_device_slot_t *device_sl
     return true;
 }
 
+static TickType_t spi_cooperative_wait_ticks(void)
+{
+    TickType_t ticks = pdMS_TO_TICKS(ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS);
+
+    return ticks > 0 ? ticks : 1;
+}
+
+static esp_err_t spi_queue_transaction_cooperatively(spi_device_handle_t handle,
+                                                     spi_transaction_t *transaction)
+{
+    esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
+    esp32_mquickjs_native_wait_t wait;
+    esp_err_t err;
+
+    esp32_mquickjs_native_wait_begin(runtime, &wait);
+    do {
+        if (!esp32_mquickjs_cooperate(runtime)) {
+            err = ESP_ERR_INVALID_STATE;
+            break;
+        }
+        err = spi_device_queue_trans(handle, transaction, spi_cooperative_wait_ticks());
+    } while (err == ESP_ERR_TIMEOUT);
+    esp32_mquickjs_native_wait_end(runtime, &wait);
+    return err;
+}
+
 static esp_err_t spi_wait_queued_write(spi_device_handle_t handle, uint64_t *wait_us)
 {
+    esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
+    esp32_mquickjs_native_wait_t wait;
     spi_transaction_t *completed = NULL;
     int64_t wait_start = esp_timer_get_time();
-    esp_err_t err = spi_device_get_trans_result(handle, &completed, portMAX_DELAY);
+    esp_err_t err;
+    bool interrupted = false;
+
+    esp32_mquickjs_native_wait_begin(runtime, &wait);
+    do {
+        if (!esp32_mquickjs_cooperate(runtime)) {
+            interrupted = true;
+        }
+        err = spi_device_get_trans_result(handle, &completed, spi_cooperative_wait_ticks());
+    } while (err == ESP_ERR_TIMEOUT);
+    esp32_mquickjs_native_wait_end(runtime, &wait);
 
     *wait_us += (uint64_t)(esp_timer_get_time() - wait_start);
+    if (err == ESP_OK && interrupted) {
+        return ESP_ERR_INVALID_STATE;
+    }
     return err;
+}
+
+static esp_err_t spi_transmit_cooperatively(spi_device_handle_t handle,
+                                            spi_transaction_t *transaction)
+{
+    uint64_t wait_us = 0;
+    esp_err_t err = spi_queue_transaction_cooperatively(handle, transaction);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+    return spi_wait_queued_write(handle, &wait_us);
 }
 
 static JSValue spi_make_write_chunks_stats(JSContext *ctx,
@@ -936,7 +996,7 @@ static JSValue spi_write_span_source(JSContext *ctx,
         }
 
         step_start = esp_timer_get_time();
-        err = spi_device_queue_trans(device_slot->handle, &transactions[slot_index], portMAX_DELAY);
+        err = spi_queue_transaction_cooperatively(device_slot->handle, &transactions[slot_index]);
         queue_us += (uint64_t)(esp_timer_get_time() - step_start);
         if (err != ESP_OK) {
             spi_release_span_owner(ctx, &active_owners[slot_index]);
@@ -1588,7 +1648,7 @@ JSValue js_spi_device_write_chunks(JSContext *ctx, JSValue *this_val, int argc, 
         }
 
         step_start = esp_timer_get_time();
-        err = spi_device_queue_trans(device_slot->handle, &transactions[slot_index], portMAX_DELAY);
+        err = spi_queue_transaction_cooperatively(device_slot->handle, &transactions[slot_index]);
         queue_us += (uint64_t)(esp_timer_get_time() - step_start);
         if (err != ESP_OK) {
             if (active_direct[slot_index]) {

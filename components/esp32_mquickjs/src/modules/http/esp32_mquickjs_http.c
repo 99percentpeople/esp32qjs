@@ -12,6 +12,9 @@
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 
 #define ESP32_MQUICKJS_HTTP_MAX_REQUEST_HEADERS 16
 #define ESP32_MQUICKJS_HTTP_MAX_RESPONSE_HEADERS 16
@@ -887,21 +890,84 @@ fail:
     return -1;
 }
 
+typedef struct {
+    const esp32_mquickjs_http_request_t *request;
+    esp32_mquickjs_http_response_t *response;
+    SemaphoreHandle_t done;
+    esp_err_t err;
+    char error_text[ESP32_MQUICKJS_HTTP_ERROR_TEXT_LEN];
+} esp32_mquickjs_http_sync_job_t;
+
+static void http_sync_worker_task(void *opaque)
+{
+    esp32_mquickjs_http_sync_job_t *job = opaque;
+
+    job->response = esp32_mquickjs_http_perform_request(job->request,
+                                                        &job->err,
+                                                        job->error_text,
+                                                        sizeof(job->error_text));
+    xSemaphoreGive(job->done);
+    vTaskDelete(NULL);
+}
+
 static JSValue http_fetch_sync(JSContext *ctx,
                                const esp32_mquickjs_http_request_t *request)
 {
+    esp32_mquickjs_http_sync_job_t *job;
     esp32_mquickjs_http_response_t *response;
-    char error_text[ESP32_MQUICKJS_HTTP_ERROR_TEXT_LEN];
-    esp_err_t err;
+    esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
+    esp32_mquickjs_native_wait_t wait;
     JSValue result;
+    bool interrupted = false;
+    TickType_t wait_ticks = pdMS_TO_TICKS(ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS);
 
-    response = esp32_mquickjs_http_perform_request(request, &err, error_text, sizeof(error_text));
-    if (response == NULL) {
-        return JS_ThrowInternalError(ctx, "%s", error_text);
+    job = heap_caps_calloc(1, sizeof(*job), MALLOC_CAP_8BIT);
+    if (job == NULL) {
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    job->request = request;
+    job->done = xSemaphoreCreateBinary();
+    if (job->done == NULL) {
+        heap_caps_free(job);
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    if (xTaskCreate(http_sync_worker_task,
+                    "http_sync",
+                    ESP32_MQUICKJS_HTTP_TASK_STACK_SIZE,
+                    job,
+                    tskIDLE_PRIORITY + 4,
+                    NULL) != pdPASS) {
+        vSemaphoreDelete(job->done);
+        heap_caps_free(job);
+        return JS_ThrowInternalError(ctx, "failed to start synchronous HTTP worker task");
     }
 
-    result = esp32_mquickjs_http_make_response_object(ctx, response);
-    esp32_mquickjs_http_free_response(response);
+    if (wait_ticks == 0) {
+        wait_ticks = 1;
+    }
+    esp32_mquickjs_native_wait_begin(runtime, &wait);
+    while (xSemaphoreTake(job->done, wait_ticks) != pdTRUE) {
+        if (!esp32_mquickjs_cooperate(runtime)) {
+            interrupted = true;
+        }
+    }
+    if (!esp32_mquickjs_cooperate(runtime)) {
+        interrupted = true;
+    }
+    esp32_mquickjs_native_wait_end(runtime, &wait);
+
+    response = job->response;
+    if (interrupted) {
+        esp32_mquickjs_http_free_response(response);
+        result = JS_ThrowInternalError(ctx, "fetch() was interrupted by a runtime stop request");
+    } else if (response == NULL) {
+        result = JS_ThrowInternalError(ctx, "%s", job->error_text);
+    } else {
+        result = esp32_mquickjs_http_make_response_object(ctx, response);
+        esp32_mquickjs_http_free_response(response);
+    }
+    vSemaphoreDelete(job->done);
+    heap_caps_free(job);
     return result;
 }
 

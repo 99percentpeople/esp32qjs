@@ -11,6 +11,7 @@
 #define ESP32QJS_HOST_API_VERSION ((uint32_t)1U)
 
 #define ESP32_MQUICKJS_DEFAULT_EVAL_TIMEOUT_MS ((uint32_t)CONFIG_ESP32_MQUICKJS_DEFAULT_EVAL_TIMEOUT_MS)
+#define ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS ((uint32_t)CONFIG_ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS)
 #define ESP32_MQUICKJS_LITTLEFS_BASE_PATH "/littlefs"
 #define ESP32_MQUICKJS_LITTLEFS_PARTITION_LABEL "storage"
 
@@ -20,6 +21,12 @@ typedef uint32_t esp32_mquickjs_poll_result_t;
 typedef bool (*esp32_mquickjs_async_poller_t)(JSContext *ctx,
                                               esp32_mquickjs_runtime_t *runtime,
                                               void *opaque);
+typedef bool (*esp32_mquickjs_cooperate_fn)(void *opaque);
+
+typedef struct {
+    uint64_t saved_deadline_us;
+    uint64_t started_us;
+} esp32_mquickjs_native_wait_t;
 
 #define ESP32_MQUICKJS_POLL_NONE   ((esp32_mquickjs_poll_result_t)0U)
 #define ESP32_MQUICKJS_POLL_ASYNC  ((esp32_mquickjs_poll_result_t)(1U << 0))
@@ -38,6 +45,8 @@ struct esp32_mquickjs_runtime {
     uint64_t deadline_us;
     void (*prepare_output)(void *opaque);
     void *prepare_output_opaque;
+    esp32_mquickjs_cooperate_fn cooperate;
+    void *cooperate_opaque;
     void *timer_state;
     void *async_state;
 };
@@ -56,6 +65,17 @@ void esp32_mquickjs_unmount_littlefs(void);
 
 void esp32_mquickjs_set_eval_timeout(esp32_mquickjs_runtime_t *runtime,
                                      uint32_t eval_timeout_ms);
+
+void esp32_mquickjs_set_cooperate_hook(esp32_mquickjs_runtime_t *runtime,
+                                       esp32_mquickjs_cooperate_fn cooperate,
+                                       void *opaque);
+bool esp32_mquickjs_cooperate(esp32_mquickjs_runtime_t *runtime);
+void esp32_mquickjs_native_wait_begin(esp32_mquickjs_runtime_t *runtime,
+                                      esp32_mquickjs_native_wait_t *wait);
+void esp32_mquickjs_native_wait_end(esp32_mquickjs_runtime_t *runtime,
+                                    esp32_mquickjs_native_wait_t *wait);
+bool esp32_mquickjs_cooperative_delay(esp32_mquickjs_runtime_t *runtime,
+                                      uint32_t delay_ms);
 
 JSValue esp32_mquickjs_eval(JSContext *ctx,
                             esp32_mquickjs_runtime_t *runtime,

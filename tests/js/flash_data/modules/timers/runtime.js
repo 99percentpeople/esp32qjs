@@ -90,6 +90,7 @@ test("timers/runtime", function () {
     }, 40);
   }, 1000);
   test.equal(callbackTimeoutRecovery, "recovered", "runtime should recover after a timed-out timer callback");
+  test.equal(delay(5100), 5100, "long native delay should cooperate with the task watchdog");
 
   return { intervalTicks: intervalTicks, timeoutValue: timeoutValue };
 });

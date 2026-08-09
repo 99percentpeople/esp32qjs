@@ -2,6 +2,7 @@ test("http/network", function () {
   var cfg = test.requireConfig("wifiSsid", "wifiPassword", "httpUrl");
   var wifiStatus = wifi.status();
   var response;
+  var syncResponse;
   var body;
 
   if (!wifiStatus.connected) {
@@ -32,7 +33,13 @@ test("http/network", function () {
   body = response.text();
   test.ok(typeof body === "string", "fetch body should be text");
 
+  syncResponse = http.fetch(cfg.httpUrl, { timeoutMs: 15000 });
+  test.ok(syncResponse.status >= 200 && syncResponse.status < 600,
+    "synchronous fetch worker status should be valid");
+  test.ok(typeof syncResponse.text() === "string",
+    "synchronous fetch worker body should be text");
+
   wifi.disconnect();
 
-  return { status: response.status, bodyLength: body.length };
+  return { status: response.status, syncStatus: syncResponse.status, bodyLength: body.length };
 });

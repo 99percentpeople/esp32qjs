@@ -184,6 +184,19 @@ static void runtime_startup_callback(void *opaque)
     runtime_run_startup(opaque);
 }
 
+static bool runtime_cooperate(void *opaque)
+{
+    esp32qjs_runtime_t *runtime = opaque;
+
+    if (runtime == NULL) {
+        return false;
+    }
+    if (runtime->watchdog_registered) {
+        esp_task_wdt_reset();
+    }
+    return !runtime->stop_requested;
+}
+
 static esp32_mquickjs_poll_result_t runtime_poll_engine(esp32qjs_runtime_t *runtime)
 {
     esp32_mquickjs_poll_result_t result;
@@ -232,18 +245,8 @@ static void runtime_handle_line(void *opaque, const char *line)
 static bool runtime_wait_for_activity(void *opaque, uint32_t timeout_ms)
 {
     esp32qjs_runtime_t *runtime = opaque;
-    uint32_t effective_timeout = timeout_ms;
 
-    if (runtime == NULL) {
-        return false;
-    }
-    if (runtime->watchdog_registered) {
-        esp_task_wdt_reset();
-        if (effective_timeout == UINT32_MAX || effective_timeout > 1000U) {
-            effective_timeout = 1000U;
-        }
-    }
-    return esp32_mquickjs_wait_for_activity(&runtime->engine, effective_timeout);
+    return runtime != NULL && esp32_mquickjs_wait_for_activity(&runtime->engine, timeout_ms);
 }
 
 static bool runtime_should_stop(void *opaque)
@@ -370,6 +373,7 @@ esp_err_t esp32qjs_runtime_create(const esp32qjs_runtime_config_t *config,
         runtime_release_unstarted(runtime);
         return ESP_FAIL;
     }
+    esp32_mquickjs_set_cooperate_hook(&runtime->engine, runtime_cooperate, runtime);
     runtime->engine.js_heap_size = config->js_heap_size;
     runtime->engine.js_heap_in_psram = esp_ptr_external_ram(runtime->js_heap);
     runtime->engine.repl_enabled = config->enable_repl;

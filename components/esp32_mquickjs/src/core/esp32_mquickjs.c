@@ -191,24 +191,140 @@ void esp32_mquickjs_notify_active_runtime_from_isr(int *task_woken)
     }
 }
 
+void esp32_mquickjs_set_cooperate_hook(esp32_mquickjs_runtime_t *runtime,
+                                       esp32_mquickjs_cooperate_fn cooperate,
+                                       void *opaque)
+{
+    if (runtime == NULL) {
+        return;
+    }
+    runtime->cooperate = cooperate;
+    runtime->cooperate_opaque = opaque;
+}
+
+bool esp32_mquickjs_cooperate(esp32_mquickjs_runtime_t *runtime)
+{
+    return runtime == NULL || runtime->cooperate == NULL || runtime->cooperate(runtime->cooperate_opaque);
+}
+
+void esp32_mquickjs_native_wait_begin(esp32_mquickjs_runtime_t *runtime,
+                                      esp32_mquickjs_native_wait_t *wait)
+{
+    if (wait == NULL) {
+        return;
+    }
+    wait->saved_deadline_us = runtime != NULL ? runtime->deadline_us : 0;
+    wait->started_us = (uint64_t)esp_timer_get_time();
+    if (runtime != NULL) {
+        runtime->deadline_us = 0;
+    }
+}
+
+void esp32_mquickjs_native_wait_end(esp32_mquickjs_runtime_t *runtime,
+                                    esp32_mquickjs_native_wait_t *wait)
+{
+    uint64_t elapsed_us;
+
+    if (runtime == NULL || wait == NULL) {
+        return;
+    }
+    elapsed_us = (uint64_t)esp_timer_get_time() - wait->started_us;
+    if (wait->saved_deadline_us == 0) {
+        runtime->deadline_us = 0;
+    } else if (wait->saved_deadline_us > UINT64_MAX - elapsed_us) {
+        runtime->deadline_us = UINT64_MAX;
+    } else {
+        runtime->deadline_us = wait->saved_deadline_us + elapsed_us;
+    }
+    wait->saved_deadline_us = 0;
+    wait->started_us = 0;
+}
+
+bool esp32_mquickjs_cooperative_delay(esp32_mquickjs_runtime_t *runtime,
+                                      uint32_t delay_ms)
+{
+    esp32_mquickjs_native_wait_t wait;
+    uint32_t remaining_ms = delay_ms;
+    bool completed = true;
+
+    esp32_mquickjs_native_wait_begin(runtime, &wait);
+    do {
+        uint32_t slice_ms;
+        TickType_t wait_ticks;
+
+        if (!esp32_mquickjs_cooperate(runtime)) {
+            completed = false;
+            break;
+        }
+        if (remaining_ms == 0) {
+            break;
+        }
+        slice_ms = remaining_ms > ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS
+                       ? ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS
+                       : remaining_ms;
+        wait_ticks = pdMS_TO_TICKS(slice_ms);
+        if (wait_ticks == 0) {
+            wait_ticks = 1;
+        }
+        vTaskDelay(wait_ticks);
+        remaining_ms -= slice_ms;
+    } while (remaining_ms > 0);
+
+    if (completed && !esp32_mquickjs_cooperate(runtime)) {
+        completed = false;
+    }
+    esp32_mquickjs_native_wait_end(runtime, &wait);
+    return completed;
+}
+
 bool esp32_mquickjs_wait_for_activity(esp32_mquickjs_runtime_t *runtime,
                                       uint32_t timeout_ms)
 {
     esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
-    TickType_t wait_ticks = timeout_ms == UINT32_MAX ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
+    uint32_t remaining_ms = timeout_ms;
 
-    if (timeout_ms != 0 && timeout_ms != UINT32_MAX && wait_ticks == 0) {
-        wait_ticks = 1;
-    }
+    for (;;) {
+        uint32_t slice_ms;
+        TickType_t wait_ticks;
+        bool notified;
 
-    if (state == NULL || state->task_handle == NULL) {
-        if (wait_ticks > 0) {
-            vTaskDelay(wait_ticks);
+        if (!esp32_mquickjs_cooperate(runtime)) {
+            return false;
         }
-        return false;
-    }
+        if (timeout_ms == UINT32_MAX) {
+            slice_ms = ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS;
+        } else {
+            slice_ms = remaining_ms > ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS
+                           ? ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS
+                           : remaining_ms;
+        }
+        wait_ticks = pdMS_TO_TICKS(slice_ms);
+        if (slice_ms > 0 && wait_ticks == 0) {
+            wait_ticks = 1;
+        }
 
-    return ulTaskNotifyTake(pdTRUE, wait_ticks) > 0;
+        if (state == NULL || state->task_handle == NULL) {
+            if (wait_ticks > 0) {
+                vTaskDelay(wait_ticks);
+            }
+            notified = false;
+        } else {
+            notified = ulTaskNotifyTake(pdTRUE, wait_ticks) > 0;
+        }
+        if (!esp32_mquickjs_cooperate(runtime)) {
+            return false;
+        }
+        if (notified) {
+            return true;
+        }
+        if (timeout_ms == UINT32_MAX) {
+            continue;
+        }
+        if (remaining_ms <= slice_ms) {
+            return false;
+        }
+        remaining_ms -= slice_ms;
+    }
 }
 
 static bool esp32_mquickjs_poll_registered(JSContext *ctx,
@@ -545,7 +661,11 @@ static JSValue js_wait_for_deferred(JSContext *ctx,
                 }
             }
 
-            esp32_mquickjs_wait_for_activity(runtime, wait_ms);
+            if (!esp32_mquickjs_wait_for_activity(runtime, wait_ms) &&
+                !esp32_mquickjs_cooperate(runtime)) {
+                *result = JS_ThrowInternalError(ctx, "%s() was interrupted by a runtime stop request", api_name);
+                goto done;
+            }
         }
     }
 
@@ -1020,6 +1140,8 @@ JSContext *esp32_mquickjs_create(void *mem_start,
 #endif
     runtime->prepare_output = NULL;
     runtime->prepare_output_opaque = NULL;
+    runtime->cooperate = NULL;
+    runtime->cooperate_opaque = NULL;
     runtime->timer_state = NULL;
     runtime->async_state = NULL;
     if (!esp32_mquickjs_init_async_state(runtime)) {
@@ -1082,6 +1204,8 @@ bool esp32_mquickjs_destroy(JSContext *ctx,
     runtime->format_littlefs_on_mount_fail = false;
     runtime->prepare_output = NULL;
     runtime->prepare_output_opaque = NULL;
+    runtime->cooperate = NULL;
+    runtime->cooperate_opaque = NULL;
     return true;
 }
 
@@ -1349,7 +1473,9 @@ JSValue js_sleep(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     if (argc < 1 || JS_ToInt32(ctx, &delay_ms, argv[0]) != 0 || delay_ms < 0) {
         return JS_ThrowTypeError(ctx, "sleep(ms) expects a non-negative integer");
     }
-    vTaskDelay(pdMS_TO_TICKS((uint32_t)delay_ms));
+    if (!esp32_mquickjs_cooperative_delay(s_active_runtime, (uint32_t)delay_ms)) {
+        return JS_ThrowInternalError(ctx, "sleep(ms) was interrupted by a runtime stop request");
+    }
     return JS_NewInt32(ctx, delay_ms);
 }
 

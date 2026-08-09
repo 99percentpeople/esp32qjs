@@ -117,6 +117,14 @@ config ESP32_MQUICKJS_DEFAULT_EVAL_TIMEOUT_MS
     help
         Default timeout for direct JavaScript evaluation on the REPL thread.
 
+config ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS
+    int "Maximum native wait slice (ms)"
+    range 10 1000
+    default 250
+    help
+        Split sleep, event waits, and driver queue waits into bounded slices so
+        the runtime can feed its task watchdog and observe stop requests.
+
 config ESP32_MQUICKJS_MAX_TIMERS
     int "Maximum active JS timers"
     range 1 64

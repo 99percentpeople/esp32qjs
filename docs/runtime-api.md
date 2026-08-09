@@ -85,10 +85,21 @@ Native-to-JavaScript calls go through `esp32_mquickjs_call()`. It applies the
 runtime deadline and never extends an earlier nested deadline. The runtime task
 watchdog is a final recovery layer, not a replacement for callback deadlines.
 
+Native waits are split according to
+`CONFIG_ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS` (250 ms by default). Between
+slices the runtime feeds its task watchdog and observes stop requests. This
+covers `sleep()`/`delay()`, deferred activity waits, synchronous Wi-Fi waits,
+SPI queue waits, and synchronous HTTP requests. Intentional native wait time is
+excluded from the JavaScript execution deadline. An in-flight SPI transaction
+is drained before an interrupted call returns so DMA buffers remain valid; a
+synchronous HTTP request similarly waits for its bounded worker to finish.
+
 ## Current Lifecycle Constraint
 
 Shutdown is cooperative. `stop()` never force-deletes the runtime task, and
 `destroy()` never frees callback state still owned by an outgoing HTTP worker.
+A stop request wakes idle waits immediately and is checked between bounded
+native wait slices.
 HTTP servers and registered GPIO/Wi-Fi callbacks are shut down automatically;
 object finalizers close synchronous peripheral handles. If `destroy()` reports
 `ESP_ERR_INVALID_STATE`, wait for the bounded HTTP request to finish and retry

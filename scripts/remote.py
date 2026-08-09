@@ -124,7 +124,7 @@ JS_TEST_MODULES = (
         "http",
         (
             JsTestCase("modules/http/offline.js"),
-            JsTestCase("modules/http/network.js", required_capabilities=("network",), timeout_seconds=25.0),
+            JsTestCase("modules/http/network.js", required_capabilities=("network",), timeout_seconds=40.0),
         ),
         required_features=("http",),
     ),

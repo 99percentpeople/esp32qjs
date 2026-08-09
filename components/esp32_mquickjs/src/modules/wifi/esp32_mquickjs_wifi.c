@@ -403,10 +403,62 @@ static esp_err_t wifi_init_once(void)
     return ESP_OK;
 }
 
+static EventBits_t wifi_wait_for_bits(EventBits_t bits_to_wait_for,
+                                      bool clear_on_exit,
+                                      uint32_t timeout_ms,
+                                      bool *out_interrupted)
+{
+    esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
+    esp32_mquickjs_native_wait_t wait;
+    uint32_t remaining_ms = timeout_ms;
+    EventBits_t result = 0;
+
+    if (out_interrupted != NULL) {
+        *out_interrupted = false;
+    }
+    esp32_mquickjs_native_wait_begin(runtime, &wait);
+    for (;;) {
+        uint32_t slice_ms = remaining_ms > ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS
+                                ? ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS
+                                : remaining_ms;
+        TickType_t wait_ticks = pdMS_TO_TICKS(slice_ms);
+        EventBits_t bits;
+
+        if (!esp32_mquickjs_cooperate(runtime)) {
+            if (out_interrupted != NULL) {
+                *out_interrupted = true;
+            }
+            break;
+        }
+        if (slice_ms > 0 && wait_ticks == 0) {
+            wait_ticks = 1;
+        }
+        bits = xEventGroupWaitBits(s_wifi_state.event_group,
+                                   bits_to_wait_for,
+                                   clear_on_exit ? pdTRUE : pdFALSE,
+                                   pdFALSE,
+                                   wait_ticks);
+        if (!esp32_mquickjs_cooperate(runtime)) {
+            if (out_interrupted != NULL) {
+                *out_interrupted = true;
+            }
+            break;
+        }
+        if ((bits & bits_to_wait_for) != 0 || remaining_ms <= slice_ms) {
+            result = bits;
+            break;
+        }
+        remaining_ms -= slice_ms;
+    }
+    esp32_mquickjs_native_wait_end(runtime, &wait);
+    return result;
+}
+
 esp_err_t esp32_mquickjs_wifi_ensure_started(void)
 {
     esp_err_t err;
     EventBits_t bits;
+    bool interrupted = false;
 
     ESP_RETURN_ON_ERROR(wifi_init_once(), TAG, "wifi_init_once() failed");
     if (s_wifi_state.started) {
@@ -420,12 +472,15 @@ esp_err_t esp32_mquickjs_wifi_ensure_started(void)
         return err;
     }
 
-    bits = xEventGroupWaitBits(s_wifi_state.event_group,
-                               WIFI_STARTED_BIT,
-                               pdFALSE,
-                               pdFALSE,
-                               pdMS_TO_TICKS(WIFI_START_TIMEOUT_MS));
+    bits = wifi_wait_for_bits(WIFI_STARTED_BIT,
+                              false,
+                              WIFI_START_TIMEOUT_MS,
+                              &interrupted);
     if ((bits & WIFI_STARTED_BIT) == 0) {
+        if (interrupted) {
+            ESP_LOGW(TAG, "Interrupted while waiting for WIFI_EVENT_STA_START");
+            return ESP_ERR_INVALID_STATE;
+        }
         ESP_LOGE(TAG, "Timed out waiting for WIFI_EVENT_STA_START");
         return ESP_ERR_TIMEOUT;
     }
@@ -644,13 +699,12 @@ esp_err_t esp32_mquickjs_wifi_get_status(esp32_mquickjs_wifi_status_t *status)
 static esp_err_t wifi_wait_for_connection(uint32_t timeout_ms)
 {
     EventBits_t bits;
-    TickType_t wait_ticks = timeout_ms == 0 ? 0 : pdMS_TO_TICKS(timeout_ms);
+    bool interrupted = false;
 
-    bits = xEventGroupWaitBits(s_wifi_state.event_group,
-                               WIFI_CONNECTED_BIT | WIFI_FAILED_BIT,
-                               pdTRUE,
-                               pdFALSE,
-                               wait_ticks);
+    bits = wifi_wait_for_bits(WIFI_CONNECTED_BIT | WIFI_FAILED_BIT,
+                              true,
+                              timeout_ms,
+                              &interrupted);
 
     if ((bits & WIFI_CONNECTED_BIT) != 0) {
         return ESP_OK;
@@ -664,7 +718,7 @@ static esp_err_t wifi_wait_for_connection(uint32_t timeout_ms)
     s_wifi_state.ignore_disconnect_once = true;
     wifi_unlock();
     esp_wifi_disconnect();
-    return ESP_ERR_TIMEOUT;
+    return interrupted ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
 }
 
 static esp_err_t wifi_apply_config(const char *ssid, const char *password)
