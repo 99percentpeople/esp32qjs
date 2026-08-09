@@ -25,7 +25,7 @@ Startup behavior:
 
 - If `/littlefs/index.js` exists, it is loaded automatically before the first `js>` prompt appears.
 - `index.js` is the single startup entry point. Keep it empty when you want the board to boot into the REPL, or use it to `load(...)` scripts, drivers, and app code.
-- This is the recommended place for board startup logic such as `load("_sys/display.js")`, `load("_sys/ui.js")`, and `wifi.connect(...)`.
+- This is the recommended place for board startup logic such as loading a panel entry point (`load("_sys/display/st7789.js")`), `load("_sys/ui.js")`, and `wifi.connect(...)`.
 - Optional examples can live under `demo/` and be started manually, for example `load("demo/display_perf.js")`.
 
 Examples:
@@ -45,7 +45,7 @@ Example `index.js`:
 
 ```js
 print("[startup] boot script running");
-load("_sys/display.js");
+load("_sys/display/st7789.js");
 load("_sys/ui.js");
 wifi.async.connect("your-ssid", "your-password", function (status, error) {
   print(error === undefined, status && status.ip);
@@ -450,7 +450,7 @@ python scripts/remote.py test --scope js --module uart --loopback
 
 ## `displayBuffer` Module
 
-This module exposes native display buffers for heavy pixel work. It is registered only when `esp32.info().features.displayBuffer` is enabled. Display drivers still own SPI/I2C commands and flush policy; `displayBuffer` only owns pixels and export bytes.
+This module exposes native display buffers for heavy pixel work. It is registered only when `esp32.info().features.displayBuffer` is enabled. The JS `Surface` owns rendering, `PanelDriver` owns controller sequencing, and `DisplayTransport` owns SPI/I2C/GPIO operations; `displayBuffer` only owns pixels and export bytes.
 
 - `displayBuffer.MONO1`
   Pixel format string `"mono1"`.

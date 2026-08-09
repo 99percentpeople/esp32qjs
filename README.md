@@ -110,7 +110,7 @@ defaults retain target, pin, feature, and memory settings. Select the app with
 available under `_sys/`, for example:
 
 ```js
-load("_sys/display.js");
+load("_sys/display/wlk1501spi8p.js");
 load("_sys/ui.js");
 ```
 

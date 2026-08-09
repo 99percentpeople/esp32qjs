@@ -18,7 +18,10 @@ Versioning; the native Host API uses a separate integer compatibility version.
   explicit server/route release methods.
 - Add an exact-engine MQuickJS syntax preflight for flashed sources and runnable
   API examples, plus checked JavaScript declarations for apps/shared libraries.
+- Replace inherited display-driver surfaces with a layered Display, Surface,
+  PanelDriver, and Transport architecture; add explicit bus ownership and move
+  WLK1501SPI8P wiring into a profile.
 - Align display/UI declarations with runtime return values, optional colors,
-  batching, and explicit surface close behavior.
+  batching, capabilities, presentation statistics, and explicit close behavior.
 - Publish Host API version `1` through `esp32.info()`.
 - Establish Apache-2.0 licensing and initial framework documentation.

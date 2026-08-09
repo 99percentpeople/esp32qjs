@@ -1,8 +1,6 @@
 # Display and Panel Driver Redesign
 
-Status: proposed for implementation; no runtime API in this document exists yet.
-
-Target JS display-layer version: `0.5.0`.
+Status: implemented as JS display-layer version `0.5.0`.
 
 ## Decisions
 
@@ -23,10 +21,10 @@ This is a JavaScript-layer redesign and does not require a Host API version
 bump. It does require coordinated changes to the JS API version, examples,
 applications, and declarations.
 
-## Why Change the Current Model
+## Why the Previous Model Changed
 
-The current implementation makes each hardware driver a `display.Surface`
-subclass. This puts too many responsibilities in one object:
+Before `0.5.0`, each hardware driver was a `display.Surface` subclass. That put
+too many responsibilities in one object:
 
 - allocating and drawing into a native `displayBuffer`;
 - normalizing colors, fonts, and text;
@@ -718,7 +716,7 @@ shared/flash_data/_sys/
 Files may be combined if measured parse/runtime overhead favors fewer files,
 but ownership boundaries must remain visible in code and tests.
 
-## Implementation Phases
+## Implementation Sequence
 
 ### Phase 1: Contracts and Generic Rendering
 

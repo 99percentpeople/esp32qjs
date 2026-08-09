@@ -58,7 +58,8 @@ Deliverables:
 - Move reusable `_sys` JavaScript libraries under `shared/flash_data`.
 - Move the current display UI demo under `apps/demo`.
 - Add a board-neutral `apps/minimal` application and make it the default.
-- Preserve a complete-flash-data override for the board-backed JS test image.
+- Preserve complete-flash-data overrides, while allowing the board-backed JS
+  test image to overlay its test assets onto shared framework resources.
 
 Acceptance criteria:
 

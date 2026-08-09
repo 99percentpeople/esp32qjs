@@ -482,7 +482,7 @@ What is already good:
 - `displayBuffer` is feature-gated and reported through `esp32.info().features.displayBuffer`.
 - The module exposes native `mono1` and `rgb565` buffers, dirty bounds, drawing primitives, EQF1 fixed bitmap font loading, and byte-view rectangle export.
 - `readRect(...)` and `readRectChunks(...)` return generic native byte sources; `createSpanSource(...)` returns a retained `DisplayBufferSpanSource` whose display-only `setRect(...)` control is separate from the generic `ByteSpanSource` consumed by SPI.
-- JavaScript display drivers still own panel command sequencing, flush policy, color helpers, font mapping, and UI composition.
+- The layered JavaScript display library separates framebuffer rendering, panel command sequencing, presentation policy, and SPI/I2C transport ownership.
 
 Recommended stable target:
 
