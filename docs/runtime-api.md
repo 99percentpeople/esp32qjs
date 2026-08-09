@@ -89,8 +89,11 @@ asynchronous work until `esp32qjs_runtime_create()` has returned successfully.
 ## Callback Safety
 
 Native-to-JavaScript calls go through `esp32_mquickjs_call()`. It applies the
-runtime deadline and never extends an earlier nested deadline. The runtime task
-watchdog is a final recovery layer, not a replacement for callback deadlines.
+runtime deadline and never extends an earlier nested deadline. Trusted
+JavaScript can use `esp32.withTimeout(timeoutMs, callback)` to tighten that
+active deadline around one operation; the scoped helper restores the previous
+deadline and cannot extend its caller's budget. The runtime task watchdog is a
+final recovery layer, not a replacement for callback deadlines.
 
 Native waits are split according to
 `CONFIG_ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS` (250 ms by default). Between

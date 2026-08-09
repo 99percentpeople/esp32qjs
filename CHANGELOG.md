@@ -10,7 +10,8 @@ Versioning; the native Host API uses a separate integer compatibility version.
   application sdkconfig overlays, board-specific partitions, and resource overlays.
 - Add the reusable `esp32qjs_runtime` lifecycle component with cooperative
   stop/destroy, native callback cleanup, and guarded in-flight HTTP teardown.
-- Apply deadlines to every native-to-JavaScript callback path.
+- Apply deadlines to every native-to-JavaScript callback path and add
+  `esp32.withTimeout()` for nested scoped execution budgets.
 - Add optional runtime-task watchdog integration.
 - Make timer handles generation-checked, clamp tight intervals, and cancel
   repeating timers whose callbacks fail.

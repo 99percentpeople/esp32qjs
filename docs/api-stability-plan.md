@@ -253,6 +253,7 @@ Status: `Stable now`
 Why:
 
 - `esp32.info()`, `millis()`, `micros()`, and `freeHeap()` are generic runtime/platform inspection helpers.
+- `esp32.withTimeout()` provides a scoped execution budget without extending an outer native callback deadline.
 - The module is not overloaded with peripheral control.
 
 Freeze recommendations:

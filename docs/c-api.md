@@ -995,6 +995,13 @@ if (ref) {
   Return monotonic microseconds from `esp_timer`.
 - `esp32.freeHeap()`
   Return current free heap in bytes.
+- `esp32.withTimeout(timeoutMs, callback)`
+  Run `callback` with a scoped JavaScript execution deadline between 1 and
+  10000 milliseconds and return its value. A nested call only shortens an
+  already active runtime deadline; it never extends the surrounding native
+  callback or evaluation budget. A native interrupt caused by the scoped
+  deadline is normalized after restoring the outer deadline and becomes the
+  catchable `InternalError: esp32.withTimeout() deadline exceeded`.
 
 Example:
 
@@ -1005,6 +1012,9 @@ if (esp32.info().features.fs) {
 }
 print(esp32.millis());
 print(esp32.freeHeap());
+var answer = esp32.withTimeout(100, function () {
+  return 42;
+});
 ```
 
 ## `wifi` Module
