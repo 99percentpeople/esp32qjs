@@ -146,6 +146,38 @@ class RemoteConfigTests(unittest.TestCase):
             self.assertIn("* external_agent: External Agent", output.getvalue())
             self.assertIn("[external:", output.getvalue())
 
+    def test_external_app_sdkconfig_can_track_the_selected_board(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_dir = self.write_external_app(Path(temp_dir))
+            app_file = app_dir / "app.env"
+            app_file.write_text(
+                app_file.read_text(encoding="utf-8").replace(
+                    "APP_SDKCONFIG_DEFAULTS=sdkconfig.defaults",
+                    "APP_SDKCONFIG_DEFAULTS=sdkconfig.{board}.defaults",
+                ),
+                encoding="utf-8",
+            )
+            (app_dir / "sdkconfig.defaults").rename(
+                app_dir / "sdkconfig.xiao_esp32s3.defaults"
+            )
+            (app_dir / "sdkconfig.esp32c3_supermini.defaults").write_text(
+                "CONFIG_ESP32QJS_JS_HEAP_SIZE=122880\n",
+                encoding="utf-8",
+            )
+            (app_dir / "partitions" / "esp32c3_supermini.csv").write_text(
+                "storage,data,littlefs,,0x100000,\n", encoding="utf-8"
+            )
+
+            s3 = REMOTE.load_app_profile(str(app_dir), "xiao_esp32s3", "esp32s3")
+            c3 = REMOTE.load_app_profile(
+                str(app_dir), "esp32c3_supermini", "esp32c3"
+            )
+
+            self.assertEqual(s3.sdkconfig_defaults.name,
+                             "sdkconfig.xiao_esp32s3.defaults")
+            self.assertEqual(c3.sdkconfig_defaults.name,
+                             "sdkconfig.esp32c3_supermini.defaults")
+
     def test_app_file_environment_selects_external_profile(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             app_dir = self.write_external_app(Path(temp_dir))
