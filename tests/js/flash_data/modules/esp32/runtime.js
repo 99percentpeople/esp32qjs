@@ -22,6 +22,8 @@ test("esp32/runtime", function () {
 
   test.ok(info && typeof info === "object", "esp32.info() should return an object");
   test.ok(features && typeof features === "object", "esp32.info().features should return an object");
+  test.equal(info.runtimeVersion, "0.1.0", "runtime version should match the framework release");
+  test.equal(info.hostApiVersion, 1, "Host API version should match the native compatibility level");
   test.ok(typeof info.board === "string" && info.board.length > 0, "board name should be present");
   test.ok(typeof info.chip === "string" && info.chip.length > 0, "chip name should be present");
   test.ok(typeof info.freeHeap === "number" && info.freeHeap >= 0, "info.freeHeap should be numeric");

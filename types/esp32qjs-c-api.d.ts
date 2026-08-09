@@ -966,6 +966,8 @@ declare namespace ESP32QJS {
    * Runtime information returned by `esp32.info()`.
    */
   interface Esp32Info {
+    runtimeVersion: string;
+    hostApiVersion: number;
     board: string;
     chip: string;
     features: Esp32Features;

@@ -563,7 +563,7 @@ Use `scripts/font_to_eqf.py` to generate EQF1 files from BDF or a small JSON
 bitmap description:
 
 ```sh
-python3 scripts/font_to_eqf.py input.bdf flash_data/_sys/display/fonts/my.eqf \
+python3 scripts/font_to_eqf.py input.bdf shared/flash_data/_sys/display/fonts/my.eqf \
   --first 0x20 --last 0x7f --missing question
 ```
 
@@ -577,7 +577,7 @@ For small Chinese UI strings, use an `eqf1-map` manifest. The same JSON file is
 used by the generator and by `display.loadMappedFont(...)` at runtime:
 
 ```sh
-python3 scripts/font_to_eqf.py --format manifest flash_data/_sys/display/fonts/droid-cjk.json
+python3 scripts/font_to_eqf.py --format manifest shared/flash_data/_sys/fonts/droid-cjk.json
 ```
 
 The manifest maps source characters to safe printable ASCII EQF1 slots before
@@ -946,7 +946,7 @@ if (ref) {
 
 - `esp32.info()`
   Return board/chip identity plus memory/runtime fields:
-  `{ board, chip, features, userLedPin, userLedActiveLow, scriptsDir, flashSize, psramEnabled, psramSize, freePsram, totalInternalHeap, freeInternalHeap, jsHeapSize, jsHeapRegion, littlefsMounted, autoRunIndexJs, formatLittlefsOnMountFail, freeHeap, jsTimeMs }`.
+  `{ runtimeVersion, hostApiVersion, board, chip, features, userLedPin, userLedActiveLow, scriptsDir, flashSize, psramEnabled, psramSize, freePsram, totalInternalHeap, freeInternalHeap, jsHeapSize, jsHeapRegion, littlefsMounted, replEnabled, autoRunIndexJs, formatLittlefsOnMountFail, freeHeap, jsTimeMs }`. `runtimeVersion` follows framework SemVer; `hostApiVersion` is the integer native compatibility level.
   `features` is `{ fs, gpio, ledc, adc, dac, i2c, spi, uart, displayBuffer, wifi, http, httpServer, staticFileHandler }` and is the stable way to discover which optional host modules or composite helpers were compiled into the firmware for the current board.
 - `esp32.millis()`
   Return monotonic milliseconds from `esp_timer`.

@@ -1,6 +1,6 @@
 # JS API Reference
 
-This document covers APIs implemented in JavaScript on top of the built-in C host APIs. These helpers live on LittleFS and are typically loaded from `index.js`.
+This document covers APIs implemented in JavaScript on top of the built-in C host APIs. Their sources live under `shared/flash_data/_sys`, are merged into the selected application's LittleFS image, and are typically loaded from `apps/<app>/flash_data/index.js`.
 
 ## Loading
 
@@ -11,7 +11,7 @@ load("_sys/display.js");
 load("_sys/ui.js");
 ```
 
-The default startup script commonly does this from `/littlefs/index.js`.
+An application entry point may do this from `/littlefs/index.js`; the default `minimal` app intentionally loads nothing.
 
 ## `display` Helpers
 
@@ -56,7 +56,7 @@ The display stdlib loads `_sys/display/fonts/mono5x7.eqf` as `display.defaultFon
 Mapped font sets can be loaded with `display.loadFontSet(path)` or directly with `display.loadMappedFont(path, size, name?)`. The manifest uses the same JSON file as `scripts/font_to_eqf.py --format manifest`, mapping input characters to safe EQF1 ASCII slots before drawing. This supports small Chinese UI strings without changing the native `displayBuffer` text API.
 
 ```js
-var cjk16 = display.loadMappedFont("_sys/display/fonts/droid-cjk.json", "16");
+var cjk16 = display.loadMappedFont("_sys/fonts/droid-cjk.json", "16");
 screen.drawText(8, 40, "中文显示", {
   color: display.rgb565(255, 255, 255),
   font: cjk16

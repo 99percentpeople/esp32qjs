@@ -1,7 +1,7 @@
 # API Stability Plan
 
 This document is a working proposal for a long-lived JavaScript host API.
-It is intentionally more opinionated than [docs/c-api.md](/home/zach/esp32qjs/docs/c-api.md): the goal here is not to describe today's implementation, but to define which API shapes should be frozen, which should still change before freeze, and how new modules such as `dac` should fit in.
+It is intentionally more opinionated than [docs/c-api.md](c-api.md): the goal here is not to describe today's implementation, but to define which API shapes should be frozen, which should still change before freeze, and how new modules such as `dac` should fit in.
 
 This plan covers:
 
@@ -49,9 +49,9 @@ The built-in host API should be split into:
 
 Recommended compile-time model:
 
-- Define one `Kconfig` boolean for each optional module under [components/esp32_mquickjs/Kconfig.projbuild](/home/zach/esp32qjs/components/esp32_mquickjs/Kconfig.projbuild).
+- Define one `Kconfig` boolean for each optional module under [components/esp32_mquickjs/Kconfig.projbuild](../components/esp32_mquickjs/Kconfig.projbuild).
 - Use the generated `CONFIG_...` macros in C to:
-  - compile out module registration from [`src/core/mqjs_stdlib_esp32.c`](/home/zach/esp32qjs/components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c)
+  - compile out module registration from [`src/core/mqjs_stdlib_esp32.c`](../components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c)
   - compile out implementation files or guard their registration paths
   - conditionally include component dependencies
 - Use those generated `CONFIG_...` symbols directly in source code; do not add a second alias layer such as `ESP32_MQUICKJS_FEATURE_*`.
@@ -118,7 +118,7 @@ Behavior rule:
 
 ## Board Profiles as Feature Presets
 
-Board directories under [configs/boards](/home/zach/esp32qjs/configs/boards) should become the canonical place where runtime feature sets are selected.
+Board directories under [configs/boards](../configs/boards) should become the canonical place where runtime feature sets are selected.
 
 Each board's `sdkconfig.defaults` should describe:
 
@@ -409,7 +409,7 @@ Recommended stable `I2CBus` methods:
 Remaining freeze work:
 
 - Add or keep focused JS tests for stale-handle behavior, chunk writes, and feature-disabled boards.
-- Keep [docs/c-api.md](/home/zach/esp32qjs/docs/c-api.md) and [types/esp32qjs-js-api.d.ts](/home/zach/esp32qjs/types/esp32qjs-js-api.d.ts) aligned with the bus-object surface.
+- Keep [docs/c-api.md](c-api.md) and [types/esp32qjs-js-api.d.ts](../types/esp32qjs-js-api.d.ts) aligned with the bus-object surface.
 
 Intentional non-goals:
 
