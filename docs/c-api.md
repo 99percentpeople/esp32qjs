@@ -165,7 +165,7 @@ Stream instance shape:
 - `readable`
 - `writable`
 - `read(size?)`
-  Read up to `size` bytes as a UTF-8 string. Returns `null` at EOF. Default chunk size is `1024`.
+  Read up to `size` bytes. Text streams return a UTF-8 string, while streams opened with a binary mode such as `"rb"` return a native `ByteView`. Returns `null` at EOF. Default chunk size is `1024`. Use `typeof chunk === "string"` to distinguish text from binary chunks; call `toArray()` when JavaScript needs to inspect or parse `ByteView` bytes.
 - `write(text)`
   Write a string and return the written byte count.
 - `flush()`
@@ -515,11 +515,34 @@ Formats and layouts:
   Return an array of native byte views split by `options.chunkBytes` or the buffer's `chunkBytes`. Passing `options.reuse: true` lets direct full-row exports reuse an internal chunk array and ByteView wrappers, which avoids per-frame wrapper allocation in display flush loops.
 - `createSpanSource(options?)`
   Return a retained native `DisplayBufferSpanSource` bound to the buffer. Pass it to `SPIDevice.writeSource(source, options?)` to flush without allocating JS chunk arrays or ByteView wrappers in the loop.
+- `createCommandBuffer(options?)`
+  Return a retained native `DisplayCommandBuffer` for recording drawing commands and replaying them into a `DisplayBuffer`. Options are `{ commandCapacity, textBytes }`.
 
 `DisplayBufferSpanSource` methods:
 
 - `source.setRect(x, y, width, height)`
   Update the clamped export rectangle and return the same source for reuse in display flush loops. This method belongs to display-buffer-created sources, not to the generic `ByteSpanSource` transport capability.
+
+`DisplayCommandBuffer` methods:
+
+- `reset()`
+  Drop recorded commands while keeping native allocations for reuse.
+- `close()`
+  Release native command and text storage. Other methods throw after close.
+- `clear(color?)` / `fill(color?)`
+- `fillRect(x, y, width, height, color?)`
+- `drawRect(x, y, width, height, color?)`
+- `drawLine(x0, y0, x1, y1, color?)`
+- `drawRoundRect(x, y, width, height, radius, color?)`
+- `fillRoundRect(x, y, width, height, radius, color?)`
+- `drawText(x, y, text, options?)`
+  Record the same packed-color and native-font text options as `DisplayBuffer.drawText(...)`.
+- `appendPacked(bytes, options?)`
+  Append a compact command byte stream in one native call. This is intended for display drivers that batch many JavaScript drawing primitives per frame before a single `replay(...)`. `options.text` carries the concatenated encoded text payload, and `options.font` is required when the packet contains text commands.
+- `replay(target)`
+  Execute all recorded commands into `target` once. The target must use the same pixel format as the buffer that created the command buffer.
+- `stats()`
+  Return `{ count, capacity, textBytes, textCapacity }`.
 
 `DisplayFont` properties:
 

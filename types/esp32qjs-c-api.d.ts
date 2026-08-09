@@ -105,6 +105,29 @@ declare namespace ESP32QJS {
     chunkBytes?: number;
   }
 
+  interface DisplayCommandBufferOptions {
+    commandCapacity?: number;
+    textBytes?: number;
+  }
+
+  interface DisplayCommandBufferPackedOptions {
+    /**
+     * Concatenated encoded text payload referenced by packed text commands.
+     */
+    text?: string;
+    /**
+     * Native font used by packed text commands in this append batch.
+     */
+    font?: DisplayFont;
+  }
+
+  interface DisplayCommandBufferStats {
+    count: number;
+    capacity: number;
+    textBytes: number;
+    textCapacity: number;
+  }
+
   interface DisplayBezierOptions {
     /** Segment count is clamped by the runtime to the supported range. */
     segments?: number;
@@ -129,6 +152,64 @@ declare namespace ESP32QJS {
     /** Omit or pass `null` to keep glyph backgrounds transparent. */
     background?: DisplayColor | null;
     spacing?: number;
+  }
+
+  /**
+   * Retained native draw-command list that can be replayed into a
+   * `DisplayBuffer` once per frame.
+   */
+  class DisplayCommandBuffer {
+    private constructor();
+    reset(): this;
+    close(): boolean;
+    clear(color?: DisplayColor): this;
+    fill(color?: DisplayColor): this;
+    fillRect(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      color?: DisplayColor,
+    ): this;
+    drawRect(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      color?: DisplayColor,
+    ): this;
+    drawLine(
+      x0: number,
+      y0: number,
+      x1: number,
+      y1: number,
+      color?: DisplayColor,
+    ): this;
+    drawRoundRect(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      radius: number,
+      color?: DisplayColor,
+    ): this;
+    fillRoundRect(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      radius: number,
+      color?: DisplayColor,
+    ): this;
+    drawText(
+      x: number,
+      y: number,
+      text: string,
+      options: DisplayTextOptions,
+    ): this;
+    appendPacked(bytes: ByteSource, options?: DisplayCommandBufferPackedOptions): this;
+    replay(target: DisplayBuffer): this;
+    stats(): DisplayCommandBufferStats;
   }
 
   /**
@@ -290,7 +371,7 @@ declare namespace ESP32QJS {
     readonly readable: boolean;
     readonly writable: boolean;
 
-    read(size?: number): string | null;
+    read(size?: number): string | ByteView | null;
     write(text: string): number;
     flush(): boolean;
     close(): boolean;
@@ -848,6 +929,7 @@ declare namespace ESP32QJS {
       options?: DisplayBufferReadRectChunksOptions,
     ): ByteView[];
     createSpanSource(options?: DisplaySpanSourceOptions): DisplayBufferSpanSource;
+    createCommandBuffer(options?: DisplayCommandBufferOptions): DisplayCommandBuffer;
   }
 
   /**
@@ -1415,6 +1497,7 @@ declare global {
   const StaticFileHandler: typeof ESP32QJS.StaticFileHandler;
   const DisplayFont: ESP32QJS.DisplayFontConstructor;
   const DisplayBuffer: typeof ESP32QJS.DisplayBuffer;
+  const DisplayCommandBuffer: typeof ESP32QJS.DisplayCommandBuffer;
 
   /** LittleFS script root exposed to JavaScript when `esp32.info().features.fs` is enabled. */
   const SCRIPTS_DIR: string;

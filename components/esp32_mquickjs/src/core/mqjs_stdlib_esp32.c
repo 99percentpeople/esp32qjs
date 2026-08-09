@@ -20,7 +20,8 @@
 #define JS_CLASS_DISPLAY_BUFFER_SPAN_SOURCE (JS_CLASS_USER + 13)
 #define JS_CLASS_DISPLAY_BUFFER (JS_CLASS_USER + 14)
 #define JS_CLASS_DISPLAY_FONT (JS_CLASS_USER + 15)
-#define JS_CLASS_COUNT (JS_CLASS_USER + 16)
+#define JS_CLASS_DISPLAY_COMMAND_BUFFER (JS_CLASS_USER + 16)
+#define JS_CLASS_COUNT (JS_CLASS_USER + 17)
 
 #define js_global_object js_global_object_base
 #define js_c_function_decl js_c_function_decl_base
@@ -145,6 +146,33 @@ static const JSPropDef js_display_font_proto[] = {
 static const JSClassDef js_display_font_class =
     JS_CLASS_DEF("DisplayFont", 0, js_display_font_constructor, JS_CLASS_DISPLAY_FONT, NULL, js_display_font_proto, NULL, js_display_font_finalizer);
 
+static const JSPropDef js_display_command_buffer_proto[] = {
+    JS_CFUNC_DEF("reset", 0, js_display_command_buffer_reset),
+    JS_CFUNC_DEF("close", 0, js_display_command_buffer_close),
+    JS_CFUNC_DEF("clear", 1, js_display_command_buffer_clear),
+    JS_CFUNC_DEF("fill", 1, js_display_command_buffer_clear),
+    JS_CFUNC_DEF("fillRect", 5, js_display_command_buffer_fill_rect),
+    JS_CFUNC_DEF("drawRect", 5, js_display_command_buffer_draw_rect),
+    JS_CFUNC_DEF("drawLine", 5, js_display_command_buffer_draw_line),
+    JS_CFUNC_DEF("drawRoundRect", 6, js_display_command_buffer_draw_round_rect),
+    JS_CFUNC_DEF("fillRoundRect", 6, js_display_command_buffer_fill_round_rect),
+    JS_CFUNC_DEF("drawText", 4, js_display_command_buffer_draw_text),
+    JS_CFUNC_DEF("appendPacked", 2, js_display_command_buffer_append_packed),
+    JS_CFUNC_DEF("replay", 1, js_display_command_buffer_replay),
+    JS_CFUNC_DEF("stats", 0, js_display_command_buffer_stats),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_display_command_buffer_class =
+    JS_CLASS_DEF("DisplayCommandBuffer",
+                 0,
+                 js_display_command_buffer_constructor,
+                 JS_CLASS_DISPLAY_COMMAND_BUFFER,
+                 NULL,
+                 js_display_command_buffer_proto,
+                 NULL,
+                 js_display_command_buffer_finalizer);
+
 static const JSPropDef js_display_buffer_proto[] = {
     JS_CGETSET_DEF("width", js_display_buffer_get_width, NULL),
     JS_CGETSET_DEF("height", js_display_buffer_get_height, NULL),
@@ -183,6 +211,7 @@ static const JSPropDef js_display_buffer_proto[] = {
     JS_CFUNC_DEF("readRect", 5, js_display_buffer_read_rect),
     JS_CFUNC_DEF("readRectChunks", 5, js_display_buffer_read_rect_chunks),
     JS_CFUNC_DEF("createSpanSource", 1, js_display_buffer_create_span_source),
+    JS_CFUNC_DEF("createCommandBuffer", 1, js_display_buffer_create_command_buffer),
     JS_PROP_END,
 };
 
@@ -566,6 +595,7 @@ static const JSPropDef js_global_object_extra[] = {
 #if CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
     JS_PROP_CLASS_DEF("_DisplayBufferSpanSource", &js_display_buffer_span_source_class),
     JS_PROP_CLASS_DEF("DisplayFont", &js_display_font_class),
+    JS_PROP_CLASS_DEF("DisplayCommandBuffer", &js_display_command_buffer_class),
     JS_PROP_CLASS_DEF("DisplayBuffer", &js_display_buffer_class),
     JS_PROP_CLASS_DEF("displayBuffer", &js_display_buffer_obj),
 #endif

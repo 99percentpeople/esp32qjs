@@ -216,6 +216,19 @@ set(ESP32_MQUICKJS_SRCS
     "${MQUICKJS_DIR}/mquickjs.c"
 )
 
+# Keep upstream diagnostics from weakening warnings for adapter sources. These
+# two files contain host-width assumptions in debug-only formatting paths.
+if(NOT CMAKE_SCRIPT_MODE_FILE)
+    set_source_files_properties(
+        "${MQUICKJS_DIR}/dtoa.c"
+        PROPERTIES COMPILE_OPTIONS "-Wno-format"
+    )
+    set_source_files_properties(
+        "${MQUICKJS_DIR}/mquickjs.c"
+        PROPERTIES COMPILE_OPTIONS "-Wno-format;-Wno-type-limits"
+    )
+endif()
+
 set(ESP32_MQUICKJS_PUBLIC_REQUIRES
     esp_common
 )
@@ -327,6 +340,7 @@ esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
     "src/modules/display_buffer/esp32_mquickjs_font.c"
     "src/modules/display_buffer/esp32_mquickjs_display_buffer.c"
+    "src/modules/display_buffer/esp32_mquickjs_display_command_buffer.c"
     "src/modules/display_buffer/esp32_mquickjs_display_buffer_draw.c"
     "src/modules/display_buffer/esp32_mquickjs_display_buffer_font.c"
     "src/modules/display_buffer/esp32_mquickjs_display_buffer_text.c"
@@ -363,6 +377,4 @@ target_compile_options(
     PRIVATE
         -fno-math-errno
         -fno-trapping-math
-        -Wno-error=format
-        -Wno-error=type-limits
 )

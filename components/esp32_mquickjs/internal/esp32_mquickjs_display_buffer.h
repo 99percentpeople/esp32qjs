@@ -27,6 +27,8 @@ JSValue js_display_buffer_constructor(JSContext *ctx, JSValue *this_val, int arg
 void js_display_buffer_finalizer(JSContext *ctx, void *opaque);
 JSValue js_display_font_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 void js_display_font_finalizer(JSContext *ctx, void *opaque);
+JSValue js_display_command_buffer_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+void js_display_command_buffer_finalizer(JSContext *ctx, void *opaque);
 
 esp32_mquickjs_display_buffer_t *esp32_mquickjs_display_buffer_from_value(JSContext *ctx,
                                                                           JSValue value,
@@ -94,5 +96,19 @@ JSValue js_display_buffer_mark_dirty(JSContext *ctx, JSValue *this_val, int argc
 JSValue js_display_buffer_read_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_display_buffer_read_rect_chunks(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_display_buffer_create_span_source(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_display_buffer_create_command_buffer(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+
+JSValue js_display_command_buffer_reset(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_display_command_buffer_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_display_command_buffer_clear(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_display_command_buffer_fill_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_display_command_buffer_draw_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_display_command_buffer_draw_line(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_display_command_buffer_draw_round_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_display_command_buffer_fill_round_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_display_command_buffer_draw_text(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_display_command_buffer_append_packed(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_display_command_buffer_replay(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_display_command_buffer_stats(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 
 #endif

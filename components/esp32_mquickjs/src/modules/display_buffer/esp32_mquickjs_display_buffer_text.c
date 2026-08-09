@@ -119,6 +119,57 @@ static bool text_background_from_options(JSContext *ctx,
     return true;
 }
 
+void display_buffer_draw_text_raw(esp32_mquickjs_display_buffer_t *buffer,
+                                  int32_t x,
+                                  int32_t y,
+                                  const char *text,
+                                  const esp32_mquickjs_bitmap_font_t *font,
+                                  int spacing,
+                                  uint16_t color,
+                                  bool has_background,
+                                  uint16_t background)
+{
+    int cursor_x = x;
+    int cursor_y = y;
+    int measured_width;
+    int measured_height;
+    int measured_lines;
+    const char *cursor;
+
+    if (buffer == NULL || text == NULL || font == NULL) {
+        return;
+    }
+    for (cursor = text; *cursor != '\0'; ++cursor) {
+        const uint8_t *glyph;
+        int col;
+
+        if (*cursor == '\n') {
+            cursor_x = x;
+            cursor_y += font->line_height;
+            continue;
+        }
+        if (has_background) {
+            fill_rect_raw(buffer, cursor_x, cursor_y, font->advance + spacing, font->line_height, background, false);
+        }
+        glyph = esp32_mquickjs_bitmap_font_glyph(font, *cursor);
+        for (col = 0; col < font->width; ++col) {
+            int row;
+
+            for (row = 0; row < font->height; ++row) {
+                uint8_t bits = glyph[((size_t)col * font->bytes_per_column) + ((size_t)row >> 3U)];
+
+                if ((bits & (1U << (row & 7))) != 0) {
+                    set_pixel_raw(buffer, cursor_x + col, cursor_y + row, color);
+                }
+            }
+        }
+        cursor_x += font->advance + spacing;
+    }
+    esp32_mquickjs_bitmap_font_measure(font, text, spacing, &measured_width, &measured_height, &measured_lines);
+    (void)measured_lines;
+    mark_dirty(buffer, x, y, measured_width, measured_height);
+}
+
 JSValue js_display_buffer_draw_text(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     esp32_mquickjs_display_buffer_t *buffer;
@@ -131,12 +182,6 @@ JSValue js_display_buffer_draw_text(JSContext *ctx, JSValue *this_val, int argc,
     JSCStringBuf text_buf;
     const char *text;
     int spacing;
-    int cursor_x;
-    int cursor_y;
-    int measured_width;
-    int measured_height;
-    int measured_lines;
-    const char *cursor;
     const esp32_mquickjs_bitmap_font_t *font;
     bool font_ok;
     JSValue options;
@@ -188,37 +233,7 @@ JSValue js_display_buffer_draw_text(JSContext *ctx, JSValue *this_val, int argc,
                                       &has_background)) {
         return JS_ThrowTypeError(ctx, "DisplayBuffer.drawText() option 'background' expects a valid color or null");
     }
-    cursor_x = x;
-    cursor_y = y;
-    for (cursor = text; *cursor != '\0'; ++cursor) {
-        const uint8_t *glyph;
-        int col;
-
-        if (*cursor == '\n') {
-            cursor_x = x;
-            cursor_y += font->line_height;
-            continue;
-        }
-        if (has_background) {
-            fill_rect_raw(buffer, cursor_x, cursor_y, font->advance + spacing, font->line_height, background, false);
-        }
-        glyph = esp32_mquickjs_bitmap_font_glyph(font, *cursor);
-        for (col = 0; col < font->width; ++col) {
-            int row;
-
-            for (row = 0; row < font->height; ++row) {
-                uint8_t bits = glyph[((size_t)col * font->bytes_per_column) + ((size_t)row >> 3U)];
-
-                if ((bits & (1U << (row & 7))) != 0) {
-                    set_pixel_raw(buffer, cursor_x + col, cursor_y + row, color);
-                }
-            }
-        }
-        cursor_x += font->advance + spacing;
-    }
-    esp32_mquickjs_bitmap_font_measure(font, text, spacing, &measured_width, &measured_height, &measured_lines);
-    (void)measured_lines;
-    mark_dirty(buffer, x, y, measured_width, measured_height);
+    display_buffer_draw_text_raw(buffer, x, y, text, font, spacing, color, has_background, background);
     return *this_val;
 }
 

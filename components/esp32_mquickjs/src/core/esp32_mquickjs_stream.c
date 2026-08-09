@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
+#include "utils/esp32_mquickjs_byte_source.h"
 
 #define ESP32_MQUICKJS_MAX_STREAMS 16
 #define ESP32_MQUICKJS_STREAM_READ_CHUNK_DEFAULT 1024
@@ -23,6 +24,7 @@ typedef struct {
     char mode[8];
     bool readable;
     bool writable;
+    bool binary;
     bool seekable;
     char *path;
     union {
@@ -107,6 +109,7 @@ static void stream_cleanup_slot(esp32_mquickjs_stream_slot_t *slot)
     slot->allocated = false;
     slot->readable = false;
     slot->writable = false;
+    slot->binary = false;
     slot->seekable = false;
     slot->kind = ESP32_MQUICKJS_STREAM_KIND_FILE;
     memset(slot->mode, 0, sizeof(slot->mode));
@@ -312,6 +315,7 @@ static int stream_open_memory_owned_slot(char *data,
     slot->kind = ESP32_MQUICKJS_STREAM_KIND_MEMORY;
     slot->readable = true;
     slot->writable = false;
+    slot->binary = false;
     slot->seekable = true;
     memcpy(slot->mode, "r", 2);
     slot->handle.memory.data = (uint8_t *)data;
@@ -457,6 +461,7 @@ JSValue esp32_mquickjs_stream_open_file(JSContext *ctx,
     }
 
     slot->kind = ESP32_MQUICKJS_STREAM_KIND_FILE;
+    slot->binary = strchr(mode, 'b') != NULL;
     slot->seekable = true;
     slot->handle.file = fopen(path, mode);
     if (slot->handle.file == NULL) {
@@ -759,7 +764,7 @@ JSValue js_stream_read(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
     esp32_mquickjs_fs_stream_ref_t stream_ref;
     esp32_mquickjs_stream_slot_t *slot = NULL;
     int chunk_size = ESP32_MQUICKJS_STREAM_READ_CHUNK_DEFAULT;
-    char *buf;
+    uint8_t *buf;
     size_t read_len = 0;
 
     if (stream_get_this_slot(ctx, *this_val, "stream.read", &stream_ref, &slot) != 0) {
@@ -775,7 +780,7 @@ JSValue js_stream_read(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
     if (chunk_size <= 0) {
         return JS_ThrowTypeError(ctx, "stream.read(size) expects a positive integer");
     }
-    buf = heap_caps_malloc((size_t)chunk_size + 1, MALLOC_CAP_8BIT);
+    buf = heap_caps_malloc((size_t)chunk_size + (slot->binary ? 0 : 1), MALLOC_CAP_8BIT);
     if (buf == NULL) {
         return JS_ThrowOutOfMemory(ctx);
     }
@@ -787,9 +792,12 @@ JSValue js_stream_read(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
         heap_caps_free(buf);
         return JS_NULL;
     }
+    if (slot->binary) {
+        return esp32_mquickjs_new_owned_byte_view(ctx, buf, read_len);
+    }
     buf[read_len] = '\0';
     {
-        JSValue result = JS_NewStringLen(ctx, buf, read_len);
+        JSValue result = JS_NewStringLen(ctx, (const char *)buf, read_len);
         heap_caps_free(buf);
         return result;
     }

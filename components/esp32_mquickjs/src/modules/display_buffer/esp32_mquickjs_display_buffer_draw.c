@@ -228,12 +228,12 @@ static void fill_circle_raw(esp32_mquickjs_display_buffer_t *buffer,
     mark_dirty_if_touched(buffer, dirty_x0, dirty_y0, dirty_x1, dirty_y1);
 }
 
-static void draw_line_raw(esp32_mquickjs_display_buffer_t *buffer,
-                          int x0,
-                          int y0,
-                          int x1,
-                          int y1,
-                          uint16_t color);
+void draw_line_raw(esp32_mquickjs_display_buffer_t *buffer,
+                   int x0,
+                   int y0,
+                   int x1,
+                   int y1,
+                   uint16_t color);
 
 static void fill_ellipse_raw(esp32_mquickjs_display_buffer_t *buffer,
                              int32_t cx,
@@ -428,12 +428,12 @@ static void expand_line_bounds(int x0,
     }
 }
 
-static void draw_line_raw(esp32_mquickjs_display_buffer_t *buffer,
-                          int x0,
-                          int y0,
-                          int x1,
-                          int y1,
-                          uint16_t color)
+void draw_line_raw(esp32_mquickjs_display_buffer_t *buffer,
+                   int x0,
+                   int y0,
+                   int x1,
+                   int y1,
+                   uint16_t color)
 {
     int dx = x1 >= x0 ? x1 - x0 : x0 - x1;
     int sx = x0 < x1 ? 1 : -1;
@@ -461,13 +461,30 @@ static void draw_line_raw(esp32_mquickjs_display_buffer_t *buffer,
     }
 }
 
-static void draw_round_rect_raw(esp32_mquickjs_display_buffer_t *buffer,
-                                int32_t x,
-                                int32_t y,
-                                int32_t width,
-                                int32_t height,
-                                uint32_t radius,
-                                uint16_t color)
+void draw_rect_raw(esp32_mquickjs_display_buffer_t *buffer,
+                   int32_t x,
+                   int32_t y,
+                   int32_t width,
+                   int32_t height,
+                   uint16_t color)
+{
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+    draw_line_raw(buffer, x, y, x + width - 1, y, color);
+    draw_line_raw(buffer, x, y + height - 1, x + width - 1, y + height - 1, color);
+    draw_line_raw(buffer, x, y, x, y + height - 1, color);
+    draw_line_raw(buffer, x + width - 1, y, x + width - 1, y + height - 1, color);
+    mark_dirty(buffer, x, y, width, height);
+}
+
+void draw_round_rect_raw(esp32_mquickjs_display_buffer_t *buffer,
+                         int32_t x,
+                         int32_t y,
+                         int32_t width,
+                         int32_t height,
+                         uint32_t radius,
+                         uint16_t color)
 {
     int32_t r;
     int32_t cx0;
@@ -528,13 +545,13 @@ static void draw_round_rect_raw(esp32_mquickjs_display_buffer_t *buffer,
     mark_dirty(buffer, x, y, width, height);
 }
 
-static void fill_round_rect_raw(esp32_mquickjs_display_buffer_t *buffer,
-                                int32_t x,
-                                int32_t y,
-                                int32_t width,
-                                int32_t height,
-                                uint32_t radius,
-                                uint16_t color)
+void fill_round_rect_raw(esp32_mquickjs_display_buffer_t *buffer,
+                         int32_t x,
+                         int32_t y,
+                         int32_t width,
+                         int32_t height,
+                         uint32_t radius,
+                         uint16_t color)
 {
     int32_t r;
     uint64_t rr;
@@ -1155,11 +1172,7 @@ JSValue js_display_buffer_draw_rect(JSContext *ctx, JSValue *this_val, int argc,
     if (!ok) {
         return JS_ThrowTypeError(ctx, "DisplayBuffer.drawRect(x, y, width, height, color) expects a valid color");
     }
-    draw_line_raw(buffer, x, y, x + width - 1, y, color);
-    draw_line_raw(buffer, x, y + height - 1, x + width - 1, y + height - 1, color);
-    draw_line_raw(buffer, x, y, x, y + height - 1, color);
-    draw_line_raw(buffer, x + width - 1, y, x + width - 1, y + height - 1, color);
-    mark_dirty(buffer, x, y, width, height);
+    draw_rect_raw(buffer, x, y, width, height, color);
     return *this_val;
 }
 

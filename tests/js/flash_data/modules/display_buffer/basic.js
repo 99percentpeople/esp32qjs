@@ -134,6 +134,56 @@ test("display_buffer/basic", function () {
   bytes = mono.readRect(0, 0, 8, 8).toArray();
   test.equal(bytes[0], 0xff, "drawBitmap should draw on pixels with an options color");
   test.equal(bytes[1], 0xfe, "drawBitmap should fill explicit background pixels");
+  if (typeof mono.createCommandBuffer === "function") {
+    var commandTarget = displayBuffer.create({ width: 8, height: 8, format: "mono1" });
+    var commands = commandTarget.createCommandBuffer({ commandCapacity: 2, textBytes: 8 });
+    var commandStats;
+
+    test.ok(commands instanceof DisplayCommandBuffer, "createCommandBuffer should return a DisplayCommandBuffer");
+    test.equal(commands.fillRect(1, 1, 2, 2, 1), commands, "command buffer methods should be chainable");
+    commands.drawLine(0, 7, 7, 7, 1).replay(commandTarget);
+    test.equal(commandTarget.getPixel(1, 1), 1, "replay should draw recorded filled rectangles");
+    test.equal(commandTarget.getPixel(6, 7), 1, "replay should draw recorded lines");
+    dirty = commandTarget.getDirty();
+    test.equal(dirty.x, 0, "replay should mark dirty x");
+    test.equal(dirty.y, 1, "replay should mark dirty y");
+    test.equal(dirty.width, 8, "replay should mark dirty width");
+    test.equal(dirty.height, 7, "replay should mark dirty height");
+    commands.reset();
+    commandStats = commands.stats();
+    test.equal(commandStats.count, 0, "reset should clear recorded commands");
+    commandTarget.clear(0).clearDirty();
+    test.equal(commands.appendPacked([
+      2, 1, 0, 1, 0, 2, 0, 2, 0, 1, 0,
+      4, 0, 0, 7, 0, 7, 0, 7, 0, 1, 0
+    ]), commands, "appendPacked should be chainable");
+    commands.replay(commandTarget);
+    test.equal(commandTarget.getPixel(1, 1), 1, "packed replay should draw filled rectangles");
+    test.equal(commandTarget.getPixel(6, 7), 1, "packed replay should draw lines");
+    commands.reset();
+    commandTarget.clear(0).clearDirty();
+    commands.drawText(0, 0, "A", { color: 1, font: font }).replay(commandTarget);
+    bytes = commandTarget.readRect(0, 0, 8, 8).toArray();
+    test.equal(bytes[0], 0x7e, "command replay should draw text with native fonts");
+    commandStats = commands.stats();
+    test.ok(commandStats.textBytes > 0, "stats should include recorded text bytes");
+    commands.reset();
+    commandTarget.clear(0).clearDirty();
+    commands.appendPacked([
+      7, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0
+    ], { text: "A", font: font }).replay(commandTarget);
+    bytes = commandTarget.readRect(0, 0, 8, 8).toArray();
+    test.equal(bytes[0], 0x7e, "packed replay should draw text with native fonts");
+    test.equal(commands.close(), true, "command buffer close should release native storage");
+    try {
+      commands.reset();
+    } catch (commandClosedError) {
+      closeError = String(commandClosedError);
+    }
+    test.ok(closeError.indexOf("closed") >= 0, "closed command buffer methods should fail clearly");
+    closeError = "";
+    commandTarget.close();
+  }
   try {
     mono.setPixel(0, 0, true);
   } catch (colorError) {
