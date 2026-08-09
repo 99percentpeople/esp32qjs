@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified helper for remote ESP32 board development.
+"""Unified helper for local and remote ESP32 board development.
 
 The script reads repository-local `/.env` defaults, then merges them with a
 selected board profile from `configs/boards/*/.env`. That keeps day-to-day
@@ -223,11 +223,8 @@ class BoardProfile:
     build_dir: Path
     sdkconfig_defaults: Path | None
     idf_path: str
-    remote_host: str
-    remote_port: int
-    remote_url: str
+    target: str
     monitor_baud: int
-    com_port: str
     listen_port: int
     server_python_exe: str
     esptool_bin: str
@@ -247,11 +244,8 @@ class ProjectConfig:
     sdkconfig_defaults: Path | None
     idf_target: str
     idf_path: str
-    remote_host: str
-    remote_port: int
-    remote_url: str
+    target: str
     monitor_baud: int
-    com_port: str
     listen_port: int
     server_python_exe: str
     esptool_bin: str
@@ -308,6 +302,41 @@ def merged_int(
     raw_value = os.environ.get(key, repo_env.get(key, board_env.get(key)))
     if raw_value is None:
         return default
+
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise SystemExit(f"Invalid integer for {key}: {raw_value!r}") from exc
+
+
+def merged_optional_value(
+    repo_env: dict[str, str],
+    board_env: dict[str, str],
+    key: str,
+) -> str | None:
+    """Resolve an optional config value, treating blank values as unset."""
+    if key in os.environ:
+        value = os.environ[key]
+    elif key in repo_env:
+        value = repo_env[key]
+    elif key in board_env:
+        value = board_env[key]
+    else:
+        return None
+
+    value = value.strip()
+    return value or None
+
+
+def merged_optional_int(
+    repo_env: dict[str, str],
+    board_env: dict[str, str],
+    key: str,
+) -> int | None:
+    """Resolve an optional integer config value."""
+    raw_value = merged_optional_value(repo_env, board_env, key)
+    if raw_value is None:
+        return None
 
     try:
         return int(raw_value)
@@ -390,6 +419,32 @@ def resolve_board_file(reference: str) -> Path:
     return board_file.resolve()
 
 
+def legacy_target(repo_env: dict[str, str], board_env: dict[str, str]) -> tuple[str, int]:
+    """Resolve compatibility target settings from older env keys."""
+    explicit_target = merged_optional_value(repo_env, board_env, "TARGET")
+    if explicit_target:
+        return explicit_target, merged_optional_int(repo_env, board_env, "LISTEN_PORT") or 2217
+
+    legacy_espport = merged_optional_value(repo_env, board_env, "ESPPORT")
+    if legacy_espport:
+        return legacy_espport, merged_optional_int(repo_env, board_env, "LISTEN_PORT") or 2217
+
+    remote_url_override = merged_optional_value(repo_env, board_env, "REMOTE_URL")
+    if remote_url_override:
+        return remote_url_override, merged_optional_int(repo_env, board_env, "LISTEN_PORT") or 2217
+
+    remote_host = merged_optional_value(repo_env, board_env, "REMOTE_HOST")
+    remote_port = merged_optional_int(repo_env, board_env, "REMOTE_PORT")
+    if remote_host is not None or remote_port is not None:
+        return default_remote_url(remote_host or "127.0.0.1", remote_port or 2217), merged_optional_int(repo_env, board_env, "LISTEN_PORT") or (remote_port or 2217)
+
+    com_port = merged_optional_value(repo_env, board_env, "COM_PORT")
+    if com_port:
+        return com_port, merged_optional_int(repo_env, board_env, "LISTEN_PORT") or 2217
+
+    return "", merged_optional_int(repo_env, board_env, "LISTEN_PORT") or 2217
+
+
 def load_profile(board_override: str | None = None) -> BoardProfile:
     """Build the effective board profile from `/.env` and `configs/boards/*/.env`."""
     repo_env = load_dotenv(ENV_PATH)
@@ -397,19 +452,13 @@ def load_profile(board_override: str | None = None) -> BoardProfile:
     board_file = resolve_board_file(board_reference)
     board_dir = board_file.parent
     board_env = load_dotenv(board_file)
+    target, listen_port = legacy_target(repo_env, board_env)
 
     idf_path = merged_value(
         repo_env,
         board_env,
         "IDF_PATH",
         merged_value(repo_env, board_env, "IDF_PATH", str(Path.home() / "esp" / "esp-idf")),
-    )
-    remote_port = merged_int(repo_env, board_env, "REMOTE_PORT", 2217)
-    remote_url_override = (
-        os.environ.get("REMOTE_URL")
-        or repo_env.get("REMOTE_URL")
-        or board_env.get("REMOTE_URL")
-        or ""
     )
     sdkconfig_defaults_raw = merged_value(repo_env, board_env, "SDKCONFIG_DEFAULTS", "")
     if not sdkconfig_defaults_raw:
@@ -432,17 +481,14 @@ def load_profile(board_override: str | None = None) -> BoardProfile:
             else (board_sdkconfig_defaults_file(board_dir) if board_sdkconfig_defaults_file(board_dir).exists() else None)
         ),
         idf_path=str(Path(idf_path).expanduser()),
-        remote_host=merged_value(repo_env, board_env, "REMOTE_HOST", "127.0.0.1"),
-        remote_port=remote_port,
-        remote_url=remote_url_override,
+        target=normalize_target(target),
         monitor_baud=merged_int(
             repo_env,
             board_env,
             "MONITOR_BAUD",
             merged_int(repo_env, board_env, "ESPBAUD", 115200),
         ),
-        com_port=merged_value(repo_env, board_env, "COM_PORT", "COM3"),
-        listen_port=merged_int(repo_env, board_env, "LISTEN_PORT", remote_port),
+        listen_port=listen_port,
         server_python_exe=merged_value(repo_env, board_env, "SERVER_PYTHON_EXE", "auto"),
         esptool_bin=merged_value(repo_env, board_env, "ESPTOOL_BIN", "auto"),
         test_wifi_ssid=merged_value(repo_env, board_env, "TEST_WIFI_SSID", ""),
@@ -633,6 +679,7 @@ def stop_server_processes() -> None:
 def start_server(config: ProjectConfig, force_restart: bool) -> int:
     """Start esp_rfc2217_server after ensuring reset overrides exist."""
     esptool_cfg, setup_cfg = write_all_configs()
+    local_target = serial_target(config, "server")
 
     if force_restart:
         stop_server_processes()
@@ -647,7 +694,7 @@ def start_server(config: ProjectConfig, force_restart: bool) -> int:
         print(f"Using monitor config: {setup_cfg}")
         return 0
 
-    cmd = [*resolve_server_cmd(config.server_python_exe), "-v", "-p", str(config.listen_port), config.com_port]
+    cmd = [*resolve_server_cmd(config.server_python_exe), "-v", "-p", str(config.listen_port), local_target]
     kwargs: dict[str, object] = {
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
@@ -666,7 +713,7 @@ def start_server(config: ProjectConfig, force_restart: bool) -> int:
         print("Failed to confirm esp_rfc2217_server startup.", file=sys.stderr)
         return 1
 
-    print(f"RFC2217 server ready on {config.com_port} -> TCP {config.listen_port}")
+    print(f"RFC2217 server ready on {local_target} -> TCP {config.listen_port}")
     print(f"Using esptool config: {esptool_cfg}")
     print(f"Using monitor config: {setup_cfg}")
     for item in existing:
@@ -842,16 +889,47 @@ def normalize_remote_url(raw_url: str) -> str:
     return urlunsplit(parts._replace(query=encode_query_items(query_items)))
 
 
-def remote_url(remote_url_override: str, host: str, port: int) -> str:
-    """Return the RFC2217 URL, preferring an explicit override from config."""
-    return normalize_remote_url(remote_url_override or default_remote_url(host, port))
+def normalize_target(raw_target: str) -> str:
+    """Normalize a device target so RFC2217 URLs keep the expected query flags."""
+    target = raw_target.strip()
+    if not target:
+        return ""
+    if urlsplit(target).scheme == "rfc2217":
+        return normalize_remote_url(target)
+    return target
+
+
+def is_rfc2217_target(target: str) -> bool:
+    """Return whether the configured target is an RFC2217 URL."""
+    return urlsplit(normalize_target(target)).scheme == "rfc2217"
+
+
+def require_target(config: ProjectConfig) -> str:
+    """Return the configured device target or raise a helpful error."""
+    target = normalize_target(config.target)
+    if not target:
+        raise SystemExit("No device target configured. Set TARGET in .env or pass --target ...")
+    return target
+
+
+def serial_target(config: ProjectConfig, command_name: str) -> str:
+    """Return the configured local serial target for commands that require one."""
+    target = require_target(config)
+    if is_rfc2217_target(target):
+        raise SystemExit(f"{command_name} requires a local serial device target, got {target!r}.")
+    return target
+
+
+def command_port(config: ProjectConfig) -> str:
+    """Resolve the esptool/monitor port for the configured target."""
+    return require_target(config)
 
 
 def chip_id(config: ProjectConfig) -> None:
-    """Probe the remote device without writing flash."""
+    """Probe the device without writing flash."""
     write_esptool_config()
     subprocess.run(
-        [*resolve_esptool_cmd(config.esptool_bin), "--port", remote_url(config.remote_url, config.remote_host, config.remote_port), "chip-id"],
+        [*resolve_esptool_cmd(config.esptool_bin), "--port", command_port(config), "chip-id"],
         cwd=ROOT_DIR,
         check=True,
     )
@@ -946,7 +1024,7 @@ def write_flash(config: ProjectConfig, write_flash_args: list[str], flash_pairs:
             "--after",
             after,
             "--port",
-            remote_url(config.remote_url, config.remote_host, config.remote_port),
+            command_port(config),
             "write-flash",
             *write_flash_args,
             *flash_pairs,
@@ -957,7 +1035,7 @@ def write_flash(config: ProjectConfig, write_flash_args: list[str], flash_pairs:
 
 
 def flash(config: ProjectConfig, build_first: bool, exclude_entries: tuple[str, ...] = ()) -> None:
-    """Flash all ESP-IDF build outputs listed in flasher_args.json over RFC2217."""
+    """Flash all ESP-IDF build outputs listed in flasher_args.json."""
     write_esptool_config()
 
     if build_first:
@@ -1007,13 +1085,13 @@ def monitor_cmd(config: ProjectConfig) -> list[str]:
     """Build the monitor command for the selected board profile."""
     write_monitor_config()
     return idf_py_cmd(
-        ["-p", remote_url(config.remote_url, config.remote_host, config.remote_port), "-b", str(config.monitor_baud), "monitor"],
+        ["-p", command_port(config), "-b", str(config.monitor_baud), "monitor"],
         config,
     )
 
 
 def monitor(config: ProjectConfig) -> None:
-    """Open ESP-IDF monitor over RFC2217."""
+    """Open ESP-IDF monitor over the selected target."""
     run(
         monitor_cmd(config),
         cwd=ROOT_DIR,
@@ -1022,7 +1100,7 @@ def monitor(config: ProjectConfig) -> None:
 
 
 def flash_monitor(config: ProjectConfig, build_first: bool) -> None:
-    """Build/flash, then open monitor over RFC2217."""
+    """Build/flash, then open monitor over the selected target."""
     flash(config, build_first=build_first)
     monitor(config)
 
@@ -1079,6 +1157,7 @@ def list_boards(selected_board: str) -> None:
 
 def show_config(config: ProjectConfig) -> None:
     """Print the effective merged configuration for the selected board."""
+    normalized_target = normalize_target(config.target)
     print(f"board={config.board}")
     print(f"board_file={config.board_file}")
     print(f"board_label={config.board_label}")
@@ -1087,11 +1166,11 @@ def show_config(config: ProjectConfig) -> None:
     print(f"generated_sdkconfig={format_path(config.generated_sdkconfig)}")
     print(f"sdkconfig_defaults={format_path(config.sdkconfig_defaults)}")
     print(f"idf_path={config.idf_path}")
-    print(f"remote_host={config.remote_host}")
-    print(f"remote_port={config.remote_port}")
-    print(f"remote_url={remote_url(config.remote_url, config.remote_host, config.remote_port)}")
+    print(f"target={config.target}")
+    print(f"normalized_target={normalized_target}")
+    print(f"target_kind={'rfc2217' if normalized_target and is_rfc2217_target(normalized_target) else ('serial' if normalized_target else '')}")
+    print(f"command_port={normalized_target}")
     print(f"monitor_baud={config.monitor_baud}")
-    print(f"com_port={config.com_port}")
     print(f"listen_port={config.listen_port}")
     print(f"server_python_exe={config.server_python_exe}")
     print(f"esptool_bin={config.esptool_bin}")
@@ -1346,9 +1425,19 @@ def read_monitor_chunk(session: MonitorSession) -> bytes:
     return b"".join(chunks)
 
 
-def find_last_output_line_with_prefix(output: str, prefix: str) -> str | None:
+def find_last_output_line_with_prefix(
+    output: str,
+    prefix: str,
+    *,
+    complete_only: bool = False,
+) -> str | None:
     """Return the last normalized output line whose content starts with a marker prefix."""
-    for line in reversed(normalize_serial_output(output).splitlines()):
+    normalized = normalize_serial_output(output)
+    lines = normalized.splitlines()
+    if complete_only and normalized and not normalized.endswith("\n"):
+        lines = lines[:-1]
+
+    for line in reversed(lines):
         stripped = line.strip()
         if stripped.startswith(prefix):
             return stripped
@@ -1386,7 +1475,7 @@ def read_monitor_until_line_prefix(session: MonitorSession, prefix: str, timeout
         chunk = read_monitor_chunk(session)
         if chunk:
             output += chunk.decode("utf-8", errors="replace")
-            if find_last_output_line_with_prefix(output, prefix) is not None:
+            if find_last_output_line_with_prefix(output, prefix, complete_only=True) is not None:
                 return normalize_serial_output(output)
             continue
 
@@ -1408,7 +1497,7 @@ def try_read_monitor_until_line_prefix(session: MonitorSession, prefix: str, tim
         if chunk:
             output += chunk.decode("utf-8", errors="replace")
             normalized = normalize_serial_output(output)
-            if find_last_output_line_with_prefix(normalized, prefix) is not None:
+            if find_last_output_line_with_prefix(normalized, prefix, complete_only=True) is not None:
                 return normalized
             continue
 
@@ -1923,11 +2012,8 @@ def build_project_config(args: argparse.Namespace, profile: BoardProfile) -> Pro
         sdkconfig_defaults=sdkconfig_defaults,
         idf_target=args.idf_target,
         idf_path=args.idf_path,
-        remote_host=getattr(args, "remote_host", profile.remote_host),
-        remote_port=getattr(args, "remote_port", profile.remote_port),
-        remote_url=getattr(args, "remote_url", profile.remote_url),
+        target=normalize_target(getattr(args, "target", profile.target)),
         monitor_baud=getattr(args, "baud", profile.monitor_baud),
-        com_port=getattr(args, "com_port", profile.com_port),
         listen_port=getattr(args, "listen_port", profile.listen_port),
         server_python_exe=getattr(args, "python_exe", profile.server_python_exe),
         esptool_bin=getattr(args, "esptool_bin", profile.esptool_bin),
@@ -1954,13 +2040,14 @@ def add_common_board_args(parser: argparse.ArgumentParser, profile: BoardProfile
 
 
 def add_common_connection_args(parser: argparse.ArgumentParser, profile: BoardProfile) -> None:
-    """Attach the shared board-connection and tool overrides once at the top level."""
-    parser.add_argument("--remote-url", default=profile.remote_url)
-    parser.add_argument("--remote-host", default=profile.remote_host)
-    parser.add_argument("--remote-port", type=int, default=profile.remote_port)
+    """Attach the shared device-target and tool overrides once at the top level."""
+    parser.add_argument(
+        "--target",
+        default=profile.target,
+        help="Device target for chip-id/flash/monitor/test/server. Use an rfc2217:// URL for remote boards, or a local serial device path such as /dev/ttyACM0 or COM3.",
+    )
     parser.add_argument("--baud", type=int, default=profile.monitor_baud)
     parser.add_argument("--esptool-bin", default=profile.esptool_bin)
-    parser.add_argument("--com-port", default=profile.com_port)
     parser.add_argument("--listen-port", type=int, default=profile.listen_port)
     parser.add_argument("--python-exe", default=profile.server_python_exe)
 
@@ -1973,7 +2060,7 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, Board
     pre_args, _ = bootstrap.parse_known_args(raw_argv)
     profile = load_profile(pre_args.board)
 
-    parser = argparse.ArgumentParser(description="Unified helper for remote ESP32 board development.")
+    parser = argparse.ArgumentParser(description="Unified helper for local and remote ESP32 board development.")
     add_common_board_args(parser, profile)
     add_common_connection_args(parser, profile)
     parser.add_argument(
@@ -2000,17 +2087,17 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, Board
     build_fs_parser = sub.add_parser("build-fs", help="Build only the LittleFS storage image.")
     build_fs_parser.set_defaults(_noop=True)
 
-    chip = sub.add_parser("chip-id", help="Check remote RFC2217 connectivity.")
+    chip = sub.add_parser("chip-id", help="Check connectivity over the selected target.")
 
-    flash_parser = sub.add_parser("flash", help="Build and flash over RFC2217.")
+    flash_parser = sub.add_parser("flash", help="Build and flash over the selected target.")
     flash_parser.add_argument("--no-build", action="store_true")
 
     flash_fs_parser = sub.add_parser("flash-fs", help="Build and flash only the LittleFS storage partition.")
     flash_fs_parser.add_argument("--no-build", action="store_true")
 
-    mon = sub.add_parser("monitor", help="Open ESP-IDF monitor over RFC2217.")
+    mon = sub.add_parser("monitor", help="Open ESP-IDF monitor over the selected target.")
 
-    fm = sub.add_parser("flash-monitor", help="Build/flash, then open monitor over RFC2217.")
+    fm = sub.add_parser("flash-monitor", help="Build/flash, then open monitor over the selected target.")
     fm.add_argument("--no-build", action="store_true")
 
     test = sub.add_parser("test", help="Run host C tests and/or board-backed JS tests.")

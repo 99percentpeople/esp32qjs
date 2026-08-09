@@ -1,9 +1,18 @@
-# Remote RFC2217 Flashing
+# Local And Remote Flashing
 
-This project supports direct flashing to remote ESP32 boards through `esp_rfc2217_server`. The Windows server must override the default reset sequence. Without this override, the server uses `ClassicReset`, which does not reliably put `USB-Serial/JTAG` boards into download mode.
+This project supports both direct local serial development and remote RFC2217 development through the same [scripts/remote.py](/home/zach/esp32qjs/scripts/remote.py) entrypoint. Use one `TARGET` value everywhere: if it is an `rfc2217://...` URL, the helper talks to a remote board; otherwise it treats the value as a local serial device path. The RFC2217 path still relies on `esp_rfc2217_server`, and the Windows server must override the default reset sequence. Without this override, the server uses `ClassicReset`, which does not reliably put `USB-Serial/JTAG` boards into download mode.
+
+## Local Serial Usage
+For a board connected to the current machine, set `TARGET=/dev/ttyACM0` or pass a one-off override:
+
+```bash
+python scripts/remote.py --target /dev/ttyACM0 chip-id
+python scripts/remote.py --target /dev/ttyACM0 flash-fs
+python scripts/remote.py --target /dev/ttyACM0 monitor
+```
 
 ## Server Setup on Windows
-Run `uv sync` once in the repository root to provision the repo-local Python tools. Then copy [.env.example](/home/zach/esp32qjs/.env.example) to `/.env`, choose a board profile with `BOARD=...`, and set the remote board address plus `IDF_PATH` once. `REMOTE_URL` is preferred; For `rfc2217://...` URLs, the helper auto-adds `ign_set_control` and `timeout=10` when they are missing. With `SERVER_PYTHON_EXE=auto`, the helper prefers the uv-managed `esptool` install automatically, and `build` / `monitor` derive `idf.py` and `export.sh` from `IDF_PATH`. Then run [scripts/remote.py](/home/zach/esp32qjs/scripts/remote.py) on the machine that owns the board:
+Run `uv sync` once in the repository root to provision the repo-local Python tools. Then copy [.env.example](/home/zach/esp32qjs/.env.example) to `/.env`, choose a board profile with `BOARD=...`, and set `TARGET` to the local serial device on the machine that owns the board. For `rfc2217://...` URLs, the helper auto-adds `ign_set_control` and `timeout=10` when they are missing. With `SERVER_PYTHON_EXE=auto`, the helper prefers the uv-managed `esptool` install automatically, and `build` / `monitor` derive `idf.py` and `export.sh` from `IDF_PATH`. Then run [scripts/remote.py](/home/zach/esp32qjs/scripts/remote.py) on the machine that owns the board:
 
 ```bash
 python scripts/remote.py server --force-restart
@@ -41,11 +50,11 @@ python scripts/remote.py --board esp32c3_supermini chip-id
 python scripts/remote.py --board esp32c3_supermini test --scope js --module fs --module stream
 ```
 
-When a one-off override is needed, pass the board and connection overrides as top-level options before the subcommand, using either `--remote-host/--remote-port` or a full `--remote-url`:
+When a one-off remote override is needed, pass a full RFC2217 URL as `--target`:
 
 ```bash
-python scripts/remote.py --remote-host 192.168.68.54 --remote-port 4000 flash
-python scripts/remote.py --remote-url "rfc2217://192.168.68.54:4000?ign_set_control&timeout=10" monitor
+python scripts/remote.py --target "rfc2217://192.168.68.54:4000?ign_set_control&timeout=10" flash
+python scripts/remote.py --target "rfc2217://192.168.68.54:4000?ign_set_control&timeout=10" monitor
 python scripts/remote.py --board esp32c3_supermini --build-dir build-c3 monitor
 ```
 
