@@ -1,2 +1,1 @@
-
-load("demo/display_perf.js");
+load("demo/ui_immediate.js");

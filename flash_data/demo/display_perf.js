@@ -2,10 +2,13 @@ load("_sys/display.js");
 
 var PERF = globalThis.displayPerfConfig || {};
 var TRANSFER_BYTES = PERF.transferBytes || 32768;
+var USE_BATCH = PERF.batch === true;
 var HUD_H = 58;
 var GRAPH_H = 36;
 var MODE_SECONDS = PERF.modeSeconds || 12;
 var FRAME_DELAY_MS = PERF.frameDelayMs === undefined ? 0 : PERF.frameDelayMs;
+var PARTIAL_HUD_MS = PERF.partialHudMs === undefined ? 1000 : PERF.partialHudMs;
+var PARTIAL_OVERLAY_MS = PERF.partialOverlayMs === undefined ? 0 : PERF.partialOverlayMs;
 
 var COLORS = {
   bg: display.rgb565(3, 12, 26),
@@ -94,6 +97,9 @@ var reportShapeOvalUs = 0;
 var reportShapePolygonUs = 0;
 var reportShapeCurveUs = 0;
 var reportShapeTriangleUs = 0;
+var partialLastBox = null;
+var partialHudUs = 0;
+var partialOverlayUs = 0;
 var latest = {
   fps: 0,
   frameUs: 0,
@@ -109,7 +115,10 @@ var latest = {
   chunks: 0,
   pixels: 0,
   bytes: 0,
-  heap: 0
+  heap: 0,
+  batch: false,
+  commandCount: 0,
+  commandTextBytes: 0
 };
 var latestShape = {
   bgUs: 0,
@@ -118,6 +127,7 @@ var latestShape = {
   curveUs: 0,
   triangleUs: 0
 };
+var lastBatch = false;
 
 var MODES = [
   { name: "FULL", label: "FULL SCREEN", fullFlush: true },
@@ -199,6 +209,30 @@ function rect(list, x, y, w, h) {
   }
 }
 
+function unionRect(a, b) {
+  var x0;
+  var y0;
+  var x1;
+  var y1;
+
+  if (!a) {
+    return b;
+  }
+  if (!b) {
+    return a;
+  }
+  x0 = a.x < b.x ? a.x : b.x;
+  y0 = a.y < b.y ? a.y : b.y;
+  x1 = a.x + a.w > b.x + b.w ? a.x + a.w : b.x + b.w;
+  y1 = a.y + a.h > b.y + b.h ? a.y + a.h : b.y + b.h;
+  return {
+    x: x0,
+    y: y0,
+    w: x1 - x0,
+    h: y1 - y0
+  };
+}
+
 function pushSample(us) {
   history[historyIndex] = us;
   historyIndex = (historyIndex + 1) % history.length;
@@ -212,10 +246,20 @@ function activeMode() {
   return MODES[modeIndex];
 }
 
+function shouldUseBatch(mode) {
+  if (!USE_BATCH) {
+    return false;
+  }
+  return mode.name !== "SHAPE";
+}
+
 function setMode(index) {
   modeIndex = ((index % MODES.length) + MODES.length) % MODES.length;
   modeStartUs = esp32.micros();
   forceFullFrame = true;
+  partialLastBox = null;
+  partialHudUs = 0;
+  partialOverlayUs = 0;
   if (screen.resetPerf) {
     screen.resetPerf();
   }
@@ -226,37 +270,37 @@ function nextMode() {
   setMode(modeIndex + 1);
 }
 
-function drawBase() {
+function drawBase(surface) {
   var x;
   var y;
 
-  screen.clear(COLORS.bg);
-  screen.fillRect(0, 0, width, HUD_H, COLORS.panel);
+  surface.clear(COLORS.bg);
+  surface.fillRect(0, 0, width, HUD_H, COLORS.panel);
   for (x = 0; x < width; x += 24) {
-    screen.drawLine(x, bodyY, x, graphY - 3, COLORS.grid);
+    surface.drawLine(x, bodyY, x, graphY - 3, COLORS.grid);
   }
   for (y = bodyY; y < graphY - 2; y += 20) {
-    screen.drawLine(0, y, width - 1, y, COLORS.grid);
+    surface.drawLine(0, y, width - 1, y, COLORS.grid);
   }
 }
 
-function drawHud(dirty) {
+function drawHud(surface, dirty) {
   var mode = activeMode();
   var seconds = ((esp32.micros() - modeStartUs) / 1000000) | 0;
 
-  screen.fillRect(0, 0, width, HUD_H, COLORS.panel);
-  screen.drawText(6, 4, "DISPLAY PERF " + mode.name, { color: COLORS.yellow, spacing: 0 });
-  screen.drawText(width - 70, 4, "F" + pad(frame, 5), { color: COLORS.text, spacing: 0 });
-  screen.drawText(6, 18,
+  surface.fillRect(0, 0, width, HUD_H, COLORS.panel);
+  surface.drawText(6, 4, "DISPLAY PERF " + mode.name, { color: COLORS.yellow, spacing: 0 });
+  surface.drawText(width - 70, 4, "F" + pad(frame, 5), { color: COLORS.text, spacing: 0 });
+  surface.drawText(6, 18,
                   "FPS " + fmt1(latest.fps) +
                   "  LAT " + ms(lastFrameUs) + "MS" +
                   "  T" + pad(seconds, 2),
                   { color: COLORS.text, spacing: 0 });
-  screen.drawText(6, 30,
+  surface.drawText(6, 30,
                   "DRAW " + ms(lastDrawUs) +
                   "  FLUSH " + ms(lastFlushUs),
                   { color: COLORS.cyan, spacing: 0 });
-  screen.drawText(6, 42,
+  surface.drawText(6, 42,
                   "AVG " + ms(latest.frameUs) +
                   "  MAX " + ms(latest.maxFrameUs) +
                   "  KB " + kb(latest.bytes),
@@ -264,7 +308,28 @@ function drawHud(dirty) {
   rect(dirty, 0, 0, width, HUD_H);
 }
 
-function drawFullScene() {
+function drawPartialHud(surface, dirty) {
+  var seconds = ((esp32.micros() - modeStartUs) / 1000000) | 0;
+
+  surface.fillRect(0, 18, width, HUD_H - 18, COLORS.panel);
+  surface.drawText(6, 18,
+                  "FPS " + fmt1(latest.fps) +
+                  "  LAT " + ms(lastFrameUs) + "MS" +
+                  "  T" + pad(seconds, 2),
+                  { color: COLORS.text, spacing: 0 });
+  surface.drawText(6, 30,
+                  "DRAW " + ms(lastDrawUs) +
+                  "  FLUSH " + ms(lastFlushUs),
+                  { color: COLORS.cyan, spacing: 0 });
+  surface.drawText(6, 42,
+                  "AVG " + ms(latest.frameUs) +
+                  "  MAX " + ms(latest.maxFrameUs) +
+                  "  KB " + kb(latest.bytes),
+                  { color: COLORS.green, spacing: 0 });
+  rect(dirty, 0, 18, width, HUD_H - 18);
+}
+
+function drawFullScene(surface) {
   var i;
   var x;
   var y;
@@ -274,12 +339,12 @@ function drawFullScene() {
   var x2;
   var y2;
 
-  screen.fillRect(0, bodyY, width, graphY - bodyY - 3, COLORS.bg);
+  surface.fillRect(0, bodyY, width, graphY - bodyY - 3, COLORS.bg);
   for (x = 0; x < width; x += 24) {
-    screen.drawLine(x, bodyY, x, graphY - 3, COLORS.grid);
+    surface.drawLine(x, bodyY, x, graphY - 3, COLORS.grid);
   }
   for (y = bodyY; y < graphY - 2; y += 20) {
-    screen.drawLine(0, y, width - 1, y, COLORS.grid);
+    surface.drawLine(0, y, width - 1, y, COLORS.grid);
   }
   for (i = 0; i < 12; i += 1) {
     x = ((frame * 5 + i * 27) % (width + 28)) - 28;
@@ -289,71 +354,113 @@ function drawFullScene() {
       y = bodyY + 4;
       h = graphY - y - 10;
     }
-    screen.fillRect(x, y, 24, h, BAR_COLORS[i % BAR_COLORS.length]);
-    screen.drawRect(x, y, 24, h, COLORS.text);
+    surface.fillRect(x, y, 24, h, BAR_COLORS[i % BAR_COLORS.length]);
+    surface.drawRect(x, y, 24, h, COLORS.text);
   }
 
   x1 = 10 + pingPong(frame * 6, width - 48);
   y1 = bodyY + 16 + pingPong(frame * 4, graphY - bodyY - 62);
   x2 = 14 + pingPong(frame * 9 + 70, width - 66);
   y2 = bodyY + 24 + pingPong(frame * 5 + 30, graphY - bodyY - 70);
-  screen.fillRect(0, bodyY + ((frame * 4) % (graphY - bodyY - 8)), width, 2, COLORS.dim);
-  screen.fillRect(x1, y1, 42, 22, COLORS.yellow);
-  screen.drawText(x1 + 10, y1 + 7, "JS", { color: COLORS.bg, spacing: 0 });
-  screen.fillRect(x2, y2, 54, 18, COLORS.magenta);
-  screen.drawText(x2 + 7, y2 + 5, "SPI", { color: COLORS.text, spacing: 0 });
-  screen.drawRect(x2 - 2, y2 - 2, 58, 22, COLORS.orange);
+  surface.fillRect(0, bodyY + ((frame * 4) % (graphY - bodyY - 8)), width, 2, COLORS.dim);
+  surface.fillRect(x1, y1, 42, 22, COLORS.yellow);
+  surface.drawText(x1 + 10, y1 + 7, "JS", { color: COLORS.bg, spacing: 0 });
+  surface.fillRect(x2, y2, 54, 18, COLORS.magenta);
+  surface.drawText(x2 + 7, y2 + 5, "SPI", { color: COLORS.text, spacing: 0 });
+  surface.drawRect(x2 - 2, y2 - 2, 58, 22, COLORS.orange);
 
   if (cjk12 && cjk16 && cjk24) {
-    screen.drawText(10, bodyY + 8, "性能", { color: COLORS.yellow, font: cjk24 });
-    screen.drawText(70, bodyY + 10, "中文显示", { color: COLORS.text, font: cjk16 });
-    screen.drawText(70, bodyY + 30, "帧率 延迟 测试正常", { color: COLORS.green, font: cjk12 });
+    surface.drawText(10, bodyY + 8, "性能", { color: COLORS.yellow, font: cjk24 });
+    surface.drawText(70, bodyY + 10, "中文显示", { color: COLORS.text, font: cjk16 });
+    surface.drawText(70, bodyY + 30, "帧率 延迟 测试正常", { color: COLORS.green, font: cjk12 });
   }
 }
 
-function drawPartialScene(dirty) {
+function partialLayout() {
   var areaX = 12;
   var areaY = bodyY + 10;
   var areaW = width - 24;
   var areaH = graphY - areaY - 10;
   var box = 34;
-  var x = areaX + pingPong(frame * 8, areaW - box);
-  var y = areaY + pingPong(frame * 5, areaH - box);
+
+  return {
+    areaX: areaX,
+    areaY: areaY,
+    areaW: areaW,
+    areaH: areaH,
+    playX: areaX + 8,
+    playY: areaY + 30,
+    playW: Math.max(box, areaW - 16),
+    playH: Math.max(box, areaH - 38),
+    box: box
+  };
+}
+
+function partialBox(frameValue) {
+  var layout = partialLayout();
+
+  return {
+    x: layout.playX + pingPong(frameValue * 8, layout.playW - layout.box),
+    y: layout.playY + pingPong(frameValue * 5, layout.playH - layout.box),
+    w: layout.box,
+    h: layout.box
+  };
+}
+
+function drawPartialBackground(surface) {
+  var layout = partialLayout();
   var i;
   var px;
 
-  screen.fillRect(areaX, areaY, areaW, areaH, COLORS.bg);
-  screen.drawRect(areaX, areaY, areaW, areaH, COLORS.dim);
+  surface.fillRect(layout.areaX, layout.areaY, layout.areaW, layout.areaH, COLORS.bg);
+  surface.drawRect(layout.areaX, layout.areaY, layout.areaW, layout.areaH, COLORS.dim);
   for (i = 0; i < 5; i += 1) {
-    px = areaX + ((frame * 11 + i * 41) % areaW);
-    screen.fillRect(px, areaY + 2, 3, areaH - 4, BAR_COLORS[i]);
+    px = layout.areaX + 12 + i * ((layout.areaW - 24) / 4 | 0);
+    surface.fillRect(px, layout.areaY + 4, 2, 12, BAR_COLORS[i]);
   }
-  screen.fillRect(x, y, box, box, COLORS.cyan);
-  screen.drawRect(x + 4, y + 4, box - 8, box - 8, COLORS.text);
-  screen.drawText(x + 8, y + 13, "P", { color: COLORS.bg, spacing: 0 });
-  screen.drawText(areaX + 8, areaY + 8, "flushRect " + areaW + "x" + areaH, { color: COLORS.text, spacing: 0 });
-  rect(dirty, areaX, areaY, areaW, areaH);
+  surface.drawText(layout.areaX + 8, layout.areaY + 8, "PARTIAL RECT TEST", { color: COLORS.text, spacing: 0 });
 }
 
-function drawTextScene(dirty) {
+function drawPartialBox(surface, box) {
+  surface.fillRect(box.x, box.y, box.w, box.h, COLORS.cyan);
+  surface.drawRect(box.x + 4, box.y + 4, box.w - 8, box.h - 8, COLORS.text);
+  surface.drawText(box.x + 8, box.y + 13, "P", { color: COLORS.bg, spacing: 0 });
+}
+
+function drawPartialScene(surface, dirty, fullFrame) {
+  var box = partialBox(frame);
+  var changed = unionRect(partialLastBox, box);
+
+  if (fullFrame) {
+    drawPartialBackground(surface);
+  }
+  if (changed) {
+    surface.fillRect(changed.x, changed.y, changed.w, changed.h, COLORS.bg);
+    drawPartialBox(surface, box);
+    rect(dirty, changed.x, changed.y, changed.w, changed.h);
+  }
+  partialLastBox = box;
+}
+
+function drawTextScene(surface, dirty) {
   var y = bodyY + 8;
   var panelH = graphY - y - 8;
   var n = frame % 1000;
 
-  screen.fillRect(8, y, width - 16, panelH, COLORS.bg);
-  screen.drawRect(8, y, width - 16, panelH, COLORS.dim);
-  screen.drawText(16, y + 8, "TEXT STRESS " + pad(n, 3), { color: COLORS.yellow, spacing: 0 });
-  screen.drawText(16, y + 22, "ASCII 0123456789 ABCD", { color: COLORS.text, spacing: 0 });
-  screen.drawText(16, y + 36, "FRAME " + frame + " HEAP " + (esp32.freeHeap() / 1024 | 0) + "K", { color: COLORS.cyan, spacing: 0 });
+  surface.fillRect(8, y, width - 16, panelH, COLORS.bg);
+  surface.drawRect(8, y, width - 16, panelH, COLORS.dim);
+  surface.drawText(16, y + 8, "TEXT STRESS " + pad(n, 3), { color: COLORS.yellow, spacing: 0 });
+  surface.drawText(16, y + 22, "ASCII 0123456789 ABCD", { color: COLORS.text, spacing: 0 });
+  surface.drawText(16, y + 36, "FRAME " + frame + " HEAP " + (esp32.freeHeap() / 1024 | 0) + "K", { color: COLORS.cyan, spacing: 0 });
   if (cjk12 && cjk16 && cjk24) {
-    screen.drawText(16, y + 54, "中文显示", { color: COLORS.green, font: cjk16 });
-    screen.drawText(16, y + 76, "性能 测试 延迟", { color: COLORS.orange, font: cjk12 });
-    screen.drawText(118, y + 64, "帧率", { color: COLORS.magenta, font: cjk24 });
+    surface.drawText(16, y + 54, "中文显示", { color: COLORS.green, font: cjk16 });
+    surface.drawText(16, y + 76, "性能 测试 延迟", { color: COLORS.orange, font: cjk12 });
+    surface.drawText(118, y + 64, "帧率", { color: COLORS.magenta, font: cjk24 });
   }
   rect(dirty, 8, y, width - 16, panelH);
 }
 
-function drawShapeScene(dirty) {
+function drawShapeScene(surface, dirty) {
   var areaX = 6;
   var areaY = bodyY + 4;
   var areaW = width - 12;
@@ -371,17 +478,17 @@ function drawShapeScene(dirty) {
   var stageUs;
 
   stageUs = esp32.micros();
-  screen.fillRect(areaX, areaY, areaW, areaH, COLORS.bg);
-  screen.drawRoundRect(areaX, areaY, areaW, areaH, 10, COLORS.dim);
-  screen.fillRoundRect(areaX + 6, areaY + 6, 58, 22, 7, COLORS.panel2);
-  screen.drawText(areaX + 13, areaY + 13, "SHAPES", { color: COLORS.yellow, spacing: 0 });
+  surface.fillRect(areaX, areaY, areaW, areaH, COLORS.bg);
+  surface.drawRoundRect(areaX, areaY, areaW, areaH, 10, COLORS.dim);
+  surface.fillRoundRect(areaX + 6, areaY + 6, 58, 22, 7, COLORS.panel2);
+  surface.drawText(areaX + 13, areaY + 13, "SHAPES", { color: COLORS.yellow, spacing: 0 });
   addShapeTime("bg", stageUs);
 
   stageUs = esp32.micros();
-  screen.fillCircle(areaX + 34 + pulse, areaY + 58, 18, COLORS.blue);
-  screen.drawCircle(areaX + 34 + pulse, areaY + 58, 23, COLORS.cyan);
-  screen.fillEllipse(width - 48, areaY + 52 + pingPong(frame, 18), 30, 14, COLORS.magenta);
-  screen.drawEllipse(width - 48, areaY + 52 + pingPong(frame, 18), 38, 20, COLORS.text, { segments: 28 });
+  surface.fillCircle(areaX + 34 + pulse, areaY + 58, 18, COLORS.blue);
+  surface.drawCircle(areaX + 34 + pulse, areaY + 58, 23, COLORS.cyan);
+  surface.fillEllipse(width - 48, areaY + 52 + pingPong(frame, 18), 30, 14, COLORS.magenta);
+  surface.drawEllipse(width - 48, areaY + 52 + pingPong(frame, 18), 38, 20, COLORS.text, { segments: 28 });
   addShapeTime("oval", stageUs);
 
   stageUs = esp32.micros();
@@ -392,12 +499,12 @@ function drawShapeScene(dirty) {
     py = cy + Math.round(Math.sin(angle) * radius);
     star.push([px, py]);
   }
-  screen.fillPolygon(star, COLORS.green);
-  screen.drawPolygon(star, COLORS.text);
+  surface.fillPolygon(star, COLORS.green);
+  surface.drawPolygon(star, COLORS.text);
   addShapeTime("polygon", stageUs);
 
   stageUs = esp32.micros();
-  screen.drawQuadraticBezier(
+  surface.drawQuadraticBezier(
     areaX + 12,
     graphY - 34,
     cx,
@@ -407,7 +514,7 @@ function drawShapeScene(dirty) {
     COLORS.orange,
     { segments: 28 }
   );
-  screen.drawCubicBezier(
+  surface.drawCubicBezier(
     areaX + 8,
     graphY - 12,
     areaX + 44,
@@ -422,13 +529,13 @@ function drawShapeScene(dirty) {
   addShapeTime("curve", stageUs);
 
   stageUs = esp32.micros();
-  screen.fillTriangle(cx - 18, areaY + 18, cx + 20, areaY + 22, cx + 2, areaY + 52, COLORS.cyan);
-  screen.drawTriangle(cx - 18, areaY + 18, cx + 20, areaY + 22, cx + 2, areaY + 52, COLORS.bg);
+  surface.fillTriangle(cx - 18, areaY + 18, cx + 20, areaY + 22, cx + 2, areaY + 52, COLORS.cyan);
+  surface.drawTriangle(cx - 18, areaY + 18, cx + 20, areaY + 22, cx + 2, areaY + 52, COLORS.bg);
   addShapeTime("triangle", stageUs);
   rect(dirty, areaX, areaY, areaW, areaH);
 }
 
-function drawGraph(dirty) {
+function drawGraph(surface, dirty) {
   var i;
   var sample;
   var min = 0;
@@ -440,8 +547,8 @@ function drawGraph(dirty) {
   var color;
   var w = graphW / samples;
 
-  screen.fillRect(graphX - 2, graphY - 2, graphW + 4, GRAPH_H + 1, COLORS.bg);
-  screen.drawRect(graphX - 2, graphY - 2, graphW + 4, GRAPH_H + 1, COLORS.dim);
+  surface.fillRect(graphX - 2, graphY - 2, graphW + 4, GRAPH_H + 1, COLORS.bg);
+  surface.drawRect(graphX - 2, graphY - 2, graphW + 4, GRAPH_H + 1, COLORS.dim);
   for (i = 0; i < samples; i += 1) {
     sample = sampleAt(i);
     if (sample <= 0) {
@@ -458,7 +565,7 @@ function drawGraph(dirty) {
   if (range < 4000) {
     range = 4000;
   }
-  screen.drawText(graphX, graphY - 13, "LAT " + ms(min) + "-" + ms(max) + "MS", { color: COLORS.text, spacing: 0 });
+  surface.drawText(graphX, graphY - 13, "LAT " + ms(min) + "-" + ms(max) + "MS", { color: COLORS.text, spacing: 0 });
   for (i = 0; i < samples; i += 1) {
     sample = sampleAt(i);
     if (sample <= 0) {
@@ -474,12 +581,12 @@ function drawGraph(dirty) {
     barH = 3 + (((GRAPH_H - 8) * ratio) / 1000 | 0);
     color = ratio > 780 ? COLORS.red : (ratio > 520 ? COLORS.orange : COLORS.green);
     x = graphX + (i * w | 0);
-    screen.drawLine(x, graphBottom, x, graphBottom - barH, color);
+    surface.drawLine(x, graphBottom, x, graphBottom - barH, color);
   }
   rect(dirty, 0, graphY - 15, width, height - graphY + 15);
 }
 
-function flushRects(dirty, fullFlush) {
+function flushRects(dirty, fullFlush, options) {
   var i;
 
   if (fullFlush || typeof screen.flushRect !== "function") {
@@ -487,7 +594,7 @@ function flushRects(dirty, fullFlush) {
     return;
   }
   if (typeof screen.flushRects === "function") {
-    screen.flushRects(dirty);
+    screen.flushRects(dirty, options);
     return;
   }
   for (i = 0; i < dirty.length; i += 1) {
@@ -499,6 +606,9 @@ function publish(nowUs) {
   var wallUs = nowUs - reportLastUs;
   var frames = reportFrames || 1;
   var stats = screen.getPerf ? screen.getPerf() : null;
+  var commandStats = screen.commandBuffer && screen.commandBuffer.stats
+    ? screen.commandBuffer.stats()
+    : null;
 
   latest.fps = wallUs > 0 ? (reportFrames * 1000000) / wallUs : 0;
   latest.frameUs = reportFrameUs / frames;
@@ -515,6 +625,9 @@ function publish(nowUs) {
   latest.pixels = stats ? stats.pixels : 0;
   latest.bytes = stats ? stats.bytes : 0;
   latest.heap = esp32.freeHeap();
+  latest.batch = lastBatch;
+  latest.commandCount = lastBatch && commandStats ? commandStats.count : 0;
+  latest.commandTextBytes = lastBatch && commandStats ? commandStats.textBytes : 0;
   latestShape.bgUs = reportShapeBgUs / frames;
   latestShape.ovalUs = reportShapeOvalUs / frames;
   latestShape.polygonUs = reportShapePolygonUs / frames;
@@ -538,6 +651,8 @@ function publish(nowUs) {
         "chunks=" + latest.chunks,
         "pixels=" + latest.pixels,
         "bytes=" + latest.bytes,
+        "batch=" + (latest.batch ? "cmd" : "direct"),
+        "cmds=" + latest.commandCount,
         "heap=" + latest.heap);
 
   if (activeMode().name === "SHAPE") {
@@ -572,30 +687,63 @@ function drawFrame() {
   var nowUs;
   var dirty = [];
   var mode = activeMode();
+  var partialMode;
+  var drawPartialHudMetrics;
+  var drawOverlay;
+  var batch = null;
+  var surface = screen;
 
   if (PERF.autoCycle !== false && frameStartUs - modeStartUs >= MODE_SECONDS * 1000000) {
     nextMode();
     mode = activeMode();
   }
 
+  partialMode = mode.name === "PART";
+  if (shouldUseBatch(mode) && typeof screen.beginBatch === "function") {
+    batch = screen.beginBatch();
+    if (batch) {
+      surface = batch;
+    }
+  }
+  lastBatch = !!batch;
+  drawOverlay = !partialMode ||
+    forceFullFrame ||
+    (PARTIAL_OVERLAY_MS > 0 && frameStartUs - partialOverlayUs >= PARTIAL_OVERLAY_MS * 1000);
+  drawPartialHudMetrics = partialMode &&
+    !drawOverlay &&
+    PARTIAL_HUD_MS > 0 &&
+    frameStartUs - partialHudUs >= PARTIAL_HUD_MS * 1000;
+
   if (forceFullFrame) {
-    drawBase();
+    drawBase(surface);
   }
-  drawHud(dirty);
+  if (drawOverlay) {
+    drawHud(surface, dirty);
+    partialHudUs = frameStartUs;
+  } else if (drawPartialHudMetrics) {
+    drawPartialHud(surface, dirty);
+    partialHudUs = frameStartUs;
+  }
   if (mode.name === "FULL") {
-    drawFullScene();
+    drawFullScene(surface);
   } else if (mode.name === "PART") {
-    drawPartialScene(dirty);
+    drawPartialScene(surface, dirty, forceFullFrame);
   } else if (mode.name === "SHAPE") {
-    drawShapeScene(dirty);
+    drawShapeScene(surface, dirty);
   } else {
-    drawTextScene(dirty);
+    drawTextScene(surface, dirty);
   }
-  drawGraph(dirty);
+  if (drawOverlay) {
+    drawGraph(surface, dirty);
+    partialOverlayUs = frameStartUs;
+  }
+  if (batch && typeof screen.endBatch === "function") {
+    screen.endBatch(batch);
+  }
   lastDrawUs = esp32.micros() - drawStartUs;
 
   flushStartUs = esp32.micros();
-  flushRects(dirty, forceFullFrame || mode.fullFlush);
+  flushRects(dirty, forceFullFrame || mode.fullFlush, partialMode ? { merge: false } : undefined);
   lastFlushUs = esp32.micros() - flushStartUs;
   lastFrameUs = esp32.micros() - frameStartUs;
   forceFullFrame = false;
@@ -655,6 +803,7 @@ globalThis.displayPerf = {
 
 print("[display:perf] running", width + "x" + height,
       "chunk=" + TRANSFER_BYTES,
+      "batch=" + (USE_BATCH ? "on" : "off"),
       "storage=dma-auto",
       "modes=FULL,PART,SHAPE,TEXT",
       "next=displayPerf.next()",
