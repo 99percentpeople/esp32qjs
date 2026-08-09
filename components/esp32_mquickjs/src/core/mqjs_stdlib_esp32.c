@@ -388,6 +388,7 @@ static const JSPropDef js_esp32[] = {
     JS_CFUNC_DEF("millis", 0, js_esp32_millis),
     JS_CFUNC_DEF("micros", 0, js_esp32_micros),
     JS_CFUNC_DEF("freeHeap", 0, js_esp32_freeHeap),
+    JS_CFUNC_DEF("withTimeout", 2, js_esp32_withTimeout),
     JS_PROP_END,
 };
 

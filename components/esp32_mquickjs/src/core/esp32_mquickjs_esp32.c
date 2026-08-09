@@ -220,3 +220,48 @@ JSValue js_esp32_freeHeap(JSContext *ctx, JSValue *this_val, int argc, JSValue *
     (void)argv;
     return JS_NewUint32(ctx, esp_get_free_heap_size());
 }
+
+JSValue js_esp32_withTimeout(JSContext *ctx,
+                             JSValue *this_val,
+                             int argc,
+                             JSValue *argv)
+{
+    esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
+    uint64_t previous_deadline_us;
+    uint64_t requested_deadline_us;
+    uint64_t effective_deadline_us;
+    int timeout_ms;
+    JSValue result;
+
+    (void)this_val;
+    if (argc < 2 || JS_ToInt32(ctx, &timeout_ms, argv[0]) != 0 ||
+        timeout_ms <= 0 || timeout_ms > 10000) {
+        return JS_ThrowRangeError(ctx,
+                                  "esp32.withTimeout(timeoutMs, callback) expects timeoutMs between 1 and 10000");
+    }
+    if (!JS_IsFunction(ctx, argv[1])) {
+        return JS_ThrowTypeError(ctx,
+                                 "esp32.withTimeout(timeoutMs, callback) expects a callback function");
+    }
+    if (runtime == NULL) {
+        return JS_ThrowInternalError(ctx, "ESP32 runtime is not active");
+    }
+
+    previous_deadline_us = runtime->deadline_us;
+    requested_deadline_us = (uint64_t)esp_timer_get_time() +
+                            ((uint64_t)(uint32_t)timeout_ms * 1000ULL);
+    if (previous_deadline_us == 0 || requested_deadline_us < previous_deadline_us) {
+        runtime->deadline_us = requested_deadline_us;
+    }
+    effective_deadline_us = runtime->deadline_us;
+
+    result = esp32_mquickjs_call(ctx, runtime, argv[1], JS_NULL, 0, NULL);
+    if (JS_IsException(result) && effective_deadline_us > 0 &&
+        (uint64_t)esp_timer_get_time() >= effective_deadline_us) {
+        (void)JS_GetException(ctx);
+        runtime->deadline_us = previous_deadline_us;
+        return JS_ThrowInternalError(ctx, "esp32.withTimeout() deadline exceeded");
+    }
+    runtime->deadline_us = previous_deadline_us;
+    return result;
+}

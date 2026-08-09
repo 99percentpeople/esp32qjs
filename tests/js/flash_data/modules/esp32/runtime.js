@@ -4,6 +4,10 @@ test("esp32/runtime", function () {
   var millisBefore = esp32.millis();
   var microsBefore = esp32.micros();
   var heap = esp32.freeHeap();
+  var scopedResult;
+  var timeoutError = "";
+  var timeoutStarted;
+  var timeoutElapsed;
   var millisAfter;
   var microsAfter;
 
@@ -15,6 +19,21 @@ test("esp32/runtime", function () {
     test.ok(typeof features[name] === "boolean", "info.features." + name + " should be boolean");
     test.equal(features[name], available, "feature " + name + " should match global availability");
   }
+
+  scopedResult = esp32.withTimeout(100, function () {
+    return 42;
+  });
+  timeoutStarted = esp32.millis();
+  try {
+    esp32.withTimeout(10, function () {
+      while (true) {
+        // The scoped native deadline must interrupt this callback.
+      }
+    });
+  } catch (error) {
+    timeoutError = String(error);
+  }
+  timeoutElapsed = esp32.millis() - timeoutStarted;
 
   sleep(5);
   millisAfter = esp32.millis();
@@ -28,6 +47,11 @@ test("esp32/runtime", function () {
   test.ok(typeof info.chip === "string" && info.chip.length > 0, "chip name should be present");
   test.ok(typeof info.freeHeap === "number" && info.freeHeap >= 0, "info.freeHeap should be numeric");
   test.ok(typeof heap === "number" && heap >= 0, "esp32.freeHeap() should be numeric");
+  test.equal(scopedResult, 42, "esp32.withTimeout() should return the callback result");
+  test.ok(timeoutError.indexOf("deadline exceeded") >= 0,
+    "esp32.withTimeout() should report runaway JavaScript as a catchable deadline error");
+  test.ok(timeoutElapsed >= 10 && timeoutElapsed < 200,
+    "esp32.withTimeout() should enforce its scoped deadline");
   test.ok(millisAfter >= millisBefore, "esp32.millis() should be monotonic");
   test.ok(microsAfter >= microsBefore, "esp32.micros() should be monotonic");
 

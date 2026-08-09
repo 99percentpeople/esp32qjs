@@ -1023,6 +1023,11 @@ namespace ESP32QJS {
     millis(): number;
     micros(): number;
     freeHeap(): number;
+    /**
+     * Run a callback under a scoped deadline. Nested calls may only shorten an
+     * already active runtime deadline; they never extend it.
+     */
+    withTimeout<T>(timeoutMs: number, callback: () => T): T;
   }
 
   /**
