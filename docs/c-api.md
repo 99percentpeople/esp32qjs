@@ -1150,8 +1150,10 @@ wifi.async.connect("your-ssid", "your-password", function (status, error) {
 ```
 
 Only complete text messages are accepted in the first version. Binary and
-fragmented WebSocket messages are rejected. Automatic reconnect preserves the
-registered callback until explicit `close()`.
+fragmented WebSocket application messages are rejected. Close, ping, and pong
+control frames are handled by the native client and are not reported as
+application errors. Automatic reconnect preserves the registered callback until
+explicit `close()`.
 
 ## `http` Module
 

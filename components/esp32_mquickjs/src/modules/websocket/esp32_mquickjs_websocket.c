@@ -22,6 +22,10 @@
 #define WEBSOCKET_DEFAULT_NETWORK_TIMEOUT_MS 10000
 #define WEBSOCKET_DEFAULT_SEND_TIMEOUT_MS 1000
 #define WEBSOCKET_DEFAULT_PING_INTERVAL_SEC 10
+#define WEBSOCKET_OPCODE_TEXT 0x1
+#define WEBSOCKET_OPCODE_CLOSE 0x8
+#define WEBSOCKET_OPCODE_PING 0x9
+#define WEBSOCKET_OPCODE_PONG 0xA
 
 typedef enum {
     WEBSOCKET_CALLBACK_OPEN = 1,
@@ -150,7 +154,12 @@ static void websocket_handle_data(const esp_websocket_event_data_t *data)
     if (data == NULL || s_websocket_state.closing) {
         return;
     }
-    if (data->op_code != 0x1) {
+    if (data->op_code == WEBSOCKET_OPCODE_CLOSE ||
+        data->op_code == WEBSOCKET_OPCODE_PING ||
+        data->op_code == WEBSOCKET_OPCODE_PONG) {
+        return;
+    }
+    if (data->op_code != WEBSOCKET_OPCODE_TEXT) {
         if (data->payload_offset == 0) {
             websocket_enqueue_error("only complete WebSocket text messages are supported",
                                     data->op_code);

@@ -1,7 +1,6 @@
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 MQUICKJS = ROOT / "components" / "esp32_mquickjs"
 
@@ -28,6 +27,22 @@ class TransportArchitectureTests(unittest.TestCase):
         self.assertIn("espressif/esp_websocket_client", manifest)
         self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET", cmake)
         self.assertIn("src/modules/websocket/esp32_mquickjs_websocket.c", cmake)
+
+    def test_websocket_control_frames_are_not_application_errors(self):
+        source = (
+            MQUICKJS / "src" / "modules" / "websocket" / "esp32_mquickjs_websocket.c"
+        ).read_text(encoding="utf-8")
+
+        control_check = """if (data->op_code == WEBSOCKET_OPCODE_CLOSE ||
+        data->op_code == WEBSOCKET_OPCODE_PING ||
+        data->op_code == WEBSOCKET_OPCODE_PONG) {
+        return;
+    }"""
+        self.assertIn(control_check, source)
+        self.assertLess(
+            source.index(control_check),
+            source.index('websocket_enqueue_error("only complete WebSocket text'),
+        )
 
     def test_transport_callbacks_use_the_guarded_call_gateway(self):
         sources = (
