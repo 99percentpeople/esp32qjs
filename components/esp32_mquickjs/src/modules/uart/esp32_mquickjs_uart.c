@@ -4,6 +4,7 @@
 
 #include "utils/esp32_mquickjs_byte_source.h"
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_future.h"
 
 #include <limits.h>
 #include <stdbool.h>
@@ -36,10 +37,14 @@ typedef struct {
     uint32_t rx_buffer_size;
     uint32_t tx_buffer_size;
     uint32_t timeout_ms;
+    bool busy;
 } esp32_mquickjs_uart_slot_t;
 
 static esp32_mquickjs_uart_slot_t s_uart_slots[SOC_UART_NUM];
 static uint32_t s_uart_next_generation = 1;
+
+static bool uart_register_future_drivers(JSContext *ctx,
+                                         esp32_mquickjs_runtime_t *runtime);
 
 static bool js_value_to_i32(JSContext *ctx, JSValue value, int32_t *out_value)
 {
@@ -458,11 +463,6 @@ static int uart_get_bound_slot(JSContext *ctx,
     return 0;
 }
 
-static TickType_t uart_timeout_ticks(uint32_t timeout_ms)
-{
-    return pdMS_TO_TICKS(timeout_ms);
-}
-
 static JSValue uart_write_bytes_from_source(JSContext *ctx,
                                             const esp32_mquickjs_uart_slot_t *slot,
                                             const uint8_t *data,
@@ -624,38 +624,6 @@ static JSValue uart_write_span_source(JSContext *ctx,
                                  chunks,
                                  bytes,
                                  (uint64_t)(esp_timer_get_time() - total_start));
-}
-
-static JSValue uart_read(JSContext *ctx,
-                         const esp32_mquickjs_uart_slot_t *slot,
-                         uint32_t length,
-                         uint32_t timeout_ms)
-{
-    uint8_t *bytes = NULL;
-    int read_len;
-    JSValue result;
-
-    if (length == 0) {
-        return JS_NewArray(ctx, 0);
-    }
-
-    bytes = heap_caps_malloc(length, MALLOC_CAP_8BIT);
-    if (bytes == NULL) {
-        return JS_ThrowOutOfMemory(ctx);
-    }
-
-    read_len = uart_read_bytes((uart_port_t)slot->port_id,
-                               bytes,
-                               length,
-                               uart_timeout_ticks(timeout_ms));
-    if (read_len < 0) {
-        heap_caps_free(bytes);
-        return JS_ThrowInternalError(ctx, "UARTPort.read() failed");
-    }
-
-    result = uart_bytes_to_array(ctx, bytes, (size_t)read_len);
-    heap_caps_free(bytes);
-    return result;
 }
 
 static JSValue uart_open(JSContext *ctx, int argc, JSValue *argv)
@@ -880,9 +848,11 @@ void esp32_mquickjs_deinit_uart_runtime(void)
     uart_reset_slots();
 }
 
-void esp32_mquickjs_init_uart_runtime(void)
+bool esp32_mquickjs_init_uart_runtime(JSContext *ctx,
+                                      esp32_mquickjs_runtime_t *runtime)
 {
     esp32_mquickjs_deinit_uart_runtime();
+    return uart_register_future_drivers(ctx, runtime);
 }
 
 JSValue js_uart_port_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -925,6 +895,10 @@ JSValue js_uart_port_close(JSContext *ctx, JSValue *this_val, int argc, JSValue 
     }
     slot = uart_get_slot(&port_ref);
     if (slot != NULL) {
+        if (slot->busy) {
+            return JS_ThrowInternalError(ctx,
+                                         "UARTPort.close() refused while an operation is pending");
+        }
         uart_cleanup_slot(slot);
     }
     port_ref_ptr = JS_GetOpaque(ctx, *this_val);
@@ -991,24 +965,381 @@ JSValue js_uart_port_write_source(JSContext *ctx, JSValue *this_val, int argc, J
     return uart_write_span_source(ctx, slot, argv[0]);
 }
 
+typedef enum {
+    UART_FUTURE_READ,
+    UART_FUTURE_FLUSH,
+} uart_future_kind_t;
+
+struct esp32_mquickjs_future_driver_state {
+    uart_future_kind_t kind;
+    JSContext *ctx;
+    JSGCRef owner_ref;
+    esp32_mquickjs_uart_port_ref_t port_ref;
+    esp32_mquickjs_runtime_t *runtime;
+    esp32_mquickjs_future_token_t token;
+    esp_timer_handle_t poll_timer;
+    uint64_t deadline_us;
+    uint32_t timeout_ms;
+    uint32_t length;
+    uint8_t *data;
+    int read_length;
+    esp_err_t err;
+    bool owner_retained;
+    bool started;
+    bool completed;
+    bool cancelled;
+};
+
+static esp32_mquickjs_future_driver_state_t *uart_future_allocate(
+    JSContext *ctx,
+    JSValue this_value,
+    uart_future_kind_t kind)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+    esp32_mquickjs_uart_slot_t *slot = NULL;
+    JSValue *owner;
+
+    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    if (state == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        return NULL;
+    }
+    if (uart_get_bound_slot(ctx, this_value, "UART Future operation",
+                            &state->port_ref, &slot) != 0) {
+        heap_caps_free(state);
+        return NULL;
+    }
+    if (slot->busy) {
+        heap_caps_free(state);
+        JS_ThrowInternalError(ctx, "UART port is busy");
+        return NULL;
+    }
+    state->kind = kind;
+    state->ctx = ctx;
+    state->timeout_ms = slot->timeout_ms;
+    owner = JS_AddGCRef(ctx, &state->owner_ref);
+    *owner = this_value;
+    state->owner_retained = true;
+    return state;
+}
+
+static void uart_future_release(esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL) {
+        return;
+    }
+    if (state->poll_timer != NULL) {
+        (void)esp_timer_stop(state->poll_timer);
+        (void)esp_timer_delete(state->poll_timer);
+    }
+    if (state->owner_retained) {
+        JS_DeleteGCRef(state->ctx, &state->owner_ref);
+    }
+    heap_caps_free(state->data);
+    heap_caps_free(state);
+}
+
+static bool uart_read_future_prepare(
+    JSContext *ctx,
+    JSGCRef *this_ref,
+    int argc,
+    JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+
+    if (out_state == NULL || argc < 1 || argc > 2) {
+        JS_ThrowTypeError(ctx,
+                          "UARTPort.read(length, timeoutMs?) expects a byte length");
+        return false;
+    }
+    state = uart_future_allocate(ctx, this_ref->val, UART_FUTURE_READ);
+    if (state == NULL) {
+        return false;
+    }
+    if (!js_value_to_u32(ctx, argv[0].val, &state->length) ||
+        (argc >= 2 && !JS_IsUndefined(argv[1].val) &&
+         !js_value_to_u32(ctx, argv[1].val, &state->timeout_ms))) {
+        uart_future_release(state);
+        JS_ThrowTypeError(ctx,
+                          "UARTPort.read(length, timeoutMs?) expects non-negative integers");
+        return false;
+    }
+    if (state->length > 0) {
+        state->data = heap_caps_malloc(state->length, MALLOC_CAP_8BIT);
+        if (state->data == NULL) {
+            uart_future_release(state);
+            JS_ThrowOutOfMemory(ctx);
+            return false;
+        }
+    }
+    *out_state = state;
+    return true;
+}
+
+static bool uart_flush_future_prepare(
+    JSContext *ctx,
+    JSGCRef *this_ref,
+    int argc,
+    JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+
+    if (out_state == NULL || argc > 1) {
+        JS_ThrowTypeError(ctx, "UARTPort.flush(timeoutMs?) expected");
+        return false;
+    }
+    state = uart_future_allocate(ctx, this_ref->val, UART_FUTURE_FLUSH);
+    if (state == NULL) {
+        return false;
+    }
+    if (argc == 1 && !JS_IsUndefined(argv[0].val) &&
+        !js_value_to_u32(ctx, argv[0].val, &state->timeout_ms)) {
+        uart_future_release(state);
+        JS_ThrowTypeError(ctx,
+                          "UARTPort.flush(timeoutMs?) expects timeoutMs to be non-negative");
+        return false;
+    }
+    *out_state = state;
+    return true;
+}
+
+static void uart_future_step(esp32_mquickjs_future_driver_state_t *state)
+{
+    esp32_mquickjs_uart_slot_t *slot;
+
+    if (state == NULL || state->completed || state->cancelled) {
+        return;
+    }
+    slot = uart_get_slot(&state->port_ref);
+    if (slot == NULL) {
+        state->err = ESP_ERR_INVALID_STATE;
+        state->completed = true;
+        return;
+    }
+    if (state->kind == UART_FUTURE_READ) {
+        size_t available = 0;
+
+        state->err = uart_get_buffered_data_len((uart_port_t)slot->port_id,
+                                                &available);
+        if (state->err != ESP_OK) {
+            state->completed = true;
+        } else if (state->length == 0 || available > 0) {
+            size_t wanted = available < state->length ? available : state->length;
+
+            state->read_length = wanted == 0 ? 0 : uart_read_bytes(
+                (uart_port_t)slot->port_id,
+                state->data,
+                wanted,
+                0);
+            if (state->read_length < 0) {
+                state->err = ESP_FAIL;
+            }
+            state->completed = true;
+        }
+    } else {
+        state->err = uart_wait_tx_done((uart_port_t)slot->port_id, 0);
+        if (state->err == ESP_OK) {
+            state->completed = true;
+        } else if (state->err == ESP_ERR_TIMEOUT) {
+            state->err = ESP_OK;
+        } else {
+            state->completed = true;
+        }
+    }
+    if (!state->completed && (state->timeout_ms == 0 ||
+        (state->deadline_us > 0 &&
+         (uint64_t)esp_timer_get_time() >= state->deadline_us))) {
+        if (state->kind == UART_FUTURE_READ) {
+            state->read_length = 0;
+            state->err = ESP_OK;
+        } else {
+            state->err = ESP_ERR_TIMEOUT;
+        }
+        state->completed = true;
+    }
+}
+
+static void uart_future_timer(void *opaque)
+{
+    esp32_mquickjs_future_driver_state_t *state = opaque;
+
+    if (state != NULL && !state->completed) {
+        (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+    }
+}
+
+static bool uart_future_start(JSContext *ctx,
+                              esp32_mquickjs_runtime_t *runtime,
+                              esp32_mquickjs_future_token_t token,
+                              esp32_mquickjs_future_driver_state_t *state)
+{
+    esp32_mquickjs_uart_slot_t *slot = state != NULL
+        ? uart_get_slot(&state->port_ref) : NULL;
+    esp_timer_create_args_t timer_args = {
+        .callback = uart_future_timer,
+        .arg = state,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "mqjs_uart",
+        .skip_unhandled_events = true,
+    };
+
+    if (state == NULL || slot == NULL) {
+        JS_ThrowReferenceError(ctx, "UART port closed before operation start");
+        return false;
+    }
+    if (slot->busy) {
+        JS_ThrowInternalError(ctx, "UART port is busy");
+        return false;
+    }
+    slot->busy = true;
+    state->runtime = runtime;
+    state->token = token;
+    state->started = true;
+    if (state->timeout_ms > 0) {
+        state->deadline_us = (uint64_t)esp_timer_get_time() +
+                             (uint64_t)state->timeout_ms * 1000ULL;
+    }
+    uart_future_step(state);
+    if (!state->completed &&
+        (esp_timer_create(&timer_args, &state->poll_timer) != ESP_OK ||
+         esp_timer_start_periodic(state->poll_timer, 10000U) != ESP_OK)) {
+        JS_ThrowInternalError(ctx, "failed to start UART readiness poller");
+        return false;
+    }
+    (void)esp32_mquickjs_future_wake(runtime, token);
+    return true;
+}
+
+static esp32_mquickjs_future_poll_t uart_future_poll(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    uart_future_step(state);
+    return state != NULL && state->completed
+        ? ESP32_MQUICKJS_FUTURE_READY
+        : ESP32_MQUICKJS_FUTURE_PENDING;
+}
+
+static JSValue uart_future_finish(JSContext *ctx,
+                                  esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || state->cancelled) {
+        return JS_ThrowInternalError(ctx, "UART operation cancelled");
+    }
+    if (state->err != ESP_OK) {
+        return uart_throw_error(ctx, state->err,
+                                state->kind == UART_FUTURE_READ
+                                    ? "UARTPort.read() failed"
+                                    : "UARTPort.flush() failed");
+    }
+    return state->kind == UART_FUTURE_READ
+        ? uart_bytes_to_array(ctx, state->data, (size_t)state->read_length)
+        : JS_TRUE;
+}
+
+static bool uart_future_cancel(esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || state->completed || state->cancelled) {
+        return false;
+    }
+    state->cancelled = true;
+    state->completed = true;
+    if (state->runtime != NULL) {
+        (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+    }
+    return true;
+}
+
+static void uart_future_destroy(esp32_mquickjs_future_driver_state_t *state)
+{
+    esp32_mquickjs_uart_slot_t *slot = state != NULL
+        ? uart_get_slot(&state->port_ref) : NULL;
+
+    if (slot != NULL && state->started) {
+        slot->busy = false;
+    }
+    uart_future_release(state);
+}
+
+static const esp32_mquickjs_future_driver_t s_uart_read_driver = {
+    .prepare = uart_read_future_prepare,
+    .start = uart_future_start,
+    .poll = uart_future_poll,
+    .finish = uart_future_finish,
+    .cancel = uart_future_cancel,
+    .destroy = uart_future_destroy,
+};
+
+static const esp32_mquickjs_future_driver_t s_uart_flush_driver = {
+    .prepare = uart_flush_future_prepare,
+    .start = uart_future_start,
+    .poll = uart_future_poll,
+    .finish = uart_future_finish,
+    .cancel = uart_future_cancel,
+    .destroy = uart_future_destroy,
+};
+
+static JSValue uart_future_call_and_wait(JSContext *ctx,
+                                         JSValue receiver,
+                                         const char *method_name,
+                                         int argc,
+                                         JSValue *argv)
+{
+    JSGCRef receiver_ref;
+    JSGCRef method_ref;
+    JSValue *rooted_receiver = JS_PushGCRef(ctx, &receiver_ref);
+    JSValue *method = JS_PushGCRef(ctx, &method_ref);
+    JSValue result;
+
+    *rooted_receiver = receiver;
+    *method = JS_GetPropertyStr(ctx, *rooted_receiver, method_name);
+    result = JS_IsException(*method)
+        ? JS_EXCEPTION
+        : esp32_mquickjs_future_call_and_wait(ctx,
+                                              esp32_mquickjs_get_active_runtime(),
+                                              *method,
+                                              *rooted_receiver,
+                                              argc,
+                                              argv);
+    JS_PopGCRef(ctx, &method_ref);
+    JS_PopGCRef(ctx, &receiver_ref);
+    return result;
+}
+
+static bool uart_register_future_drivers(JSContext *ctx,
+                                         esp32_mquickjs_runtime_t *runtime)
+{
+    JSGCRef object_ref;
+    JSGCRef read_ref;
+    JSGCRef flush_ref;
+    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    JSValue *read_fn = JS_PushGCRef(ctx, &read_ref);
+    JSValue *flush_fn = JS_PushGCRef(ctx, &flush_ref);
+    bool result;
+
+    *object = JS_NewObjectClassUser(ctx, JS_CLASS_UART_PORT);
+    *read_fn = JS_IsException(*object)
+        ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *object, "read");
+    *flush_fn = JS_IsException(*object)
+        ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *object, "flush");
+    result = !JS_IsException(*read_fn) && !JS_IsException(*flush_fn) &&
+             esp32_mquickjs_future_register_driver(ctx, runtime,
+                                                   *read_fn, &s_uart_read_driver) &&
+             esp32_mquickjs_future_register_driver(ctx, runtime,
+                                                   *flush_fn, &s_uart_flush_driver);
+    if (!result && !JS_IsException(*object)) {
+        JS_ThrowInternalError(ctx, "failed to register UART Future drivers");
+    }
+    JS_PopGCRef(ctx, &flush_ref);
+    JS_PopGCRef(ctx, &read_ref);
+    JS_PopGCRef(ctx, &object_ref);
+    return result;
+}
+
 JSValue js_uart_port_read(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_uart_port_ref_t port_ref;
-    esp32_mquickjs_uart_slot_t *slot = NULL;
-    uint32_t length = 0;
-    uint32_t timeout_ms;
-
-    if (uart_get_bound_slot(ctx, *this_val, "UARTPort.read()", &port_ref, &slot) != 0) {
-        return JS_EXCEPTION;
-    }
-    if (argc < 1 || !js_value_to_u32(ctx, argv[0], &length)) {
-        return JS_ThrowTypeError(ctx, "UARTPort.read(length, timeoutMs?) expects a byte length");
-    }
-    timeout_ms = slot->timeout_ms;
-    if (argc >= 2 && !JS_IsUndefined(argv[1]) && !js_value_to_u32(ctx, argv[1], &timeout_ms)) {
-        return JS_ThrowTypeError(ctx, "UARTPort.read(length, timeoutMs?) expects timeoutMs to be non-negative");
-    }
-    return uart_read(ctx, slot, length, timeout_ms);
+    return uart_future_call_and_wait(ctx, *this_val, "read", argc, argv);
 }
 
 JSValue js_uart_port_available(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -1033,23 +1364,7 @@ JSValue js_uart_port_available(JSContext *ctx, JSValue *this_val, int argc, JSVa
 
 JSValue js_uart_port_flush(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_uart_port_ref_t port_ref;
-    esp32_mquickjs_uart_slot_t *slot = NULL;
-    uint32_t timeout_ms;
-    esp_err_t err;
-
-    if (uart_get_bound_slot(ctx, *this_val, "UARTPort.flush()", &port_ref, &slot) != 0) {
-        return JS_EXCEPTION;
-    }
-    timeout_ms = slot->timeout_ms;
-    if (argc >= 1 && !JS_IsUndefined(argv[0]) && !js_value_to_u32(ctx, argv[0], &timeout_ms)) {
-        return JS_ThrowTypeError(ctx, "UARTPort.flush(timeoutMs?) expects timeoutMs to be non-negative");
-    }
-    err = uart_wait_tx_done((uart_port_t)slot->port_id, uart_timeout_ticks(timeout_ms));
-    if (err != ESP_OK) {
-        return uart_throw_error(ctx, err, "UARTPort.flush() failed");
-    }
-    return JS_TRUE;
+    return uart_future_call_and_wait(ctx, *this_val, "flush", argc, argv);
 }
 
 JSValue js_uart_port_clear_rx(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

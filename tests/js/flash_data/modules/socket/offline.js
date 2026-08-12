@@ -3,15 +3,15 @@ test("socket/offline", function () {
   var udpId = socket.open("udp", 0);
   var tcpStatus = socket.status(tcpId);
   var udpStatus = socket.status(udpId);
-  var maxMessageBytes = socket.get_max_message_bytes(tcpId);
+  var maxTransferBytes = socket.MAX_TRANSFER_BYTES;
   var invalidProtocol = "";
 
   test.equal(tcpStatus.protocol, "tcp", "TCP handle should report its protocol");
   test.equal(udpStatus.protocol, "udp", "UDP handle should report its protocol");
   test.ok(!tcpStatus.connected && !tcpStatus.listening,
     "new TCP handle should be inactive");
-  test.ok(maxMessageBytes >= 256,
-    "socket receive limit should be exposed per handle");
+  test.ok(maxTransferBytes >= 256,
+    "socket transfer limit should be exposed");
   test.equal(socket.tcp.recv(tcpId, 64, 0), null,
     "inactive TCP recv should be non-blocking");
   test.equal(socket.udp.recvfrom(udpId, 64, 0), null,
@@ -31,6 +31,6 @@ test("socket/offline", function () {
   test.ok(socket.close(udpId), "UDP handle should close");
 
   return {
-    maxMessageBytes: maxMessageBytes
+    maxTransferBytes: maxTransferBytes
   };
 });

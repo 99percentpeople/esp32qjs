@@ -11,7 +11,7 @@ void esp32_mquickjs_deinit_socket_runtime(JSContext *ctx);
 JSValue js_socket_open(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_socket_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_socket_status(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
-JSValue js_socket_get_max_message_bytes(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_socket_get_max_transfer_bytes(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_socket_tcp_connect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_socket_tcp_listen(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_socket_tcp_accept(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

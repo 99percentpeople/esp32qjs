@@ -114,7 +114,6 @@ test("sys/runtime", function () {
   expectFeature("wifi", hasObject("wifi"));
   expectFeature("http", hasObject("http") && typeof globalThis.fetch === "function");
   expectFeature("httpServer", hasObject("http") && typeof globalThis.http.server === "function");
-  expectFeature("staticFileHandler", typeof globalThis.staticFileHandler === "function");
   test.equal(hasObject("http"), features.http || features.httpServer,
     "http namespace should exist when either client or server support is enabled");
 

@@ -1,71 +1,38 @@
 test("websocket/network", function () {
   var cfg = test.requireConfig("wifiSsid", "wifiPassword", "websocketUrl");
   var wifiStatus = wifi.status();
-  var phaseResolve = null;
-  var phaseReject = null;
-  var opened = false;
+  var client;
+  var event;
   var echoed = "";
   var payload = "esp32qjs-websocket-echo";
 
   if (!wifiStatus.connected) {
-    wifiStatus = waitFor(function (resolve, reject) {
-      wifi.async.connect(cfg.wifiSsid, cfg.wifiPassword, 15000,
-        function (nextStatus, error) {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve(nextStatus);
-        });
-    }, 20000);
+    wifiStatus = Future.call(wifi.connect, wifi,
+      [cfg.wifiSsid, cfg.wifiPassword, 15000]).wait(20000);
   }
   test.ok(wifiStatus.connected,
     "Wi-Fi should be connected before WebSocket test");
 
   try {
-    opened = waitFor(function (resolve, reject) {
-      phaseResolve = resolve;
-      phaseReject = reject;
-      websocketClient.open({
-        url: cfg.websocketUrl,
-        autoReconnect: false,
-        networkTimeoutMs: 10000,
-        pingIntervalSec: 5,
-        maxMessageBytes: 4096
-      }, function (event) {
-        var callback;
-
-        if (event.type === "open" && phaseResolve) {
-          callback = phaseResolve;
-          phaseResolve = null;
-          phaseReject = null;
-          callback(true);
-        } else if (event.type === "message" && phaseResolve) {
-          callback = phaseResolve;
-          phaseResolve = null;
-          phaseReject = null;
-          callback(event.data);
-        } else if ((event.type === "error" || event.type === "close") && phaseReject) {
-          callback = phaseReject;
-          phaseResolve = null;
-          phaseReject = null;
-          callback(event.message || event.type);
-        }
-      });
-    }, 20000);
-    test.ok(opened && websocketClient.status().connected,
+    client = websocketClient.open({
+      url: cfg.websocketUrl,
+      autoReconnect: false,
+      networkTimeoutMs: 10000,
+      pingIntervalSec: 5,
+      maxMessageBytes: 4096
+    });
+    event = client.recv(20000);
+    test.equal(event.type, "open", "WebSocket client should emit open");
+    test.ok(websocketClient.status().connected,
       "WebSocket client should connect");
 
-    echoed = waitFor(function (resolve, reject) {
-      phaseResolve = resolve;
-      phaseReject = reject;
-      websocketClient.send(payload);
-    }, 10000);
+    client.send(payload);
+    event = client.recv(10000);
+    if (event && event.type === "message") echoed = event.data;
     test.equal(echoed, payload,
       "WebSocket server should echo the complete text frame");
   } finally {
-    phaseResolve = null;
-    phaseReject = null;
+    if (client) client.close();
     websocketClient.close();
     wifi.disconnect();
   }

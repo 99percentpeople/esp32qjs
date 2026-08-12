@@ -5,6 +5,7 @@
 #include "esp32_mquickjs_fs.h"
 
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_future.h"
 #include "utils/esp32_mquickjs_fs_path.h"
 #include "esp32_mquickjs_stream.h"
 
@@ -19,10 +20,13 @@
 #include "esp_heap_caps.h"
 #include "esp_littlefs.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "esp32qjs";
 
 static bool s_littlefs_mounted;
+static SemaphoreHandle_t s_fs_worker_lock;
 
 static const char *active_fs_base_path(void)
 {
@@ -95,10 +99,11 @@ static uint8_t *load_script_file(const char *path, size_t *out_len)
     return buf;
 }
 
-static JSValue fs_throw_errno(JSContext *ctx, const char *action, const char *path)
+static JSValue fs_throw_error(JSContext *ctx,
+                              const char *action,
+                              const char *path,
+                              int err)
 {
-    int err = errno;
-
     if (err == ENOENT) {
         return JS_ThrowReferenceError(ctx, "%s failed for %s (%s)", action, path, strerror(err));
     }
@@ -162,121 +167,6 @@ static JSValue fs_make_stat_object(JSContext *ctx, const char *path, const struc
 fail:
     JS_PopGCRef(ctx, &entry_ref);
     return JS_EXCEPTION;
-}
-
-static JSValue js_fs_stat_path(JSContext *ctx, const char *path)
-{
-    struct stat st;
-
-    if (stat(path, &st) != 0) {
-        return fs_throw_errno(ctx, "stat()", path);
-    }
-
-    return fs_make_stat_object(ctx, path, &st);
-}
-
-static JSValue js_fs_list_path(JSContext *ctx, const char *path)
-{
-    DIR *dir = NULL;
-    struct dirent *entry_raw;
-    JSGCRef entries_ref;
-    JSValue *entries;
-    uint32_t index = 0;
-
-    entries = JS_PushGCRef(ctx, &entries_ref);
-    *entries = JS_NewArray(ctx, 0);
-    if (JS_IsException(*entries)) {
-        goto fail;
-    }
-
-    dir = opendir(path);
-    if (dir == NULL) {
-        JS_PopGCRef(ctx, &entries_ref);
-        return fs_throw_errno(ctx, "list()", path);
-    }
-
-    while ((entry_raw = readdir(dir)) != NULL) {
-        char entry_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
-        struct stat st;
-        JSGCRef entry_ref;
-        JSValue *entry;
-        int needed;
-
-        if (strcmp(entry_raw->d_name, ".") == 0 || strcmp(entry_raw->d_name, "..") == 0) {
-            continue;
-        }
-
-        needed = snprintf(entry_path, sizeof(entry_path), "%s/%s", path, entry_raw->d_name);
-        if (needed <= 0 || (size_t)needed >= sizeof(entry_path)) {
-            JS_ThrowInternalError(ctx, "path too long while listing %s", path);
-            goto fail;
-        }
-        if (stat(entry_path, &st) != 0) {
-            fs_throw_errno(ctx, "stat()", entry_path);
-            goto fail;
-        }
-
-        entry = JS_PushGCRef(ctx, &entry_ref);
-        *entry = fs_make_stat_object(ctx, entry_path, &st);
-        if (JS_IsException(*entry) ||
-            JS_IsException(JS_SetPropertyUint32(ctx, *entries, index++, *entry))) {
-            JS_PopGCRef(ctx, &entry_ref);
-            goto fail;
-        }
-        JS_PopGCRef(ctx, &entry_ref);
-    }
-
-    closedir(dir);
-    return JS_PopGCRef(ctx, &entries_ref);
-
-fail:
-    if (dir != NULL) {
-        closedir(dir);
-    }
-    JS_PopGCRef(ctx, &entries_ref);
-    return JS_EXCEPTION;
-}
-
-static JSValue js_fs_read_text_path(JSContext *ctx, const char *path)
-{
-    size_t source_len = 0;
-    uint8_t *source = load_script_file(path, &source_len);
-    JSValue result;
-
-    if (source == NULL) {
-        return fs_throw_errno(ctx, "readText()", path);
-    }
-
-    result = JS_NewStringLen(ctx, (const char *)source, source_len);
-    heap_caps_free(source);
-    return result;
-}
-
-static JSValue js_fs_write_text_path(JSContext *ctx, const char *path, JSValue text_value, bool append)
-{
-    JSCStringBuf text_buf;
-    const char *text;
-    size_t text_len = 0;
-    FILE *file;
-    size_t written;
-
-    if (!JS_IsString(ctx, text_value)) {
-        return JS_ThrowTypeError(ctx, "%s expects a text string",
-                                 append ? "fs.appendText(path, text)" : "fs.writeText(path, text)");
-    }
-
-    text = JS_ToCStringLen(ctx, &text_len, text_value, &text_buf);
-    file = fopen(path, append ? "ab" : "wb");
-    if (file == NULL) {
-        return fs_throw_errno(ctx, append ? "appendText()" : "writeText()", path);
-    }
-
-    written = fwrite(text, 1, text_len, file);
-    if (fclose(file) != 0 || written != text_len) {
-        return fs_throw_errno(ctx, append ? "appendText()" : "writeText()", path);
-    }
-
-    return JS_NewInt64(ctx, (int64_t)written);
 }
 
 bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed)
@@ -520,163 +410,459 @@ JSValue js_fs_open(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     }
 }
 
-JSValue js_fs_list(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
+#define ESP32_MQUICKJS_FS_FUTURE_MAX_ENTRIES 64U
+
+typedef enum {
+    FS_FUTURE_LIST,
+    FS_FUTURE_STAT,
+    FS_FUTURE_EXISTS,
+    FS_FUTURE_READ_TEXT,
+    FS_FUTURE_WRITE_TEXT,
+    FS_FUTURE_APPEND_TEXT,
+    FS_FUTURE_REMOVE,
+    FS_FUTURE_RENAME,
+    FS_FUTURE_MKDIR,
+} fs_future_kind_t;
+
+typedef struct {
     char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+    struct stat stat_value;
+} fs_future_entry_t;
 
-    (void)this_val;
-
-    if (argc == 0) {
-        return js_fs_list_path(ctx, active_fs_base_path());
-    }
-    if (js_value_to_fs_path(ctx, argv[0], "fs.list(path)", path, sizeof(path)) != 0) {
-        return JS_EXCEPTION;
-    }
-    return js_fs_list_path(ctx, path);
-}
-
-JSValue js_fs_stat(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
+struct esp32_mquickjs_future_driver_state {
+    fs_future_kind_t kind;
+    esp32_mquickjs_runtime_t *runtime;
+    esp32_mquickjs_future_token_t token;
     char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
-
-    (void)this_val;
-
-    if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "fs.stat(path) expects a path");
-    }
-    if (js_value_to_fs_path(ctx, argv[0], "fs.stat(path)", path, sizeof(path)) != 0) {
-        return JS_EXCEPTION;
-    }
-    return js_fs_stat_path(ctx, path);
-}
-
-JSValue js_fs_exists(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
-    struct stat st;
-
-    (void)this_val;
-
-    if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "fs.exists(path) expects a path");
-    }
-    if (js_value_to_fs_path(ctx, argv[0], "fs.exists(path)", path, sizeof(path)) != 0) {
-        return JS_EXCEPTION;
-    }
-    return JS_NewBool(stat(path, &st) == 0);
-}
-
-JSValue js_fs_readText(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
-
-    (void)this_val;
-
-    if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "fs.readText(path) expects a path");
-    }
-    if (js_value_to_fs_path(ctx, argv[0], "fs.readText(path)", path, sizeof(path)) != 0) {
-        return JS_EXCEPTION;
-    }
-    return js_fs_read_text_path(ctx, path);
-}
-
-JSValue js_fs_writeText(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
-
-    (void)this_val;
-
-    if (argc < 2) {
-        return JS_ThrowTypeError(ctx, "fs.writeText(path, text) expects a path and text");
-    }
-    if (js_value_to_fs_path(ctx, argv[0], "fs.writeText(path, text)", path, sizeof(path)) != 0) {
-        return JS_EXCEPTION;
-    }
-    return js_fs_write_text_path(ctx, path, argv[1], false);
-}
-
-JSValue js_fs_appendText(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
-
-    (void)this_val;
-
-    if (argc < 2) {
-        return JS_ThrowTypeError(ctx, "fs.appendText(path, text) expects a path and text");
-    }
-    if (js_value_to_fs_path(ctx, argv[0], "fs.appendText(path, text)", path, sizeof(path)) != 0) {
-        return JS_EXCEPTION;
-    }
-    return js_fs_write_text_path(ctx, path, argv[1], true);
-}
-
-JSValue js_fs_remove(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
-    struct stat st;
-
-    (void)this_val;
-
-    if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "fs.remove(path) expects a path");
-    }
-    if (js_value_to_fs_path(ctx, argv[0], "fs.remove(path)", path, sizeof(path)) != 0) {
-        return JS_EXCEPTION;
-    }
-    if (stat(path, &st) != 0) {
-        return fs_throw_errno(ctx, "remove()", path);
-    }
-    if ((S_ISDIR(st.st_mode) ? rmdir(path) : remove(path)) != 0) {
-        return fs_throw_errno(ctx, "remove()", path);
-    }
-    return JS_NewBool(true);
-}
-
-JSValue js_fs_rename(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    char from_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
     char to_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+    char *data;
+    size_t data_length;
+    struct stat stat_value;
+    fs_future_entry_t *entries;
+    size_t entry_count;
+    int error_number;
+    bool result;
+    volatile bool completed;
+    bool cancelled;
+};
 
-    (void)this_val;
-
-    if (argc < 2) {
-        return JS_ThrowTypeError(ctx, "fs.rename(fromPath, toPath) expects two paths");
-    }
-    if (js_value_to_fs_path(ctx,
-                                  argv[0],
-                                  "fs.rename(fromPath, toPath)",
-                                  from_path,
-                                  sizeof(from_path)) != 0 ||
-        js_value_to_fs_path(ctx,
-                                  argv[1],
-                                  "fs.rename(fromPath, toPath)",
-                                  to_path,
-                                  sizeof(to_path)) != 0) {
-        return JS_EXCEPTION;
-    }
-    if (rename(from_path, to_path) != 0) {
-        return fs_throw_errno(ctx, "rename()", from_path);
-    }
-    return JS_NewBool(true);
-}
-
-JSValue js_fs_mkdir(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+static void fs_future_release(esp32_mquickjs_future_driver_state_t *state)
 {
-    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
-
-    (void)this_val;
-
-    if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "fs.mkdir(path) expects a path");
+    if (state == NULL) {
+        return;
     }
-    if (js_value_to_fs_path(ctx, argv[0], "fs.mkdir(path)", path, sizeof(path)) != 0) {
-        return JS_EXCEPTION;
-    }
-    if (mkdir(path, 0777) != 0) {
-        return fs_throw_errno(ctx, "mkdir()", path);
-    }
-    return JS_NewBool(true);
+    heap_caps_free(state->data);
+    heap_caps_free(state->entries);
+    heap_caps_free(state);
 }
+
+static bool fs_future_prepare_common(
+    JSContext *ctx,
+    fs_future_kind_t kind,
+    int argc,
+    JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+    const char *api_name;
+
+    if (out_state == NULL) {
+        return false;
+    }
+    api_name = kind == FS_FUTURE_LIST ? "fs.list(path?)" :
+               kind == FS_FUTURE_STAT ? "fs.stat(path)" :
+               kind == FS_FUTURE_EXISTS ? "fs.exists(path)" :
+               kind == FS_FUTURE_READ_TEXT ? "fs.readText(path)" :
+               kind == FS_FUTURE_WRITE_TEXT ? "fs.writeText(path, text)" :
+               kind == FS_FUTURE_APPEND_TEXT ? "fs.appendText(path, text)" :
+               kind == FS_FUTURE_REMOVE ? "fs.remove(path)" :
+               kind == FS_FUTURE_RENAME ? "fs.rename(fromPath, toPath)" :
+               "fs.mkdir(path)";
+    if ((kind == FS_FUTURE_LIST && argc > 1) ||
+        (kind != FS_FUTURE_LIST && kind != FS_FUTURE_RENAME &&
+         kind != FS_FUTURE_WRITE_TEXT && kind != FS_FUTURE_APPEND_TEXT && argc != 1) ||
+        (kind == FS_FUTURE_RENAME && argc != 2) ||
+        ((kind == FS_FUTURE_WRITE_TEXT || kind == FS_FUTURE_APPEND_TEXT) && argc != 2)) {
+        JS_ThrowTypeError(ctx, "%s received invalid arguments", api_name);
+        return false;
+    }
+    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    if (state == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        return false;
+    }
+    state->kind = kind;
+    if (kind == FS_FUTURE_LIST && argc == 0) {
+        snprintf(state->path, sizeof(state->path), "%s", active_fs_base_path());
+    } else if (js_value_to_fs_path(ctx, argv[0].val, api_name,
+                                   state->path, sizeof(state->path)) != 0) {
+        fs_future_release(state);
+        return false;
+    }
+    if (kind == FS_FUTURE_RENAME &&
+        js_value_to_fs_path(ctx, argv[1].val, api_name,
+                            state->to_path, sizeof(state->to_path)) != 0) {
+        fs_future_release(state);
+        return false;
+    }
+    if (kind == FS_FUTURE_WRITE_TEXT || kind == FS_FUTURE_APPEND_TEXT) {
+        JSCStringBuf text_buf;
+        const char *text;
+
+        if (!JS_IsString(ctx, argv[1].val)) {
+            fs_future_release(state);
+            JS_ThrowTypeError(ctx, "%s expects a text string", api_name);
+            return false;
+        }
+        text = JS_ToCStringLen(ctx, &state->data_length, argv[1].val, &text_buf);
+        if (text == NULL) {
+            fs_future_release(state);
+            return false;
+        }
+        state->data = heap_caps_malloc(state->data_length + 1U, MALLOC_CAP_8BIT);
+        if (state->data == NULL) {
+            fs_future_release(state);
+            JS_ThrowOutOfMemory(ctx);
+            return false;
+        }
+        memcpy(state->data, text, state->data_length);
+        state->data[state->data_length] = '\0';
+    }
+    *out_state = state;
+    return true;
+}
+
+#define FS_PREPARE(name, kind_value) \
+    static bool name(JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv, \
+                     esp32_mquickjs_future_driver_state_t **out_state) \
+    { \
+        (void)this_ref; \
+        return fs_future_prepare_common(ctx, kind_value, argc, argv, out_state); \
+    }
+
+FS_PREPARE(fs_list_future_prepare, FS_FUTURE_LIST)
+FS_PREPARE(fs_stat_future_prepare, FS_FUTURE_STAT)
+FS_PREPARE(fs_exists_future_prepare, FS_FUTURE_EXISTS)
+FS_PREPARE(fs_read_text_future_prepare, FS_FUTURE_READ_TEXT)
+FS_PREPARE(fs_write_text_future_prepare, FS_FUTURE_WRITE_TEXT)
+FS_PREPARE(fs_append_text_future_prepare, FS_FUTURE_APPEND_TEXT)
+FS_PREPARE(fs_remove_future_prepare, FS_FUTURE_REMOVE)
+FS_PREPARE(fs_rename_future_prepare, FS_FUTURE_RENAME)
+FS_PREPARE(fs_mkdir_future_prepare, FS_FUTURE_MKDIR)
+
+#undef FS_PREPARE
+
+static void fs_future_worker(void *opaque)
+{
+    esp32_mquickjs_future_driver_state_t *state = opaque;
+
+    if (state == NULL) {
+        return;
+    }
+    xSemaphoreTake(s_fs_worker_lock, portMAX_DELAY);
+    errno = 0;
+    if (state->kind == FS_FUTURE_LIST) {
+        DIR *dir = opendir(state->path);
+
+        if (dir == NULL) {
+            state->error_number = errno;
+        } else {
+            struct dirent *entry_raw;
+
+            while ((entry_raw = readdir(dir)) != NULL) {
+                fs_future_entry_t *entry;
+                fs_future_entry_t *grown;
+                int needed;
+
+                if (strcmp(entry_raw->d_name, ".") == 0 ||
+                    strcmp(entry_raw->d_name, "..") == 0) {
+                    continue;
+                }
+                if (state->entry_count >= ESP32_MQUICKJS_FS_FUTURE_MAX_ENTRIES) {
+                    state->error_number = E2BIG;
+                    break;
+                }
+                grown = heap_caps_realloc(state->entries,
+                                          (state->entry_count + 1U) * sizeof(*state->entries),
+                                          MALLOC_CAP_8BIT);
+                if (grown == NULL) {
+                    state->error_number = ENOMEM;
+                    break;
+                }
+                state->entries = grown;
+                entry = &state->entries[state->entry_count];
+                needed = snprintf(entry->path, sizeof(entry->path),
+                                  "%s/%s", state->path, entry_raw->d_name);
+                if (needed <= 0 || (size_t)needed >= sizeof(entry->path)) {
+                    state->error_number = ENAMETOOLONG;
+                    break;
+                }
+                if (stat(entry->path, &entry->stat_value) != 0) {
+                    state->error_number = errno;
+                    break;
+                }
+                state->entry_count++;
+            }
+            closedir(dir);
+        }
+    } else if (state->kind == FS_FUTURE_STAT || state->kind == FS_FUTURE_EXISTS) {
+        state->result = stat(state->path, &state->stat_value) == 0;
+        if (!state->result && state->kind == FS_FUTURE_STAT) {
+            state->error_number = errno;
+        }
+    } else if (state->kind == FS_FUTURE_READ_TEXT) {
+        state->data = (char *)load_script_file(state->path, &state->data_length);
+        if (state->data == NULL) {
+            state->error_number = errno != 0 ? errno : EIO;
+        }
+    } else if (state->kind == FS_FUTURE_WRITE_TEXT ||
+               state->kind == FS_FUTURE_APPEND_TEXT) {
+        FILE *file = fopen(state->path,
+                           state->kind == FS_FUTURE_APPEND_TEXT ? "ab" : "wb");
+
+        if (file == NULL) {
+            state->error_number = errno;
+        } else {
+            size_t written = fwrite(state->data, 1, state->data_length, file);
+
+            if (fclose(file) != 0 || written != state->data_length) {
+                state->error_number = errno != 0 ? errno : EIO;
+            }
+        }
+    } else if (state->kind == FS_FUTURE_REMOVE) {
+        if (stat(state->path, &state->stat_value) != 0 ||
+            (S_ISDIR(state->stat_value.st_mode)
+                 ? rmdir(state->path) : remove(state->path)) != 0) {
+            state->error_number = errno;
+        } else {
+            state->result = true;
+        }
+    } else if (state->kind == FS_FUTURE_RENAME) {
+        if (rename(state->path, state->to_path) != 0) {
+            state->error_number = errno;
+        } else {
+            state->result = true;
+        }
+    } else if (mkdir(state->path, 0777) != 0) {
+        state->error_number = errno;
+    } else {
+        state->result = true;
+    }
+    xSemaphoreGive(s_fs_worker_lock);
+    state->completed = true;
+    (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+}
+
+static bool fs_future_start(JSContext *ctx,
+                            esp32_mquickjs_runtime_t *runtime,
+                            esp32_mquickjs_future_token_t token,
+                            esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL) {
+        return false;
+    }
+    state->runtime = runtime;
+    state->token = token;
+    if (!esp32_mquickjs_future_submit_worker(runtime, token,
+                                             fs_future_worker, state)) {
+        JS_ThrowInternalError(ctx, "filesystem Future worker queue is busy");
+        return false;
+    }
+    return true;
+}
+
+static esp32_mquickjs_future_poll_t fs_future_poll(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    return state != NULL && state->completed
+        ? ESP32_MQUICKJS_FUTURE_READY
+        : ESP32_MQUICKJS_FUTURE_PENDING;
+}
+
+static const char *fs_future_action(const esp32_mquickjs_future_driver_state_t *state)
+{
+    return state->kind == FS_FUTURE_LIST ? "list()" :
+           state->kind == FS_FUTURE_STAT ? "stat()" :
+           state->kind == FS_FUTURE_READ_TEXT ? "readText()" :
+           state->kind == FS_FUTURE_WRITE_TEXT ? "writeText()" :
+           state->kind == FS_FUTURE_APPEND_TEXT ? "appendText()" :
+           state->kind == FS_FUTURE_REMOVE ? "remove()" :
+           state->kind == FS_FUTURE_RENAME ? "rename()" : "mkdir()";
+}
+
+static JSValue fs_future_finish(JSContext *ctx,
+                                esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || state->cancelled) {
+        return JS_ThrowInternalError(ctx, "filesystem operation cancelled");
+    }
+    if (state->error_number != 0) {
+        return fs_throw_error(ctx, fs_future_action(state), state->path,
+                              state->error_number);
+    }
+    if (state->kind == FS_FUTURE_LIST) {
+        JSGCRef entries_ref;
+        JSValue *entries = JS_PushGCRef(ctx, &entries_ref);
+        uint32_t index;
+
+        *entries = JS_NewArray(ctx, state->entry_count);
+        for (index = 0; !JS_IsException(*entries) && index < state->entry_count; ++index) {
+            JSValue entry = fs_make_stat_object(ctx,
+                                                state->entries[index].path,
+                                                &state->entries[index].stat_value);
+            if (JS_IsException(entry) ||
+                JS_IsException(JS_SetPropertyUint32(ctx, *entries, index, entry))) {
+                JS_PopGCRef(ctx, &entries_ref);
+                return JS_EXCEPTION;
+            }
+        }
+        return JS_PopGCRef(ctx, &entries_ref);
+    }
+    if (state->kind == FS_FUTURE_STAT) {
+        return fs_make_stat_object(ctx, state->path, &state->stat_value);
+    }
+    if (state->kind == FS_FUTURE_EXISTS) {
+        return JS_NewBool(state->result);
+    }
+    if (state->kind == FS_FUTURE_READ_TEXT) {
+        return JS_NewStringLen(ctx, state->data, state->data_length);
+    }
+    if (state->kind == FS_FUTURE_WRITE_TEXT || state->kind == FS_FUTURE_APPEND_TEXT) {
+        return JS_NewInt64(ctx, (int64_t)state->data_length);
+    }
+    return JS_NewBool(state->result);
+}
+
+static bool fs_future_cancel(esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || state->completed || state->cancelled) {
+        return false;
+    }
+    state->cancelled = true;
+    return true;
+}
+
+static void fs_future_destroy(esp32_mquickjs_future_driver_state_t *state)
+{
+    fs_future_release(state);
+}
+
+#define FS_FUTURE_DRIVER(name, prepare_fn) \
+    static const esp32_mquickjs_future_driver_t name = { \
+        .prepare = prepare_fn, \
+        .start = fs_future_start, \
+        .poll = fs_future_poll, \
+        .finish = fs_future_finish, \
+        .cancel = fs_future_cancel, \
+        .destroy = fs_future_destroy, \
+    }
+
+FS_FUTURE_DRIVER(s_fs_list_driver, fs_list_future_prepare);
+FS_FUTURE_DRIVER(s_fs_stat_driver, fs_stat_future_prepare);
+FS_FUTURE_DRIVER(s_fs_exists_driver, fs_exists_future_prepare);
+FS_FUTURE_DRIVER(s_fs_read_text_driver, fs_read_text_future_prepare);
+FS_FUTURE_DRIVER(s_fs_write_text_driver, fs_write_text_future_prepare);
+FS_FUTURE_DRIVER(s_fs_append_text_driver, fs_append_text_future_prepare);
+FS_FUTURE_DRIVER(s_fs_remove_driver, fs_remove_future_prepare);
+FS_FUTURE_DRIVER(s_fs_rename_driver, fs_rename_future_prepare);
+FS_FUTURE_DRIVER(s_fs_mkdir_driver, fs_mkdir_future_prepare);
+
+#undef FS_FUTURE_DRIVER
+
+bool esp32_mquickjs_init_fs_runtime(JSContext *ctx,
+                                    esp32_mquickjs_runtime_t *runtime)
+{
+    static const char *names[] = {
+        "list", "stat", "exists", "readText", "writeText",
+        "appendText", "remove", "rename", "mkdir",
+    };
+    static const esp32_mquickjs_future_driver_t *drivers[] = {
+        &s_fs_list_driver, &s_fs_stat_driver, &s_fs_exists_driver,
+        &s_fs_read_text_driver, &s_fs_write_text_driver,
+        &s_fs_append_text_driver, &s_fs_remove_driver,
+        &s_fs_rename_driver, &s_fs_mkdir_driver,
+    };
+    JSGCRef global_ref;
+    JSGCRef fs_ref;
+    JSValue *global_obj;
+    JSValue *fs_obj;
+    size_t index;
+    bool result = true;
+
+    if (s_fs_worker_lock == NULL) {
+        s_fs_worker_lock = xSemaphoreCreateMutex();
+        if (s_fs_worker_lock == NULL) {
+            JS_ThrowOutOfMemory(ctx);
+            return false;
+        }
+    }
+    global_obj = JS_PushGCRef(ctx, &global_ref);
+    fs_obj = JS_PushGCRef(ctx, &fs_ref);
+    *global_obj = JS_GetGlobalObject(ctx);
+    *fs_obj = JS_IsException(*global_obj)
+        ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *global_obj, "fs");
+    for (index = 0; result && index < sizeof(names) / sizeof(names[0]); ++index) {
+        JSGCRef method_ref;
+        JSValue *method = JS_PushGCRef(ctx, &method_ref);
+
+        *method = JS_IsException(*fs_obj)
+            ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *fs_obj, names[index]);
+        result = !JS_IsException(*method) &&
+                 esp32_mquickjs_future_register_driver(ctx, runtime,
+                                                       *method, drivers[index]);
+        JS_PopGCRef(ctx, &method_ref);
+    }
+    if (!result && !JS_IsException(*fs_obj)) {
+        JS_ThrowInternalError(ctx, "failed to register filesystem Future drivers");
+    }
+    JS_PopGCRef(ctx, &fs_ref);
+    JS_PopGCRef(ctx, &global_ref);
+    return result;
+}
+
+static JSValue fs_future_call_and_wait(JSContext *ctx,
+                                       JSValue receiver,
+                                       const char *method_name,
+                                       int argc,
+                                       JSValue *argv)
+{
+    JSGCRef receiver_ref;
+    JSGCRef method_ref;
+    JSValue *rooted_receiver = JS_PushGCRef(ctx, &receiver_ref);
+    JSValue *method = JS_PushGCRef(ctx, &method_ref);
+    JSValue result;
+
+    *rooted_receiver = receiver;
+    *method = JS_GetPropertyStr(ctx, *rooted_receiver, method_name);
+    result = JS_IsException(*method)
+        ? JS_EXCEPTION
+        : esp32_mquickjs_future_call_and_wait(ctx,
+                                              esp32_mquickjs_get_active_runtime(),
+                                              *method,
+                                              *rooted_receiver,
+                                              argc,
+                                              argv);
+    JS_PopGCRef(ctx, &method_ref);
+    JS_PopGCRef(ctx, &receiver_ref);
+    return result;
+}
+
+#define FS_DIRECT_WRAPPER(function_name, method_name) \
+    JSValue function_name(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) \
+    { \
+        return fs_future_call_and_wait(ctx, *this_val, method_name, argc, argv); \
+    }
+
+FS_DIRECT_WRAPPER(js_fs_list, "list")
+FS_DIRECT_WRAPPER(js_fs_stat, "stat")
+FS_DIRECT_WRAPPER(js_fs_exists, "exists")
+FS_DIRECT_WRAPPER(js_fs_readText, "readText")
+FS_DIRECT_WRAPPER(js_fs_writeText, "writeText")
+FS_DIRECT_WRAPPER(js_fs_appendText, "appendText")
+FS_DIRECT_WRAPPER(js_fs_remove, "remove")
+FS_DIRECT_WRAPPER(js_fs_rename, "rename")
+FS_DIRECT_WRAPPER(js_fs_mkdir, "mkdir")
+
+#undef FS_DIRECT_WRAPPER
 
 #endif

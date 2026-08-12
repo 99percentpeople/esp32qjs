@@ -23,13 +23,6 @@ JSValue esp32_mquickjs_load_from_root(JSContext *ctx,
 
 JSValue js_print(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_help(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
-JSValue js_defer(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
-JSValue js_waitFor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
-JSValue js_deferred_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
-JSValue js_deferred_resolve(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
-JSValue js_deferred_reject(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
-JSValue js_deferred_callback(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
-JSValue js_deferred_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_gc(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_framework_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

@@ -4,7 +4,8 @@
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_I2C
 
-void esp32_mquickjs_init_i2c_runtime(void);
+bool esp32_mquickjs_init_i2c_runtime(JSContext *ctx,
+                                     esp32_mquickjs_runtime_t *runtime);
 void esp32_mquickjs_deinit_i2c_runtime(void);
 
 JSValue js_i2c_bus_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

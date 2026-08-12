@@ -3,6 +3,7 @@
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
 
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_event_queue.h"
 #include "utils/esp32_mquickjs_request_response.h"
 #include "esp32_mquickjs_stream.h"
 
@@ -11,6 +12,7 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
+#include "esp_event.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -41,6 +43,7 @@ typedef struct {
     bool started;
     httpd_handle_t handle;
     httpd_uri_t dispatch_uri;
+    esp32_mquickjs_event_queue_t *events;
 } esp32_mquickjs_http_server_slot_t;
 
 typedef struct {
@@ -51,12 +54,6 @@ typedef struct {
     char *uri;
     char *mount_path;
     bool match_with_regex;
-    bool pattern_ref_added;
-    bool callback_ref_added;
-    bool callback_this_ref_added;
-    JSGCRef pattern;
-    JSGCRef callback;
-    JSGCRef callback_this;
     bool registered;
     httpd_uri_t uri_def;
 } esp32_mquickjs_http_server_route_t;
@@ -81,12 +78,14 @@ typedef struct {
 } esp32_mquickjs_http_server_event_t;
 
 typedef struct {
+    uint8_t server_id;
+    uint32_t generation;
+} esp32_mquickjs_http_server_event_source_t;
+
+typedef struct {
     bool initialized;
     bool shutting_down;
-    bool dispatching_request;
-    uint8_t dispatching_request_id;
     esp32_mquickjs_runtime_t *runtime;
-    QueueHandle_t queue;
     SemaphoreHandle_t lock;
     esp32_mquickjs_http_server_slot_t servers[ESP32_MQUICKJS_HTTP_SERVER_MAX_SERVERS];
     esp32_mquickjs_http_server_route_t routes[ESP32_MQUICKJS_HTTP_SERVER_MAX_ROUTES];
@@ -105,9 +104,6 @@ typedef struct {
 static const char *TAG = "esp32qjs_httpd";
 static esp32_mquickjs_http_server_state_t s_http_server_state;
 
-static bool http_server_async_poller(JSContext *ctx,
-                                     esp32_mquickjs_runtime_t *runtime,
-                                     void *opaque);
 static bool http_server_glob_match(const char *pattern, const char *text);
 
 static httpd_method_t http_server_method_from_name(const char *method_name)
@@ -250,17 +246,7 @@ static void http_server_cleanup_route(JSContext *ctx, esp32_mquickjs_http_server
         return;
     }
 
-    if (ctx != NULL) {
-        if (route->pattern_ref_added) {
-            JS_DeleteGCRef(ctx, &route->pattern);
-        }
-        if (route->callback_ref_added) {
-            JS_DeleteGCRef(ctx, &route->callback);
-        }
-        if (route->callback_this_ref_added) {
-            JS_DeleteGCRef(ctx, &route->callback_this);
-        }
-    }
+    (void)ctx;
     heap_caps_free(route->uri);
     heap_caps_free(route->mount_path);
     memset(route, 0, sizeof(*route));
@@ -371,13 +357,8 @@ static bool http_server_init_state(esp32_mquickjs_runtime_t *runtime)
     }
 
     memset(&s_http_server_state, 0, sizeof(s_http_server_state));
-    s_http_server_state.queue = xQueueCreate(ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN,
-                                             sizeof(esp32_mquickjs_http_server_event_t));
     s_http_server_state.lock = xSemaphoreCreateMutex();
-    if (s_http_server_state.queue == NULL || s_http_server_state.lock == NULL) {
-        if (s_http_server_state.queue != NULL) {
-            vQueueDelete(s_http_server_state.queue);
-        }
+    if (s_http_server_state.lock == NULL) {
         if (s_http_server_state.lock != NULL) {
             vSemaphoreDelete(s_http_server_state.lock);
         }
@@ -619,104 +600,6 @@ static bool http_server_compile_route_pattern(JSContext *ctx,
         return true;
     }
 
-    if (http_server_is_object(ctx, *pattern_value)) {
-        JSGCRef source_ref;
-        JSGCRef flags_ref;
-        JSValue *source_value;
-        JSValue *flags_value;
-        JSCStringBuf source_buf;
-        JSCStringBuf flags_buf;
-        const char *source;
-        const char *flags;
-        char *source_copy = NULL;
-        size_t source_len;
-        size_t flags_len;
-        char *route_text;
-
-        source_value = JS_PushGCRef(ctx, &source_ref);
-        flags_value = JS_PushGCRef(ctx, &flags_ref);
-        *source_value = JS_GetPropertyStr(ctx, *pattern_value, "source");
-        *flags_value = JS_GetPropertyStr(ctx, *pattern_value, "flags");
-        if (JS_IsException(*source_value) || JS_IsException(*flags_value)) {
-            JS_PopGCRef(ctx, &flags_ref);
-            JS_PopGCRef(ctx, &source_ref);
-            return false;
-        }
-
-        source = JS_ToCString(ctx, *source_value, &source_buf);
-        if (source != NULL) {
-            source_copy = http_server_strdup(source);
-        }
-        flags = JS_ToCString(ctx, *flags_value, &flags_buf);
-        if (source_copy != NULL && flags != NULL) {
-            source_len = strlen(source_copy);
-            flags_len = strlen(flags);
-            route_text = heap_caps_malloc(source_len + flags_len + 3, MALLOC_CAP_8BIT);
-            if (route_text == NULL) {
-                heap_caps_free(source_copy);
-                JS_PopGCRef(ctx, &flags_ref);
-                JS_PopGCRef(ctx, &source_ref);
-                return false;
-            }
-            route_text[0] = '/';
-            memcpy(route_text + 1, source_copy, source_len);
-            route_text[source_len + 1] = '/';
-            memcpy(route_text + source_len + 2, flags, flags_len);
-            route_text[source_len + flags_len + 2] = '\0';
-            route->uri = route_text;
-        } else {
-            uri = JS_ToCString(ctx, *pattern_value, &uri_buf);
-            route->uri = http_server_strdup(uri != NULL ? uri : "<regexp>");
-        }
-        heap_caps_free(source_copy);
-        JS_PopGCRef(ctx, &flags_ref);
-        JS_PopGCRef(ctx, &source_ref);
-        *JS_AddGCRef(ctx, &route->pattern) = *pattern_value;
-        route->pattern_ref_added = true;
-        route->match_with_regex = true;
-        return route->uri != NULL;
-    }
-
-    return false;
-}
-
-static bool http_server_regex_test(JSContext *ctx, JSValue *pattern, const char *path)
-{
-    JSGCRef test_ref;
-    JSGCRef path_ref;
-    JSValue *test_fn;
-    JSValue *path_value;
-    JSValue argv[1];
-    JSValue result;
-    JSValue reset_index;
-    int matched = 0;
-
-    if (JS_IsException(*pattern)) {
-        return false;
-    }
-
-    test_fn = JS_PushGCRef(ctx, &test_ref);
-    path_value = JS_PushGCRef(ctx, &path_ref);
-    *test_fn = JS_GetPropertyStr(ctx, *pattern, "test");
-    *path_value = JS_NewString(ctx, path != NULL ? path : "");
-    if (JS_IsException(*test_fn) || !JS_IsFunction(ctx, *test_fn) || JS_IsException(*path_value)) {
-        JS_PopGCRef(ctx, &path_ref);
-        JS_PopGCRef(ctx, &test_ref);
-        return false;
-    }
-    reset_index = JS_NewInt32(ctx, 0);
-    if (!JS_IsException(reset_index)) {
-        JS_SetPropertyStr(ctx, *pattern, "lastIndex", reset_index);
-    }
-    argv[0] = *path_value;
-    result = http_server_call_function(ctx, *test_fn, *pattern, 1, argv);
-    if (!JS_IsException(result) && JS_ToInt32(ctx, &matched, result) == 0) {
-        JS_PopGCRef(ctx, &path_ref);
-        JS_PopGCRef(ctx, &test_ref);
-        return matched != 0;
-    }
-    JS_PopGCRef(ctx, &path_ref);
-    JS_PopGCRef(ctx, &test_ref);
     return false;
 }
 
@@ -811,6 +694,8 @@ static esp32_mquickjs_http_server_route_t *http_server_find_route(JSContext *ctx
     int i;
     httpd_method_t method = http_server_method_from_name(method_name);
 
+    (void)ctx;
+
     for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_ROUTES; ++i) {
         esp32_mquickjs_http_server_route_t *route = &s_http_server_state.routes[i];
 
@@ -821,8 +706,7 @@ static esp32_mquickjs_http_server_route_t *http_server_find_route(JSContext *ctx
             continue;
         }
         if (route->match_with_regex) {
-            if ((route->pattern_ref_added && http_server_regex_test(ctx, &route->pattern.val, path)) ||
-                (!route->pattern_ref_added && http_server_glob_match(route->uri, path != NULL ? path : ""))) {
+            if (http_server_glob_match(route->uri, path != NULL ? path : "")) {
                 return route;
             }
         } else if (strcmp(route->uri, path) == 0) {
@@ -905,15 +789,13 @@ static esp_err_t http_server_dispatch_handler(httpd_req_t *req)
 
     event.request_id = request->request_id;
     event.generation = request->generation;
-    if (xQueueSend(s_http_server_state.queue, &event, 0) != pdTRUE) {
+    if (server->events == NULL ||
+        !esp32_mquickjs_event_queue_send(server->events, &event)) {
         http_server_send_error(async_req, 503, "request queue full");
         http_server_cleanup_request(request);
         return ESP_OK;
     }
 
-    if (s_http_server_state.runtime != NULL) {
-        esp32_mquickjs_notify_activity(s_http_server_state.runtime);
-    }
     return ESP_OK;
 }
 
@@ -1359,147 +1241,6 @@ static bool http_server_has_content_type(const esp32_mquickjs_http_server_respon
     return false;
 }
 
-#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER && CONFIG_ESP32_MQUICKJS_FEATURE_FS
-static bool http_server_resolve_littlefs_path(const char *input_path,
-                                              char *out_path,
-                                              size_t out_path_size)
-{
-    static const size_t base_len = sizeof(ESP32_MQUICKJS_LITTLEFS_BASE_PATH) - 1;
-    const char *cursor;
-    size_t out_len;
-
-    if (input_path == NULL || out_path == NULL || out_path_size <= base_len + 1) {
-        return false;
-    }
-
-    memcpy(out_path, ESP32_MQUICKJS_LITTLEFS_BASE_PATH, base_len);
-    out_path[base_len] = '\0';
-    out_len = base_len;
-
-    if (input_path[0] == '\0' || strcmp(input_path, ".") == 0) {
-        return true;
-    }
-
-    cursor = input_path[0] == '/' ? input_path + 1 : input_path;
-    while (*cursor != '\0') {
-        const char *segment_start;
-        size_t segment_len;
-
-        while (*cursor == '/') {
-            cursor++;
-        }
-        if (*cursor == '\0') {
-            break;
-        }
-        segment_start = cursor;
-        while (*cursor != '\0' && *cursor != '/') {
-            cursor++;
-        }
-        segment_len = (size_t)(cursor - segment_start);
-        if (segment_len == 1 && segment_start[0] == '.') {
-            continue;
-        }
-        if (segment_len == 2 && segment_start[0] == '.' && segment_start[1] == '.') {
-            return false;
-        }
-        if (out_len + 1 + segment_len >= out_path_size) {
-            return false;
-        }
-        out_path[out_len++] = '/';
-        memcpy(out_path + out_len, segment_start, segment_len);
-        out_len += segment_len;
-        out_path[out_len] = '\0';
-    }
-    return true;
-}
-
-static const char *http_server_guess_content_type(const char *path)
-{
-    const char *ext = strrchr(path != NULL ? path : "", '.');
-
-    if (ext == NULL) {
-        return "application/octet-stream";
-    }
-    if (strcasecmp(ext, ".html") == 0 || strcasecmp(ext, ".htm") == 0) {
-        return "text/html; charset=utf-8";
-    }
-    if (strcasecmp(ext, ".css") == 0) {
-        return "text/css; charset=utf-8";
-    }
-    if (strcasecmp(ext, ".js") == 0 || strcasecmp(ext, ".mjs") == 0) {
-        return "application/javascript; charset=utf-8";
-    }
-    if (strcasecmp(ext, ".json") == 0) {
-        return "application/json; charset=utf-8";
-    }
-    if (strcasecmp(ext, ".txt") == 0) {
-        return "text/plain; charset=utf-8";
-    }
-    if (strcasecmp(ext, ".svg") == 0) {
-        return "image/svg+xml";
-    }
-    if (strcasecmp(ext, ".png") == 0) {
-        return "image/png";
-    }
-    if (strcasecmp(ext, ".jpg") == 0 || strcasecmp(ext, ".jpeg") == 0) {
-        return "image/jpeg";
-    }
-    if (strcasecmp(ext, ".gif") == 0) {
-        return "image/gif";
-    }
-    if (strcasecmp(ext, ".ico") == 0) {
-        return "image/x-icon";
-    }
-    return "application/octet-stream";
-}
-
-static bool http_server_join_path(char *out,
-                                  size_t out_size,
-                                  const char *root,
-                                  const char *relative,
-                                  const char *suffix)
-{
-    size_t root_len = strlen(root);
-    size_t relative_len = strlen(relative);
-    size_t suffix_len = suffix != NULL ? strlen(suffix) : 0;
-    size_t total = root_len + 1 + relative_len + suffix_len;
-
-    if (total + 1 > out_size) {
-        return false;
-    }
-
-    memcpy(out, root, root_len);
-    out[root_len] = '/';
-    memcpy(out + root_len + 1, relative, relative_len);
-    if (suffix_len > 0) {
-        memcpy(out + root_len + 1 + relative_len, suffix, suffix_len);
-    }
-    out[total] = '\0';
-    return true;
-}
-
-static JSValue http_server_make_static_handler(JSContext *ctx, const char *root_path)
-{
-    JSGCRef handler_ref;
-    JSValue *handler_obj;
-    char *root_copy = http_server_strdup(root_path);
-
-    if (root_copy == NULL) {
-        return JS_ThrowOutOfMemory(ctx);
-    }
-    handler_obj = JS_PushGCRef(ctx, &handler_ref);
-    *handler_obj = JS_NewObjectClassUser(ctx, JS_CLASS_STATIC_FILE_HANDLER);
-    if (JS_IsException(*handler_obj) ||
-        !esp32_mquickjs_set_property_ref(ctx, handler_obj, "root", JS_NewString(ctx, root_copy))) {
-        heap_caps_free(root_copy);
-        JS_PopGCRef(ctx, &handler_ref);
-        return JS_EXCEPTION;
-    }
-    heap_caps_free(root_copy);
-    return JS_PopGCRef(ctx, &handler_ref);
-}
-#endif
-
 static esp_err_t http_server_send_response(httpd_req_t *req,
                                            const esp32_mquickjs_http_server_response_t *response)
 {
@@ -1579,12 +1320,26 @@ static bool http_server_start_slot(esp32_mquickjs_http_server_slot_t *server)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     struct ifreq ifr;
+    esp_err_t err;
 
     if (server == NULL) {
         return false;
     }
     if (server->started) {
         return true;
+    }
+
+    err = esp_netif_init();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "esp_netif_init() failed before HTTP server start: %s",
+                 esp_err_to_name(err));
+        return false;
+    }
+    err = esp_event_loop_create_default();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "esp_event_loop_create_default() failed before HTTP server start: %s",
+                 esp_err_to_name(err));
+        return false;
     }
 
     config.server_port = server->port;
@@ -1657,9 +1412,7 @@ static void http_server_cleanup_requests_for_server(uint8_t server_id)
 
     for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN; ++i) {
         if (s_http_server_state.requests[i].allocated &&
-            s_http_server_state.requests[i].server_id == server_id &&
-            (!s_http_server_state.dispatching_request ||
-             s_http_server_state.dispatching_request_id != (uint8_t)i)) {
+            s_http_server_state.requests[i].server_id == server_id) {
             http_server_cleanup_request(&s_http_server_state.requests[i]);
         }
     }
@@ -1669,6 +1422,9 @@ static void http_server_close_slot(JSContext *ctx, esp32_mquickjs_http_server_sl
 {
     if (server == NULL) {
         return;
+    }
+    if (server->events != NULL) {
+        esp32_mquickjs_event_queue_close(server->events);
     }
     http_server_stop_slot(server);
     http_server_cleanup_requests_for_server(server->server_id);
@@ -1724,16 +1480,136 @@ static int http_server_server_id_from_object(JSContext *ctx,
     return 0;
 }
 
+static JSValue http_server_event_to_js(JSContext *ctx,
+                                       const void *event_value,
+                                       void *opaque)
+{
+    JSGCRef result_ref;
+    const esp32_mquickjs_http_server_event_t *event = event_value;
+    const esp32_mquickjs_http_server_event_source_t *source = opaque;
+    esp32_mquickjs_http_server_request_t *request;
+    esp32_mquickjs_http_server_route_t *route;
+    JSValue *result;
+
+    if (event == NULL || source == NULL ||
+        event->request_id >= ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN) {
+        return JS_NULL;
+    }
+    request = &s_http_server_state.requests[event->request_id];
+    if (!request->allocated || request->generation != event->generation ||
+        request->server_id != source->server_id ||
+        http_server_get_slot(source->server_id) == NULL ||
+        http_server_get_slot(source->server_id)->generation != source->generation) {
+        return JS_NULL;
+    }
+    route = http_server_find_route(ctx,
+                                   request->server_id,
+                                   request->method,
+                                   request->path);
+    if (route == NULL) {
+        http_server_send_error(request->async_req, 404,
+                               "Nothing matches the given URI");
+        http_server_cleanup_request(request);
+        return JS_NULL;
+    }
+    result = JS_PushGCRef(ctx, &result_ref);
+    *result = JS_UNDEFINED;
+    if (!http_server_make_request_object(ctx, request, route, result) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "_requestId",
+                                         JS_NewInt32(ctx, request->request_id)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "_requestGeneration",
+                                         JS_NewUint32(ctx, request->generation))) {
+        http_server_send_error(request->async_req, 500,
+                               "failed to build request object");
+        http_server_cleanup_request(request);
+        JS_PopGCRef(ctx, &result_ref);
+        return JS_EXCEPTION;
+    }
+    return JS_PopGCRef(ctx, &result_ref);
+}
+
+static void http_server_event_drop(void *event_value, void *opaque)
+{
+    const esp32_mquickjs_http_server_event_t *event = event_value;
+    const esp32_mquickjs_http_server_event_source_t *source = opaque;
+    esp32_mquickjs_http_server_request_t *request;
+
+    if (event == NULL || source == NULL ||
+        event->request_id >= ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN) {
+        return;
+    }
+    request = &s_http_server_state.requests[event->request_id];
+    if (!request->allocated || request->generation != event->generation ||
+        request->server_id != source->server_id) {
+        return;
+    }
+    http_server_send_error(request->async_req, 503, "request queue full");
+    http_server_cleanup_request(request);
+}
+
+static void http_server_event_close(void *opaque)
+{
+    esp32_mquickjs_http_server_event_source_t *source = opaque;
+    esp32_mquickjs_http_server_slot_t *server;
+
+    if (source == NULL) {
+        return;
+    }
+    server = http_server_get_slot(source->server_id);
+    if (server != NULL && server->generation == source->generation) {
+        server->events = NULL;
+    }
+    heap_caps_free(source);
+}
+
 static JSValue http_server_make_server_object(JSContext *ctx, JSValue global_obj, int32_t server_id)
 {
     JSGCRef server_ref;
+    JSGCRef events_ref;
+    JSGCRef receive_ref;
     JSValue *server_obj;
+    JSValue *events_obj;
+    JSValue *receive_fn;
     esp32_mquickjs_http_server_slot_t *server = http_server_get_slot(server_id);
+    esp32_mquickjs_http_server_event_source_t *source = NULL;
 
     (void)global_obj;
     server_obj = JS_PushGCRef(ctx, &server_ref);
+    events_obj = JS_PushGCRef(ctx, &events_ref);
+    receive_fn = JS_PushGCRef(ctx, &receive_ref);
     *server_obj = JS_NewObjectClassUser(ctx, JS_CLASS_HTTP_SERVER);
+    *events_obj = JS_UNDEFINED;
+    *receive_fn = JS_UNDEFINED;
     if (JS_IsException(*server_obj) || server == NULL) {
+        goto fail;
+    }
+
+    source = heap_caps_calloc(1, sizeof(*source), MALLOC_CAP_8BIT);
+    if (source == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        goto fail;
+    }
+    source->server_id = (uint8_t)server_id;
+    source->generation = server->generation;
+    *events_obj = esp32_mquickjs_event_queue_new(
+        ctx,
+        s_http_server_state.runtime,
+        sizeof(esp32_mquickjs_http_server_event_t),
+        ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN,
+        ESP32_MQUICKJS_EVENT_QUEUE_DROP_NEWEST,
+        http_server_event_to_js,
+        http_server_event_drop,
+        http_server_event_close,
+        source);
+    if (JS_IsException(*events_obj)) {
+        heap_caps_free(source);
+        source = NULL;
+        goto fail;
+    }
+    source = NULL;
+    server->events = esp32_mquickjs_event_queue_from_value(ctx, *events_obj);
+    *receive_fn = JS_GetPropertyStr(ctx, *events_obj, "receive");
+    if (server->events == NULL || JS_IsException(*receive_fn)) {
         goto fail;
     }
 
@@ -1752,123 +1628,29 @@ static JSValue http_server_make_server_object(JSContext *ctx, JSValue global_obj
                                                       ? server->host
                                                       : "0.0.0.0")) ||
         !esp32_mquickjs_set_property_ref(ctx, server_obj, "started", JS_NewBool(server->started)) ||
-        !esp32_mquickjs_set_property_ref(ctx, server_obj, "closed", JS_FALSE)) {
+        !esp32_mquickjs_set_property_ref(ctx, server_obj, "closed", JS_FALSE) ||
+        !esp32_mquickjs_set_property_ref(ctx, server_obj, "_eventQueue", *events_obj) ||
+        !esp32_mquickjs_set_property_ref(ctx, server_obj, "receive", *receive_fn)) {
         goto fail;
     }
 
+    JS_PopGCRef(ctx, &receive_ref);
+    JS_PopGCRef(ctx, &events_ref);
     return JS_PopGCRef(ctx, &server_ref);
 
 fail:
+    heap_caps_free(source);
+    JS_PopGCRef(ctx, &receive_ref);
+    JS_PopGCRef(ctx, &events_ref);
     JS_PopGCRef(ctx, &server_ref);
     return JS_EXCEPTION;
-}
-
-static bool http_server_register_route_js(JSContext *ctx,
-                                          int32_t server_id,
-                                          const char *method_name,
-                                          JSValue pattern_value,
-                                          JSValue handler,
-                                          JSValue *out_result)
-{
-    esp32_mquickjs_http_server_slot_t *server;
-    esp32_mquickjs_http_server_route_t *route = NULL;
-    JSGCRef pattern_ref;
-    JSGCRef handler_ref;
-    JSGCRef callback_ref;
-    JSGCRef callback_this_ref;
-    JSValue *rooted_pattern;
-    JSValue *rooted_handler;
-    JSValue *callback;
-    JSValue *callback_this;
-    int i;
-    httpd_method_t method;
-
-    rooted_pattern = JS_PushGCRef(ctx, &pattern_ref);
-    rooted_handler = JS_PushGCRef(ctx, &handler_ref);
-    callback = JS_PushGCRef(ctx, &callback_ref);
-    callback_this = JS_PushGCRef(ctx, &callback_this_ref);
-    *rooted_pattern = pattern_value;
-    *rooted_handler = handler;
-    *callback = JS_UNDEFINED;
-    *callback_this = JS_UNDEFINED;
-
-    if (JS_IsFunction(ctx, *rooted_handler)) {
-        *callback = *rooted_handler;
-    } else if (http_server_is_object(ctx, *rooted_handler)) {
-        *callback = JS_GetPropertyStr(ctx, *rooted_handler, "handle");
-        if (JS_IsException(*callback)) {
-            *out_result = JS_EXCEPTION;
-            goto done;
-        }
-        if (!JS_IsFunction(ctx, *callback)) {
-            *out_result = JS_ThrowTypeError(ctx,
-                                            "server.<method>(pathOrPattern, handler) expects a function or object with handle(req)");
-            goto done;
-        }
-        *callback_this = *rooted_handler;
-    } else {
-        *out_result = JS_ThrowTypeError(ctx,
-                                        "server.<method>(pathOrPattern, handler) expects a function or object with handle(req)");
-        goto done;
-    }
-
-    server = http_server_get_slot(server_id);
-    if (server == NULL) {
-        *out_result = JS_ThrowInternalError(ctx, "invalid server handle");
-        goto done;
-    }
-
-    method = http_server_method_from_name(method_name);
-
-    http_server_lock();
-    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_ROUTES; ++i) {
-        if (!s_http_server_state.routes[i].allocated) {
-            route = &s_http_server_state.routes[i];
-            route->allocated = true;
-            route->server_id = (uint8_t)server_id;
-            route->method = method;
-            break;
-        }
-    }
-    http_server_unlock();
-
-    if (route == NULL) {
-        *out_result = JS_ThrowInternalError(ctx, "too many server routes");
-        goto done;
-    }
-
-    if (!http_server_compile_route_pattern(ctx, rooted_pattern, route)) {
-        http_server_cleanup_route(ctx, route);
-        *out_result = JS_ThrowTypeError(ctx, "server.<method>(pathOrPattern, handler) expects a string path or RegExp");
-        goto done;
-    }
-    *JS_AddGCRef(ctx, &route->callback) = *callback;
-    route->callback_ref_added = true;
-    if (!JS_IsUndefined(*callback_this) && !JS_IsNull(*callback_this)) {
-        *JS_AddGCRef(ctx, &route->callback_this) = *callback_this;
-        route->callback_this_ref_added = true;
-    }
-    *out_result = JS_UNDEFINED;
-
-done:
-    JS_PopGCRef(ctx, &callback_this_ref);
-    JS_PopGCRef(ctx, &callback_ref);
-    JS_PopGCRef(ctx, &handler_ref);
-    JS_PopGCRef(ctx, &pattern_ref);
-    return true;
 }
 
 bool esp32_mquickjs_init_http_server_runtime(JSContext *ctx,
                                              esp32_mquickjs_runtime_t *runtime)
 {
-    (void)ctx;
-
     if (!http_server_init_state(runtime)) {
         JS_ThrowOutOfMemory(ctx);
-        return false;
-    }
-    if (!esp32_mquickjs_register_async_poller(runtime, http_server_async_poller, NULL)) {
-        JS_ThrowInternalError(ctx, "failed to register http server async poller");
         return false;
     }
     return true;
@@ -1880,36 +1662,6 @@ JSValue js_http_server_constructor(JSContext *ctx, JSValue *this_val, int argc, 
     (void)argc;
     (void)argv;
     return JS_ThrowTypeError(ctx, "HttpServer cannot be constructed directly");
-}
-
-JSValue js_http_static_file_handler_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    (void)this_val;
-    (void)argc;
-    (void)argv;
-    return JS_ThrowTypeError(ctx, "StaticFileHandler cannot be constructed directly");
-}
-
-static JSValue http_server_route_method(JSContext *ctx,
-                                        JSValue this_value,
-                                        const char *api_name,
-                                        const char *method_name,
-                                        int argc,
-                                        JSValue *argv)
-{
-    int32_t server_id = -1;
-    JSValue result = JS_UNDEFINED;
-
-    if (http_server_server_id_from_object(ctx, this_value, api_name, &server_id) != 0) {
-        return JS_EXCEPTION;
-    }
-    if (argc < 2) {
-        return JS_ThrowTypeError(ctx, "%s(pathOrPattern, handler) expects a path and handler", api_name);
-    }
-    if (http_server_register_route_js(ctx, server_id, method_name, argv[0], argv[1], &result)) {
-        return result;
-    }
-    return JS_ThrowInternalError(ctx, "%s failed", api_name);
 }
 
 JSValue js_http_server_start(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -2006,8 +1758,8 @@ JSValue js_http_server_remove_route(JSContext *ctx, JSValue *this_val, int argc,
     if (http_server_server_id_from_object(ctx, *this_val, "server.removeRoute", &server_id) != 0) {
         return JS_EXCEPTION;
     }
-    if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "server.removeRoute(pathOrPattern, method?) expects a route pattern");
+    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "server.removeRoute(path, method?) expects a string path");
     }
     if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
         JSCStringBuf method_buf;
@@ -2046,7 +1798,7 @@ JSValue js_http_server_remove_route(JSContext *ctx, JSValue *this_val, int argc,
     if (!http_server_compile_route_pattern(ctx, rooted_pattern, &pattern)) {
         http_server_cleanup_route(ctx, &pattern);
         JS_PopGCRef(ctx, &pattern_ref);
-        return JS_ThrowTypeError(ctx, "server.removeRoute(pathOrPattern, method?) expects a string path or RegExp");
+        return JS_ThrowTypeError(ctx, "server.removeRoute(path, method?) expects a valid string path");
     }
 
     for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_ROUTES; ++i) {
@@ -2054,7 +1806,6 @@ JSValue js_http_server_remove_route(JSContext *ctx, JSValue *this_val, int argc,
 
         if (!route->allocated || route->server_id != (uint8_t)server_id ||
             route->match_with_regex != pattern.match_with_regex ||
-            route->pattern_ref_added != pattern.pattern_ref_added ||
             route->uri == NULL || pattern.uri == NULL || strcmp(route->uri, pattern.uri) != 0 ||
             (filter_method && route->method != method)) {
             continue;
@@ -2068,44 +1819,160 @@ JSValue js_http_server_remove_route(JSContext *ctx, JSValue *this_val, int argc,
     return JS_NewInt32(ctx, removed);
 }
 
-JSValue js_http_server_get(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_http_server_route(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    return http_server_route_method(ctx, *this_val, "server.get", "GET", argc, argv);
+    esp32_mquickjs_http_server_route_t candidate = {0};
+    esp32_mquickjs_http_server_route_t *route = NULL;
+    JSGCRef path_ref;
+    JSValue *path_value;
+    JSCStringBuf method_buf;
+    const char *method_name;
+    httpd_method_t method;
+    int32_t server_id = -1;
+    int i;
+
+    if (http_server_server_id_from_object(ctx, *this_val, "server.route", &server_id) != 0) {
+        return JS_EXCEPTION;
+    }
+    if (argc < 2 || !JS_IsString(ctx, argv[0]) || !JS_IsString(ctx, argv[1])) {
+        return JS_ThrowTypeError(ctx, "server.route(method, path) expects two strings");
+    }
+    method_name = JS_ToCString(ctx, argv[0], &method_buf);
+    if (method_name == NULL) {
+        return JS_EXCEPTION;
+    }
+    if (strcasecmp(method_name, "GET") == 0) {
+        method = HTTP_GET;
+    } else if (strcasecmp(method_name, "POST") == 0) {
+        method = HTTP_POST;
+    } else if (strcasecmp(method_name, "PUT") == 0) {
+        method = HTTP_PUT;
+    } else if (strcasecmp(method_name, "PATCH") == 0) {
+        method = HTTP_PATCH;
+    } else if (strcasecmp(method_name, "DELETE") == 0) {
+        method = HTTP_DELETE;
+    } else if (strcasecmp(method_name, "HEAD") == 0) {
+        method = HTTP_HEAD;
+    } else if (strcasecmp(method_name, "OPTIONS") == 0) {
+        method = HTTP_OPTIONS;
+    } else if (strcasecmp(method_name, "ANY") == 0 || strcasecmp(method_name, "ALL") == 0) {
+        method = HTTP_ANY;
+    } else {
+        return JS_ThrowTypeError(ctx, "server.route received an unsupported HTTP method");
+    }
+
+    path_value = JS_PushGCRef(ctx, &path_ref);
+    *path_value = argv[1];
+    candidate.allocated = true;
+    candidate.server_id = (uint8_t)server_id;
+    candidate.method = method;
+    if (!http_server_compile_route_pattern(ctx, path_value, &candidate)) {
+        http_server_cleanup_route(ctx, &candidate);
+        JS_PopGCRef(ctx, &path_ref);
+        return JS_ThrowTypeError(ctx, "server.route(method, path) expects a valid string path");
+    }
+    JS_PopGCRef(ctx, &path_ref);
+
+    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_ROUTES; ++i) {
+        if (!s_http_server_state.routes[i].allocated) {
+            uint8_t route_id = s_http_server_state.routes[i].route_id;
+
+            route = &s_http_server_state.routes[i];
+            *route = candidate;
+            route->route_id = route_id;
+            memset(&candidate, 0, sizeof(candidate));
+            break;
+        }
+    }
+    if (route == NULL) {
+        http_server_cleanup_route(ctx, &candidate);
+        return JS_ThrowInternalError(ctx, "too many server routes");
+    }
+    return JS_UNDEFINED;
 }
 
-JSValue js_http_server_post(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+static void http_server_close_request_body(JSContext *ctx, JSValue request_value)
 {
-    return http_server_route_method(ctx, *this_val, "server.post", "POST", argc, argv);
+    JSGCRef body_ref;
+    JSValue *body_value = JS_PushGCRef(ctx, &body_ref);
+
+    *body_value = JS_GetPropertyStr(ctx, request_value, "body");
+    if (!JS_IsException(*body_value)) {
+        esp32_mquickjs_stream_close_value(ctx, *body_value);
+    }
+    JS_PopGCRef(ctx, &body_ref);
 }
 
-JSValue js_http_server_put(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_http_server_respond(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    return http_server_route_method(ctx, *this_val, "server.put", "PUT", argc, argv);
-}
+    esp32_mquickjs_http_server_request_t *request;
+    esp32_mquickjs_http_server_response_t response = {0};
+    JSGCRef request_ref;
+    JSGCRef request_id_ref;
+    JSGCRef generation_ref;
+    JSGCRef response_ref;
+    JSValue *request_value;
+    JSValue *request_id_value;
+    JSValue *generation_value;
+    JSValue *response_value;
+    uint32_t generation = 0;
+    int request_id = -1;
+    int32_t server_id = -1;
+    esp_err_t send_result;
 
-JSValue js_http_server_patch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    return http_server_route_method(ctx, *this_val, "server.patch", "PATCH", argc, argv);
-}
+    if (http_server_server_id_from_object(ctx, *this_val, "server.respond", &server_id) != 0) {
+        return JS_EXCEPTION;
+    }
+    if (argc < 2) {
+        return JS_ThrowTypeError(ctx, "server.respond(request, response) expects two arguments");
+    }
 
-JSValue js_http_server_delete(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    return http_server_route_method(ctx, *this_val, "server.delete", "DELETE", argc, argv);
-}
+    request_value = JS_PushGCRef(ctx, &request_ref);
+    request_id_value = JS_PushGCRef(ctx, &request_id_ref);
+    generation_value = JS_PushGCRef(ctx, &generation_ref);
+    response_value = JS_PushGCRef(ctx, &response_ref);
+    *request_value = argv[0];
+    *response_value = argv[1];
+    *request_id_value = JS_GetPropertyStr(ctx, *request_value, "_requestId");
+    *generation_value = JS_GetPropertyStr(ctx, *request_value, "_requestGeneration");
+    if (JS_IsException(*request_id_value) || JS_IsException(*generation_value) ||
+        JS_ToInt32(ctx, &request_id, *request_id_value) != 0 ||
+        JS_ToUint32(ctx, &generation, *generation_value) != 0 ||
+        request_id < 0 || request_id >= ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN) {
+        JS_ThrowTypeError(ctx, "server.respond expects a live request returned by server.receive");
+        goto fail;
+    }
+    request = &s_http_server_state.requests[request_id];
+    if (!request->allocated || request->generation != generation ||
+        request->server_id != (uint8_t)server_id || request->async_req == NULL) {
+        JS_ThrowInternalError(ctx, "server.respond cannot use a completed or stale request");
+        goto fail;
+    }
+    if (http_server_make_response(ctx, response_value, &response) != 0) {
+        goto fail;
+    }
 
-JSValue js_http_server_head(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    return http_server_route_method(ctx, *this_val, "server.head", "HEAD", argc, argv);
-}
+    send_result = http_server_send_response(request->async_req, &response);
+    http_server_close_request_body(ctx, *request_value);
+    http_server_free_response(&response);
+    http_server_cleanup_request(request);
+    (void)esp32_mquickjs_set_property_ref(ctx, request_value, "_requestId", JS_NewInt32(ctx, -1));
+    JS_PopGCRef(ctx, &response_ref);
+    JS_PopGCRef(ctx, &generation_ref);
+    JS_PopGCRef(ctx, &request_id_ref);
+    JS_PopGCRef(ctx, &request_ref);
+    if (send_result != ESP_OK) {
+        return JS_ThrowInternalError(ctx, "failed to send HTTP response");
+    }
+    return JS_TRUE;
 
-JSValue js_http_server_options(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    return http_server_route_method(ctx, *this_val, "server.options", "OPTIONS", argc, argv);
-}
-
-JSValue js_http_server_all(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    return http_server_route_method(ctx, *this_val, "server.all", "ANY", argc, argv);
+fail:
+    http_server_free_response(&response);
+    JS_PopGCRef(ctx, &response_ref);
+    JS_PopGCRef(ctx, &generation_ref);
+    JS_PopGCRef(ctx, &request_id_ref);
+    JS_PopGCRef(ctx, &request_ref);
+    return JS_EXCEPTION;
 }
 
 JSValue js_http_server_create(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -2233,206 +2100,11 @@ JSValue js_http_server_create(JSContext *ctx, JSValue *this_val, int argc, JSVal
     }
 }
 
-#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER && CONFIG_ESP32_MQUICKJS_FEATURE_FS
-static JSValue http_server_static_file_handler_handle_internal(JSContext *ctx,
-                                                               JSValue *handler_value,
-                                                               JSValue *request_value);
-
-JSValue js_http_static_file_handler(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    JSCStringBuf root_buf;
-    const char *root;
-
-    (void)this_val;
-    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
-        return JS_ThrowTypeError(ctx, "staticFileHandler(root) expects a LittleFS root path");
-    }
-    root = JS_ToCString(ctx, argv[0], &root_buf);
-    if (root == NULL) {
-        return JS_EXCEPTION;
-    }
-    return http_server_make_static_handler(ctx, root);
-}
-
-JSValue js_http_static_file_handler_handle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "staticFileHandler.handle(req) expects a request object");
-    }
-    return http_server_static_file_handler_handle_internal(ctx, this_val, &argv[0]);
-}
-
-static JSValue http_server_static_file_handler_handle_internal(JSContext *ctx,
-                                                               JSValue *handler_value,
-                                                               JSValue *request_value)
-{
-    JSGCRef root_ref;
-    JSGCRef relative_ref;
-    JSValue *root_value;
-    JSValue *relative_value;
-    JSCStringBuf root_buf;
-    JSCStringBuf relative_buf;
-    const char *root;
-    const char *relative_path;
-    char littlefs_root[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
-    char target_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
-    FILE *file;
-    const char *content_type;
-    JSValue response_obj;
-
-    if (JS_GetClassID(ctx, *handler_value) != JS_CLASS_STATIC_FILE_HANDLER ||
-        !http_server_is_object(ctx, *request_value)) {
-        return JS_ThrowTypeError(ctx, "staticFileHandler.handle(req) expects a request object");
-    }
-
-    root_value = JS_PushGCRef(ctx, &root_ref);
-    relative_value = JS_PushGCRef(ctx, &relative_ref);
-    *root_value = JS_GetPropertyStr(ctx, *handler_value, "root");
-    *relative_value = JS_GetPropertyStr(ctx, *request_value, "relativePath");
-    if (JS_IsException(*root_value) || JS_IsException(*relative_value)) {
-        JS_PopGCRef(ctx, &relative_ref);
-        JS_PopGCRef(ctx, &root_ref);
-        return JS_EXCEPTION;
-    }
-
-    root = JS_ToCString(ctx, *root_value, &root_buf);
-    if (root == NULL) {
-        JS_PopGCRef(ctx, &relative_ref);
-        JS_PopGCRef(ctx, &root_ref);
-        return JS_EXCEPTION;
-    }
-    if (!http_server_resolve_littlefs_path(root, littlefs_root, sizeof(littlefs_root))) {
-        JS_PopGCRef(ctx, &relative_ref);
-        JS_PopGCRef(ctx, &root_ref);
-        return JS_ThrowTypeError(ctx, "staticFileHandler(root) expects a path under /littlefs");
-    }
-
-    relative_path = JS_ToCString(ctx, *relative_value, &relative_buf);
-    if (relative_path == NULL) {
-        JS_PopGCRef(ctx, &relative_ref);
-        JS_PopGCRef(ctx, &root_ref);
-        return JS_EXCEPTION;
-    }
-    while (*relative_path == '/') {
-        relative_path++;
-    }
-    if (*relative_path == '\0') {
-        relative_path = "index.html";
-    }
-
-    if (!http_server_join_path(target_path, sizeof(target_path), littlefs_root, relative_path, NULL)) {
-        JS_PopGCRef(ctx, &relative_ref);
-        JS_PopGCRef(ctx, &root_ref);
-        return JS_ThrowInternalError(ctx, "static file path is too long");
-    }
-    file = fopen(target_path, "rb");
-    if (file == NULL && strchr(relative_path, '.') == NULL) {
-        if (!http_server_join_path(target_path,
-                                   sizeof(target_path),
-                                   littlefs_root,
-                                   relative_path,
-                                   "/index.html")) {
-            JS_PopGCRef(ctx, &relative_ref);
-            JS_PopGCRef(ctx, &root_ref);
-            return JS_ThrowInternalError(ctx, "static file path is too long");
-        }
-        file = fopen(target_path, "rb");
-    }
-    if (file == NULL) {
-        JSGCRef global_ref;
-        JSGCRef body_ref;
-        JSValue *global_obj;
-        JSValue *body_obj;
-
-        global_obj = JS_PushGCRef(ctx, &global_ref);
-        body_obj = JS_PushGCRef(ctx, &body_ref);
-        *global_obj = JS_GetGlobalObject(ctx);
-        *body_obj = JS_NewString(ctx, "Not Found");
-        response_obj = JS_IsException(*global_obj) || JS_IsException(*body_obj)
-                           ? JS_EXCEPTION
-                           : esp32_mquickjs_make_response_object(ctx,
-                                                                 *global_obj,
-                                                                 404,
-                                                                 "Not Found",
-                                                                 "",
-                                                                 JS_UNDEFINED,
-                                                                 *body_obj);
-        JS_PopGCRef(ctx, &body_ref);
-        JS_PopGCRef(ctx, &global_ref);
-        JS_PopGCRef(ctx, &relative_ref);
-        JS_PopGCRef(ctx, &root_ref);
-        return response_obj;
-    }
-
-    fclose(file);
-    content_type = http_server_guess_content_type(target_path);
-    {
-        JSGCRef global_ref;
-        JSGCRef headers_ref;
-        JSGCRef stream_ref;
-        JSValue *global_obj;
-        JSValue *headers_obj;
-        JSValue *stream_obj;
-
-        global_obj = JS_PushGCRef(ctx, &global_ref);
-        headers_obj = JS_PushGCRef(ctx, &headers_ref);
-        stream_obj = JS_PushGCRef(ctx, &stream_ref);
-        *global_obj = JS_GetGlobalObject(ctx);
-        *headers_obj = JS_NewObject(ctx);
-        *stream_obj = JS_UNDEFINED;
-        if (JS_IsException(*global_obj) || JS_IsException(*headers_obj)) {
-            JS_PopGCRef(ctx, &stream_ref);
-            JS_PopGCRef(ctx, &headers_ref);
-            JS_PopGCRef(ctx, &global_ref);
-            JS_PopGCRef(ctx, &relative_ref);
-            JS_PopGCRef(ctx, &root_ref);
-            return JS_EXCEPTION;
-        }
-        if (!esp32_mquickjs_set_property_ref(ctx,
-                                         headers_obj,
-                                         "content-type",
-                                         JS_NewString(ctx, content_type))) {
-            JS_PopGCRef(ctx, &stream_ref);
-            JS_PopGCRef(ctx, &headers_ref);
-            JS_PopGCRef(ctx, &global_ref);
-            JS_PopGCRef(ctx, &relative_ref);
-            JS_PopGCRef(ctx, &root_ref);
-            return JS_EXCEPTION;
-        }
-        *stream_obj = esp32_mquickjs_stream_open_file(ctx, *global_obj, target_path, "rb");
-        if (JS_IsException(*stream_obj)) {
-            JS_PopGCRef(ctx, &stream_ref);
-            JS_PopGCRef(ctx, &headers_ref);
-            JS_PopGCRef(ctx, &global_ref);
-            JS_PopGCRef(ctx, &relative_ref);
-            JS_PopGCRef(ctx, &root_ref);
-            return JS_EXCEPTION;
-        }
-        response_obj = esp32_mquickjs_make_response_object(ctx,
-                                                           *global_obj,
-                                                           200,
-                                                           "OK",
-                                                           "",
-                                                           *headers_obj,
-                                                           *stream_obj);
-        JS_PopGCRef(ctx, &stream_ref);
-        JS_PopGCRef(ctx, &headers_ref);
-        JS_PopGCRef(ctx, &global_ref);
-    }
-    JS_PopGCRef(ctx, &relative_ref);
-    JS_PopGCRef(ctx, &root_ref);
-    return response_obj;
-}
-#endif
-
 void esp32_mquickjs_deinit_http_server_runtime(JSContext *ctx)
 {
     int i;
 
     if (!s_http_server_state.initialized) {
-        if (s_http_server_state.queue != NULL) {
-            vQueueDelete(s_http_server_state.queue);
-        }
         if (s_http_server_state.lock != NULL) {
             vSemaphoreDelete(s_http_server_state.lock);
         }
@@ -2443,6 +2115,9 @@ void esp32_mquickjs_deinit_http_server_runtime(JSContext *ctx)
     s_http_server_state.shutting_down = true;
     s_http_server_state.runtime = NULL;
     for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_SERVERS; ++i) {
+        if (s_http_server_state.servers[i].events != NULL) {
+            esp32_mquickjs_event_queue_close(s_http_server_state.servers[i].events);
+        }
         http_server_stop_slot(&s_http_server_state.servers[i]);
     }
     for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN; ++i) {
@@ -2455,111 +2130,10 @@ void esp32_mquickjs_deinit_http_server_runtime(JSContext *ctx)
         http_server_cleanup_server(&s_http_server_state.servers[i]);
     }
 
-    if (s_http_server_state.queue != NULL) {
-        vQueueDelete(s_http_server_state.queue);
-    }
     if (s_http_server_state.lock != NULL) {
         vSemaphoreDelete(s_http_server_state.lock);
     }
     memset(&s_http_server_state, 0, sizeof(s_http_server_state));
-}
-
-static bool http_server_async_poller(JSContext *ctx,
-                                     esp32_mquickjs_runtime_t *runtime,
-                                     void *opaque)
-{
-    esp32_mquickjs_http_server_event_t event;
-    bool handled = false;
-
-    (void)runtime;
-    (void)opaque;
-    if (ctx == NULL || s_http_server_state.queue == NULL) {
-        return false;
-    }
-
-    while (xQueueReceive(s_http_server_state.queue, &event, 0) == pdTRUE) {
-        esp32_mquickjs_http_server_request_t *request;
-        esp32_mquickjs_http_server_route_t *route;
-        JSGCRef callback_ref;
-        JSGCRef request_ref;
-        JSGCRef result_ref;
-        JSValue *callback_fn;
-        JSValue *req_obj;
-        JSValue *callback_result;
-        esp32_mquickjs_http_server_response_t response = {0};
-
-        if (event.request_id >= ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN) {
-            continue;
-        }
-
-        request = &s_http_server_state.requests[event.request_id];
-        if (!request->allocated || request->generation != event.generation) {
-            continue;
-        }
-
-        route = http_server_find_route(ctx, request->server_id, request->method, request->path);
-        if (route == NULL) {
-            http_server_send_error(request->async_req, 404, "Nothing matches the given URI");
-            http_server_cleanup_request(request);
-            handled = true;
-            continue;
-        }
-
-        callback_fn = JS_PushGCRef(ctx, &callback_ref);
-        req_obj = JS_PushGCRef(ctx, &request_ref);
-        callback_result = JS_PushGCRef(ctx, &result_ref);
-        *callback_fn = route->callback.val;
-        *req_obj = JS_UNDEFINED;
-        *callback_result = JS_UNDEFINED;
-        if (!http_server_make_request_object(ctx, request, route, req_obj)) {
-            JS_PopGCRef(ctx, &result_ref);
-            JS_PopGCRef(ctx, &request_ref);
-            JS_PopGCRef(ctx, &callback_ref);
-            http_server_send_error(request->async_req, 500, "failed to build request object");
-            http_server_cleanup_request(request);
-            handled = true;
-            continue;
-        }
-
-        s_http_server_state.dispatching_request = true;
-        s_http_server_state.dispatching_request_id = request->request_id;
-        *callback_result = http_server_call_function(
-            ctx,
-            *callback_fn,
-            route->callback_this_ref_added ? route->callback_this.val : JS_NULL,
-            1,
-            req_obj);
-        s_http_server_state.dispatching_request = false;
-        if (JS_IsException(*callback_result)) {
-            esp32_mquickjs_print_exception(ctx);
-            http_server_send_error(request->async_req, 500, "handler exception");
-        } else if (http_server_make_response(ctx, callback_result, &response) != 0) {
-            http_server_send_error(request->async_req, 500, "invalid response object");
-        } else if (http_server_send_response(request->async_req, &response) != ESP_OK) {
-            ESP_LOGE(TAG, "failed to send response");
-        }
-
-        if (!JS_IsException(*req_obj)) {
-            JSGCRef req_body_ref;
-            JSValue *req_body_value;
-
-            req_body_value = JS_PushGCRef(ctx, &req_body_ref);
-            *req_body_value = JS_GetPropertyStr(ctx, *req_obj, "body");
-            if (!JS_IsException(*req_body_value)) {
-                esp32_mquickjs_stream_close_value(ctx, *req_body_value);
-            }
-            JS_PopGCRef(ctx, &req_body_ref);
-        }
-
-        JS_PopGCRef(ctx, &result_ref);
-        JS_PopGCRef(ctx, &request_ref);
-        JS_PopGCRef(ctx, &callback_ref);
-        http_server_free_response(&response);
-        http_server_cleanup_request(request);
-        handled = true;
-    }
-
-    return handled;
 }
 
 #endif

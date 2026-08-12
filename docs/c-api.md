@@ -10,10 +10,8 @@ This document covers the APIs exported directly by the firmware runtime.
   Write values to the serial console.
 - `gc()`
   Run the JavaScript garbage collector.
-- `defer()`
-  Create a deferred helper object for callback-style async work.
 - `fetch(input, options?)`
-  Run a blocking HTTP request and return a `Response`.
+  Run an HTTP request through a hidden native Future and return a `Response`.
 - `load(path)`
   Evaluate a script from the active filesystem root. It starts at `/littlefs`;
   applications may select any mounted root with `fs.setRoot(path)`.
@@ -22,9 +20,8 @@ This document covers the APIs exported directly by the firmware runtime.
   the active application root. Nested `load(...)` calls made while evaluating the
   framework module also remain on the system partition.
 - `sleep(ms)` / `delay(ms)`
-  Block the REPL task for `ms` milliseconds.
-- `waitFor(start, timeoutMs?)`
-  Run `start(resolve, reject, deferred)` and block while the runtime keeps pumping timers, Wi-Fi, and HTTP callbacks. Return the resolved value or throw the rejection.
+  Wait for `ms` milliseconds while the Future scheduler, timers, deadlines,
+  watchdog, and stop requests continue to advance.
 
 Startup behavior:
 
@@ -41,9 +38,7 @@ gc();
 sleep(50);
 print(fetch("https://example.com").status);
 load("demo/display_perf.js");
-print(waitFor(function (resolve) {
-  setTimeout(function () { resolve(123); }, 50);
-}, 1000));
+print(Future.call(function () { return 123; }).wait(1000));
 ```
 
 Example `index.js`:
@@ -52,40 +47,33 @@ Example `index.js`:
 print("[startup] boot script running");
 framework.load("display/st7789.js");
 framework.load("ui.js");
-wifi.async.connect("your-ssid", "your-password", function (status, error) {
-  print(error === undefined, status && status.ip);
-});
+wifi.connect("your-ssid", "your-password", 10000);
 ```
 
-## Deferred Helpers
+## Futures
 
-- `defer()`
-  Return `{ settled, done, ok, value, error, resolve, reject, callback, wait }`.
-- `deferred.resolve(value)`
-  Resolve the deferred with `value`.
-- `deferred.reject(error)`
-  Reject the deferred with `error`.
-- `deferred.callback(value, error?)`
-  Unified callback helper. Resolve with `value` when `error` is empty, otherwise reject with `error`.
-- `deferred.wait(timeoutMs?)`
-  Block until the deferred settles, while still polling async host events.
+- `Future.call(fn, thisValue?, args?)`
+  Queue a callable without invoking it before return. It starts at the next
+  scheduler idle point and remains runtime-owned through settlement.
+- `Future.all(futures)`
+  Fulfill with results in input order. Other inputs are not cancelled when one fails.
+- `Future.race(futures)`
+  Settle as `{ index, value }` from the first input without cancelling the rest.
+- `Future.sleep(ms)`
+  Return a timer-backed Future.
+- `Future.timeout(future, timeoutMs)`
+  Apply an operation deadline and cancel the input if it expires.
+- `future.status()` / `future.wait(timeoutMs?)` / `future.cancel()`
+  Inspect, cooperatively wait for, or cancel a Future. A wait timeout does not
+  cancel the operation.
 
 Examples:
 
 ```js
-var d = defer();
-setTimeout(function () { d.resolve("ok"); }, 50);
-print(d.wait(1000));
-
-var aps = waitFor(function (resolve, reject, deferred) {
-  wifi.async.scan(deferred.callback);
-}, 10000);
-print(aps.length);
-
-var response = waitFor(function (resolve, reject, deferred) {
-  http.async.fetch("https://example.com", deferred.callback);
-}, 10000);
-print(response.status);
+var scan = Future.call(wifi.scan, wifi, []);
+var request = Future.call(fetch, globalThis, ["https://example.com"]);
+var values = Future.all([scan, request]).wait(10000);
+print(values[0].length, values[1].status);
 ```
 
 ## Timers
@@ -511,28 +499,20 @@ consume the same USB input stream.
 
 - `usbSerial.MAX_FRAME_BYTES`
   Compile-time upper bound for one UTF-8 line.
-- `usbSerial.open(callback)` / `usbSerial.open(options, callback)`
-  Start receiving lines. `options.maxFrameBytes` may select a smaller bound.
-  The callback is `callback(error, data)`: exactly one argument is defined.
-  CR, LF, and CRLF terminate a frame. Oversized input is discarded through the
-  next terminator and reported as an error.
-- `usbSerial.send(text)`
-  Send one text frame and append a line terminator. Embedded CR/LF and oversized
-  strings are rejected.
-- `usbSerial.status()`
-  Return `{ open, connected, maxFrameBytes, receivedFrames, sentFrames,
-  overflowFrames, callbackErrors }`.
-- `usbSerial.close()`
-  Release the callback and line buffer. Repeated close is safe.
+- `usbSerial.open(options?)`
+  Start receiving lines and return a bounded EventQueue handle.
+  `options.maxFrameBytes` may select a smaller bound.
+- `handle.recv(timeoutMs?)`
+  Return the next text frame, or `null` at the timeout. CR, LF, and CRLF
+  terminate a frame; oversized input is discarded through the next terminator.
+- `handle.send(text)` / `handle.status()` / `handle.close()`
+  Send one frame, inspect counters, or close the queue. Embedded CR/LF and
+  oversized outbound strings are rejected.
 
 ```js
-usbSerial.open({ maxFrameBytes: 4096 }, function (error, line) {
-  if (error !== undefined) {
-    usbSerial.send(JSON.stringify({ type: "protocol.error", error: error }));
-    return;
-  }
-  usbSerial.send(line);
-});
+var serial = usbSerial.open({ maxFrameBytes: 4096 });
+var line = serial.recv(1000);
+if (line !== null) serial.send(line);
 ```
 
 Boot and framework logs can precede protocol traffic. Host clients should wait
@@ -1042,7 +1022,7 @@ if (ref) {
 - `sys.info()`
   Return board/chip identity plus memory/runtime fields:
   `{ runtimeVersion, hostApiVersion, board, chip, features, userLedPin, userLedActiveLow, scriptsDir, flashSize, psramEnabled, psramSize, freePsram, totalInternalHeap, freeInternalHeap, jsHeapSize, jsHeapRegion, littlefsMounted, replEnabled, autoRunIndexJs, formatLittlefsOnMountFail, freeHeap, jsTimeMs }`. `runtimeVersion` follows framework SemVer; `hostApiVersion` is the integer native compatibility level.
-  `features` is `{ fs, nvs, gpio, ledc, adc, dac, i2c, spi, uart, usbSerial, socket, websocket, displayBuffer, wifi, http, httpServer, staticFileHandler }` and is the stable way to discover which optional host modules or composite helpers were compiled into the firmware for the current board.
+  `features` is `{ fs, nvs, gpio, ledc, adc, dac, i2c, spi, uart, usbSerial, socket, websocket, displayBuffer, wifi, http, httpServer }` and is the stable way to discover which optional host modules were compiled into the firmware for the current board.
 - `sys.millis()`
   Return monotonic milliseconds from `esp_timer`.
 - `sys.micros()`
@@ -1088,15 +1068,11 @@ Wi-Fi credentials are kept in RAM. Rebooting the board clears the active station
 - `wifi.status()`
   Return `{ initialized, started, connected, scanning, ssid, hostname, ip, netmask, gateway, lastDisconnectReason, lastDisconnectReasonName }`.
 - `wifi.connect(ssid, password, timeoutMs = wifi.DEFAULT_TIMEOUT_MS)`
-  Start station mode, connect to an AP, and return the updated status object.
-- `wifi.async.connect(ssid, password, callback)` / `wifi.async.connect(ssid, password, timeoutMs, callback)`
-  Start station mode without blocking the REPL and call `callback(status, error)` on completion.
+  Start station mode through the native Future driver and return the updated status object.
 - `wifi.disconnect()`
   Disconnect the station and return the updated status object.
 - `wifi.scan()`
-  Run a blocking AP scan and return an array of `{ ssid, bssid, rssi, channel, authMode, hidden }`.
-- `wifi.async.scan(callback)`
-  Start a non-blocking scan and call `callback(results, error)` after the scan completes.
+  Run an event-driven AP scan and return an array of `{ ssid, bssid, rssi, channel, authMode, hidden }`.
 
 Example:
 
@@ -1104,13 +1080,9 @@ Example:
 print(JSON.stringify(wifi.status()));
 var aps = wifi.scan();
 print(aps.length);
-wifi.async.scan(function (results, error) {
-  print(error === undefined, results.length);
-});
 wifi.connect("your-ssid", "your-password");
-wifi.async.connect("your-ssid", "your-password", function (status, error) {
-  print(error === undefined, status && status.ip);
-});
+var nextScan = Future.call(wifi.scan, wifi, []);
+print(nextScan.wait(10000).length);
 print(JSON.stringify(wifi.status()));
 wifi.disconnect();
 ```
@@ -1165,201 +1137,91 @@ socket.close(udp);
 
 ## `websocketClient` Module
 
-`websocketClient` is a singleton outbound text client backed by Espressif's
-managed `esp_websocket_client` component. It is exposed only when
-`sys.info().features.websocket` is enabled. Connect after Wi-Fi is ready.
+`websocketClient` is exposed when `sys.info().features.websocket` is enabled.
+It uses a bounded `EventQueue` handle and does not invoke application callbacks.
 
-- `websocketClient.MAX_MESSAGE_BYTES`
-  Compile-time upper bound for complete inbound and outbound text messages.
-- `websocketClient.open(options, callback)`
-  Start an asynchronous connection. Required `options.url` must use `ws://` or
-  `wss://`. Options include `authorization`, `subprotocol`, `autoReconnect`,
-  `reconnectMs`, `networkTimeoutMs`, `sendTimeoutMs`, `pingIntervalSec`,
-  `maxMessageBytes`, and `useCertBundle`. Authorization values containing CR/LF
-  are rejected. `wss://` uses the ESP certificate bundle by default.
-- Callback events:
-  `{ type: "open" }`, `{ type: "message", data }`, or
-  `{ type: "close" | "error", code, message, reconnecting }`.
-- `websocketClient.send(text)`
-  Send one complete WebSocket text message while connected.
-- `websocketClient.status()`
-  Return `{ open, connected, maxMessageBytes, openedEvents, receivedMessages,
-  sentMessages, droppedEvents, oversizedMessages, callbackErrors }`.
-- `websocketClient.close()`
-  Stop reconnect attempts, close the socket, release queued messages and remove
-  the callback. Repeated close is safe.
+- `websocketClient.open(options)`
+  Start a connection and return a handle. Required `options.url` uses `ws://`
+  or `wss://`; the remaining network, reconnect, authorization, and size options
+  are unchanged.
+- `handle.recv(timeoutMs?)`
+  Return the next `{ type: "open" | "message" | "close" | "error", ... }`
+  event, or `null` at the timeout.
+- `handle.send(text)` / `handle.status()` / `handle.close()`
+  Send text, inspect counters, or close the event source.
 
 ```js
-wifi.async.connect("your-ssid", "your-password", function (status, error) {
-  if (error !== undefined) {
-    print(error);
-    return;
-  }
-  websocketClient.open({
-    url: "wss://agent.example/ws",
-    authorization: "Bearer paired-device-token",
-    autoReconnect: true
-  }, function (event) {
-    if (event.type === "open") {
-      websocketClient.send(JSON.stringify({ type: "protocol.ping", id: 1 }));
-    } else if (event.type === "message") {
-      print(event.data);
-    }
-  });
+var client = websocketClient.open({
+  url: "wss://agent.example/ws",
+  authorization: "Bearer paired-device-token",
+  autoReconnect: true
 });
+var event = client.recv(10000);
+if (event && event.type === "open") {
+  client.send(JSON.stringify({ type: "protocol.ping", id: 1 }));
+}
 ```
 
-Only complete text messages are accepted in the first version. Binary and
-fragmented WebSocket application messages are rejected. Close, ping, and pong
-control frames are handled by the native client and are not reported as
-application errors. Automatic reconnect preserves the registered callback until
-explicit `close()`.
+Only complete text messages are accepted. Close, ping, and pong control frames
+are handled natively and are not reported as application errors.
 
 ## `http` Module
 
-The `http` namespace is exposed when either the HTTP client feature or the HTTP server feature is enabled. Individual members are still feature-gated.
+The namespace is present when the HTTP client or server feature is enabled.
 
-- `http.DEFAULT_TIMEOUT_MS`
-  Default request timeout in milliseconds. Exposed only when `sys.info().features.http` is enabled.
-- `http.MAX_BODY_BYTES`
-  Default maximum captured response body size. Exposed only when
-  `sys.info().features.http` is enabled.
+- `http.DEFAULT_TIMEOUT_MS` / `http.MAX_BODY_BYTES`
+  HTTP-client limits when `sys.info().features.http` is enabled.
+- `fetch(input, options?)` / `http.fetch(input, options?)`
+  Run one request through the native HTTP Future driver. Options include
+  `method`, `headers`, UTF-8 string or `Stream` `body`, `timeoutMs`, and
+  `maxBodyBytes`.
 - `http.server(options?)`
-  Create a lightweight HTTP server object backed by `esp_http_server`. Exposed only when `sys.info().features.httpServer` is enabled.
-- `http.fetch(input, options?)`
-  Alias of global `fetch(input, options?)`. Exposed only when `sys.info().features.http` is enabled.
-- `http.async.fetch(input, callback)` / `http.async.fetch(input, options, callback)`
-  Run an asynchronous HTTP request, return an opaque generation-checked request
-  handle, and call `callback(response, error)` on completion. Exposed only when
-  `sys.info().features.http` is enabled.
-- `http.async.cancel(handle)`
-  Cancel an active asynchronous request. Return `true` only when the handle
-  still identifies an active request; stale handles cannot cancel a reused
-  worker slot. The completion callback receives a cancellation error.
-
-Supported `fetch` options:
-
-- `method`
-  HTTP method string such as `"GET"`, `"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"`, `"HEAD"`, or `"OPTIONS"`.
-- `headers`
-  Plain object or `Headers`.
-- `body`
-  UTF-8 string request body or `Stream`.
-- `timeoutMs`
-  Per-request timeout in milliseconds.
-- `maxBodyBytes`
-  Positive maximum number of response body bytes to retain. The request fails
-  with an explicit `maxBodyBytes` error instead of growing the response buffer
-  beyond this boundary.
-
-Examples:
+  Create a low-level declarative server when
+  `sys.info().features.httpServer` is enabled.
 
 ```js
-var response = fetch("http://example.com");
-print(response.status, response.ok, response.text().length);
-
-var requestHandle = http.async.fetch("https://example.com", function (response, error) {
-  print(error === undefined, response && response.status);
-});
-// http.async.cancel(requestHandle);
-
-var head = http.fetch("http://example.com", {
-  method: "HEAD",
-  timeoutMs: 5000,
-});
-print(head.status, head.text().length);
-```
-
-Synchronous `fetch(...)` runs on the same JS thread as `http.server(...)`. If you call your own local server from the same script, prefer the asynchronous form with `waitFor(...)`:
-
-```js
-var response = waitFor(function (resolve, reject, deferred) {
-  http.async.fetch("http://" + wifi.status().ip + ":8080/ping", deferred.callback);
-}, 10000);
-print(response.text());
+var left = Future.call(fetch, globalThis, ["https://example.com/a"]);
+var right = Future.call(fetch, globalThis, ["https://example.com/b"]);
+var responses = Future.all([left, right]).wait(10000);
+print(responses[0].status, responses[1].status);
 ```
 
 ### HTTP Server API
 
-- `var server = http.server({ port: 8080, host: "0.0.0.0" })`
-  Create a server. Default port is `80`. Default host is `"0.0.0.0"` to listen on all interfaces.
-- `server.get(pathOrPattern, handler)`
-- `server.post(pathOrPattern, handler)`
-- `server.put(pathOrPattern, handler)`
-- `server.patch(pathOrPattern, handler)`
-- `server.delete(pathOrPattern, handler)`
-- `server.head(pathOrPattern, handler)`
-- `server.options(pathOrPattern, handler)`
-- `server.all(pathOrPattern, handler)`
-  Register a route handler.
-- `http.staticFileHandler(root)` / `staticFileHandler(root)`
-  Create a static file handler suitable for routes such as `server.get("/assets/*", staticFileHandler("./www"))`. Exposed only when both `sys.info().features.httpServer` and `sys.info().features.fs` are enabled.
-- `server.start()`
-- `server.stop()`
-  Stop listening while retaining the server slot and registered routes.
-- `server.removeRoute(pathOrPattern, method?)`
-  Remove matching routes and return the number removed. Omit `method` to remove
-  every method for the pattern; use names such as `"GET"` or `"ANY"` to filter.
-- `server.clearRoutes()`
-  Release all route callbacks owned by this server and return the number removed.
+- `server.route(method, path)`
+  Register a declarative route. Supported methods are `GET`, `POST`, `PUT`,
+  `PATCH`, `DELETE`, `HEAD`, `OPTIONS`, and `ANY`; `*` in a path uses the
+  built-in glob matcher.
+- `server.start()` / `server.stop()`
+  Start or stop listening while retaining the server and route table.
+- `server.receive(timeoutMs?)`
+  Return the next matching `Request`, or `null` at the timeout. The request
+  queue is bounded and rejects overflow with HTTP 503.
+- `server.respond(request, response)`
+  Complete one live request with a `Response`. A request is generation-checked
+  and cannot be completed twice.
+- `server.removeRoute(path, method?)` / `server.clearRoutes()`
+  Remove matching declarative routes.
 - `server.close()`
-  Stop listening, finish pending request bookkeeping, release every route, and
-  return the native server slot for reuse. Calling `close()` again is safe.
+  Stop the listener, close its EventQueue, reject pending requests, and release
+  the native slot. Repeated close is safe.
 
-Handler shape:
-
-- `handler` can be:
-  - a function `function (req) { return response; }` that returns a `Response`
-  - or an object with `handle(req)` that returns a `Response`
-- `req` is always a `Request`
-- request bodies larger than 8192 bytes are rejected with HTTP 413 before a
-  JavaScript handler runs
-- route handlers must return a `Response`
-
-Route patterns:
-
-- Exact strings such as `"/ping"` match the request path directly.
-- Strings containing `*` use the built-in simple glob matcher, for example `"/assets/*"`.
-- You can also pass a `RegExp` directly, for example `/^\\/api\\/v1\\//`.
-
-Host binding:
-
-- Omit `host` or set it to `"0.0.0.0"` to listen on all interfaces.
-- Set `host` to a specific local IPv4 address to bind the server to the matching network interface.
-
-`staticFileHandler(root)` behavior:
-
-- `root` must resolve under `/littlefs`.
-- Matched file paths are resolved from `req.relativePath`.
-- Files are streamed directly from LittleFS in chunks.
-- `Response.stream(...)` also streams in chunks and closes the supplied stream after the response is sent.
-
-Example:
+Request bodies larger than 8192 bytes are rejected with HTTP 413 before they
+enter the queue. `Response.stream(...)` writes in chunks and closes the stream
+after the response is sent.
 
 ```js
 var server = http.server({ port: 8080, host: "0.0.0.0" });
-
-server.get("/ping", function (req) {
-  return Response.text("pong");
-});
-
-server.post("/echo", function (req) {
-  return Response.text(req.text(), {
-    headers: { "content-type": "text/plain; charset=utf-8" },
-  });
-});
-
-server.get(/^\/hello$/, function (req) {
-  return Response.text(req.query.name || "hello");
-});
-
-server.get("/assets/*", staticFileHandler("./_sys"));
-
-server.get("/core", function (req) {
-  return Response.stream(fs.open("_sys/display/core.js", "rb"), {
-    headers: { "content-type": "application/javascript; charset=utf-8" },
-  });
-});
-
+server.route("GET", "/ping");
+server.route("POST", "/echo");
 server.start();
+
+var request = server.receive(1000);
+if (request !== null) {
+  if (request.method === "POST") {
+    server.respond(request, Response.text(request.text()));
+  } else {
+    server.respond(request, Response.text("pong"));
+  }
+}
 ```

@@ -50,7 +50,7 @@ class TransportArchitectureTests(unittest.TestCase):
             "js_socket_open",
             "js_socket_close",
             "js_socket_status",
-            "js_socket_get_max_message_bytes",
+            "js_socket_get_max_transfer_bytes",
             "js_socket_tcp_connect",
             "js_socket_tcp_listen",
             "js_socket_tcp_accept",
@@ -63,7 +63,8 @@ class TransportArchitectureTests(unittest.TestCase):
         self.assertNotIn("tcpClient", source)
         self.assertNotIn("agent.", source)
         self.assertNotIn("deviceId", source)
-        self.assertNotIn("token", source)
+        self.assertNotIn("Authorization", source)
+        self.assertNotIn("Bearer ", source)
 
     def test_websocket_control_frames_are_not_application_errors(self):
         source = (
@@ -81,7 +82,7 @@ class TransportArchitectureTests(unittest.TestCase):
             source.index('websocket_enqueue_error("only complete WebSocket text'),
         )
 
-    def test_transport_callbacks_use_the_guarded_call_gateway(self):
+    def test_repeated_input_transports_use_event_queues_without_callbacks(self):
         sources = (
             MQUICKJS / "src" / "modules" / "usb_serial" / "esp32_mquickjs_usb_serial.c",
             MQUICKJS / "src" / "modules" / "websocket" / "esp32_mquickjs_websocket.c",
@@ -89,8 +90,9 @@ class TransportArchitectureTests(unittest.TestCase):
 
         for source in sources:
             text = source.read_text(encoding="utf-8")
-            self.assertIn("esp32_mquickjs_call(", text, source)
+            self.assertIn("esp32_mquickjs_event_queue", text, source)
             self.assertNotIn("JS_Call(", text, source)
+            self.assertNotIn("JSGCRef callback", text, source)
 
 
 if __name__ == "__main__":

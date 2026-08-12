@@ -4,6 +4,9 @@
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
 
+bool esp32_mquickjs_init_fs_runtime(JSContext *ctx,
+                                    esp32_mquickjs_runtime_t *runtime);
+
 bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed);
 bool esp32_mquickjs_mount_littlefs_partition(const char *partition_label,
                                              const char *base_path,

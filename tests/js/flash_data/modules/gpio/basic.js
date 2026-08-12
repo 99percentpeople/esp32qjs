@@ -33,8 +33,8 @@ test("gpio/basic", function () {
   test.ok(typeof gpio.getDriveStrength === "function", "gpio.getDriveStrength should exist");
   test.ok(typeof gpio.setDriveStrength === "function", "gpio.setDriveStrength should exist");
   test.ok(typeof gpio.hold === "function", "gpio.hold should exist");
-  test.ok(typeof gpio.attachInterrupt === "function", "gpio.attachInterrupt should exist");
-  test.ok(typeof gpio.detachInterrupt === "function", "gpio.detachInterrupt should exist");
+  test.ok(typeof gpio.watch === "function", "gpio.watch should exist");
+  test.ok(typeof gpio.attachInterrupt === "undefined", "legacy interrupt callbacks should be removed");
   test.ok(typeof gpio.reset === "function", "gpio.reset should exist");
   test.ok(typeof gpio.led === "function", "gpio.led should exist");
   test.ok(!gpio.isValid(-1), "negative pin should be invalid");
@@ -93,43 +93,22 @@ test("gpio/basic", function () {
     pull: gpio.PULLDOWN,
     level: gpio.LOW,
   });
-  var interruptEvents = [];
-  status = gpio.attachInterrupt(pin, function (event) {
-    interruptEvents.push({
-      pin: event.pin,
-      level: event.level,
-      mode: event.mode,
-    });
-  }, gpio.CHANGE);
-  test.ok(status.interruptAttached, "attachInterrupt should update status");
-  test.equal(status.interruptMode, gpio.CHANGE, "attachInterrupt should report change mode");
-  test.equal(status.interruptDropped, 0, "attachInterrupt should reset dropped count");
+  var interrupts = gpio.watch(pin, gpio.CHANGE);
+  status = gpio.status(pin);
+  test.ok(status.interruptAttached, "watch should update status");
+  test.equal(status.interruptMode, gpio.CHANGE, "watch should report change mode");
+  test.equal(status.interruptDropped, 0, "watch should reset dropped count");
   gpio.digitalWrite(pin, true);
-  var interruptEvent = waitFor(function (resolve) {
-    var intervalId = setInterval(function () {
-      if (interruptEvents.length > 0) {
-        clearInterval(intervalId);
-        resolve(interruptEvents[0]);
-      }
-    }, 10);
-
-    return function () {
-      clearInterval(intervalId);
-    };
-  }, 1000);
-  test.equal(interruptEvent.pin, pin, "interrupt callback pin");
-  test.equal(interruptEvent.mode, gpio.CHANGE, "interrupt callback mode");
-  test.ok(typeof interruptEvent.level === "boolean", "interrupt callback level should be boolean");
-  status = gpio.detachInterrupt(pin);
-  test.ok(!status.interruptAttached, "detachInterrupt should clear attached state");
-  test.equal(status.interruptMode, null, "detachInterrupt should clear mode");
+  var interruptEvent = interrupts.receive(1000);
+  test.equal(interruptEvent.pin, pin, "interrupt event pin");
+  test.equal(interruptEvent.mode, gpio.CHANGE, "interrupt event mode");
+  test.ok(typeof interruptEvent.level === "boolean", "interrupt event level should be boolean");
+  test.ok(interrupts.close(), "interrupt EventQueue should close");
+  status = gpio.status(pin);
+  test.ok(!status.interruptAttached, "queue close should detach the interrupt");
+  test.equal(status.interruptMode, null, "queue close should clear mode");
   gpio.digitalWrite(pin, false);
-  var interruptCountAfterDetach = waitFor(function (resolve) {
-    setTimeout(function () {
-      resolve(interruptEvents.length);
-    }, 80);
-  }, 500);
-  test.equal(interruptCountAfterDetach, 1, "detachInterrupt should stop future callbacks");
+  test.equal(interrupts.receive(80), null, "closed interrupt queue should not receive new events");
   status = gpio.configure(pin, {
     mode: gpio.OUTPUT,
     pull: gpio.FLOATING,

@@ -7,44 +7,33 @@ test("http/network", function () {
   var localUrl;
   var bodyLimitError;
   var syncBodyLimitError = "";
-  var cancelError;
-  var cancelHandle;
-  var cancelAccepted;
-  var staleCancelAccepted;
+  var boundedRequest;
+  var incomingRequest;
+  var cancelledRequest;
+  var replacementRequest;
   var replacementResponse;
   var body;
 
   if (!wifiStatus.connected) {
-    wifiStatus = waitFor(function (resolve, reject) {
-      wifi.async.connect(cfg.wifiSsid, cfg.wifiPassword, 15000, function (nextStatus, error) {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve(nextStatus);
-      });
-    }, 20000);
+    wifiStatus = Future.call(wifi.connect, wifi,
+      [cfg.wifiSsid, cfg.wifiPassword, 15000]).wait(20000);
   }
 
   test.ok(wifiStatus.connected, "wifi should be connected before fetch");
 
-  response = waitFor(function (resolve, reject) {
-    http.async.fetch(cfg.httpUrl, function (nextResponse, error) {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(nextResponse);
-    });
-  }, 20000);
+  response = Future.call(fetch, globalThis, [cfg.httpUrl]).wait(20000);
 
   test.ok(response.status >= 200 && response.status < 600, "fetch status should be valid");
+  test.equal(typeof response.text, "function", "fetch response should expose text()");
   body = response.text();
   test.ok(typeof body === "string", "fetch body should be text");
 
+  test.equal(typeof http.fetch, "function", "http.fetch should be available");
   syncResponse = http.fetch(cfg.httpUrl, { timeoutMs: 15000 });
   test.ok(syncResponse.status >= 200 && syncResponse.status < 600,
     "synchronous fetch worker status should be valid");
+  test.equal(typeof syncResponse.text, "function",
+    "synchronous fetch response should expose text()");
   test.ok(typeof syncResponse.text() === "string",
     "synchronous fetch worker body should be text");
 
@@ -60,51 +49,40 @@ test("http/network", function () {
       "synchronous response capture should enforce maxBodyBytes");
   }
 
+  test.equal(typeof http.server, "function", "http.server should be available");
   localServer = http.server({ port: 18081, host: "0.0.0.0" });
-  localServer.get("/bounded", function () {
-    return Response.text("0123456789abcdef");
-  });
+  test.equal(typeof localServer.route, "function", "HTTP server should expose route()");
+  test.equal(typeof localServer.receive, "function", "HTTP server should expose receive()");
+  test.equal(typeof localServer.respond, "function", "HTTP server should expose respond()");
+  test.equal(typeof localServer.start, "function", "HTTP server should expose start()");
+  test.equal(typeof localServer.close, "function", "HTTP server should expose close()");
+  localServer.route("GET", "/bounded");
   localServer.start();
   localUrl = "http://" + wifiStatus.ip + ":18081/bounded";
 
-  bodyLimitError = waitFor(function (resolve, reject) {
-    http.async.fetch(localUrl, { maxBodyBytes: 8 }, function (nextResponse, error) {
-      if (error) {
-        resolve(String(error));
-        return;
-      }
-      reject("bounded fetch unexpectedly returned status " + nextResponse.status);
-    });
-  }, 5000);
+  boundedRequest = Future.call(fetch, globalThis, [localUrl, { maxBodyBytes: 8 }]);
+  incomingRequest = localServer.receive(5000);
+  test.ok(incomingRequest !== null, "bounded request should reach the local server");
+  localServer.respond(incomingRequest, Response.text("0123456789abcdef"));
+  try {
+    boundedRequest.wait(5000);
+    bodyLimitError = "bounded fetch unexpectedly succeeded";
+  } catch (error) {
+    bodyLimitError = String(error);
+  }
   test.ok(bodyLimitError.indexOf("maxBodyBytes") >= 0,
     "response capture should stop at the configured body limit");
 
-  cancelError = waitFor(function (resolve, reject) {
-    cancelHandle = http.async.fetch(localUrl, function (nextResponse, error) {
-      if (error) {
-        resolve(String(error));
-        return;
-      }
-      reject("cancelled fetch unexpectedly returned status " + nextResponse.status);
-    });
-    cancelAccepted = http.async.cancel(cancelHandle);
-  }, 5000);
-  test.ok(typeof cancelHandle === "number", "async fetch should return an opaque handle");
-  test.ok(cancelAccepted, "async cancel should accept an active handle");
-  test.ok(cancelError.indexOf("cancelled") >= 0, "cancelled fetch should report cancellation");
-  test.ok(!http.async.cancel(cancelHandle), "completed request handles should become stale");
+  cancelledRequest = Future.call(fetch, globalThis, [localUrl]);
+  test.ok(cancelledRequest.cancel(), "queued request Future should cancel");
+  test.equal(cancelledRequest.status(), "cancelled", "cancel should settle request Future");
+  test.ok(!cancelledRequest.cancel(), "cancel should be idempotent after settlement");
 
-  replacementResponse = waitFor(function (resolve, reject) {
-    http.async.fetch(localUrl, function (nextResponse, error) {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(nextResponse);
-    });
-    staleCancelAccepted = http.async.cancel(cancelHandle);
-  }, 5000);
-  test.ok(!staleCancelAccepted, "a stale handle should not cancel a reused request slot");
+  replacementRequest = Future.call(fetch, globalThis, [localUrl]);
+  incomingRequest = localServer.receive(5000);
+  test.ok(incomingRequest !== null, "replacement request should reach the local server");
+  localServer.respond(incomingRequest, Response.text("replacement"));
+  replacementResponse = replacementRequest.wait(5000);
   test.equal(replacementResponse.status, 200, "replacement request should complete");
 
   localServer.close();

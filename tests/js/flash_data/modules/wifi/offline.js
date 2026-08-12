@@ -12,13 +12,7 @@ test("wifi/offline", function () {
   test.ok(typeof wifi.disconnect === "function", "wifi.disconnect should exist");
   test.ok(typeof wifi.scan === "function", "wifi.scan should exist");
   test.ok(typeof wifi.scanAsync === "undefined", "wifi.scanAsync should not exist");
-  test.ok(typeof wifi.async === "object", "wifi.async should exist");
-  test.ok(wifi.async === wifi.async, "wifi.async should be a stable object");
-  wifi.async.__probe = 7;
-  test.equal(wifi.async.__probe, 7, "wifi.async should preserve object properties");
-  delete wifi.async.__probe;
-  test.ok(typeof wifi.async.connect === "function", "wifi.async.connect should exist");
-  test.ok(typeof wifi.async.scan === "function", "wifi.async.scan should exist");
+  test.ok(typeof wifi.async === "undefined", "wifi.async should be removed");
   test.ok(typeof status.initialized === "boolean", "initialized should be boolean");
   test.ok(typeof status.started === "boolean", "started should be boolean");
   test.ok(typeof status.connected === "boolean", "connected should be boolean");
@@ -33,14 +27,14 @@ test("wifi/offline", function () {
   } catch (scanFailure) {
     scanError = scanFailure && scanFailure.message ? scanFailure.message : String(scanFailure);
   }
-  test.ok(scanError.indexOf("wifi.async.scan") >= 0, "wifi.scan(callback) should direct callers to wifi.async.scan");
+  test.ok(scanError.indexOf("expects no arguments") >= 0, "wifi.scan should reject callback overloads");
 
   try {
     wifi.connect("ssid", "password", function () {});
   } catch (connectFailure) {
     connectError = connectFailure && connectFailure.message ? connectFailure.message : String(connectFailure);
   }
-  test.ok(connectError.indexOf("wifi.async.connect") >= 0, "wifi.connect(callback) should direct callers to wifi.async.connect");
+  test.ok(connectError.indexOf("timeout") >= 0, "wifi.connect should reject callback overloads");
 
   disconnected = wifi.disconnect();
   test.ok(disconnected && typeof disconnected === "object", "wifi.disconnect should return a status object");

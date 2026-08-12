@@ -4,7 +4,8 @@
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_NVS
 
-bool esp32_mquickjs_init_nvs_runtime(JSContext *ctx);
+bool esp32_mquickjs_init_nvs_runtime(JSContext *ctx,
+                                     esp32_mquickjs_runtime_t *runtime);
 
 JSValue js_nvs_getString(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_nvs_setString(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

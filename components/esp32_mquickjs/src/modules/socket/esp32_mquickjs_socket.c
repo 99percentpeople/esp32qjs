@@ -3,6 +3,8 @@
 #if CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
 
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_future.h"
+#include "utils/esp32_mquickjs_byte_source.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -19,7 +21,7 @@
 #include "lwip/sockets.h"
 
 #define SOCKET_HOST_MAX_BYTES 253U
-#define SOCKET_WAIT_SLICE_MS 10U
+#define SOCKET_POLL_INTERVAL_US 10000U
 #define SOCKET_DEFAULT_CONNECT_TIMEOUT_MS 5000
 #define SOCKET_MAX_TIMEOUT_MS 60000
 #define SOCKET_DEFAULT_LISTEN_BACKLOG 4
@@ -37,10 +39,11 @@ typedef struct {
     bool connected;
     bool listening;
     bool peer_closed;
+    bool busy;
     int local_port;
     int remote_port;
     char local_ip[INET6_ADDRSTRLEN];
-    char remote_ip[SOCKET_HOST_MAX_BYTES + 1U];
+    char remote_host[SOCKET_HOST_MAX_BYTES + 1U];
     uint32_t sent_bytes;
     uint32_t received_bytes;
 } socket_entry_t;
@@ -52,6 +55,9 @@ typedef struct {
 } socket_state_t;
 
 static socket_state_t s_socket;
+
+static bool socket_register_future_drivers(JSContext *ctx,
+                                           esp32_mquickjs_runtime_t *runtime);
 
 static const char *socket_protocol_name(socket_protocol_t protocol)
 {
@@ -215,60 +221,24 @@ static void socket_refresh_local_address(socket_entry_t *entry)
     }
 }
 
-static int socket_wait_fd(int fd, bool writable, int timeout_ms)
+static int socket_poll_fd(int fd, bool writable)
 {
-    esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
-    int64_t deadline_us = esp_timer_get_time() + (int64_t)timeout_ms * 1000LL;
+    fd_set read_fds;
+    fd_set write_fds;
+    struct timeval timeout = {0};
 
-    for (;;) {
-        fd_set read_fds;
-        fd_set write_fds;
-        struct timeval poll_timeout = {0};
-        int result;
-
-        FD_ZERO(&read_fds);
-        FD_ZERO(&write_fds);
-        if (writable) {
-            FD_SET(fd, &write_fds);
-        } else {
-            FD_SET(fd, &read_fds);
-        }
-        result = select(fd + 1,
-                        writable ? NULL : &read_fds,
-                        writable ? &write_fds : NULL,
-                        NULL,
-                        &poll_timeout);
-        if (result > 0) {
-            return 1;
-        }
-        if (result < 0 && errno != EINTR) {
-            return -1;
-        }
-        if (timeout_ms == 0 || esp_timer_get_time() >= deadline_us) {
-            return 0;
-        }
-        {
-            int64_t remaining_us = deadline_us - esp_timer_get_time();
-            uint32_t delay_ms = remaining_us > (int64_t)SOCKET_WAIT_SLICE_MS * 1000LL
-                                    ? SOCKET_WAIT_SLICE_MS
-                                    : (uint32_t)((remaining_us + 999LL) / 1000LL);
-
-            if (delay_ms == 0) {
-                return 0;
-            }
-            if (!esp32_mquickjs_cooperative_delay(runtime, delay_ms)) {
-                return -2;
-            }
-        }
+    FD_ZERO(&read_fds);
+    FD_ZERO(&write_fds);
+    if (writable) {
+        FD_SET(fd, &write_fds);
+    } else {
+        FD_SET(fd, &read_fds);
     }
-}
-
-static JSValue socket_wait_failure(JSContext *ctx, int wait_result, const char *operation)
-{
-    if (wait_result == -2) {
-        return JS_ThrowInternalError(ctx, "sys.withTimeout() deadline exceeded");
-    }
-    return JS_ThrowInternalError(ctx, "%s failed: errno=%d", operation, errno);
+    return select(fd + 1,
+                  writable ? NULL : &read_fds,
+                  writable ? &write_fds : NULL,
+                  NULL,
+                  &timeout);
 }
 
 static bool socket_resolve(const char *host,
@@ -311,8 +281,6 @@ bool esp32_mquickjs_init_socket_runtime(JSContext *ctx,
 {
     size_t i;
 
-    (void)ctx;
-    (void)runtime;
     if (s_socket.initialized) {
         return true;
     }
@@ -321,6 +289,10 @@ bool esp32_mquickjs_init_socket_runtime(JSContext *ctx,
         s_socket.entries[i].fd = -1;
     }
     s_socket.initialized = true;
+    if (!socket_register_future_drivers(ctx, runtime)) {
+        memset(&s_socket, 0, sizeof(s_socket));
+        return false;
+    }
     return true;
 }
 
@@ -412,6 +384,10 @@ JSValue js_socket_close(JSContext *ctx,
     if (entry == NULL) {
         return JS_NewBool(false);
     }
+    if (entry->busy) {
+        return JS_ThrowInternalError(ctx,
+                                     "socket.close() refused while an operation is pending");
+    }
     socket_close_entry(entry);
     return JS_NewBool(true);
 }
@@ -462,8 +438,8 @@ JSValue js_socket_status(JSContext *ctx,
                                          JS_NewInt32(ctx, entry->local_port)) ||
         !esp32_mquickjs_set_property_ref(ctx,
                                          status,
-                                         "remoteIp",
-                                         JS_NewString(ctx, entry->remote_ip)) ||
+                                         "remoteHost",
+                                         JS_NewString(ctx, entry->remote_host)) ||
         !esp32_mquickjs_set_property_ref(ctx,
                                          status,
                                          "remotePort",
@@ -482,18 +458,1024 @@ JSValue js_socket_status(JSContext *ctx,
     return JS_PopGCRef(ctx, &status_ref);
 }
 
-JSValue js_socket_get_max_message_bytes(JSContext *ctx,
-                                        JSValue *this_val,
-                                        int argc,
-                                        JSValue *argv)
+JSValue js_socket_get_max_transfer_bytes(JSContext *ctx,
+                                         JSValue *this_val,
+                                         int argc,
+                                         JSValue *argv)
 {
     (void)this_val;
-    if (argc < 1 || socket_require_entry(ctx,
-                                         argv[0],
-                                         SOCKET_PROTOCOL_NONE) == NULL) {
+    (void)argc;
+    (void)argv;
+    return JS_NewInt32(ctx, CONFIG_ESP32_MQUICKJS_SOCKET_MAX_MESSAGE_BYTES);
+}
+
+static JSValue socket_future_call_and_wait(JSContext *ctx,
+                                           const char *family_name,
+                                           const char *method_name,
+                                           int argc,
+                                           JSValue *argv)
+{
+    JSGCRef global_ref;
+    JSGCRef socket_ref;
+    JSGCRef family_ref;
+    JSGCRef method_ref;
+    JSValue *global = JS_PushGCRef(ctx, &global_ref);
+    JSValue *socket = JS_PushGCRef(ctx, &socket_ref);
+    JSValue *family = JS_PushGCRef(ctx, &family_ref);
+    JSValue *method = JS_PushGCRef(ctx, &method_ref);
+    JSValue result;
+
+    *global = JS_GetGlobalObject(ctx);
+    *socket = JS_IsException(*global)
+        ? JS_EXCEPTION
+        : JS_GetPropertyStr(ctx, *global, "socket");
+    *family = JS_IsException(*socket)
+        ? JS_EXCEPTION
+        : JS_GetPropertyStr(ctx, *socket, family_name);
+    *method = JS_IsException(*family)
+        ? JS_EXCEPTION
+        : JS_GetPropertyStr(ctx, *family, method_name);
+    if (JS_IsException(*global) || JS_IsException(*socket) ||
+        JS_IsException(*family) || JS_IsException(*method)) {
+        result = JS_EXCEPTION;
+    } else {
+        result = esp32_mquickjs_future_call_and_wait(ctx,
+                                                     esp32_mquickjs_get_active_runtime(),
+                                                     *method,
+                                                     *family,
+                                                     argc,
+                                                     argv);
+    }
+    JS_PopGCRef(ctx, &method_ref);
+    JS_PopGCRef(ctx, &family_ref);
+    JS_PopGCRef(ctx, &socket_ref);
+    JS_PopGCRef(ctx, &global_ref);
+    return result;
+}
+
+typedef enum {
+    SOCKET_FUTURE_TCP_CONNECT,
+    SOCKET_FUTURE_TCP_ACCEPT,
+    SOCKET_FUTURE_TCP_SEND,
+    SOCKET_FUTURE_TCP_RECV,
+    SOCKET_FUTURE_UDP_SENDTO,
+    SOCKET_FUTURE_UDP_RECVFROM,
+} socket_future_kind_t;
+
+struct esp32_mquickjs_future_driver_state {
+    socket_future_kind_t kind;
+    esp32_mquickjs_runtime_t *runtime;
+    esp32_mquickjs_future_token_t token;
+    esp_timer_handle_t poll_timer;
+    int entry_id;
+    int fd;
+    int port;
+    int timeout_ms;
+    int error_code;
+    int client_fd;
+    int remote_port;
+    uint64_t deadline_us;
+    size_t length;
+    size_t offset;
+    ssize_t received;
+    uint8_t *data;
+    struct sockaddr_storage address;
+    socklen_t address_len;
+    char host[SOCKET_HOST_MAX_BYTES + 1U];
+    char error_text[96];
+    bool started;
+    bool issued;
+    bool empty_result;
+    bool completed;
+    bool cancelled;
+};
+
+static socket_entry_t *socket_future_entry(
+    const esp32_mquickjs_future_driver_state_t *state)
+{
+    socket_entry_t *entry = state != NULL ? socket_find_entry(state->entry_id) : NULL;
+
+    return entry != NULL && entry->fd == state->fd ? entry : NULL;
+}
+
+static void socket_future_fail(esp32_mquickjs_future_driver_state_t *state,
+                               int error_code,
+                               const char *message)
+{
+    if (state == NULL || state->completed) {
+        return;
+    }
+    state->error_code = error_code != 0 ? error_code : EIO;
+    if (message != NULL) {
+        snprintf(state->error_text, sizeof(state->error_text), "%s", message);
+    }
+    state->completed = true;
+}
+
+static bool socket_future_copy_source(JSContext *ctx,
+                                      JSValue value,
+                                      const char *api_name,
+                                      esp32_mquickjs_future_driver_state_t *state)
+{
+    esp32_mquickjs_byte_source_t source;
+    uint8_t *owned = NULL;
+    JSValue source_error = JS_UNDEFINED;
+
+    if (!esp32_mquickjs_get_byte_source(ctx,
+                                       value,
+                                       api_name,
+                                       &source,
+                                       &owned,
+                                       &source_error)) {
+        if (!JS_IsException(source_error)) {
+            (void)JS_Throw(ctx, source_error);
+        }
+        return false;
+    }
+    if (source.length > CONFIG_ESP32_MQUICKJS_SOCKET_MAX_MESSAGE_BYTES) {
+        esp32_mquickjs_release_byte_source(owned);
+        JS_ThrowRangeError(ctx, "%s data exceeds socket limit", api_name);
+        return false;
+    }
+    if (source.length > 0) {
+        state->data = heap_caps_malloc(source.length, MALLOC_CAP_8BIT);
+        if (state->data == NULL) {
+            esp32_mquickjs_release_byte_source(owned);
+            JS_ThrowOutOfMemory(ctx);
+            return false;
+        }
+        memcpy(state->data, source.data, source.length);
+    }
+    state->length = source.length;
+    esp32_mquickjs_release_byte_source(owned);
+    return true;
+}
+
+static esp32_mquickjs_future_driver_state_t *socket_future_allocate(
+    JSContext *ctx,
+    JSValue socket_id,
+    socket_protocol_t protocol,
+    socket_future_kind_t kind)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+    socket_entry_t *entry = socket_require_entry(ctx, socket_id, protocol);
+
+    if (entry == NULL) {
+        return NULL;
+    }
+    if (entry->busy) {
+        JS_ThrowInternalError(ctx, "socket already has an operation in progress");
+        return NULL;
+    }
+    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    if (state == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        return NULL;
+    }
+    state->kind = kind;
+    state->entry_id = entry->id;
+    state->fd = entry->fd;
+    state->client_fd = -1;
+    state->received = -1;
+    return state;
+}
+
+static bool socket_tcp_connect_future_prepare(
+    JSContext *ctx,
+    JSGCRef *this_ref,
+    int argc,
+    JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+    socket_entry_t *entry;
+
+    (void)this_ref;
+    if (out_state == NULL || argc < 3 || argc > 4) {
+        JS_ThrowTypeError(ctx,
+                          "socket.tcp.connect(socketId, remoteHost, remotePort, timeoutMs?) expected");
+        return false;
+    }
+    state = socket_future_allocate(ctx, argv[0].val, SOCKET_PROTOCOL_TCP,
+                                   SOCKET_FUTURE_TCP_CONNECT);
+    if (state == NULL) {
+        return false;
+    }
+    entry = socket_future_entry(state);
+    if (entry == NULL || entry->connected || entry->listening ||
+        !socket_get_host(ctx, argv[1].val, state->host, sizeof(state->host)) ||
+        !socket_to_int(ctx, argv[2].val, 1, 65535, &state->port) ||
+        (argc >= 4 && !JS_IsUndefined(argv[3].val) &&
+         !socket_to_int(ctx, argv[3].val, 0, SOCKET_MAX_TIMEOUT_MS,
+                        &state->timeout_ms))) {
+        heap_caps_free(state);
+        if (entry != NULL && (entry->connected || entry->listening)) {
+            JS_ThrowInternalError(ctx, "TCP socket is already active");
+        } else {
+            JS_ThrowTypeError(ctx,
+                              "socket.tcp.connect(socketId, remoteHost, remotePort, timeoutMs?) expected");
+        }
+        return false;
+    }
+    if (argc < 4 || JS_IsUndefined(argv[3].val)) {
+        state->timeout_ms = SOCKET_DEFAULT_CONNECT_TIMEOUT_MS;
+    }
+    *out_state = state;
+    return true;
+}
+
+static bool socket_tcp_accept_future_prepare(
+    JSContext *ctx,
+    JSGCRef *this_ref,
+    int argc,
+    JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+    socket_entry_t *entry;
+
+    (void)this_ref;
+    if (out_state == NULL || argc < 1 || argc > 2) {
+        JS_ThrowTypeError(ctx, "socket.tcp.accept(socketId, timeoutMs?) expected");
+        return false;
+    }
+    state = socket_future_allocate(ctx, argv[0].val, SOCKET_PROTOCOL_TCP,
+                                   SOCKET_FUTURE_TCP_ACCEPT);
+    if (state == NULL) {
+        return false;
+    }
+    entry = socket_future_entry(state);
+    if (entry == NULL || !entry->listening ||
+        (argc >= 2 && !JS_IsUndefined(argv[1].val) &&
+         !socket_to_int(ctx, argv[1].val, 0, SOCKET_MAX_TIMEOUT_MS,
+                        &state->timeout_ms))) {
+        heap_caps_free(state);
+        if (entry != NULL && !entry->listening) {
+            JS_ThrowInternalError(ctx, "TCP socket is not listening");
+        } else {
+            JS_ThrowRangeError(ctx, "invalid socket.tcp.accept() timeout");
+        }
+        return false;
+    }
+    *out_state = state;
+    return true;
+}
+
+static bool socket_tcp_send_future_prepare(
+    JSContext *ctx,
+    JSGCRef *this_ref,
+    int argc,
+    JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+    socket_entry_t *entry;
+
+    (void)this_ref;
+    if (out_state == NULL || argc < 2 || argc > 3) {
+        JS_ThrowTypeError(ctx,
+                          "socket.tcp.send(socketId, data, timeoutMs?) expects ByteSource data");
+        return false;
+    }
+    state = socket_future_allocate(ctx, argv[0].val, SOCKET_PROTOCOL_TCP,
+                                   SOCKET_FUTURE_TCP_SEND);
+    if (state == NULL) {
+        return false;
+    }
+    entry = socket_future_entry(state);
+    if (entry == NULL || !entry->connected ||
+        (argc >= 3 && !JS_IsUndefined(argv[2].val) &&
+         !socket_to_int(ctx, argv[2].val, 0, SOCKET_MAX_TIMEOUT_MS,
+                        &state->timeout_ms)) ||
+        !socket_future_copy_source(ctx, argv[1].val,
+                                   "socket.tcp.send(socketId, data, timeoutMs?)",
+                                   state)) {
+        heap_caps_free(state->data);
+        heap_caps_free(state);
+        if (entry != NULL && !entry->connected) {
+            JS_ThrowInternalError(ctx, "TCP socket is not connected");
+        } else {
+            JS_ThrowTypeError(ctx,
+                              "socket.tcp.send(socketId, data, timeoutMs?) expects ByteSource data");
+        }
+        return false;
+    }
+    *out_state = state;
+    return true;
+}
+
+static bool socket_receive_future_prepare(
+    JSContext *ctx,
+    JSGCRef *this_ref,
+    int argc,
+    JSGCRef *argv,
+    socket_protocol_t protocol,
+    socket_future_kind_t kind,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+    int max_bytes;
+
+    (void)this_ref;
+    if (out_state == NULL || argc < 1 || argc > 3) {
+        JS_ThrowRangeError(ctx, "invalid socket receive option");
+        return false;
+    }
+    state = socket_future_allocate(ctx, argv[0].val, protocol, kind);
+    if (state == NULL) {
+        return false;
+    }
+    max_bytes = CONFIG_ESP32_MQUICKJS_SOCKET_MAX_MESSAGE_BYTES;
+    if ((argc >= 2 && !JS_IsUndefined(argv[1].val) &&
+         !socket_to_int(ctx, argv[1].val, 1,
+                        CONFIG_ESP32_MQUICKJS_SOCKET_MAX_MESSAGE_BYTES,
+                        &max_bytes)) ||
+        (argc >= 3 && !JS_IsUndefined(argv[2].val) &&
+         !socket_to_int(ctx, argv[2].val, 0, SOCKET_MAX_TIMEOUT_MS,
+                        &state->timeout_ms))) {
+        heap_caps_free(state);
+        JS_ThrowRangeError(ctx, "invalid socket receive option");
+        return false;
+    }
+    state->length = (size_t)max_bytes;
+    state->data = heap_caps_malloc(state->length, MALLOC_CAP_8BIT);
+    if (state->data == NULL) {
+        heap_caps_free(state);
+        JS_ThrowOutOfMemory(ctx);
+        return false;
+    }
+    *out_state = state;
+    return true;
+}
+
+static bool socket_tcp_recv_future_prepare(
+    JSContext *ctx,
+    JSGCRef *this_ref,
+    int argc,
+    JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    return socket_receive_future_prepare(ctx, this_ref, argc, argv,
+                                         SOCKET_PROTOCOL_TCP,
+                                         SOCKET_FUTURE_TCP_RECV,
+                                         out_state);
+}
+
+static bool socket_udp_sendto_future_prepare(
+    JSContext *ctx,
+    JSGCRef *this_ref,
+    int argc,
+    JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+
+    (void)this_ref;
+    if (out_state == NULL || argc != 4) {
+        JS_ThrowTypeError(ctx,
+                          "socket.udp.sendto(socketId, remoteHost, remotePort, data) expected");
+        return false;
+    }
+    state = socket_future_allocate(ctx, argv[0].val, SOCKET_PROTOCOL_UDP,
+                                   SOCKET_FUTURE_UDP_SENDTO);
+    if (state == NULL) {
+        return false;
+    }
+    if (!socket_get_host(ctx, argv[1].val, state->host, sizeof(state->host)) ||
+        !socket_to_int(ctx, argv[2].val, 1, 65535, &state->port) ||
+        !socket_future_copy_source(ctx, argv[3].val,
+                                   "socket.udp.sendto(socketId, remoteHost, remotePort, data)",
+                                   state)) {
+        heap_caps_free(state->data);
+        heap_caps_free(state);
+        JS_ThrowTypeError(ctx,
+                          "socket.udp.sendto(socketId, remoteHost, remotePort, data) expected");
+        return false;
+    }
+    *out_state = state;
+    return true;
+}
+
+static bool socket_udp_recvfrom_future_prepare(
+    JSContext *ctx,
+    JSGCRef *this_ref,
+    int argc,
+    JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    return socket_receive_future_prepare(ctx, this_ref, argc, argv,
+                                         SOCKET_PROTOCOL_UDP,
+                                         SOCKET_FUTURE_UDP_RECVFROM,
+                                         out_state);
+}
+
+static void socket_future_poll_timer(void *opaque)
+{
+    esp32_mquickjs_future_driver_state_t *state = opaque;
+
+    if (state != NULL && !state->completed) {
+        (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+    }
+}
+
+static void socket_future_stop_timer(esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || state->poll_timer == NULL) {
+        return;
+    }
+    (void)esp_timer_stop(state->poll_timer);
+    (void)esp_timer_delete(state->poll_timer);
+    state->poll_timer = NULL;
+}
+
+static bool socket_future_resolve_address(esp32_mquickjs_future_driver_state_t *state,
+                                          int socktype)
+{
+    struct addrinfo *addresses = NULL;
+    struct addrinfo *address;
+    bool found = false;
+
+    if (!socket_resolve(state->host, state->port, socktype, &addresses)) {
+        socket_future_fail(state, EHOSTUNREACH, "could not resolve remoteHost");
+        return false;
+    }
+    for (address = addresses; address != NULL; address = address->ai_next) {
+        if (address->ai_family != AF_INET ||
+            address->ai_addrlen > sizeof(state->address)) {
+            continue;
+        }
+        memcpy(&state->address, address->ai_addr, address->ai_addrlen);
+        state->address_len = (socklen_t)address->ai_addrlen;
+        found = true;
+        break;
+    }
+    freeaddrinfo(addresses);
+    if (!found) {
+        socket_future_fail(state, EAFNOSUPPORT, "remoteHost has no IPv4 address");
+    }
+    return found;
+}
+
+static void socket_future_step_connect(esp32_mquickjs_future_driver_state_t *state,
+                                       socket_entry_t *entry)
+{
+    int ready;
+    int connect_error = 0;
+    socklen_t error_len = sizeof(connect_error);
+
+    if (!state->issued) {
+        int result;
+
+        state->issued = true;
+        if (!socket_future_resolve_address(state, SOCK_STREAM)) {
+            return;
+        }
+        result = connect(entry->fd,
+                         (struct sockaddr *)&state->address,
+                         state->address_len);
+        if (result == 0 || (result < 0 && errno == EISCONN)) {
+            state->completed = true;
+            return;
+        }
+        if (errno != EINPROGRESS && errno != EALREADY && errno != EINTR) {
+            socket_future_fail(state, errno, NULL);
+            return;
+        }
+    }
+    ready = socket_poll_fd(entry->fd, true);
+    if (ready < 0 && errno != EINTR) {
+        socket_future_fail(state, errno, NULL);
+    } else if (ready > 0 &&
+               (getsockopt(entry->fd, SOL_SOCKET, SO_ERROR,
+                           &connect_error, &error_len) != 0 || connect_error != 0)) {
+        socket_future_fail(state,
+                           connect_error != 0 ? connect_error : errno,
+                           NULL);
+    } else if (ready > 0) {
+        state->completed = true;
+    }
+}
+
+static void socket_future_step_accept(esp32_mquickjs_future_driver_state_t *state,
+                                      socket_entry_t *entry)
+{
+    int ready = socket_poll_fd(entry->fd, false);
+
+    if (ready < 0 && errno != EINTR) {
+        socket_future_fail(state, errno, NULL);
+        return;
+    }
+    if (ready <= 0) {
+        return;
+    }
+    state->address_len = sizeof(state->address);
+    state->client_fd = accept(entry->fd,
+                              (struct sockaddr *)&state->address,
+                              &state->address_len);
+    if (state->client_fd < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            return;
+        }
+        socket_future_fail(state, errno, NULL);
+        return;
+    }
+    state->completed = true;
+}
+
+static void socket_future_step_send(esp32_mquickjs_future_driver_state_t *state,
+                                    socket_entry_t *entry)
+{
+    ssize_t sent;
+    int ready;
+
+    if (state->offset >= state->length) {
+        state->completed = true;
+        return;
+    }
+    ready = socket_poll_fd(entry->fd, true);
+    if (ready < 0 && errno != EINTR) {
+        socket_future_fail(state, errno, NULL);
+        return;
+    }
+    if (ready <= 0) {
+        return;
+    }
+    sent = send(entry->fd,
+                state->data + state->offset,
+                state->length - state->offset,
+                0);
+    if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+        return;
+    }
+    if (sent <= 0) {
+        entry->connected = false;
+        entry->peer_closed = true;
+        if (state->offset == 0) {
+            socket_future_fail(state, errno, NULL);
+        } else {
+            state->completed = true;
+        }
+        return;
+    }
+    state->offset += (size_t)sent;
+    if (state->offset >= state->length) {
+        state->completed = true;
+    }
+}
+
+static void socket_future_step_receive(esp32_mquickjs_future_driver_state_t *state,
+                                       socket_entry_t *entry,
+                                       bool udp)
+{
+    int ready;
+
+    if (!udp && !entry->connected) {
+        state->empty_result = true;
+        state->completed = true;
+        return;
+    }
+    ready = socket_poll_fd(entry->fd, false);
+    if (ready < 0 && errno != EINTR) {
+        socket_future_fail(state, errno, NULL);
+        return;
+    }
+    if (ready <= 0) {
+        return;
+    }
+    if (udp) {
+        state->address_len = sizeof(state->address);
+        state->received = recvfrom(entry->fd,
+                                   state->data,
+                                   state->length,
+                                   0,
+                                   (struct sockaddr *)&state->address,
+                                   &state->address_len);
+    } else {
+        state->received = recv(entry->fd, state->data, state->length, 0);
+    }
+    if (state->received == 0 && !udp) {
+        entry->connected = false;
+        entry->peer_closed = true;
+        state->empty_result = true;
+        state->completed = true;
+    } else if (state->received < 0 &&
+               (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+        state->received = -1;
+    } else if (state->received < 0) {
+        if (!udp) {
+            entry->connected = false;
+        }
+        socket_future_fail(state, errno, NULL);
+    } else {
+        state->completed = true;
+    }
+}
+
+static void socket_future_step_udp_sendto(
+    esp32_mquickjs_future_driver_state_t *state,
+    socket_entry_t *entry)
+{
+    ssize_t sent;
+
+    state->issued = true;
+    if (!socket_future_resolve_address(state, SOCK_DGRAM)) {
+        return;
+    }
+    sent = sendto(entry->fd,
+                  state->data,
+                  state->length,
+                  0,
+                  (struct sockaddr *)&state->address,
+                  state->address_len);
+    if (sent != (ssize_t)state->length) {
+        socket_future_fail(state, errno, NULL);
+        return;
+    }
+    state->offset = (size_t)sent;
+    state->completed = true;
+}
+
+static void socket_future_step(esp32_mquickjs_future_driver_state_t *state)
+{
+    socket_entry_t *entry;
+
+    if (state == NULL || state->completed || state->cancelled) {
+        return;
+    }
+    entry = socket_future_entry(state);
+    if (entry == NULL) {
+        socket_future_fail(state, EBADF, "socket was closed during operation");
+        return;
+    }
+    switch (state->kind) {
+        case SOCKET_FUTURE_TCP_CONNECT:
+            socket_future_step_connect(state, entry);
+            break;
+        case SOCKET_FUTURE_TCP_ACCEPT:
+            socket_future_step_accept(state, entry);
+            break;
+        case SOCKET_FUTURE_TCP_SEND:
+            socket_future_step_send(state, entry);
+            break;
+        case SOCKET_FUTURE_TCP_RECV:
+            socket_future_step_receive(state, entry, false);
+            break;
+        case SOCKET_FUTURE_UDP_SENDTO:
+            socket_future_step_udp_sendto(state, entry);
+            break;
+        case SOCKET_FUTURE_UDP_RECVFROM:
+            socket_future_step_receive(state, entry, true);
+            break;
+    }
+    if (!state->completed && state->deadline_us > 0 &&
+        (uint64_t)esp_timer_get_time() >= state->deadline_us) {
+        if (state->kind == SOCKET_FUTURE_TCP_CONNECT) {
+            socket_future_fail(state, ETIMEDOUT, "timed out");
+        } else if (state->kind == SOCKET_FUTURE_TCP_SEND) {
+            state->completed = true;
+        } else {
+            state->empty_result = true;
+            state->completed = true;
+        }
+    }
+}
+
+static void socket_future_complete_nonblocking(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || state->completed || state->timeout_ms != 0) {
+        return;
+    }
+    if (state->kind == SOCKET_FUTURE_TCP_CONNECT) {
+        socket_future_fail(state, ETIMEDOUT, NULL);
+    } else if (state->kind == SOCKET_FUTURE_TCP_SEND) {
+        state->completed = true;
+    } else if (state->kind == SOCKET_FUTURE_TCP_ACCEPT ||
+               state->kind == SOCKET_FUTURE_TCP_RECV ||
+               state->kind == SOCKET_FUTURE_UDP_RECVFROM) {
+        state->empty_result = true;
+        state->completed = true;
+    }
+}
+
+static bool socket_future_start(JSContext *ctx,
+                                esp32_mquickjs_runtime_t *runtime,
+                                esp32_mquickjs_future_token_t token,
+                                esp32_mquickjs_future_driver_state_t *state)
+{
+    socket_entry_t *entry = socket_future_entry(state);
+    esp_timer_create_args_t timer_args = {0};
+
+    if (state == NULL || entry == NULL) {
+        JS_ThrowReferenceError(ctx, "socket was closed before operation start");
+        return false;
+    }
+    if (entry->busy) {
+        JS_ThrowInternalError(ctx, "socket already has an operation in progress");
+        return false;
+    }
+    entry->busy = true;
+    state->runtime = runtime;
+    state->token = token;
+    state->started = true;
+    if (state->timeout_ms > 0) {
+        state->deadline_us = (uint64_t)esp_timer_get_time() +
+                             (uint64_t)state->timeout_ms * 1000ULL;
+    }
+    socket_future_step(state);
+    socket_future_complete_nonblocking(state);
+    if (!state->completed) {
+        timer_args.callback = socket_future_poll_timer;
+        timer_args.arg = state;
+        timer_args.dispatch_method = ESP_TIMER_TASK;
+        timer_args.name = "mqjs_socket";
+        timer_args.skip_unhandled_events = true;
+        if (esp_timer_create(&timer_args, &state->poll_timer) != ESP_OK ||
+            esp_timer_start_periodic(state->poll_timer,
+                                     SOCKET_POLL_INTERVAL_US) != ESP_OK) {
+            socket_future_stop_timer(state);
+            JS_ThrowInternalError(ctx, "failed to start socket readiness poller");
+            return false;
+        }
+    }
+    (void)esp32_mquickjs_future_wake(runtime, token);
+    return true;
+}
+
+static esp32_mquickjs_future_poll_t socket_future_poll(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    socket_future_step(state);
+    if (state != NULL && state->completed) {
+        socket_future_stop_timer(state);
+        return ESP32_MQUICKJS_FUTURE_READY;
+    }
+    return ESP32_MQUICKJS_FUTURE_PENDING;
+}
+
+static JSValue socket_future_make_udp_result(
+    JSContext *ctx,
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    JSGCRef result_ref;
+    JSGCRef data_ref;
+    JSValue *result = JS_PushGCRef(ctx, &result_ref);
+    JSValue *data_view = JS_PushGCRef(ctx, &data_ref);
+
+    if (!socket_format_address(&state->address,
+                               state->host,
+                               sizeof(state->host),
+                               &state->remote_port)) {
+        snprintf(state->host, sizeof(state->host), "unknown");
+    }
+    *result = JS_NewObject(ctx);
+    *data_view = JS_IsException(*result)
+        ? JS_EXCEPTION
+        : esp32_mquickjs_new_owned_byte_view(ctx,
+                                             state->data,
+                                             (size_t)state->received);
+    if (!JS_IsException(*data_view)) {
+        state->data = NULL;
+    }
+    if (JS_IsException(*result) || JS_IsException(*data_view) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "data", *data_view) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "remoteHost",
+                                         JS_NewString(ctx, state->host)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "remotePort",
+                                         JS_NewInt32(ctx, state->remote_port))) {
+        JS_PopGCRef(ctx, &data_ref);
+        JS_PopGCRef(ctx, &result_ref);
         return JS_EXCEPTION;
     }
-    return JS_NewInt32(ctx, CONFIG_ESP32_MQUICKJS_SOCKET_MAX_MESSAGE_BYTES);
+    JS_PopGCRef(ctx, &data_ref);
+    return JS_PopGCRef(ctx, &result_ref);
+}
+
+static JSValue socket_future_finish(JSContext *ctx,
+                                    esp32_mquickjs_future_driver_state_t *state)
+{
+    socket_entry_t *entry = socket_future_entry(state);
+
+    if (state == NULL || state->cancelled) {
+        return JS_ThrowInternalError(ctx, "socket operation cancelled");
+    }
+    if (state->error_code != 0) {
+        return JS_ThrowInternalError(ctx,
+                                     "%s%s%s: errno=%d",
+                                     state->kind == SOCKET_FUTURE_TCP_CONNECT
+                                         ? "socket.tcp.connect()"
+                                         : state->kind == SOCKET_FUTURE_TCP_ACCEPT
+                                             ? "socket.tcp.accept()"
+                                             : state->kind == SOCKET_FUTURE_TCP_SEND
+                                                 ? "socket.tcp.send()"
+                                                 : state->kind == SOCKET_FUTURE_TCP_RECV
+                                                     ? "socket.tcp.recv()"
+                                                     : state->kind == SOCKET_FUTURE_UDP_SENDTO
+                                                         ? "socket.udp.sendto()"
+                                                         : "socket.udp.recvfrom()",
+                                     state->error_text[0] != '\0' ? " " : " failed",
+                                     state->error_text,
+                                     state->error_code);
+    }
+    if (entry == NULL) {
+        return JS_ThrowReferenceError(ctx, "socket was closed during operation");
+    }
+    switch (state->kind) {
+        case SOCKET_FUTURE_TCP_CONNECT:
+            entry->connected = true;
+            entry->peer_closed = false;
+            entry->remote_port = state->port;
+            snprintf(entry->remote_host, sizeof(entry->remote_host), "%s", state->host);
+            socket_refresh_local_address(entry);
+            return JS_NewBool(true);
+        case SOCKET_FUTURE_TCP_ACCEPT: {
+            socket_entry_t *client;
+
+            if (state->empty_result) {
+                return JS_NULL;
+            }
+            client = socket_allocate_entry();
+            if (client == NULL || !socket_set_nonblocking(state->client_fd)) {
+                if (client != NULL) {
+                    socket_reset_entry(client);
+                }
+                return JS_ThrowInternalError(ctx, "socket handle limit reached");
+            }
+            client->fd = state->client_fd;
+            state->client_fd = -1;
+            client->protocol = SOCKET_PROTOCOL_TCP;
+            client->connected = true;
+            socket_refresh_local_address(client);
+            if (!socket_format_address(&state->address,
+                                       client->remote_host,
+                                       sizeof(client->remote_host),
+                                       &client->remote_port)) {
+                snprintf(client->remote_host, sizeof(client->remote_host), "unknown");
+            }
+            return JS_NewInt32(ctx, client->id);
+        }
+        case SOCKET_FUTURE_TCP_SEND:
+            entry->sent_bytes += (uint32_t)state->offset;
+            return JS_NewInt32(ctx, (int32_t)state->offset);
+        case SOCKET_FUTURE_TCP_RECV:
+            if (state->empty_result) {
+                return JS_NULL;
+            }
+            entry->received_bytes += (uint32_t)state->received;
+            {
+                JSValue view = esp32_mquickjs_new_owned_byte_view(
+                    ctx, state->data, (size_t)state->received);
+                if (!JS_IsException(view)) {
+                    state->data = NULL;
+                }
+                return view;
+            }
+        case SOCKET_FUTURE_UDP_SENDTO:
+            entry->sent_bytes += (uint32_t)state->offset;
+            return JS_NewInt32(ctx, (int32_t)state->offset);
+        case SOCKET_FUTURE_UDP_RECVFROM:
+            if (state->empty_result) {
+                return JS_NULL;
+            }
+            entry->received_bytes += (uint32_t)state->received;
+            return socket_future_make_udp_result(ctx, state);
+    }
+    return JS_ThrowInternalError(ctx, "invalid socket Future kind");
+}
+
+static bool socket_future_cancel(esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || state->completed || state->cancelled) {
+        return false;
+    }
+    state->cancelled = true;
+    state->completed = true;
+    socket_future_stop_timer(state);
+    if (state->runtime != NULL) {
+        (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+    }
+    return true;
+}
+
+static void socket_future_destroy(esp32_mquickjs_future_driver_state_t *state)
+{
+    socket_entry_t *entry;
+
+    if (state == NULL) {
+        return;
+    }
+    socket_future_stop_timer(state);
+    entry = socket_future_entry(state);
+    if (entry != NULL) {
+        entry->busy = false;
+    }
+    if (state->client_fd >= 0) {
+        close(state->client_fd);
+    }
+    heap_caps_free(state->data);
+    heap_caps_free(state);
+}
+
+static uint32_t socket_future_timeout_ms(
+    const esp32_mquickjs_future_driver_state_t *state)
+{
+    (void)state;
+    return 0;
+}
+
+#define SOCKET_FUTURE_DRIVER(name, prepare_fn) \
+    static const esp32_mquickjs_future_driver_t name = { \
+        .prepare = prepare_fn, \
+        .start = socket_future_start, \
+        .poll = socket_future_poll, \
+        .finish = socket_future_finish, \
+        .cancel = socket_future_cancel, \
+        .destroy = socket_future_destroy, \
+        .timeout_ms = socket_future_timeout_ms, \
+    }
+
+SOCKET_FUTURE_DRIVER(s_socket_tcp_connect_driver, socket_tcp_connect_future_prepare);
+SOCKET_FUTURE_DRIVER(s_socket_tcp_accept_driver, socket_tcp_accept_future_prepare);
+SOCKET_FUTURE_DRIVER(s_socket_tcp_send_driver, socket_tcp_send_future_prepare);
+SOCKET_FUTURE_DRIVER(s_socket_tcp_recv_driver, socket_tcp_recv_future_prepare);
+SOCKET_FUTURE_DRIVER(s_socket_udp_sendto_driver, socket_udp_sendto_future_prepare);
+SOCKET_FUTURE_DRIVER(s_socket_udp_recvfrom_driver, socket_udp_recvfrom_future_prepare);
+
+#undef SOCKET_FUTURE_DRIVER
+
+static bool socket_register_future_drivers(JSContext *ctx,
+                                           esp32_mquickjs_runtime_t *runtime)
+{
+    JSGCRef global_ref;
+    JSGCRef socket_ref;
+    JSGCRef tcp_ref;
+    JSGCRef udp_ref;
+    JSGCRef connect_ref;
+    JSGCRef accept_ref;
+    JSGCRef send_ref;
+    JSGCRef recv_ref;
+    JSGCRef sendto_ref;
+    JSGCRef recvfrom_ref;
+    JSValue *global = JS_PushGCRef(ctx, &global_ref);
+    JSValue *socket = JS_PushGCRef(ctx, &socket_ref);
+    JSValue *tcp = JS_PushGCRef(ctx, &tcp_ref);
+    JSValue *udp = JS_PushGCRef(ctx, &udp_ref);
+    JSValue *connect_fn = JS_PushGCRef(ctx, &connect_ref);
+    JSValue *accept_fn = JS_PushGCRef(ctx, &accept_ref);
+    JSValue *send_fn = JS_PushGCRef(ctx, &send_ref);
+    JSValue *recv_fn = JS_PushGCRef(ctx, &recv_ref);
+    JSValue *sendto_fn = JS_PushGCRef(ctx, &sendto_ref);
+    JSValue *recvfrom_fn = JS_PushGCRef(ctx, &recvfrom_ref);
+    bool result;
+
+    *global = JS_GetGlobalObject(ctx);
+    *socket = JS_IsException(*global) ? JS_EXCEPTION
+                                      : JS_GetPropertyStr(ctx, *global, "socket");
+    *tcp = JS_IsException(*socket) ? JS_EXCEPTION
+                                   : JS_GetPropertyStr(ctx, *socket, "tcp");
+    *udp = JS_IsException(*socket) ? JS_EXCEPTION
+                                   : JS_GetPropertyStr(ctx, *socket, "udp");
+    *connect_fn = JS_IsException(*tcp) ? JS_EXCEPTION
+                                       : JS_GetPropertyStr(ctx, *tcp, "connect");
+    *accept_fn = JS_IsException(*tcp) ? JS_EXCEPTION
+                                      : JS_GetPropertyStr(ctx, *tcp, "accept");
+    *send_fn = JS_IsException(*tcp) ? JS_EXCEPTION
+                                    : JS_GetPropertyStr(ctx, *tcp, "send");
+    *recv_fn = JS_IsException(*tcp) ? JS_EXCEPTION
+                                    : JS_GetPropertyStr(ctx, *tcp, "recv");
+    *sendto_fn = JS_IsException(*udp) ? JS_EXCEPTION
+                                      : JS_GetPropertyStr(ctx, *udp, "sendto");
+    *recvfrom_fn = JS_IsException(*udp) ? JS_EXCEPTION
+                                        : JS_GetPropertyStr(ctx, *udp, "recvfrom");
+    result = !JS_IsException(*connect_fn) && !JS_IsException(*accept_fn) &&
+             !JS_IsException(*send_fn) && !JS_IsException(*recv_fn) &&
+             !JS_IsException(*sendto_fn) && !JS_IsException(*recvfrom_fn) &&
+             esp32_mquickjs_future_register_driver(ctx, runtime, *connect_fn,
+                                                    &s_socket_tcp_connect_driver) &&
+             esp32_mquickjs_future_register_driver(ctx, runtime, *accept_fn,
+                                                    &s_socket_tcp_accept_driver) &&
+             esp32_mquickjs_future_register_driver(ctx, runtime, *send_fn,
+                                                    &s_socket_tcp_send_driver) &&
+             esp32_mquickjs_future_register_driver(ctx, runtime, *recv_fn,
+                                                    &s_socket_tcp_recv_driver) &&
+             esp32_mquickjs_future_register_driver(ctx, runtime, *sendto_fn,
+                                                    &s_socket_udp_sendto_driver) &&
+             esp32_mquickjs_future_register_driver(ctx, runtime, *recvfrom_fn,
+                                                    &s_socket_udp_recvfrom_driver);
+    if (!result) {
+        JS_ThrowInternalError(ctx, "failed to register socket Future drivers");
+    }
+    JS_PopGCRef(ctx, &recvfrom_ref);
+    JS_PopGCRef(ctx, &sendto_ref);
+    JS_PopGCRef(ctx, &recv_ref);
+    JS_PopGCRef(ctx, &send_ref);
+    JS_PopGCRef(ctx, &accept_ref);
+    JS_PopGCRef(ctx, &connect_ref);
+    JS_PopGCRef(ctx, &udp_ref);
+    JS_PopGCRef(ctx, &tcp_ref);
+    JS_PopGCRef(ctx, &socket_ref);
+    JS_PopGCRef(ctx, &global_ref);
+    return result;
 }
 
 JSValue js_socket_tcp_connect(JSContext *ctx,
@@ -501,82 +1483,8 @@ JSValue js_socket_tcp_connect(JSContext *ctx,
                               int argc,
                               JSValue *argv)
 {
-    socket_entry_t *entry;
-    struct addrinfo *addresses = NULL;
-    struct addrinfo *address;
-    char host[SOCKET_HOST_MAX_BYTES + 1U];
-    int port;
-    int timeout_ms;
-    int connect_error = ECONNREFUSED;
-    bool connected = false;
-
     (void)this_val;
-    if (argc < 3 ||
-        (entry = socket_require_entry(ctx, argv[0], SOCKET_PROTOCOL_TCP)) == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (entry->connected || entry->listening) {
-        return JS_ThrowInternalError(ctx, "TCP socket is already active");
-    }
-    if (!socket_get_host(ctx, argv[1], host, sizeof(host)) ||
-        !socket_to_int(ctx, argv[2], 1, 65535, &port) ||
-        !socket_optional_int(ctx,
-                             argc,
-                             argv,
-                             3,
-                             SOCKET_DEFAULT_CONNECT_TIMEOUT_MS,
-                             0,
-                             SOCKET_MAX_TIMEOUT_MS,
-                             &timeout_ms)) {
-        return JS_ThrowTypeError(ctx,
-                                 "socket.tcp.connect(socket_id, remote_ip, remote_port, timeout) expected");
-    }
-    if (!socket_resolve(host, port, SOCK_STREAM, &addresses)) {
-        return JS_ThrowInternalError(ctx, "socket.tcp.connect() could not resolve remote_ip");
-    }
-    for (address = addresses; address != NULL; address = address->ai_next) {
-        int result = connect(entry->fd, address->ai_addr, address->ai_addrlen);
-
-        if (result == 0) {
-            connected = true;
-        } else if (errno == EINPROGRESS || errno == EALREADY) {
-            int wait_result = socket_wait_fd(entry->fd, true, timeout_ms);
-
-            if (wait_result == -2) {
-                freeaddrinfo(addresses);
-                return socket_wait_failure(ctx, wait_result, "socket.tcp.connect()");
-            }
-            if (wait_result > 0) {
-                socklen_t error_len = sizeof(connect_error);
-
-                if (getsockopt(entry->fd,
-                               SOL_SOCKET,
-                               SO_ERROR,
-                               &connect_error,
-                               &error_len) == 0 && connect_error == 0) {
-                    connected = true;
-                }
-            }
-        } else {
-            connect_error = errno;
-        }
-        if (connected) {
-            break;
-        }
-    }
-    freeaddrinfo(addresses);
-    if (!connected) {
-        errno = connect_error;
-        return JS_ThrowInternalError(ctx,
-                                     "socket.tcp.connect() failed: errno=%d",
-                                     connect_error);
-    }
-    entry->connected = true;
-    entry->peer_closed = false;
-    entry->remote_port = port;
-    snprintf(entry->remote_ip, sizeof(entry->remote_ip), "%s", host);
-    socket_refresh_local_address(entry);
-    return JS_NewBool(true);
+    return socket_future_call_and_wait(ctx, "tcp", "connect", argc, argv);
 }
 
 JSValue js_socket_tcp_listen(JSContext *ctx,
@@ -592,8 +1500,8 @@ JSValue js_socket_tcp_listen(JSContext *ctx,
         (entry = socket_require_entry(ctx, argv[0], SOCKET_PROTOCOL_TCP)) == NULL) {
         return JS_EXCEPTION;
     }
-    if (entry->connected) {
-        return JS_ThrowInternalError(ctx, "connected TCP socket cannot listen");
+    if (entry->connected || entry->busy) {
+        return JS_ThrowInternalError(ctx, "TCP socket is already active");
     }
     if (!socket_optional_int(ctx,
                              argc,
@@ -617,67 +1525,8 @@ JSValue js_socket_tcp_accept(JSContext *ctx,
                              int argc,
                              JSValue *argv)
 {
-    socket_entry_t *listener;
-    socket_entry_t *client;
-    struct sockaddr_storage remote_address;
-    socklen_t remote_address_len = sizeof(remote_address);
-    int timeout_ms;
-    int wait_result;
-    int client_fd;
-
     (void)this_val;
-    if (argc < 1 ||
-        (listener = socket_require_entry(ctx, argv[0], SOCKET_PROTOCOL_TCP)) == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (!listener->listening) {
-        return JS_ThrowInternalError(ctx, "TCP socket is not listening");
-    }
-    if (!socket_optional_int(ctx,
-                             argc,
-                             argv,
-                             1,
-                             0,
-                             0,
-                             SOCKET_MAX_TIMEOUT_MS,
-                             &timeout_ms)) {
-        return JS_ThrowRangeError(ctx, "invalid socket.tcp.accept() timeout");
-    }
-    wait_result = socket_wait_fd(listener->fd, false, timeout_ms);
-    if (wait_result < 0) {
-        return socket_wait_failure(ctx, wait_result, "socket.tcp.accept()");
-    }
-    if (wait_result == 0) {
-        return JS_NULL;
-    }
-    client_fd = accept(listener->fd,
-                       (struct sockaddr *)&remote_address,
-                       &remote_address_len);
-    if (client_fd < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return JS_NULL;
-        }
-        return JS_ThrowInternalError(ctx, "socket.tcp.accept() failed: errno=%d", errno);
-    }
-    client = socket_allocate_entry();
-    if (client == NULL || !socket_set_nonblocking(client_fd)) {
-        close(client_fd);
-        if (client != NULL) {
-            socket_reset_entry(client);
-        }
-        return JS_ThrowInternalError(ctx, "socket handle limit reached");
-    }
-    client->fd = client_fd;
-    client->protocol = SOCKET_PROTOCOL_TCP;
-    client->connected = true;
-    socket_refresh_local_address(client);
-    if (!socket_format_address(&remote_address,
-                               client->remote_ip,
-                               sizeof(client->remote_ip),
-                               &client->remote_port)) {
-        snprintf(client->remote_ip, sizeof(client->remote_ip), "unknown");
-    }
-    return JS_NewInt32(ctx, client->id);
+    return socket_future_call_and_wait(ctx, "tcp", "accept", argc, argv);
 }
 
 JSValue js_socket_tcp_send(JSContext *ctx,
@@ -685,74 +1534,8 @@ JSValue js_socket_tcp_send(JSContext *ctx,
                            int argc,
                            JSValue *argv)
 {
-    socket_entry_t *entry;
-    JSCStringBuf data_buf;
-    const char *data;
-    size_t data_len = 0;
-    size_t offset = 0;
-    int timeout_ms;
-
     (void)this_val;
-    if (argc < 2 ||
-        (entry = socket_require_entry(ctx, argv[0], SOCKET_PROTOCOL_TCP)) == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (!entry->connected) {
-        return JS_ThrowInternalError(ctx, "TCP socket is not connected");
-    }
-    if (!JS_IsString(ctx, argv[1]) ||
-        !socket_optional_int(ctx,
-                             argc,
-                             argv,
-                             2,
-                             0,
-                             0,
-                             SOCKET_MAX_TIMEOUT_MS,
-                             &timeout_ms)) {
-        return JS_ThrowTypeError(ctx,
-                                 "socket.tcp.send(socket_id, data, timeout) expects string data");
-    }
-    data = JS_ToCStringLen(ctx, &data_len, argv[1], &data_buf);
-    if (data == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (data_len > CONFIG_ESP32_MQUICKJS_SOCKET_MAX_MESSAGE_BYTES) {
-        return JS_ThrowRangeError(ctx, "socket.tcp.send() data exceeds socket limit");
-    }
-    while (offset < data_len) {
-        int wait_result = socket_wait_fd(entry->fd, true, timeout_ms);
-        ssize_t sent;
-
-        if (wait_result < 0) {
-            if (offset > 0) {
-                break;
-            }
-            return socket_wait_failure(ctx, wait_result, "socket.tcp.send()");
-        }
-        if (wait_result == 0) {
-            break;
-        }
-        sent = send(entry->fd, data + offset, data_len - offset, 0);
-        if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
-            if (timeout_ms == 0) {
-                break;
-            }
-            continue;
-        }
-        if (sent <= 0) {
-            entry->connected = false;
-            entry->peer_closed = true;
-            if (offset == 0) {
-                return JS_ThrowInternalError(ctx,
-                                             "socket.tcp.send() failed: errno=%d",
-                                             errno);
-            }
-            break;
-        }
-        offset += (size_t)sent;
-    }
-    entry->sent_bytes += (uint32_t)offset;
-    return JS_NewInt32(ctx, (int32_t)offset);
+    return socket_future_call_and_wait(ctx, "tcp", "send", argc, argv);
 }
 
 JSValue js_socket_tcp_recv(JSContext *ctx,
@@ -760,72 +1543,8 @@ JSValue js_socket_tcp_recv(JSContext *ctx,
                            int argc,
                            JSValue *argv)
 {
-    socket_entry_t *entry;
-    char *data;
-    int max_bytes;
-    int timeout_ms;
-    int wait_result;
-    ssize_t received;
-
     (void)this_val;
-    if (argc < 1 ||
-        (entry = socket_require_entry(ctx, argv[0], SOCKET_PROTOCOL_TCP)) == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (!entry->connected) {
-        return JS_NULL;
-    }
-    if (!socket_optional_int(ctx,
-                             argc,
-                             argv,
-                             1,
-                             CONFIG_ESP32_MQUICKJS_SOCKET_MAX_MESSAGE_BYTES,
-                             1,
-                             CONFIG_ESP32_MQUICKJS_SOCKET_MAX_MESSAGE_BYTES,
-                             &max_bytes) ||
-        !socket_optional_int(ctx,
-                             argc,
-                             argv,
-                             2,
-                             0,
-                             0,
-                             SOCKET_MAX_TIMEOUT_MS,
-                             &timeout_ms)) {
-        return JS_ThrowRangeError(ctx, "invalid socket.tcp.recv() option");
-    }
-    wait_result = socket_wait_fd(entry->fd, false, timeout_ms);
-    if (wait_result < 0) {
-        return socket_wait_failure(ctx, wait_result, "socket.tcp.recv()");
-    }
-    if (wait_result == 0) {
-        return JS_NULL;
-    }
-    data = heap_caps_malloc((size_t)max_bytes, MALLOC_CAP_8BIT);
-    if (data == NULL) {
-        return JS_ThrowOutOfMemory(ctx);
-    }
-    received = recv(entry->fd, data, (size_t)max_bytes, 0);
-    if (received == 0) {
-        entry->connected = false;
-        entry->peer_closed = true;
-        heap_caps_free(data);
-        return JS_NULL;
-    }
-    if (received < 0) {
-        heap_caps_free(data);
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            return JS_NULL;
-        }
-        entry->connected = false;
-        return JS_ThrowInternalError(ctx, "socket.tcp.recv() failed: errno=%d", errno);
-    }
-    entry->received_bytes += (uint32_t)received;
-    {
-        JSValue result = JS_NewStringLen(ctx, data, (size_t)received);
-
-        heap_caps_free(data);
-        return result;
-    }
+    return socket_future_call_and_wait(ctx, "tcp", "recv", argc, argv);
 }
 
 JSValue js_socket_udp_sendto(JSContext *ctx,
@@ -833,54 +1552,8 @@ JSValue js_socket_udp_sendto(JSContext *ctx,
                              int argc,
                              JSValue *argv)
 {
-    socket_entry_t *entry;
-    struct addrinfo *addresses = NULL;
-    struct addrinfo *address;
-    JSCStringBuf data_buf;
-    char host[SOCKET_HOST_MAX_BYTES + 1U];
-    const char *data;
-    size_t data_len = 0;
-    int port;
-    ssize_t sent = -1;
-
     (void)this_val;
-    if (argc < 4 ||
-        (entry = socket_require_entry(ctx, argv[0], SOCKET_PROTOCOL_UDP)) == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (!socket_get_host(ctx, argv[1], host, sizeof(host)) ||
-        !socket_to_int(ctx, argv[2], 1, 65535, &port) ||
-        !JS_IsString(ctx, argv[3])) {
-        return JS_ThrowTypeError(ctx,
-                                 "socket.udp.sendto(socket_id, remote_ip, remote_port, data) expected");
-    }
-    data = JS_ToCStringLen(ctx, &data_len, argv[3], &data_buf);
-    if (data == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (data_len > CONFIG_ESP32_MQUICKJS_SOCKET_MAX_MESSAGE_BYTES) {
-        return JS_ThrowRangeError(ctx, "socket.udp.sendto() data exceeds socket limit");
-    }
-    if (!socket_resolve(host, port, SOCK_DGRAM, &addresses)) {
-        return JS_ThrowInternalError(ctx, "socket.udp.sendto() could not resolve remote_ip");
-    }
-    for (address = addresses; address != NULL; address = address->ai_next) {
-        sent = sendto(entry->fd,
-                      data,
-                      data_len,
-                      0,
-                      address->ai_addr,
-                      address->ai_addrlen);
-        if (sent == (ssize_t)data_len) {
-            break;
-        }
-    }
-    freeaddrinfo(addresses);
-    if (sent != (ssize_t)data_len) {
-        return JS_ThrowInternalError(ctx, "socket.udp.sendto() failed: errno=%d", errno);
-    }
-    entry->sent_bytes += (uint32_t)sent;
-    return JS_NewInt32(ctx, (int32_t)sent);
+    return socket_future_call_and_wait(ctx, "udp", "sendto", argc, argv);
 }
 
 JSValue js_socket_udp_recvfrom(JSContext *ctx,
@@ -888,98 +1561,8 @@ JSValue js_socket_udp_recvfrom(JSContext *ctx,
                                int argc,
                                JSValue *argv)
 {
-    socket_entry_t *entry;
-    struct sockaddr_storage remote_address;
-    socklen_t remote_address_len = sizeof(remote_address);
-    char remote_ip[SOCKET_HOST_MAX_BYTES + 1U];
-    char *data;
-    int remote_port = 0;
-    int max_bytes;
-    int timeout_ms;
-    int wait_result;
-    ssize_t received;
-
     (void)this_val;
-    if (argc < 1 ||
-        (entry = socket_require_entry(ctx, argv[0], SOCKET_PROTOCOL_UDP)) == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (!socket_optional_int(ctx,
-                             argc,
-                             argv,
-                             1,
-                             CONFIG_ESP32_MQUICKJS_SOCKET_MAX_MESSAGE_BYTES,
-                             1,
-                             CONFIG_ESP32_MQUICKJS_SOCKET_MAX_MESSAGE_BYTES,
-                             &max_bytes) ||
-        !socket_optional_int(ctx,
-                             argc,
-                             argv,
-                             2,
-                             0,
-                             0,
-                             SOCKET_MAX_TIMEOUT_MS,
-                             &timeout_ms)) {
-        return JS_ThrowRangeError(ctx, "invalid socket.udp.recvfrom() option");
-    }
-    wait_result = socket_wait_fd(entry->fd, false, timeout_ms);
-    if (wait_result < 0) {
-        return socket_wait_failure(ctx, wait_result, "socket.udp.recvfrom()");
-    }
-    if (wait_result == 0) {
-        return JS_NULL;
-    }
-    data = heap_caps_malloc((size_t)max_bytes, MALLOC_CAP_8BIT);
-    if (data == NULL) {
-        return JS_ThrowOutOfMemory(ctx);
-    }
-    received = recvfrom(entry->fd,
-                        data,
-                        (size_t)max_bytes,
-                        0,
-                        (struct sockaddr *)&remote_address,
-                        &remote_address_len);
-    if (received < 0) {
-        heap_caps_free(data);
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-            return JS_NULL;
-        }
-        return JS_ThrowInternalError(ctx, "socket.udp.recvfrom() failed: errno=%d", errno);
-    }
-    if (!socket_format_address(&remote_address,
-                               remote_ip,
-                               sizeof(remote_ip),
-                               &remote_port)) {
-        snprintf(remote_ip, sizeof(remote_ip), "unknown");
-    }
-    entry->received_bytes += (uint32_t)received;
-    {
-        JSGCRef result_ref;
-        JSValue *result = JS_PushGCRef(ctx, &result_ref);
-
-        *result = JS_NewObject(ctx);
-        if (JS_IsException(*result) ||
-            !esp32_mquickjs_set_property_ref(ctx,
-                                             result,
-                                             "data",
-                                             JS_NewStringLen(ctx,
-                                                             data,
-                                                             (size_t)received)) ||
-            !esp32_mquickjs_set_property_ref(ctx,
-                                             result,
-                                             "remoteIp",
-                                             JS_NewString(ctx, remote_ip)) ||
-            !esp32_mquickjs_set_property_ref(ctx,
-                                             result,
-                                             "remotePort",
-                                             JS_NewInt32(ctx, remote_port))) {
-            heap_caps_free(data);
-            JS_PopGCRef(ctx, &result_ref);
-            return JS_EXCEPTION;
-        }
-        heap_caps_free(data);
-        return JS_PopGCRef(ctx, &result_ref);
-    }
+    return socket_future_call_and_wait(ctx, "udp", "recvfrom", argc, argv);
 }
 
 #endif

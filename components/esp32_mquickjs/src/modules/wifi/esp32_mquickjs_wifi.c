@@ -3,6 +3,7 @@
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
 
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_future.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -32,6 +33,7 @@
 static const char *TAG = "esp32qjs_wifi";
 
 static esp32_mquickjs_wifi_state_t s_wifi_state;
+static void wifi_stop_connect_timeout_timer(void);
 
 esp32_mquickjs_wifi_state_t *esp32_mquickjs_wifi_state(void)
 {
@@ -90,34 +92,21 @@ static void wifi_refresh_hostname_locked(void)
     s_wifi_state.status.hostname[sizeof(s_wifi_state.status.hostname) - 1] = '\0';
 }
 
-static void wifi_clear_scan_callback(JSContext *ctx)
+void esp32_mquickjs_wifi_clear_scan_future(void)
 {
-    if (ctx == NULL || !s_wifi_state.scan_callback_registered) {
-        return;
-    }
-
-    JS_DeleteGCRef(ctx, &s_wifi_state.scan_callback);
-    s_wifi_state.scan_callback_registered = false;
+    wifi_lock();
+    s_wifi_state.scan_future_registered = false;
+    memset(&s_wifi_state.scan_future_token, 0, sizeof(s_wifi_state.scan_future_token));
+    wifi_unlock();
 }
 
-void esp32_mquickjs_wifi_clear_scan_callback(JSContext *ctx)
+void esp32_mquickjs_wifi_clear_connect_future(void)
 {
-    wifi_clear_scan_callback(ctx);
-}
-
-static void wifi_clear_connect_callback(JSContext *ctx)
-{
-    if (ctx == NULL || !s_wifi_state.connect_callback_registered) {
-        return;
-    }
-
-    JS_DeleteGCRef(ctx, &s_wifi_state.connect_callback);
-    s_wifi_state.connect_callback_registered = false;
-}
-
-void esp32_mquickjs_wifi_clear_connect_callback(JSContext *ctx)
-{
-    wifi_clear_connect_callback(ctx);
+    wifi_stop_connect_timeout_timer();
+    wifi_lock();
+    s_wifi_state.connect_future_registered = false;
+    memset(&s_wifi_state.connect_future_token, 0, sizeof(s_wifi_state.connect_future_token));
+    wifi_unlock();
 }
 
 static void wifi_stop_connect_timeout_timer(void)
@@ -139,6 +128,8 @@ static void wifi_queue_connect_event(uint32_t generation,
                                      uint32_t kind,
                                      int32_t reason)
 {
+    esp32_mquickjs_future_token_t token = {0};
+    bool should_wake = false;
     esp32_mquickjs_wifi_connect_event_t event = {
         .generation = generation,
         .kind = kind,
@@ -147,6 +138,13 @@ static void wifi_queue_connect_event(uint32_t generation,
 
     if (s_wifi_state.connect_queue != NULL) {
         xQueueOverwrite(s_wifi_state.connect_queue, &event);
+        wifi_lock();
+        should_wake = s_wifi_state.connect_future_registered;
+        token = s_wifi_state.connect_future_token;
+        wifi_unlock();
+        if (should_wake) {
+            (void)esp32_mquickjs_future_wake(esp32_mquickjs_get_active_runtime(), token);
+        }
         esp32_mquickjs_notify_activity(esp32_mquickjs_get_active_runtime());
     }
 }
@@ -159,7 +157,7 @@ static void wifi_connect_timeout_cb(void *arg)
     (void)arg;
 
     wifi_lock();
-    if (s_wifi_state.connect_callback_registered && s_wifi_state.connect_in_progress) {
+    if (s_wifi_state.connect_future_registered && s_wifi_state.connect_in_progress) {
         generation = s_wifi_state.connect_generation;
         s_wifi_state.connect_in_progress = false;
         s_wifi_state.ignore_disconnect_once = true;
@@ -219,7 +217,7 @@ static void wifi_event_handler(void *arg,
         s_wifi_state.status.connected = false;
         if (!ignore_disconnect) {
             s_wifi_state.connect_in_progress = false;
-            should_queue_connect_failure = s_wifi_state.connect_callback_registered;
+            should_queue_connect_failure = s_wifi_state.connect_future_registered;
             connect_generation = s_wifi_state.connect_generation;
         }
         s_wifi_state.status.last_disconnect_reason = reason;
@@ -242,17 +240,20 @@ static void wifi_event_handler(void *arg,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_SCAN_DONE) {
         esp32_mquickjs_wifi_scan_event_t scan_event = {0};
         wifi_event_sta_scan_done_t *event = event_data;
-        bool should_queue_callback = false;
+        bool should_queue_future = false;
+        esp32_mquickjs_future_token_t scan_token = {0};
 
         wifi_lock();
         wifi_set_scanning_locked(false);
         scan_event.generation = s_wifi_state.scan_generation;
         scan_event.status = event != NULL ? event->status : 1;
-        should_queue_callback = s_wifi_state.scan_callback_registered;
+        should_queue_future = s_wifi_state.scan_future_registered;
+        scan_token = s_wifi_state.scan_future_token;
         wifi_unlock();
 
-        if (should_queue_callback && s_wifi_state.scan_queue != NULL) {
+        if (should_queue_future && s_wifi_state.scan_queue != NULL) {
             xQueueOverwrite(s_wifi_state.scan_queue, &scan_event);
+            (void)esp32_mquickjs_future_wake(esp32_mquickjs_get_active_runtime(), scan_token);
             esp32_mquickjs_notify_activity(esp32_mquickjs_get_active_runtime());
         }
         return;
@@ -266,7 +267,7 @@ static void wifi_event_handler(void *arg,
         wifi_lock();
         s_wifi_state.status.connected = true;
         s_wifi_state.connect_in_progress = false;
-        should_queue_connect_success = s_wifi_state.connect_callback_registered;
+        should_queue_connect_success = s_wifi_state.connect_future_registered;
         connect_generation = s_wifi_state.connect_generation;
         s_wifi_state.status.last_disconnect_reason = 0;
         if (event != NULL) {
@@ -696,31 +697,6 @@ esp_err_t esp32_mquickjs_wifi_get_status(esp32_mquickjs_wifi_status_t *status)
     return ESP_OK;
 }
 
-static esp_err_t wifi_wait_for_connection(uint32_t timeout_ms)
-{
-    EventBits_t bits;
-    bool interrupted = false;
-
-    bits = wifi_wait_for_bits(WIFI_CONNECTED_BIT | WIFI_FAILED_BIT,
-                              true,
-                              timeout_ms,
-                              &interrupted);
-
-    if ((bits & WIFI_CONNECTED_BIT) != 0) {
-        return ESP_OK;
-    }
-    if ((bits & WIFI_FAILED_BIT) != 0) {
-        return ESP_FAIL;
-    }
-
-    wifi_lock();
-    s_wifi_state.connect_in_progress = false;
-    s_wifi_state.ignore_disconnect_once = true;
-    wifi_unlock();
-    esp_wifi_disconnect();
-    return interrupted ? ESP_ERR_INVALID_STATE : ESP_ERR_TIMEOUT;
-}
-
 static esp_err_t wifi_apply_config(const char *ssid, const char *password)
 {
     wifi_config_t wifi_config = {0};
@@ -746,51 +722,7 @@ static esp_err_t wifi_apply_config(const char *ssid, const char *password)
     return esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
 }
 
-static esp_err_t wifi_connect(const char *ssid, const char *password, uint32_t timeout_ms)
-{
-    esp_err_t err;
-    bool needs_disconnect = false;
-
-    if (ssid == NULL || password == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    ESP_RETURN_ON_ERROR(esp32_mquickjs_wifi_ensure_started(), TAG, "wifi_ensure_started() failed");
-    err = wifi_apply_config(ssid, password);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_wifi_set_config() failed: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    wifi_lock();
-    needs_disconnect = s_wifi_state.status.connected || s_wifi_state.connect_in_progress;
-    s_wifi_state.ignore_disconnect_once = needs_disconnect;
-    wifi_unlock();
-
-    if (needs_disconnect) {
-        err = esp_wifi_disconnect();
-        if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_CONNECT) {
-            ESP_LOGE(TAG, "esp_wifi_disconnect() failed: %s", esp_err_to_name(err));
-            return err;
-        }
-    }
-
-    xEventGroupClearBits(s_wifi_state.event_group, WIFI_CONNECTED_BIT | WIFI_FAILED_BIT);
-
-    wifi_lock();
-    s_wifi_state.connect_in_progress = true;
-    s_wifi_state.status.connected = false;
-    s_wifi_state.status.last_disconnect_reason = 0;
-    strncpy(s_wifi_state.status.ssid, ssid, sizeof(s_wifi_state.status.ssid) - 1);
-    s_wifi_state.status.ssid[sizeof(s_wifi_state.status.ssid) - 1] = '\0';
-    wifi_clear_ip_info_locked();
-    wifi_unlock();
-
-    ESP_RETURN_ON_ERROR(esp_wifi_connect(), TAG, "esp_wifi_connect() failed");
-    return wifi_wait_for_connection(timeout_ms);
-}
-
-esp_err_t esp32_mquickjs_wifi_connect_async(const char *ssid,
+esp_err_t esp32_mquickjs_wifi_start_connect(const char *ssid,
                                             const char *password,
                                             uint32_t timeout_ms)
 {
@@ -967,44 +899,15 @@ JSValue esp32_mquickjs_wifi_make_scan_results_array(JSContext *ctx)
     return wifi_make_scan_results_array(ctx);
 }
 
-static JSValue wifi_scan_sync(JSContext *ctx)
-{
-    esp_err_t err;
-
-    err = esp32_mquickjs_wifi_ensure_started();
-    if (err != ESP_OK) {
-        return wifi_throw_scan_error(ctx, err);
-    }
-
-    wifi_lock();
-    if (s_wifi_state.scan_in_progress || s_wifi_state.scan_callback_registered) {
-        wifi_unlock();
-        return JS_ThrowInternalError(ctx, "wifi.scan() is already in progress");
-    }
-    wifi_set_scanning_locked(true);
-    wifi_unlock();
-
-    err = esp_wifi_scan_start(NULL, true);
-
-    wifi_lock();
-    wifi_set_scanning_locked(false);
-    wifi_unlock();
-
-    if (err != ESP_OK) {
-        return wifi_throw_scan_error(ctx, err);
-    }
-
-    return wifi_make_scan_results_array(ctx);
-}
-
 bool esp32_mquickjs_init_wifi_runtime(JSContext *ctx,
                                       esp32_mquickjs_runtime_t *runtime)
 {
-    return esp32_mquickjs_init_wifi_async_runtime(ctx, runtime);
+    return esp32_mquickjs_init_wifi_future_runtime(ctx, runtime);
 }
 
 void esp32_mquickjs_deinit_wifi_runtime(JSContext *ctx)
 {
+    (void)ctx;
     if (!s_wifi_state.initialized) {
         return;
     }
@@ -1019,10 +922,12 @@ void esp32_mquickjs_deinit_wifi_runtime(JSContext *ctx)
     s_wifi_state.connect_generation++;
     s_wifi_state.scan_in_progress = false;
     s_wifi_state.connect_in_progress = false;
+    s_wifi_state.scan_future_registered = false;
+    s_wifi_state.connect_future_registered = false;
+    memset(&s_wifi_state.scan_future_token, 0, sizeof(s_wifi_state.scan_future_token));
+    memset(&s_wifi_state.connect_future_token, 0, sizeof(s_wifi_state.connect_future_token));
     wifi_unlock();
 
-    wifi_clear_scan_callback(ctx);
-    wifi_clear_connect_callback(ctx);
     if (s_wifi_state.scan_queue != NULL) {
         xQueueReset(s_wifi_state.scan_queue);
     }
@@ -1049,71 +954,68 @@ JSValue js_wifi_status(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
 
 JSValue js_wifi_scan(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
+    JSGCRef global_ref;
+    JSGCRef wifi_ref;
+    JSGCRef scan_ref;
+    JSValue *global;
+    JSValue *wifi;
+    JSValue *scan;
+    JSValue result;
+
     (void)this_val;
-
-    if (argc == 0) {
-        return wifi_scan_sync(ctx);
+    global = JS_PushGCRef(ctx, &global_ref);
+    wifi = JS_PushGCRef(ctx, &wifi_ref);
+    scan = JS_PushGCRef(ctx, &scan_ref);
+    *global = JS_GetGlobalObject(ctx);
+    *wifi = JS_GetPropertyStr(ctx, *global, "wifi");
+    *scan = JS_IsException(*wifi) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *wifi, "scan");
+    if (JS_IsException(*global) || JS_IsException(*wifi) || JS_IsException(*scan)) {
+        result = JS_EXCEPTION;
+    } else {
+        result = esp32_mquickjs_future_call_and_wait(ctx,
+                                                     esp32_mquickjs_get_active_runtime(),
+                                                     *scan,
+                                                     *wifi,
+                                                     argc,
+                                                     argv);
     }
-    if (argc == 1 && JS_IsFunction(ctx, argv[0])) {
-        return JS_ThrowTypeError(ctx,
-                                 "wifi.scan() no longer accepts a callback; use wifi.async.scan(callback)");
-    }
-
-    return JS_ThrowTypeError(ctx, "wifi.scan() expects no arguments");
+    JS_PopGCRef(ctx, &scan_ref);
+    JS_PopGCRef(ctx, &wifi_ref);
+    JS_PopGCRef(ctx, &global_ref);
+    return result;
 }
 
 JSValue js_wifi_connect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    JSCStringBuf ssid_buf;
-    JSCStringBuf password_buf;
-    const char *ssid;
-    const char *password;
-    size_t ssid_len = 0;
-    size_t password_len = 0;
-    char ssid_copy[ESP32_MQUICKJS_WIFI_SSID_MAX_LEN + 1];
-    char password_copy[ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN + 1];
-    uint32_t timeout_ms = ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS;
-    esp_err_t err;
+    JSGCRef global_ref;
+    JSGCRef wifi_ref;
+    JSGCRef connect_ref;
+    JSValue *global;
+    JSValue *wifi;
+    JSValue *connect;
+    JSValue result;
 
     (void)this_val;
-    if ((argc >= 3 && JS_IsFunction(ctx, argv[2])) || (argc >= 4 && JS_IsFunction(ctx, argv[3]))) {
-        return JS_ThrowTypeError(ctx,
-                                 "wifi.connect(...) no longer accepts a callback; use wifi.async.connect(...)");
+    global = JS_PushGCRef(ctx, &global_ref);
+    wifi = JS_PushGCRef(ctx, &wifi_ref);
+    connect = JS_PushGCRef(ctx, &connect_ref);
+    *global = JS_GetGlobalObject(ctx);
+    *wifi = JS_GetPropertyStr(ctx, *global, "wifi");
+    *connect = JS_IsException(*wifi) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *wifi, "connect");
+    if (JS_IsException(*global) || JS_IsException(*wifi) || JS_IsException(*connect)) {
+        result = JS_EXCEPTION;
+    } else {
+        result = esp32_mquickjs_future_call_and_wait(ctx,
+                                                     esp32_mquickjs_get_active_runtime(),
+                                                     *connect,
+                                                     *wifi,
+                                                     argc,
+                                                     argv);
     }
-    if (argc < 2 || argc > 3 || !JS_IsString(ctx, argv[0]) || !JS_IsString(ctx, argv[1])) {
-        return JS_ThrowTypeError(ctx,
-                                 "wifi.connect(ssid, password, timeoutMs?) expects two strings and an optional timeout");
-    }
-    if (argc >= 3) {
-        if (js_value_to_timeout_ms(ctx,
-                                   argv[2],
-                                   ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS,
-                                   &timeout_ms) != 0) {
-            return JS_ThrowTypeError(ctx, "wifi.connect(..., timeoutMs) expects a non-negative integer");
-        }
-    }
-    ssid = JS_ToCStringLen(ctx, &ssid_len, argv[0], &ssid_buf);
-    if (ssid == NULL || ssid_len == 0 || ssid_len > ESP32_MQUICKJS_WIFI_SSID_MAX_LEN) {
-        return JS_ThrowTypeError(ctx, "wifi.connect(ssid, ...) expects an SSID of 1..%d bytes",
-                                 ESP32_MQUICKJS_WIFI_SSID_MAX_LEN);
-    }
-    memcpy(ssid_copy, ssid, ssid_len);
-    ssid_copy[ssid_len] = '\0';
-
-    password = JS_ToCStringLen(ctx, &password_len, argv[1], &password_buf);
-    if (password == NULL || password_len > ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN) {
-        return JS_ThrowTypeError(ctx, "wifi.connect(..., password, ...) expects at most %d bytes",
-                                 ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN);
-    }
-    memcpy(password_copy, password, password_len);
-    password_copy[password_len] = '\0';
-
-    err = wifi_connect(ssid_copy, password_copy, timeout_ms);
-    if (err != ESP_OK) {
-        return wifi_throw_connect_error(ctx, err);
-    }
-
-    return wifi_make_status_object(ctx);
+    JS_PopGCRef(ctx, &connect_ref);
+    JS_PopGCRef(ctx, &wifi_ref);
+    JS_PopGCRef(ctx, &global_ref);
+    return result;
 }
 
 JSValue js_wifi_disconnect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

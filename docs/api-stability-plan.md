@@ -12,11 +12,10 @@ This plan covers:
 
 It does not treat JS-side LittleFS libraries such as `display` and `ui` as firmware ABI. Those should remain versioned JS libraries layered on top of the built-in host APIs.
 
-> The callback and `*.async` recommendations in this document predate
-> [I/O Concurrency Refactor](io-concurrency-refactor.md). The newer document is
-> authoritative for synchronous I/O, generic task composition, and callback
-> removal. The remaining module-shape and feature-gating guidance here still
-> applies.
+> Earlier callback and `*.async` recommendations are obsolete. The implemented
+> synchronous I/O, `Future`, and `EventQueue` contracts are documented in
+> [C API Reference](c-api.md). The remaining module-shape and feature-gating
+> guidance here still applies.
 
 ## Goals
 
@@ -28,8 +27,8 @@ The stable API should satisfy these rules:
 - Host modules should be board-selectable features. Each optional module should be enabled or disabled by a `CONFIG_...` feature macro and chosen per board profile under `configs/boards/<board>/sdkconfig.defaults`.
 - Compiled feature sets should be discoverable from JS in one stable place such as `sys.info().features`, instead of forcing user scripts to probe globals with `typeof`.
 - Mutating peripheral calls should return state objects when that improves observability, but status objects must reflect real or intentionally tracked state, not guessed state.
-- Asynchronous callbacks from ISR or background tasks must always be bridged back onto the JS thread.
-- Synchronous and asynchronous variants should use distinct public names. Do not overload one function name so a callback parameter silently switches it from sync to async behavior.
+- ISR and background-task events must always be bridged back onto the single JS runtime task.
+- I/O modules expose one synchronous method shape without callback overloads or `.async` namespaces. Concurrent native I/O is started only through the global `Future` facility.
 
 ## Stability Levels
 
@@ -193,6 +192,7 @@ Built-in modules and types currently in scope:
 - Peripheral modules: `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`
 - Low-level graphics buffer modules: `displayBuffer`
 - Transport/connectivity modules: `usbSerial`, `socket`, `websocketClient`, `wifi`, `http`, `HttpServer`, `StaticFileHandler`
+- Generic concurrency types: planned `Future` and `EventQueue`
 - JS-side libraries outside the firmware ABI: `display`, `ui`
 
 In the long-term plan, `nvs`, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `usbSerial`, `socket`, `websocketClient`, `displayBuffer`, `wifi`, `http`, and `httpServer` should all be treated as optional host features rather than unconditional globals.
@@ -201,9 +201,9 @@ In the long-term plan, `nvs`, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`
 
 ### Global Helpers
 
-Status: `Stable now`
+Status: `Adjust before freeze`
 
-These helpers are small, board-independent, and already sit at the right abstraction level:
+The current inventory is:
 
 - `load(path)`
 - `defer()`
@@ -217,7 +217,18 @@ These helpers are small, board-independent, and already sit at the right abstrac
 Freeze recommendations:
 
 - Keep both `sleep` and `delay`; `delay` is a harmless compatibility alias.
-- Keep callback-oriented async helpers. Do not require Promises for baseline firmware APIs.
+- Replace `defer()` and `waitFor(...)` with the accepted scheduler-driven,
+  deferred-start `Future` API.
+- Do not require Promises, `.then()`, `.await`, or resumable JavaScript for the
+  baseline firmware API.
+- Keep `Future.call(...)` as the only custom asynchronous callback entry point;
+  it queues any callable with one public lifecycle and lets the runtime dispatch
+  it at the next JS idle point without requiring `wait()`. Native-driver lookup
+  is an internal optimization, not a separate API mode.
+- Keep nested waits lightweight: reuse the scheduler pump and normal JS call
+  stack rather than adding fibers, dependency graphs, cycle detection, or
+  automatic Future flattening.
+- Keep callback-based timers as explicitly asynchronous generic tools.
 - Keep `load(...)` as the single primitive for JS-side library composition.
 
 ### `fs` and `Stream`
@@ -284,7 +295,7 @@ Status: `Stable now`
 Why:
 
 - `sys.info()`, `millis()`, `micros()`, `freeHeap()`, and bounded `randomHex()` are generic runtime/platform helpers.
-- `sys.withTimeout()` provides a scoped wall-clock budget without extending an outer native callback deadline.
+- `sys.withTimeout()` provides a scoped wall-clock budget without extending an outer native deadline.
 - The module is not overloaded with peripheral control.
 
 Freeze recommendations:
@@ -298,26 +309,27 @@ Freeze recommendations:
 
 ### `gpio`
 
-Status: `Stable now`
+Status: `Adjust before freeze`
 
 Current shape is already close to the right long-term layer:
 
 - raw pin configuration
 - digital read/write
 - pull, drive strength, hold
-- interrupt registration via `attachInterrupt(...)`
+- interrupt delivery, currently registered through `attachInterrupt(...)`
 
 Why it is in a good place:
 
 - It stays close to ESP-IDF pad control instead of embedding drivers.
-- Interrupt callbacks are safely bridged back onto the JS thread.
+- Interrupt events are already safely bridged back onto the JS runtime task.
 - Status inspection is strong enough for debugging.
 
 Freeze recommendations:
 
 - Keep `pinMode`, `setPull`, `digitalRead`, `digitalWrite`, `toggle`, `hold`, `reset`, `status`.
-- Keep `attachInterrupt(pin, callback, mode)` / `detachInterrupt(pin)`.
-- Keep interrupt event objects `{ pin, level, mode }`.
+- Replace `attachInterrupt(pin, callback, mode)` / `detachInterrupt(pin)` with
+  `watch(pin, mode): EventQueue` and queue `close()`.
+- Keep interrupt event objects `{ pin, level, mode }` as queue values.
 - Keep richer state inspection in `status(pin)`.
 - Gate the whole module behind `FEATURE_GPIO`, even if most boards will leave it enabled.
 
@@ -606,20 +618,20 @@ If those are needed later, they should be added as separate explicit surfaces ra
 
 ### `wifi`
 
-Status: `Candidate for freeze`
+Status: `Adjust before freeze`
 
 What is good:
 
 - `status()`, `scan()`, `connect()`, `disconnect()` are the right primitives.
-- Both sync and callback-driven async forms are useful on embedded JS runtimes.
-- Async callbacks are already bridged properly to the JS thread.
+- The current ESP event integration is a useful native future-driver backend.
 
 What should stay intentional:
 
 - `wifi.status()` should remain the single authoritative status shape.
-- Async callback result ordering should stay consistent across all methods:
-  `callback(result, error)`.
-- Keep sync and async entrypoints intentionally separate. `wifi.scan()` and `wifi.connect(...)` should remain synchronous only, while `wifi.async.scan(...)` and `wifi.async.connect(...)` carry the callback-driven async behavior.
+- `wifi.scan()` and `wifi.connect(...)` remain the only module-level method
+  shapes and use the future scheduler internally.
+- `Future.call(wifi.scan, wifi, [])` and the equivalent connect call provide
+  concurrent use without a `wifi.async` namespace.
 - Any future reconnect, AP mode, hostname mutation, or event subscription work should be introduced carefully, not mixed into the basic station API casually.
 
 Recommended stable baseline:
@@ -627,16 +639,13 @@ Recommended stable baseline:
 - `DEFAULT_TIMEOUT_MS`
 - `status()`
 - `scan()`
-- `async.scan(callback)`
 - `connect(ssid, password, timeoutMs?)`
-- `async.connect(ssid, password, callback)`
-- `async.connect(ssid, password, timeoutMs, callback)`
 - `disconnect()`
 - Gate the module behind `FEATURE_WIFI`.
 
 ### `http`
 
-Status: `Candidate for freeze`
+Status: `Adjust before freeze`
 
 What is good:
 
@@ -646,20 +655,22 @@ What is good:
 What should stay intentional:
 
 - Keep the surface intentionally smaller than browser Fetch or Express.
-- Keep the embedded API explicitly split by namespace: synchronous transport stays on `fetch(...)` / `http.fetch(...)`, and callback-driven async transport stays on `http.async.fetch(...)`.
-- Do not overload `fetch(...)` with an optional callback that changes its execution model.
-- Decide that this is a callback/sync embedded API, not a promise-based compatibility layer.
-- Server routing and static file helpers should remain explicit, not auto-magic.
+- Keep only synchronous `fetch(...)` / `http.fetch(...)` at module level and
+  expose their existing worker backend through `Future.call`.
+- Do not overload `fetch(...)` with an optional callback and do not retain
+  `http.async`.
+- Treat this as an embedded `Future` API, not a Promise compatibility layer.
+- Replace native server route callbacks with declarative routes and a bounded
+  request `EventQueue`; implement routing policy in JS.
 
 Recommended stable baseline:
 
 - `fetch(url, init?)`
 - `http.fetch(...)` as the same transport primitive
-- `http.async.fetch(input, callback)` / `http.async.fetch(input, options, callback)`
 - `http.server(options?)`
 - `http.staticFileHandler(root)`
-- `HttpServer.start()`, `stop()`
-- `HttpServer.get/post/put/patch/delete/options/head/all`
+- `HttpServer.route(method, path)`, `start()`, `receive(timeoutMs?)`,
+  `respond(request, response)`, and `stop()`
 - `StaticFileHandler.handle(request)`
 - Gate the client transport behind `FEATURE_HTTP`.
 - Gate the server transport behind `FEATURE_HTTP_SERVER`.
@@ -687,8 +698,8 @@ Before calling the built-in host API stable, adopt these rules:
 
 - Use `i2c`, not `iic`.
 - Prefer ESP-IDF peripheral names over Arduino compatibility aliases.
-- Arduino-like convenience is acceptable where it does not distort the underlying model:
-  `gpio.attachInterrupt(...)` is acceptable.
+- Keep module methods callback-free; repeated input such as GPIO interrupts uses
+  `EventQueue`, and concurrency is composed through `Future`.
 - Do not add broad alias sets for every peripheral API. One clear name is better than many compatibility names.
 - New optional modules should always be introduced as named build features with board-level defaults, not as unconditional globals.
 
@@ -697,11 +708,11 @@ Before calling the built-in host API stable, adopt these rules:
 Recommended order for stabilization:
 
 1. Freeze now:
-   `help/load/defer/waitFor/timers`, `fs`, `Stream`, `Headers`, `Request`, `Response`, `sys`, `gpio`, `adc`
+   `help/load/timers`, `fs`, `Stream`, `Headers`, `Request`, `Response`, `sys`, `adc`
 2. Candidate for freeze after focused validation:
-   `nvs`, `i2c`, `spi`, `uart`, `displayBuffer`, `wifi`, `http`
+   `nvs`, `i2c`, `spi`, `uart`, `displayBuffer`
 3. Adjust before freeze:
-   `ledc`, `dac`
+   `Future`, `EventQueue`, `gpio`, `wifi`, `http`, `ledc`, `dac`
 
 ## Immediate Next Steps
 

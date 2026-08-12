@@ -7,10 +7,8 @@
 #define JS_CLASS_HEADERS (JS_CLASS_USER + 0)
 #define JS_CLASS_REQUEST (JS_CLASS_USER + 1)
 #define JS_CLASS_RESPONSE (JS_CLASS_USER + 2)
-#define JS_CLASS_DEFERRED (JS_CLASS_USER + 3)
 #define JS_CLASS_STREAM (JS_CLASS_USER + 4)
 #define JS_CLASS_HTTP_SERVER (JS_CLASS_USER + 5)
-#define JS_CLASS_STATIC_FILE_HANDLER (JS_CLASS_USER + 6)
 #define JS_CLASS_I2C_BUS (JS_CLASS_USER + 7)
 #define JS_CLASS_SPI_BUS (JS_CLASS_USER + 8)
 #define JS_CLASS_SPI_DEVICE (JS_CLASS_USER + 9)
@@ -21,7 +19,9 @@
 #define JS_CLASS_DISPLAY_BUFFER (JS_CLASS_USER + 14)
 #define JS_CLASS_DISPLAY_FONT (JS_CLASS_USER + 15)
 #define JS_CLASS_DISPLAY_COMMAND_BUFFER (JS_CLASS_USER + 16)
-#define JS_CLASS_COUNT (JS_CLASS_USER + 17)
+#define JS_CLASS_FUTURE (JS_CLASS_USER + 17)
+#define JS_CLASS_EVENT_QUEUE (JS_CLASS_USER + 18)
+#define JS_CLASS_COUNT (JS_CLASS_USER + 19)
 
 #define js_global_object js_global_object_base
 #define js_c_function_decl js_c_function_decl_base
@@ -69,16 +69,33 @@ static const JSPropDef js_response_proto[] = {
 static const JSClassDef js_response_class =
     JS_CLASS_DEF("Response", 2, js_response_constructor, JS_CLASS_RESPONSE, js_response, js_response_proto, NULL, NULL);
 
-static const JSPropDef js_deferred_proto[] = {
-    JS_CFUNC_DEF("resolve", 1, js_deferred_resolve),
-    JS_CFUNC_DEF("reject", 1, js_deferred_reject),
-    JS_CFUNC_DEF("callback", 2, js_deferred_callback),
-    JS_CFUNC_DEF("wait", 1, js_deferred_wait),
+static const JSPropDef js_future[] = {
+    JS_CFUNC_DEF("call", 3, js_future_call),
+    JS_CFUNC_DEF("all", 1, js_future_all),
+    JS_CFUNC_DEF("race", 1, js_future_race),
+    JS_CFUNC_DEF("sleep", 1, js_future_sleep),
+    JS_CFUNC_DEF("timeout", 2, js_future_timeout),
     JS_PROP_END,
 };
 
-static const JSClassDef js_deferred_class =
-    JS_CLASS_DEF("_Deferred", 0, js_deferred_constructor, JS_CLASS_DEFERRED, NULL, js_deferred_proto, NULL, NULL);
+static const JSPropDef js_future_proto[] = {
+    JS_CFUNC_DEF("status", 0, js_future_status),
+    JS_CFUNC_DEF("wait", 1, js_future_wait),
+    JS_CFUNC_DEF("cancel", 0, js_future_cancel),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_future_class =
+    JS_CLASS_DEF("Future", 0, js_future_constructor, JS_CLASS_FUTURE, js_future, js_future_proto, NULL, js_future_finalizer);
+
+static const JSPropDef js_event_queue_proto[] = {
+    JS_CFUNC_DEF("receive", 1, js_event_queue_receive),
+    JS_CFUNC_DEF("close", 0, js_event_queue_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_event_queue_class =
+    JS_CLASS_DEF("EventQueue", 0, js_event_queue_constructor, JS_CLASS_EVENT_QUEUE, NULL, js_event_queue_proto, NULL, js_event_queue_finalizer);
 
 static const JSPropDef js_stream[] = {
     JS_PROP_DOUBLE_DEF("SEEK_SET", 0, 0),
@@ -311,8 +328,7 @@ static const JSPropDef js_gpio[] = {
     JS_CFUNC_DEF("getDriveStrength", 1, js_gpio_getDriveStrength),
     JS_CFUNC_DEF("setDriveStrength", 2, js_gpio_setDriveStrength),
     JS_CFUNC_DEF("hold", 2, js_gpio_hold),
-    JS_CFUNC_DEF("attachInterrupt", 3, js_gpio_attachInterrupt),
-    JS_CFUNC_DEF("detachInterrupt", 1, js_gpio_detachInterrupt),
+    JS_CFUNC_DEF("watch", 2, js_gpio_watch),
     JS_CFUNC_DEF("reset", 1, js_gpio_reset),
     JS_CFUNC_DEF("led", 1, js_gpio_led),
     JS_PROP_END,
@@ -531,7 +547,7 @@ static const JSClassDef js_uart_obj =
 #if CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
 static const JSPropDef js_usb_serial[] = {
     JS_CGETSET_DEF("MAX_FRAME_BYTES", js_usb_serial_get_max_frame_bytes, NULL),
-    JS_CFUNC_DEF("open", 2, js_usb_serial_open),
+    JS_CFUNC_DEF("open", 1, js_usb_serial_open),
     JS_CFUNC_DEF("close", 0, js_usb_serial_close),
     JS_CFUNC_DEF("send", 1, js_usb_serial_send),
     JS_CFUNC_DEF("status", 0, js_usb_serial_status),
@@ -568,7 +584,7 @@ static const JSPropDef js_socket[] = {
     JS_CFUNC_DEF("open", 2, js_socket_open),
     JS_CFUNC_DEF("close", 1, js_socket_close),
     JS_CFUNC_DEF("status", 1, js_socket_status),
-    JS_CFUNC_DEF("get_max_message_bytes", 1, js_socket_get_max_message_bytes),
+    JS_CGETSET_DEF("MAX_TRANSFER_BYTES", js_socket_get_max_transfer_bytes, NULL),
     JS_PROP_CLASS_DEF("tcp", &js_socket_tcp_obj),
     JS_PROP_CLASS_DEF("udp", &js_socket_udp_obj),
     JS_PROP_END,
@@ -581,7 +597,7 @@ static const JSClassDef js_socket_obj =
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
 static const JSPropDef js_websocket_client[] = {
     JS_CGETSET_DEF("MAX_MESSAGE_BYTES", js_websocket_get_max_message_bytes, NULL),
-    JS_CFUNC_DEF("open", 2, js_websocket_open),
+    JS_CFUNC_DEF("open", 1, js_websocket_open),
     JS_CFUNC_DEF("close", 0, js_websocket_close),
     JS_CFUNC_DEF("send", 1, js_websocket_send),
     JS_CFUNC_DEF("status", 0, js_websocket_status),
@@ -593,22 +609,12 @@ static const JSClassDef js_websocket_client_obj =
 #endif
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
-static const JSPropDef js_wifi_async[] = {
-    JS_CFUNC_DEF("connect", 4, js_wifi_async_connect),
-    JS_CFUNC_DEF("scan", 1, js_wifi_async_scan),
-    JS_PROP_END,
-};
-
-static const JSClassDef js_wifi_async_obj =
-    JS_OBJECT_DEF("async", js_wifi_async);
-
 static const JSPropDef js_wifi[] = {
     JS_CGETSET_DEF("DEFAULT_TIMEOUT_MS", js_wifi_get_default_timeout_ms, NULL),
     JS_CFUNC_DEF("connect", 3, js_wifi_connect),
     JS_CFUNC_DEF("disconnect", 0, js_wifi_disconnect),
     JS_CFUNC_DEF("status", 0, js_wifi_status),
     JS_CFUNC_DEF("scan", 0, js_wifi_scan),
-    JS_PROP_CLASS_DEF("async", &js_wifi_async_obj),
     JS_PROP_END,
 };
 
@@ -617,29 +623,14 @@ static const JSClassDef js_wifi_obj =
 #endif
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP || CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
-#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
-static const JSPropDef js_http_async[] = {
-    JS_CFUNC_DEF("fetch", 3, js_http_async_fetch),
-    JS_CFUNC_DEF("cancel", 1, js_http_async_cancel),
-    JS_PROP_END,
-};
-
-static const JSClassDef js_http_async_obj =
-    JS_OBJECT_DEF("async", js_http_async);
-#endif
-
 static const JSPropDef js_http[] = {
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
     JS_CGETSET_DEF("DEFAULT_TIMEOUT_MS", js_http_get_default_timeout_ms, NULL),
     JS_CGETSET_DEF("MAX_BODY_BYTES", js_http_get_max_body_bytes, NULL),
     JS_CFUNC_DEF("fetch", 2, js_http_fetch),
-    JS_PROP_CLASS_DEF("async", &js_http_async_obj),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
     JS_CFUNC_DEF("server", 1, js_http_server_create),
-#endif
-#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER && CONFIG_ESP32_MQUICKJS_FEATURE_FS
-    JS_CFUNC_DEF("staticFileHandler", 1, js_http_static_file_handler),
 #endif
     JS_PROP_END,
 };
@@ -653,16 +644,10 @@ static const JSPropDef js_http_server_proto[] = {
     JS_CFUNC_DEF("start", 0, js_http_server_start),
     JS_CFUNC_DEF("stop", 0, js_http_server_stop),
     JS_CFUNC_DEF("close", 0, js_http_server_close),
+    JS_CFUNC_DEF("route", 2, js_http_server_route),
+    JS_CFUNC_DEF("respond", 2, js_http_server_respond),
     JS_CFUNC_DEF("removeRoute", 2, js_http_server_remove_route),
     JS_CFUNC_DEF("clearRoutes", 0, js_http_server_clear_routes),
-    JS_CFUNC_DEF("get", 2, js_http_server_get),
-    JS_CFUNC_DEF("post", 2, js_http_server_post),
-    JS_CFUNC_DEF("put", 2, js_http_server_put),
-    JS_CFUNC_DEF("patch", 2, js_http_server_patch),
-    JS_CFUNC_DEF("delete", 2, js_http_server_delete),
-    JS_CFUNC_DEF("options", 2, js_http_server_options),
-    JS_CFUNC_DEF("head", 2, js_http_server_head),
-    JS_CFUNC_DEF("all", 2, js_http_server_all),
     JS_PROP_END,
 };
 
@@ -670,21 +655,12 @@ static const JSClassDef js_http_server_class =
     JS_CLASS_DEF("HttpServer", 0, js_http_server_constructor, JS_CLASS_HTTP_SERVER, NULL, js_http_server_proto, NULL, NULL);
 #endif
 
-#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER && CONFIG_ESP32_MQUICKJS_FEATURE_FS
-static const JSPropDef js_static_file_handler_proto[] = {
-    JS_CFUNC_DEF("handle", 1, js_http_static_file_handler_handle),
-    JS_PROP_END,
-};
-
-static const JSClassDef js_static_file_handler_class =
-    JS_CLASS_DEF("StaticFileHandler", 0, js_http_static_file_handler_constructor, JS_CLASS_STATIC_FILE_HANDLER, NULL, js_static_file_handler_proto, NULL, NULL);
-#endif
-
 static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("Headers", &js_headers_class),
     JS_PROP_CLASS_DEF("Request", &js_request_class),
     JS_PROP_CLASS_DEF("Response", &js_response_class),
-    JS_PROP_CLASS_DEF("_Deferred", &js_deferred_class),
+    JS_PROP_CLASS_DEF("Future", &js_future_class),
+    JS_PROP_CLASS_DEF("EventQueue", &js_event_queue_class),
     JS_PROP_CLASS_DEF("Stream", &js_stream_class),
     JS_PROP_CLASS_DEF("_ByteView", &js_byte_view_class),
     JS_PROP_CLASS_DEF("_ByteSpanSource", &js_byte_span_source_class),
@@ -746,21 +722,13 @@ static const JSPropDef js_global_object_extra[] = {
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
     JS_PROP_CLASS_DEF("HttpServer", &js_http_server_class),
 #endif
-#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER && CONFIG_ESP32_MQUICKJS_FEATURE_FS
-    JS_PROP_CLASS_DEF("StaticFileHandler", &js_static_file_handler_class),
-#endif
     JS_CFUNC_DEF("help", 0, js_help),
-    JS_CFUNC_DEF("defer", 0, js_defer),
-    JS_CFUNC_DEF("waitFor", 2, js_waitFor),
     JS_CFUNC_DEF("sleep", 1, js_sleep),
     JS_CFUNC_DEF("delay", 1, js_sleep),
     JS_CFUNC_DEF("setInterval", 2, js_setInterval),
     JS_CFUNC_DEF("clearInterval", 1, js_clearTimeout),
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
     JS_CFUNC_DEF("fetch", 2, js_http_fetch),
-#endif
-#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER && CONFIG_ESP32_MQUICKJS_FEATURE_FS
-    JS_CFUNC_DEF("staticFileHandler", 1, js_http_static_file_handler),
 #endif
     JS_PROP_END,
 };

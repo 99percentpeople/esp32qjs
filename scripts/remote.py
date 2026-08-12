@@ -70,6 +70,8 @@ class JsTestCase:
     path: str
     required_capabilities: tuple[str, ...] = ()
     timeout_seconds: float = 15.0
+    reset_before: bool = False
+    reset_after: bool = False
 
 
 @dataclass(frozen=True)
@@ -118,7 +120,13 @@ JS_TEST_MODULES = (
     ),
     JsTestModule(
         "display",
-        (JsTestCase("modules/display/lifecycle.js", timeout_seconds=90.0),),
+        (
+            JsTestCase(
+                "modules/display/lifecycle.js",
+                timeout_seconds=90.0,
+                reset_before=True,
+            ),
+        ),
         required_features=("displayBuffer",),
     ),
     JsTestModule(
@@ -154,6 +162,10 @@ JS_TEST_MODULES = (
             JsTestCase("modules/websocket/network.js", required_capabilities=("network",), timeout_seconds=30.0),
         ),
         required_features=("websocket",),
+    ),
+    JsTestModule(
+        "future",
+        (JsTestCase("modules/timers/capacity.js", reset_before=True, reset_after=True),),
     ),
 )
 JS_TEST_MODULE_MAP = {module.name: module for module in JS_TEST_MODULES}
@@ -1302,13 +1314,13 @@ def flash_workspace(config: ProjectConfig, build_first: bool) -> None:
     )
 
 
-def monitor_cmd(config: ProjectConfig) -> list[str]:
+def monitor_cmd(config: ProjectConfig, *, no_reset: bool = False) -> list[str]:
     """Build the monitor command for the selected board profile."""
     write_monitor_config()
-    return idf_py_cmd(
-        ["-p", command_port(config), "-b", str(config.monitor_baud), "monitor"],
-        config,
-    )
+    project_args = ["-p", command_port(config), "-b", str(config.monitor_baud), "monitor"]
+    if no_reset:
+        project_args.append("--no-reset")
+    return idf_py_cmd(project_args, config)
 
 
 def monitor(config: ProjectConfig) -> None:
@@ -1653,7 +1665,7 @@ def start_monitor_session(config: ProjectConfig) -> MonitorSession:
     master_fd, slave_fd = os.openpty()
     try:
         process = subprocess.Popen(
-            monitor_cmd(config),
+            monitor_cmd(config, no_reset=True),
             cwd=ROOT_DIR,
             stdin=slave_fd,
             stdout=slave_fd,
@@ -1922,6 +1934,18 @@ def collect_js_runtime(session: MonitorSession) -> None:
         read_monitor_until_line_prefix(session, "__ESP32QJS_TEST_GC__", 5.0, "the JS GC handshake")
     except (MarkerTimeoutError, OSError):
         print("Warning: skipped JS GC handshake before the next case", flush=True)
+
+
+def reset_js_test_runtime(session: MonitorSession, config: ProjectConfig) -> None:
+    """Hard-reset the board and restore dynamic test configuration for an isolated case."""
+    os.write(session.master_fd, b"\x14\x12")
+    read_monitor_until_line_prefix(
+        session,
+        JS_TEST_READY_MARKER,
+        25.0,
+        "the isolated JS test runtime reset",
+    )
+    configure_js_test_runtime(session, config)
 
 
 def validate_network_test_config(config: ProjectConfig, modules: tuple[JsTestModule, ...], network_enabled: bool) -> None:
@@ -2224,8 +2248,28 @@ def run_js_tests(config: ProjectConfig,
                     print(f"Skipping JS test {case.path} (requires {required_flags})", flush=True)
                     summary.skipped_cases += 1
                     continue
+                if case.reset_before:
+                    try:
+                        reset_js_test_runtime(session, js_config)
+                    except (MarkerTimeoutError, OSError) as exc:
+                        message = f"failed to reset the JS runtime before isolated case ({exc})"
+                        print(f"FAIL {case.path}: {message}", flush=True)
+                        summary.failed_cases += 1
+                        summary.status = "failed"
+                        summary.failure_details.append(f"{case.path}: {message}")
+                        continue
                 collect_js_runtime(session)
                 result = run_js_test_case(session, case)
+                if case.reset_after:
+                    try:
+                        reset_js_test_runtime(session, js_config)
+                    except (MarkerTimeoutError, OSError) as exc:
+                        message = f"failed to reset the JS runtime after isolated case ({exc})"
+                        print(f"FAIL {case.path}: {message}", flush=True)
+                        summary.failed_cases += 1
+                        summary.status = "failed"
+                        summary.failure_details.append(f"{case.path}: {message}")
+                        continue
                 if result.status == "failed":
                     summary.failed_cases += 1
                     summary.status = "failed"

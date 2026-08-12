@@ -4,6 +4,8 @@
 #include "esp32_mquickjs_adc.h"
 #include "esp32_mquickjs_dac.h"
 #include "esp32_mquickjs_fs.h"
+#include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_event_queue.h"
 #include "esp32_mquickjs_gpio.h"
 #include "esp32_mquickjs_http.h"
 #include "esp32_mquickjs_http_server.h"
@@ -292,6 +294,7 @@ bool esp32_mquickjs_cooperative_delay(esp32_mquickjs_runtime_t *runtime,
             completed = false;
             break;
         }
+        (void)esp32_mquickjs_future_cooperate(runtime);
         if (remaining_ms == 0) {
             break;
         }
@@ -322,7 +325,10 @@ bool esp32_mquickjs_wait_for_activity(esp32_mquickjs_runtime_t *runtime,
                                       uint32_t timeout_ms)
 {
     esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
-    uint32_t remaining_ms = timeout_ms;
+    uint32_t remaining_ms;
+
+    timeout_ms = esp32_mquickjs_future_next_wait_ms(runtime, timeout_ms);
+    remaining_ms = timeout_ms;
 
     for (;;) {
         uint32_t slice_ms;
@@ -507,476 +513,6 @@ bool esp32_mquickjs_set_property_ref(JSContext *ctx,
 {
     return target_obj != NULL &&
            !JS_IsException(JS_SetPropertyStr(ctx, *target_obj, name, value));
-}
-
-static int js_timeout_arg(JSContext *ctx,
-                          JSValue value,
-                          uint32_t default_timeout_ms,
-                          uint32_t *timeout_ms)
-{
-    int timeout = 0;
-
-    if (JS_IsUndefined(value)) {
-        *timeout_ms = default_timeout_ms;
-        return 0;
-    }
-    if (JS_ToInt32(ctx, &timeout, value) != 0 || timeout < 0) {
-        return -1;
-    }
-    *timeout_ms = (uint32_t)timeout;
-    return 0;
-}
-
-static bool js_is_object(JSContext *ctx, JSValue value)
-{
-    return JS_GetClassID(ctx, value) >= 0;
-}
-
-static bool js_get_bool_property(JSContext *ctx,
-                                 JSValue obj,
-                                 const char *name,
-                                 bool *value)
-{
-    int int_value = 0;
-    JSValue property = JS_GetPropertyStr(ctx, obj, name);
-
-    if (JS_IsException(property) || JS_ToInt32(ctx, &int_value, property) != 0) {
-        return false;
-    }
-    *value = int_value != 0;
-    return true;
-}
-
-static bool js_settle_deferred(JSContext *ctx,
-                               JSValue deferred_obj,
-                               bool ok,
-                               JSValue payload)
-{
-    JSGCRef deferred_ref;
-    JSGCRef payload_ref;
-    JSValue *rooted_deferred;
-    JSValue *rooted_payload;
-    bool settled = false;
-    bool result = false;
-
-    rooted_deferred = JS_PushGCRef(ctx, &deferred_ref);
-    rooted_payload = JS_PushGCRef(ctx, &payload_ref);
-    *rooted_deferred = deferred_obj;
-    *rooted_payload = payload;
-
-    if (!js_get_bool_property(ctx, *rooted_deferred, "settled", &settled)) {
-        goto done;
-    }
-    if (settled) {
-        result = true;
-        goto done;
-    }
-
-    if (!esp32_mquickjs_set_property_ref(ctx, rooted_deferred, "settled", JS_NewBool(true)) ||
-        !esp32_mquickjs_set_property_ref(ctx, rooted_deferred, "done", JS_NewBool(true)) ||
-        !esp32_mquickjs_set_property_ref(ctx, rooted_deferred, "ok", JS_NewBool(ok))) {
-        goto done;
-    }
-
-    if (ok) {
-        result = esp32_mquickjs_set_property_ref(ctx, rooted_deferred, "value", *rooted_payload) &&
-                 esp32_mquickjs_set_property_ref(ctx, rooted_deferred, "error", JS_UNDEFINED);
-    } else {
-        result = esp32_mquickjs_set_property_ref(ctx, rooted_deferred, "error", *rooted_payload) &&
-                 esp32_mquickjs_set_property_ref(ctx, rooted_deferred, "value", JS_UNDEFINED);
-    }
-
-done:
-    JS_PopGCRef(ctx, &payload_ref);
-    JS_PopGCRef(ctx, &deferred_ref);
-    return result;
-}
-
-static void js_call_best_effort(JSContext *ctx, JSValue func)
-{
-    JSValue ret;
-
-    if (!JS_IsFunction(ctx, func)) {
-        return;
-    }
-
-    ret = esp32_mquickjs_call(ctx, s_active_runtime, func, JS_NULL, 0, NULL);
-    if (JS_IsException(ret)) {
-        esp32_mquickjs_print_exception(ctx);
-    }
-}
-
-static bool js_is_deferred(JSContext *ctx, JSValue value)
-{
-    return js_is_object(ctx, value) && JS_GetClassID(ctx, value) == JS_CLASS_DEFERRED;
-}
-
-static JSValue js_bind_method(JSContext *ctx, JSValue target_obj, const char *method_name)
-{
-    JSGCRef target_ref;
-    JSGCRef method_ref;
-    JSGCRef bind_ref;
-    JSValue *rooted_target;
-    JSValue *method_fn;
-    JSValue *bind_fn;
-    JSValue result = JS_EXCEPTION;
-
-    rooted_target = JS_PushGCRef(ctx, &target_ref);
-    method_fn = JS_PushGCRef(ctx, &method_ref);
-    bind_fn = JS_PushGCRef(ctx, &bind_ref);
-    *rooted_target = target_obj;
-    *method_fn = JS_GetPropertyStr(ctx, *rooted_target, method_name);
-    *bind_fn = JS_UNDEFINED;
-
-    if (JS_IsException(*method_fn)) {
-        goto done;
-    }
-    if (!JS_IsFunction(ctx, *method_fn)) {
-        JS_ThrowInternalError(ctx, "%s is not a function", method_name);
-        goto done;
-    }
-
-    *bind_fn = JS_GetPropertyStr(ctx, *method_fn, "bind");
-    if (JS_IsException(*bind_fn)) {
-        goto done;
-    }
-    if (!JS_IsFunction(ctx, *bind_fn)) {
-        JS_ThrowInternalError(ctx, "Function.bind() is not available");
-        goto done;
-    }
-
-    result = esp32_mquickjs_call(ctx, s_active_runtime, *bind_fn, *method_fn, 1, rooted_target);
-
-done:
-    JS_PopGCRef(ctx, &bind_ref);
-    JS_PopGCRef(ctx, &method_ref);
-    JS_PopGCRef(ctx, &target_ref);
-    return result;
-}
-
-static JSValue js_wait_for_deferred(JSContext *ctx,
-                                    esp32_mquickjs_runtime_t *runtime,
-                                    JSValue deferred_obj,
-                                    JSValue timeout_value,
-                                    const char *api_name)
-{
-    JSGCRef result_ref;
-    JSGCRef deferred_ref;
-    JSGCRef timeout_ref;
-    JSValue *result;
-    JSValue *rooted_deferred;
-    JSValue *rooted_timeout;
-    uint32_t timeout_ms = runtime != NULL ? runtime->eval_timeout_ms : ESP32_MQUICKJS_DEFAULT_EVAL_TIMEOUT_MS;
-    uint64_t saved_deadline_us = 0;
-    uint64_t wait_deadline_us = 0;
-    bool deadline_changed = false;
-
-    result = JS_PushGCRef(ctx, &result_ref);
-    rooted_deferred = JS_PushGCRef(ctx, &deferred_ref);
-    rooted_timeout = JS_PushGCRef(ctx, &timeout_ref);
-    *result = JS_EXCEPTION;
-    *rooted_deferred = deferred_obj;
-    *rooted_timeout = timeout_value;
-
-    if (js_timeout_arg(ctx, *rooted_timeout, timeout_ms, &timeout_ms) != 0) {
-        *result = JS_ThrowTypeError(ctx, "%s(..., timeoutMs) expects a non-negative integer", api_name);
-        goto done;
-    }
-
-    if (runtime != NULL) {
-        saved_deadline_us = runtime->deadline_us;
-        runtime->deadline_us = timeout_ms > 0
-                                   ? esp_timer_get_time() + ((uint64_t)timeout_ms * 1000ULL)
-                                   : 0;
-        deadline_changed = true;
-    }
-    if (timeout_ms > 0) {
-        wait_deadline_us = esp_timer_get_time() + ((uint64_t)timeout_ms * 1000ULL);
-    }
-
-    for (;;) {
-        bool settled = false;
-        bool ok = false;
-
-        if (!js_get_bool_property(ctx, *rooted_deferred, "settled", &settled)) {
-            goto done;
-        }
-        if (settled) {
-            if (!js_get_bool_property(ctx, *rooted_deferred, "ok", &ok)) {
-                goto done;
-            }
-
-            *result = JS_GetPropertyStr(ctx, *rooted_deferred, ok ? "value" : "error");
-            if (JS_IsException(*result) || ok) {
-                goto done;
-            }
-            if (JS_IsUndefined(*result)) {
-                *result = JS_ThrowInternalError(ctx, "%s() rejected without an error value", api_name);
-            } else {
-                *result = JS_Throw(ctx, *result);
-            }
-            goto done;
-        }
-
-        if (wait_deadline_us > 0 && esp_timer_get_time() >= wait_deadline_us) {
-            JSGCRef cancel_ref;
-            JSValue *cancel = JS_PushGCRef(ctx, &cancel_ref);
-
-            *cancel = JS_GetPropertyStr(ctx, *rooted_deferred, "_cancel");
-            if (!JS_IsException(*cancel)) {
-                js_call_best_effort(ctx, *cancel);
-            }
-            JS_PopGCRef(ctx, &cancel_ref);
-            *result = JS_ThrowInternalError(ctx, "%s() timed out after %" PRIu32 " ms", api_name, timeout_ms);
-            goto done;
-        }
-
-        if (esp32_mquickjs_poll(ctx, runtime) != ESP32_MQUICKJS_POLL_NONE) {
-            continue;
-        }
-
-        {
-            uint32_t wait_ms = UINT32_MAX;
-
-            if (wait_deadline_us > 0) {
-                uint64_t now_us = esp_timer_get_time();
-
-                if (now_us < wait_deadline_us) {
-                    uint64_t remaining_us = wait_deadline_us - now_us;
-                    wait_ms = (uint32_t)((remaining_us + 999ULL) / 1000ULL);
-                    if (wait_ms == 0) {
-                        wait_ms = 1;
-                    }
-                } else {
-                    wait_ms = 0;
-                }
-            }
-
-            if (!esp32_mquickjs_wait_for_activity(runtime, wait_ms) &&
-                !esp32_mquickjs_cooperate(runtime)) {
-                *result = JS_ThrowInternalError(ctx, "%s() was interrupted by a runtime stop request", api_name);
-                goto done;
-            }
-        }
-    }
-
-done:
-    if (runtime != NULL && deadline_changed) {
-        runtime->deadline_us = saved_deadline_us;
-    }
-    JS_PopGCRef(ctx, &timeout_ref);
-    JS_PopGCRef(ctx, &deferred_ref);
-    return JS_PopGCRef(ctx, &result_ref);
-}
-
-static JSValue js_make_deferred(JSContext *ctx)
-{
-    JSGCRef deferred_ref;
-    JSGCRef resolve_ref;
-    JSGCRef reject_ref;
-    JSGCRef callback_ref;
-    JSGCRef wait_ref;
-    JSValue *deferred_obj;
-    JSValue *resolve_fn;
-    JSValue *reject_fn;
-    JSValue *callback_fn;
-    JSValue *wait_fn;
-
-    deferred_obj = JS_PushGCRef(ctx, &deferred_ref);
-    resolve_fn = JS_PushGCRef(ctx, &resolve_ref);
-    reject_fn = JS_PushGCRef(ctx, &reject_ref);
-    callback_fn = JS_PushGCRef(ctx, &callback_ref);
-    wait_fn = JS_PushGCRef(ctx, &wait_ref);
-    *deferred_obj = JS_NewObjectClassUser(ctx, JS_CLASS_DEFERRED);
-    *resolve_fn = JS_UNDEFINED;
-    *reject_fn = JS_UNDEFINED;
-    *callback_fn = JS_UNDEFINED;
-    *wait_fn = JS_UNDEFINED;
-    if (JS_IsException(*deferred_obj)) {
-        goto fail;
-    }
-
-    *resolve_fn = js_bind_method(ctx, *deferred_obj, "resolve");
-    *reject_fn = js_bind_method(ctx, *deferred_obj, "reject");
-    *callback_fn = js_bind_method(ctx, *deferred_obj, "callback");
-    *wait_fn = js_bind_method(ctx, *deferred_obj, "wait");
-    if (JS_IsException(*resolve_fn) || JS_IsException(*reject_fn) || JS_IsException(*callback_fn) ||
-        JS_IsException(*wait_fn)) {
-        goto fail;
-    }
-
-    if (!esp32_mquickjs_set_property_ref(ctx, deferred_obj, "settled", JS_NewBool(false)) ||
-        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "done", JS_NewBool(false)) ||
-        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "ok", JS_NewBool(false)) ||
-        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "value", JS_UNDEFINED) ||
-        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "error", JS_UNDEFINED) ||
-        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "_cancel", JS_UNDEFINED) ||
-        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "resolve", *resolve_fn) ||
-        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "reject", *reject_fn) ||
-        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "callback", *callback_fn) ||
-        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "wait", *wait_fn)) {
-        goto fail;
-    }
-
-    JS_PopGCRef(ctx, &wait_ref);
-    JS_PopGCRef(ctx, &callback_ref);
-    JS_PopGCRef(ctx, &reject_ref);
-    JS_PopGCRef(ctx, &resolve_ref);
-    return JS_PopGCRef(ctx, &deferred_ref);
-
-fail:
-    JS_PopGCRef(ctx, &wait_ref);
-    JS_PopGCRef(ctx, &callback_ref);
-    JS_PopGCRef(ctx, &reject_ref);
-    JS_PopGCRef(ctx, &resolve_ref);
-    JS_PopGCRef(ctx, &deferred_ref);
-    return JS_EXCEPTION;
-}
-
-static JSValue js_wait_for(JSContext *ctx, int argc, JSValue *argv)
-{
-    JSGCRef result_ref;
-    JSGCRef deferred_ref;
-    JSGCRef resolve_ref;
-    JSGCRef reject_ref;
-    JSValue *start_result;
-    JSValue *deferred_obj;
-    JSValue *resolve_fn;
-    JSValue *reject_fn;
-    JSValue start_args[3];
-
-    if (argc < 1 || !JS_IsFunction(ctx, argv[0])) {
-        return JS_ThrowTypeError(ctx, "waitFor(start, timeoutMs?) expects a function");
-    }
-
-    start_result = JS_PushGCRef(ctx, &result_ref);
-    deferred_obj = JS_PushGCRef(ctx, &deferred_ref);
-    resolve_fn = JS_PushGCRef(ctx, &resolve_ref);
-    reject_fn = JS_PushGCRef(ctx, &reject_ref);
-    *start_result = JS_EXCEPTION;
-    *deferred_obj = js_make_deferred(ctx);
-    *resolve_fn = JS_UNDEFINED;
-    *reject_fn = JS_UNDEFINED;
-    if (JS_IsException(*deferred_obj)) {
-        goto done;
-    }
-
-    *resolve_fn = JS_GetPropertyStr(ctx, *deferred_obj, "resolve");
-    *reject_fn = JS_GetPropertyStr(ctx, *deferred_obj, "reject");
-    if (JS_IsException(*resolve_fn) || JS_IsException(*reject_fn)) {
-        goto done;
-    }
-
-    start_args[0] = *resolve_fn;
-    start_args[1] = *reject_fn;
-    start_args[2] = *deferred_obj;
-    *start_result = esp32_mquickjs_call(ctx, s_active_runtime, argv[0], JS_NULL, 3, start_args);
-    if (JS_IsException(*start_result)) {
-        goto done;
-    }
-    if (JS_IsFunction(ctx, *start_result) &&
-        !esp32_mquickjs_set_property_ref(ctx, deferred_obj, "_cancel", *start_result)) {
-        *start_result = JS_EXCEPTION;
-        goto done;
-    }
-
-    *start_result = js_wait_for_deferred(ctx,
-                                         s_active_runtime,
-                                         *deferred_obj,
-                                         argc >= 2 ? argv[1] : JS_UNDEFINED,
-                                         "waitFor");
-
-done:
-    JS_PopGCRef(ctx, &reject_ref);
-    JS_PopGCRef(ctx, &resolve_ref);
-    JS_PopGCRef(ctx, &deferred_ref);
-    return JS_PopGCRef(ctx, &result_ref);
-}
-
-static JSValue js_deferred_resolve_common(JSContext *ctx,
-                                          JSValue deferred_obj,
-                                          bool ok,
-                                          JSValue payload,
-                                          bool return_payload)
-{
-    JSGCRef deferred_ref;
-    JSGCRef payload_ref;
-    JSValue *rooted_deferred;
-    JSValue *rooted_payload;
-    JSValue result;
-
-    rooted_deferred = JS_PushGCRef(ctx, &deferred_ref);
-    rooted_payload = JS_PushGCRef(ctx, &payload_ref);
-    *rooted_deferred = deferred_obj;
-    *rooted_payload = payload;
-
-    if (!js_is_deferred(ctx, *rooted_deferred)) {
-        result = JS_ThrowTypeError(ctx, "Deferred method expects a deferred object");
-    } else if (!js_settle_deferred(ctx, *rooted_deferred, ok, *rooted_payload)) {
-        result = JS_EXCEPTION;
-    } else {
-        result = return_payload ? *rooted_payload : JS_UNDEFINED;
-    }
-
-    JS_PopGCRef(ctx, &payload_ref);
-    JS_PopGCRef(ctx, &deferred_ref);
-    return result;
-}
-
-JSValue js_deferred_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    (void)this_val;
-    (void)argc;
-    (void)argv;
-    return JS_ThrowTypeError(ctx, "_Deferred cannot be constructed directly");
-}
-
-JSValue js_deferred_resolve(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    return js_deferred_resolve_common(ctx,
-                                      *this_val,
-                                      true,
-                                      argc >= 1 ? argv[0] : JS_UNDEFINED,
-                                      true);
-}
-
-JSValue js_deferred_reject(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    return js_deferred_resolve_common(ctx,
-                                      *this_val,
-                                      false,
-                                      argc >= 1 ? argv[0] : JS_UNDEFINED,
-                                      true);
-}
-
-JSValue js_deferred_callback(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    if (!js_is_deferred(ctx, *this_val)) {
-        return JS_ThrowTypeError(ctx, "Deferred.callback(data, error?) expects a deferred object");
-    }
-
-    if (argc >= 2 && !JS_IsNull(argv[1]) && !JS_IsUndefined(argv[1])) {
-        if (!js_settle_deferred(ctx, *this_val, false, argv[1])) {
-            return JS_EXCEPTION;
-        }
-        return JS_UNDEFINED;
-    }
-    if (!js_settle_deferred(ctx, *this_val, true, argc >= 1 ? argv[0] : JS_UNDEFINED)) {
-        return JS_EXCEPTION;
-    }
-    return JS_UNDEFINED;
-}
-
-JSValue js_deferred_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    if (!js_is_deferred(ctx, *this_val)) {
-        return JS_ThrowTypeError(ctx, "Deferred.wait(timeoutMs?) expects a deferred object");
-    }
-    return js_wait_for_deferred(ctx,
-                                s_active_runtime,
-                                *this_val,
-                                argc >= 1 ? argv[0] : JS_UNDEFINED,
-                                "Deferred.wait");
 }
 
 esp32_mquickjs_runtime_t *esp32_mquickjs_get_active_runtime(void)
@@ -1282,6 +818,7 @@ JSContext *esp32_mquickjs_create(void *mem_start,
     runtime->cooperate_opaque = NULL;
     runtime->timer_state = NULL;
     runtime->async_state = NULL;
+    runtime->future_state = NULL;
     if (!esp32_mquickjs_init_async_state(runtime)) {
         return NULL;
     }
@@ -1302,6 +839,21 @@ JSContext *esp32_mquickjs_create(void *mem_start,
     JS_SetInterruptHandler(ctx, js_interrupt_handler);
     JS_SetRandomSeed(ctx, (uint64_t)esp_timer_get_time());
     s_active_runtime = runtime;
+    if (!esp32_mquickjs_init_future_runtime(ctx, runtime)) {
+        s_active_runtime = NULL;
+        JS_FreeContext(ctx);
+        esp32_mquickjs_deinit_timer_state(NULL, runtime);
+        esp32_mquickjs_deinit_async_state(runtime);
+        return NULL;
+    }
+    if (!esp32_mquickjs_init_event_queue_runtime(ctx, runtime)) {
+        esp32_mquickjs_deinit_future_runtime(runtime);
+        s_active_runtime = NULL;
+        JS_FreeContext(ctx);
+        esp32_mquickjs_deinit_timer_state(NULL, runtime);
+        esp32_mquickjs_deinit_async_state(runtime);
+        return NULL;
+    }
     return ctx;
 }
 
@@ -1309,6 +861,9 @@ bool esp32_mquickjs_destroy(JSContext *ctx,
                             esp32_mquickjs_runtime_t *runtime)
 {
     if (runtime == NULL) {
+        return false;
+    }
+    if (!esp32_mquickjs_prepare_future_runtime_destroy(ctx, runtime)) {
         return false;
     }
 
@@ -1361,6 +916,7 @@ bool esp32_mquickjs_destroy(JSContext *ctx,
     if (ctx != NULL) {
         JS_FreeContext(ctx);
     }
+    esp32_mquickjs_deinit_future_runtime(runtime);
     esp32_mquickjs_deinit_async_state(runtime);
     runtime->deadline_us = 0;
     runtime->scoped_deadline_us = 0;
@@ -1449,7 +1005,13 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
         return false;
     }
 #if CONFIG_ESP32_MQUICKJS_FEATURE_NVS
-    if (!esp32_mquickjs_init_nvs_runtime(ctx)) {
+    if (!esp32_mquickjs_init_nvs_runtime(ctx, runtime)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_FS
+    if (!esp32_mquickjs_init_fs_runtime(ctx, runtime)) {
         esp32_mquickjs_print_exception(ctx);
         return false;
     }
@@ -1464,13 +1026,22 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
     esp32_mquickjs_init_dac_runtime();
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_I2C
-    esp32_mquickjs_init_i2c_runtime();
+    if (!esp32_mquickjs_init_i2c_runtime(ctx, runtime)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_SPI
-    esp32_mquickjs_init_spi_runtime();
+    if (!esp32_mquickjs_init_spi_runtime(ctx, runtime)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_UART
-    esp32_mquickjs_init_uart_runtime();
+    if (!esp32_mquickjs_init_uart_runtime(ctx, runtime)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
     if (!esp32_mquickjs_init_usb_serial_runtime(ctx, runtime)) {
@@ -1525,6 +1096,9 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
         return ESP32_MQUICKJS_POLL_NONE;
     }
     output_generation = runtime->output_generation;
+    if (esp32_mquickjs_future_poll(ctx, runtime)) {
+        core_async_handled = true;
+    }
     if (state == NULL || state->queue == NULL || state->slots == NULL) {
         async_handled = esp32_mquickjs_poll_registered(ctx, runtime);
         run_pending_external_gc(ctx);
@@ -1619,20 +1193,6 @@ JSValue js_print(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     fflush(stdout);
     note_console_output();
     return JS_UNDEFINED;
-}
-
-JSValue js_defer(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    (void)this_val;
-    (void)argc;
-    (void)argv;
-    return js_make_deferred(ctx);
-}
-
-JSValue js_waitFor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    (void)this_val;
-    return js_wait_for(ctx, argc, argv);
 }
 
 JSValue js_gc(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

@@ -31,7 +31,8 @@ Use the repo scripts for normal development; do not default to direct `idf.py` w
 
 Keep `idf.py menuconfig` for configuration work and `cmake --build build --target update_mquickjs_headers` as a manual fallback for generated headers, but they are not the primary day-to-day workflow.
 
-Remote flashing setup is documented in [docs/remote-rfc2217.md](docs/remote-rfc2217.md).
+Local serial and RFC2217 targets are configured through `scripts/remote.py` and
+the repository `.env` file.
 
 ## Coding Style
 Use 4-space indentation and standard ESP-IDF C style. Prefer `snake_case` for functions and locals, `UPPER_SNAKE_CASE` for macros, and keep ESP32-specific code in the adapter layer instead of editing the submodule directly. Match existing logging and error-handling patterns with `ESP_LOG*`, `ESP_ERROR_CHECK`, and thin adapter helpers around third-party code.

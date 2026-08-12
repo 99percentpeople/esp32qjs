@@ -56,13 +56,7 @@ test("http/offline", function () {
 
   test.ok(typeof http.fetch === "function", "http.fetch should exist");
   test.ok(typeof http.fetchAsync === "undefined", "http.fetchAsync should not exist");
-  test.ok(typeof http.async === "object", "http.async should exist");
-  test.ok(http.async === http.async, "http.async should be a stable object");
-  http.async.__probe = 7;
-  test.equal(http.async.__probe, 7, "http.async should preserve object properties");
-  delete http.async.__probe;
-  test.ok(typeof http.async.fetch === "function", "http.async.fetch should exist");
-  test.ok(typeof http.async.cancel === "function", "http.async.cancel should exist");
+  test.ok(typeof http.async === "undefined", "http.async should be removed");
   test.ok(typeof http.DEFAULT_TIMEOUT_MS === "number", "http timeout constant");
   test.ok(typeof http.MAX_BODY_BYTES === "number" && http.MAX_BODY_BYTES > 0,
     "http response body limit constant");
@@ -72,14 +66,14 @@ test("http/offline", function () {
   } catch (globalFailure) {
     globalFetchError = globalFailure && globalFailure.message ? globalFailure.message : String(globalFailure);
   }
-  test.ok(globalFetchError.indexOf("http.async.fetch") >= 0, "global fetch callback form should direct callers to http.async.fetch");
+  test.ok(globalFetchError.indexOf("Future.call") >= 0, "global fetch should reject callback overloads");
 
   try {
     http.fetch("https://example.com", function () {});
   } catch (moduleFailure) {
     moduleFetchError = moduleFailure && moduleFailure.message ? moduleFailure.message : String(moduleFailure);
   }
-  test.ok(moduleFetchError.indexOf("http.async.fetch") >= 0, "http.fetch callback form should direct callers to http.async.fetch");
+  test.ok(moduleFetchError.indexOf("Future.call") >= 0, "http.fetch should reject callback overloads");
 
   try {
     http.fetch("https://example.com", { maxBodyBytes: 0 });

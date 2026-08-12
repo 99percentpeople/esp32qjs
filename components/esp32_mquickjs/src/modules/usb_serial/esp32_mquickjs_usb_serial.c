@@ -3,6 +3,7 @@
 #if CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
 
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_event_queue.h"
 #include "utils/esp32_mquickjs_line_framer.h"
 
 #include <stdio.h>
@@ -14,28 +15,31 @@
 #include "esp_heap_caps.h"
 
 #define USB_SERIAL_READ_CHUNK_BYTES 256U
+#define USB_SERIAL_EVENT_QUEUE_LEN 8U
+
+typedef struct {
+    char *data;
+    size_t length;
+    bool overflow;
+} esp32_mquickjs_usb_serial_event_t;
 
 typedef struct {
     bool initialized;
     bool opened;
     bool owns_driver;
-    bool callback_added;
     bool polling;
     bool release_buffer;
     esp32_mquickjs_runtime_t *runtime;
-    JSGCRef callback;
+    esp32_mquickjs_event_queue_t *event_queue;
     char *line_buffer;
     size_t max_frame_bytes;
     esp32_mquickjs_line_framer_t framer;
     uint32_t received_frames;
     uint32_t sent_frames;
     uint32_t overflow_frames;
-    uint32_t callback_errors;
 } esp32_mquickjs_usb_serial_state_t;
 
 typedef struct {
-    JSContext *ctx;
-    esp32_mquickjs_runtime_t *runtime;
     bool handled;
 } esp32_mquickjs_usb_serial_emit_context_t;
 
@@ -62,12 +66,10 @@ static void usb_serial_release_line_buffer(void)
     esp32_mquickjs_line_framer_init(&s_usb_serial_state.framer, NULL, 0);
 }
 
-static void usb_serial_close_internal(JSContext *ctx)
+static void usb_serial_close_source(void *opaque)
 {
-    if (s_usb_serial_state.callback_added) {
-        JS_DeleteGCRef(ctx, &s_usb_serial_state.callback);
-        s_usb_serial_state.callback_added = false;
-    }
+    (void)opaque;
+    s_usb_serial_state.event_queue = NULL;
     s_usb_serial_state.opened = false;
     if (s_usb_serial_state.polling) {
         s_usb_serial_state.release_buffer = true;
@@ -76,32 +78,43 @@ static void usb_serial_close_internal(JSContext *ctx)
     }
 }
 
-static bool usb_serial_call_callback(JSContext *ctx,
-                                     esp32_mquickjs_runtime_t *runtime,
-                                     const char *error,
-                                     const char *frame,
-                                     size_t frame_len)
+static void usb_serial_close_internal(void)
 {
-    JSGCRef callback_ref;
-    JSValue *callback;
-    JSValue argv[2];
+    esp32_mquickjs_event_queue_t *event_queue = s_usb_serial_state.event_queue;
+
+    if (event_queue != NULL) {
+        (void)esp32_mquickjs_event_queue_close(event_queue);
+    } else {
+        usb_serial_close_source(NULL);
+    }
+}
+
+static void usb_serial_drop_event(void *data, void *opaque)
+{
+    esp32_mquickjs_usb_serial_event_t *event = data;
+
+    (void)opaque;
+    if (event != NULL) {
+        heap_caps_free(event->data);
+        event->data = NULL;
+    }
+}
+
+static JSValue usb_serial_event_to_js(JSContext *ctx, const void *data, void *opaque)
+{
+    esp32_mquickjs_usb_serial_event_t *event = (esp32_mquickjs_usb_serial_event_t *)data;
     JSValue result;
 
-    if (!s_usb_serial_state.opened || !s_usb_serial_state.callback_added) {
-        return false;
+    (void)opaque;
+    if (event->overflow) {
+        return JS_ThrowRangeError(ctx, "serial frame exceeds configured maxFrameBytes");
     }
-
-    callback = JS_PushGCRef(ctx, &callback_ref);
-    *callback = s_usb_serial_state.callback.val;
-    argv[0] = error != NULL ? JS_NewString(ctx, error) : JS_UNDEFINED;
-    argv[1] = frame != NULL ? JS_NewStringLen(ctx, frame, frame_len) : JS_UNDEFINED;
-    result = esp32_mquickjs_call(ctx, runtime, *callback, JS_NULL, 2, argv);
-    if (JS_IsException(result)) {
-        s_usb_serial_state.callback_errors++;
-        esp32_mquickjs_print_exception(ctx);
-    }
-    JS_PopGCRef(ctx, &callback_ref);
-    return true;
+    result = JS_NewStringLen(ctx,
+                             event->data != NULL ? event->data : "",
+                             event->length);
+    heap_caps_free(event->data);
+    event->data = NULL;
+    return result;
 }
 
 static void usb_serial_emit_frame(void *opaque,
@@ -110,38 +123,48 @@ static void usb_serial_emit_frame(void *opaque,
                                   bool overflow)
 {
     esp32_mquickjs_usb_serial_emit_context_t *emit = opaque;
+    esp32_mquickjs_usb_serial_event_t event = {
+        .length = frame_len,
+        .overflow = overflow,
+    };
 
-    if (emit == NULL || emit->ctx == NULL) {
+    if (emit == NULL || s_usb_serial_state.event_queue == NULL) {
         return;
     }
     if (overflow) {
         s_usb_serial_state.overflow_frames++;
-        emit->handled = usb_serial_call_callback(
-            emit->ctx,
-            emit->runtime,
-            "serial frame exceeds configured maxFrameBytes",
-            NULL,
-            0) || emit->handled;
+        emit->handled = esp32_mquickjs_event_queue_send(s_usb_serial_state.event_queue,
+                                                       &event) || emit->handled;
         return;
     }
 
+    if (frame_len > 0) {
+        event.data = heap_caps_malloc(frame_len, MALLOC_CAP_8BIT);
+        if (event.data == NULL) {
+            s_usb_serial_state.overflow_frames++;
+            return;
+        }
+        memcpy(event.data, frame, frame_len);
+    }
     s_usb_serial_state.received_frames++;
-    emit->handled = usb_serial_call_callback(
-        emit->ctx, emit->runtime, NULL, frame, frame_len) || emit->handled;
+    if (!esp32_mquickjs_event_queue_send(s_usb_serial_state.event_queue, &event)) {
+        heap_caps_free(event.data);
+    } else {
+        emit->handled = true;
+    }
 }
 
 static bool usb_serial_poller(JSContext *ctx,
                               esp32_mquickjs_runtime_t *runtime,
                               void *opaque)
 {
-    esp32_mquickjs_usb_serial_emit_context_t emit = {
-        .ctx = ctx,
-        .runtime = runtime,
-    };
+    esp32_mquickjs_usb_serial_emit_context_t emit = {0};
     uint8_t chunk[USB_SERIAL_READ_CHUNK_BYTES];
     int read_len;
 
     (void)opaque;
+    (void)ctx;
+    (void)runtime;
     if (!s_usb_serial_state.initialized || !s_usb_serial_state.opened ||
         s_usb_serial_state.line_buffer == NULL) {
         return false;
@@ -240,11 +263,12 @@ bool esp32_mquickjs_init_usb_serial_runtime(JSContext *ctx,
 
 void esp32_mquickjs_deinit_usb_serial_runtime(JSContext *ctx)
 {
+    (void)ctx;
     if (!s_usb_serial_state.initialized) {
         return;
     }
 
-    usb_serial_close_internal(ctx);
+    usb_serial_close_internal();
     usb_serial_jtag_set_select_notif_callback(NULL);
     usb_serial_jtag_vfs_use_nonblocking();
     if (s_usb_serial_state.owns_driver && usb_serial_jtag_is_driver_installed()) {
@@ -259,8 +283,14 @@ JSValue js_usb_serial_open(JSContext *ctx,
                            JSValue *argv)
 {
     JSValue options = JS_UNDEFINED;
-    JSValue callback;
-    JSValue *callback_ref;
+    JSGCRef queue_ref;
+    JSGCRef receive_ref;
+    JSGCRef send_ref;
+    JSGCRef status_ref;
+    JSValue *queue_object;
+    JSValue *receive;
+    JSValue *send;
+    JSValue *status;
     size_t max_frame_bytes;
 
     (void)this_val;
@@ -270,17 +300,11 @@ JSValue js_usb_serial_open(JSContext *ctx,
     if (s_usb_serial_state.opened || s_usb_serial_state.polling) {
         return JS_ThrowInternalError(ctx, "usbSerial is already open");
     }
-    if (argc == 1) {
-        callback = argv[0];
-    } else if (argc == 2) {
-        options = argv[0];
-        callback = argv[1];
-    } else {
-        return JS_ThrowTypeError(ctx,
-                                 "usbSerial.open(callback) or usbSerial.open(options, callback) expected");
+    if (argc > 1) {
+        return JS_ThrowTypeError(ctx, "usbSerial.open(options?) expects at most one options object");
     }
-    if (!JS_IsFunction(ctx, callback)) {
-        return JS_ThrowTypeError(ctx, "usbSerial.open() expects a callback function");
+    if (argc == 1) {
+        options = argv[0];
     }
     if (!usb_serial_parse_max_frame_bytes(ctx, options, &max_frame_bytes)) {
         return JS_ThrowRangeError(
@@ -298,11 +322,43 @@ JSValue js_usb_serial_open(JSContext *ctx,
     esp32_mquickjs_line_framer_init(&s_usb_serial_state.framer,
                                     s_usb_serial_state.line_buffer,
                                     max_frame_bytes);
-    callback_ref = JS_AddGCRef(ctx, &s_usb_serial_state.callback);
-    *callback_ref = callback;
-    s_usb_serial_state.callback_added = true;
+    queue_object = JS_PushGCRef(ctx, &queue_ref);
+    receive = JS_PushGCRef(ctx, &receive_ref);
+    send = JS_PushGCRef(ctx, &send_ref);
+    status = JS_PushGCRef(ctx, &status_ref);
+    *queue_object = esp32_mquickjs_event_queue_new(
+        ctx,
+        s_usb_serial_state.runtime,
+        sizeof(esp32_mquickjs_usb_serial_event_t),
+        USB_SERIAL_EVENT_QUEUE_LEN,
+        ESP32_MQUICKJS_EVENT_QUEUE_DROP_NEWEST,
+        usb_serial_event_to_js,
+        usb_serial_drop_event,
+        usb_serial_close_source,
+        NULL);
+    *receive = JS_IsException(*queue_object)
+        ? JS_EXCEPTION
+        : JS_GetPropertyStr(ctx, *queue_object, "receive");
+    *send = JS_GetPropertyStr(ctx, *this_val, "send");
+    *status = JS_GetPropertyStr(ctx, *this_val, "status");
+    if (JS_IsException(*queue_object) || JS_IsException(*receive) ||
+        JS_IsException(*send) || JS_IsException(*status) ||
+        JS_IsException(JS_SetPropertyStr(ctx, *queue_object, "recv", *receive)) ||
+        JS_IsException(JS_SetPropertyStr(ctx, *queue_object, "send", *send)) ||
+        JS_IsException(JS_SetPropertyStr(ctx, *queue_object, "status", *status))) {
+        usb_serial_release_line_buffer();
+        JS_PopGCRef(ctx, &status_ref);
+        JS_PopGCRef(ctx, &send_ref);
+        JS_PopGCRef(ctx, &receive_ref);
+        JS_PopGCRef(ctx, &queue_ref);
+        return JS_EXCEPTION;
+    }
+    s_usb_serial_state.event_queue = JS_GetOpaque(ctx, *queue_object);
     s_usb_serial_state.opened = true;
-    return JS_NewBool(true);
+    JS_PopGCRef(ctx, &status_ref);
+    JS_PopGCRef(ctx, &send_ref);
+    JS_PopGCRef(ctx, &receive_ref);
+    return JS_PopGCRef(ctx, &queue_ref);
 }
 
 JSValue js_usb_serial_close(JSContext *ctx,
@@ -315,7 +371,7 @@ JSValue js_usb_serial_close(JSContext *ctx,
     (void)this_val;
     (void)argc;
     (void)argv;
-    usb_serial_close_internal(ctx);
+    usb_serial_close_internal();
     return JS_NewBool(was_open);
 }
 
@@ -383,8 +439,10 @@ JSValue js_usb_serial_status(JSContext *ctx,
                                          JS_NewInt32(ctx, (int32_t)s_usb_serial_state.sent_frames)) ||
         !esp32_mquickjs_set_property_ref(ctx, status, "overflowFrames",
                                          JS_NewInt32(ctx, (int32_t)s_usb_serial_state.overflow_frames)) ||
-        !esp32_mquickjs_set_property_ref(ctx, status, "callbackErrors",
-                                         JS_NewInt32(ctx, (int32_t)s_usb_serial_state.callback_errors))) {
+        !esp32_mquickjs_set_property_ref(ctx, status, "droppedFrames",
+                                         JS_NewUint32(ctx,
+                                             esp32_mquickjs_event_queue_dropped(
+                                                 s_usb_serial_state.event_queue)))) {
         JS_PopGCRef(ctx, &status_ref);
         return JS_EXCEPTION;
     }

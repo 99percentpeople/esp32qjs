@@ -3,6 +3,7 @@
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
 
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_future.h"
 #include "utils/esp32_mquickjs_request_response.h"
 #include "esp32_mquickjs_stream.h"
 
@@ -14,7 +15,6 @@
 #include "esp_http_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "freertos/task.h"
 
 #define ESP32_MQUICKJS_HTTP_MAX_REQUEST_HEADERS 16
 #define ESP32_MQUICKJS_HTTP_MAX_RESPONSE_HEADERS 16
@@ -1069,97 +1069,6 @@ fail:
     return -1;
 }
 
-typedef struct {
-    const esp32_mquickjs_http_request_t *request;
-    esp32_mquickjs_http_response_t *response;
-    esp32_mquickjs_http_operation_t *operation;
-    SemaphoreHandle_t done;
-    esp_err_t err;
-    char error_text[ESP32_MQUICKJS_HTTP_ERROR_TEXT_LEN];
-} esp32_mquickjs_http_sync_job_t;
-
-static void http_sync_worker_task(void *opaque)
-{
-    esp32_mquickjs_http_sync_job_t *job = opaque;
-
-    job->response = esp32_mquickjs_http_perform_request(job->request,
-                                                        job->operation,
-                                                        &job->err,
-                                                        job->error_text,
-                                                        sizeof(job->error_text));
-    xSemaphoreGive(job->done);
-    vTaskDelete(NULL);
-}
-
-static JSValue http_fetch_sync(JSContext *ctx,
-                               const esp32_mquickjs_http_request_t *request)
-{
-    esp32_mquickjs_http_sync_job_t *job;
-    esp32_mquickjs_http_response_t *response;
-    esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
-    esp32_mquickjs_native_wait_t wait;
-    JSValue result;
-    bool interrupted = false;
-    TickType_t wait_ticks = pdMS_TO_TICKS(ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS);
-
-    job = heap_caps_calloc(1, sizeof(*job), MALLOC_CAP_8BIT);
-    if (job == NULL) {
-        return JS_ThrowOutOfMemory(ctx);
-    }
-    job->request = request;
-    job->operation = esp32_mquickjs_http_operation_create();
-    job->done = xSemaphoreCreateBinary();
-    if (job->operation == NULL || job->done == NULL) {
-        esp32_mquickjs_http_operation_destroy(job->operation);
-        if (job->done != NULL) {
-            vSemaphoreDelete(job->done);
-        }
-        heap_caps_free(job);
-        return JS_ThrowOutOfMemory(ctx);
-    }
-    if (xTaskCreate(http_sync_worker_task,
-                    "http_sync",
-                    ESP32_MQUICKJS_HTTP_TASK_STACK_SIZE,
-                    job,
-                    tskIDLE_PRIORITY + 4,
-                    NULL) != pdPASS) {
-        vSemaphoreDelete(job->done);
-        esp32_mquickjs_http_operation_destroy(job->operation);
-        heap_caps_free(job);
-        return JS_ThrowInternalError(ctx, "failed to start synchronous HTTP worker task");
-    }
-
-    if (wait_ticks == 0) {
-        wait_ticks = 1;
-    }
-    esp32_mquickjs_native_wait_begin(runtime, &wait);
-    while (xSemaphoreTake(job->done, wait_ticks) != pdTRUE) {
-        if (!esp32_mquickjs_cooperate(runtime)) {
-            interrupted = true;
-            (void)esp32_mquickjs_http_operation_cancel(job->operation);
-        }
-    }
-    if (!esp32_mquickjs_cooperate(runtime)) {
-        interrupted = true;
-    }
-    esp32_mquickjs_native_wait_end(runtime, &wait);
-
-    response = job->response;
-    if (interrupted) {
-        esp32_mquickjs_http_free_response(response);
-        result = JS_ThrowInternalError(ctx, "fetch() was interrupted by a runtime stop request");
-    } else if (response == NULL) {
-        result = JS_ThrowInternalError(ctx, "%s", job->error_text);
-    } else {
-        result = esp32_mquickjs_http_make_response_object(ctx, response);
-        esp32_mquickjs_http_free_response(response);
-    }
-    vSemaphoreDelete(job->done);
-    esp32_mquickjs_http_operation_destroy(job->operation);
-    heap_caps_free(job);
-    return result;
-}
-
 static int http_parse_request_object(JSContext *ctx,
                                      JSValue *request_value,
                                      esp32_mquickjs_http_request_t *request)
@@ -1283,7 +1192,7 @@ fail:
 
 int esp32_mquickjs_http_build_request_from_args(JSContext *ctx,
                                                 int argc,
-                                                JSValue *argv,
+                                                JSGCRef *argv,
                                                 esp32_mquickjs_http_request_t *request)
 {
     JSCStringBuf url_buf;
@@ -1295,27 +1204,27 @@ int esp32_mquickjs_http_build_request_from_args(JSContext *ctx,
     }
 
     if (argc >= 2) {
-        if (JS_IsFunction(ctx, argv[1])) {
+        if (JS_IsFunction(ctx, argv[1].val)) {
             JS_ThrowTypeError(ctx,
-                              "fetch(input, options?) does not accept a callback; use http.async.fetch(input, callback)");
+                              "fetch(input, options?) does not accept a callback; use Future.call(fetch, globalThis, args)");
             return -1;
         }
     }
 
-    if (esp32_mquickjs_is_request_object(ctx, argv[0])) {
-        if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
+    if (esp32_mquickjs_is_request_object(ctx, argv[0].val)) {
+        if (argc >= 2 && !JS_IsUndefined(argv[1].val) && !JS_IsNull(argv[1].val)) {
             JS_ThrowTypeError(ctx, "fetch(request) does not accept a separate options object");
             return -1;
         }
-        return http_parse_request_object(ctx, &argv[0], request);
+        return http_parse_request_object(ctx, &argv[0].val, request);
     }
 
-    if (!JS_IsString(ctx, argv[0])) {
+    if (!JS_IsString(ctx, argv[0].val)) {
         JS_ThrowTypeError(ctx, "fetch(input, options?) expects a URL string or Request");
         return -1;
     }
 
-    url = JS_ToCString(ctx, argv[0], &url_buf);
+    url = JS_ToCString(ctx, argv[0].val, &url_buf);
     if (url == NULL) {
         return -1;
     }
@@ -1329,13 +1238,13 @@ int esp32_mquickjs_http_build_request_from_args(JSContext *ctx,
         return -1;
     }
 
-    return argc >= 2 ? http_parse_options(ctx, &argv[1], request) : 0;
+    return argc >= 2 ? http_parse_options(ctx, &argv[1].val, request) : 0;
 }
 
 bool esp32_mquickjs_init_http_runtime(JSContext *ctx,
                                       esp32_mquickjs_runtime_t *runtime)
 {
-    return esp32_mquickjs_init_http_async_runtime(ctx, runtime);
+    return esp32_mquickjs_init_http_future_runtime(ctx, runtime);
 }
 
 JSValue js_http_get_default_timeout_ms(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -1356,18 +1265,29 @@ JSValue js_http_get_max_body_bytes(JSContext *ctx, JSValue *this_val, int argc, 
 
 JSValue js_http_fetch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_http_request_t request = {0};
+    JSGCRef global_ref;
+    JSGCRef fetch_ref;
+    JSValue *global;
+    JSValue *fetch;
     JSValue result;
 
     (void)this_val;
-
-    if (esp32_mquickjs_http_build_request_from_args(ctx, argc, argv, &request) != 0) {
-        esp32_mquickjs_http_free_request(&request);
-        return JS_EXCEPTION;
+    global = JS_PushGCRef(ctx, &global_ref);
+    fetch = JS_PushGCRef(ctx, &fetch_ref);
+    *global = JS_GetGlobalObject(ctx);
+    *fetch = JS_GetPropertyStr(ctx, *global, "fetch");
+    if (JS_IsException(*global) || JS_IsException(*fetch)) {
+        result = JS_EXCEPTION;
+    } else {
+        result = esp32_mquickjs_future_call_and_wait(ctx,
+                                                     esp32_mquickjs_get_active_runtime(),
+                                                     *fetch,
+                                                     *global,
+                                                     argc,
+                                                     argv);
     }
-
-    result = http_fetch_sync(ctx, &request);
-    esp32_mquickjs_http_free_request(&request);
+    JS_PopGCRef(ctx, &fetch_ref);
+    JS_PopGCRef(ctx, &global_ref);
     return result;
 }
 

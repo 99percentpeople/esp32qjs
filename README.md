@@ -168,16 +168,14 @@ python scripts/remote.py test --scope js --module wifi --module http --network
 python scripts/remote.py test --scope js --module spi --module uart --loopback
 ```
 
-## API and Plans
+## API and Pending Work
 
 - [API index](docs/api.md)
 - [Native Host API](docs/c-api.md)
 - [JavaScript libraries](docs/js-api.md)
-- [Display/driver redesign proposal](docs/display-driver-redesign.md)
 - [API stability plan](docs/api-stability-plan.md)
 - [Native runtime integration](docs/runtime-api.md)
-- [Framework plan](docs/framework-plan.md)
-- [Local and RFC2217 workflows](docs/remote-rfc2217.md)
+- [Framework backlog](docs/backlog.md)
 
 The native Host API uses an integer compatibility version. Additive changes keep
 the current version; incompatible changes increment it. Framework releases use

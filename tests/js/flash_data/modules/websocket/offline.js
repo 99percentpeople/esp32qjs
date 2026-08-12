@@ -11,7 +11,7 @@ test("websocket/offline", function () {
     "WebSocket client should start closed");
 
   try {
-    websocketClient.open({ url: "http://example.com" }, function () {});
+    websocketClient.open({ url: "http://example.com" });
   } catch (urlError) {
     invalidUrl = String(urlError && urlError.message ? urlError.message : urlError);
   }
@@ -22,7 +22,7 @@ test("websocket/offline", function () {
     websocketClient.open({
       url: "ws://127.0.0.1:1",
       authorization: "Bearer bad\r\nInjected: yes"
-    }, function () {});
+    });
   } catch (headerError) {
     invalidHeader = String(headerError && headerError.message
       ? headerError.message : headerError);
@@ -45,7 +45,7 @@ test("websocket/offline", function () {
       autoReconnect: false,
       networkTimeoutMs: 1000,
       maxMessageBytes: 1024
-    }, function () {});
+    });
   } catch (notConnectedError) {
     wifiError = String(notConnectedError && notConnectedError.message
       ? notConnectedError.message : notConnectedError);

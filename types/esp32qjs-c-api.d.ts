@@ -9,12 +9,35 @@ namespace ESP32QJS {
   type HeaderRecord = Record<string, string>;
   type HeadersInit = Headers | HeaderRecord;
   type RequestBody = string | Stream | null | undefined;
-  type RoutePattern = string | RegExp;
 
   /** Opaque generation-checked token returned by the timer globals. */
   type TimerHandle = number & { readonly __timerHandleBrand: never };
-  /** Opaque generation-checked token returned by `http.async.fetch(...)`. */
-  type HttpRequestHandle = number & { readonly __httpRequestHandleBrand: never };
+
+  type FutureStatus =
+    | "queued"
+    | "pending"
+    | "fulfilled"
+    | "rejected"
+    | "cancelled";
+
+  interface Future<T> {
+    status(): FutureStatus;
+    wait(timeoutMs?: number): T;
+    cancel(): boolean;
+  }
+
+  interface FutureFactory {
+    call<T>(fn: (...args: any[]) => T, receiver?: unknown, args?: unknown[]): Future<T>;
+    all<T>(futures: Future<T>[]): Future<T[]>;
+    race<T>(futures: Future<T>[]): Future<{ index: number; value: T }>;
+    sleep(ms: number): Future<void>;
+    timeout<T>(future: Future<T>, timeoutMs: number): Future<T>;
+  }
+
+  interface EventQueue<T> {
+    receive(timeoutMs?: number): T | null;
+    close(): boolean;
+  }
 
   /**
    * Byte payload accepted by low-level transports.
@@ -219,45 +242,6 @@ namespace ESP32QJS {
   }
 
   /**
-   * Deferred helper created by the global `defer()` helper.
-   *
-   * @example
-   * ```js
-   * var d = defer();
-   * setTimeout(function () { d.resolve("ok"); }, 50);
-   * print(d.wait(1000));
-   * ```
-   */
-  interface Deferred<T = unknown> {
-    readonly settled: boolean;
-    readonly done: boolean;
-    readonly ok: boolean;
-    readonly value: T | undefined;
-    readonly error: unknown;
-    resolve(value?: T): T | undefined;
-    reject(error?: unknown): unknown;
-    callback(value?: T, error?: unknown): void;
-    wait(timeoutMs?: number): T;
-  }
-
-  /**
-   * Start function accepted by the global `waitFor(...)` helper.
-   *
-   * @example
-   * ```js
-   * var result = waitFor(function (resolve) {
-   *   setTimeout(function () { resolve(123); }, 50);
-   * }, 1000);
-   * print(result);
-   * ```
-   */
-  type WaitForStart<T> = (
-    resolve: (value: T) => void,
-    reject: (error?: unknown) => void,
-    deferred: Deferred<T>,
-  ) => void | (() => void);
-
-  /**
    * HTTP header collection.
    *
    * @example
@@ -411,6 +395,7 @@ namespace ESP32QJS {
    */
   interface FsModule {
     readonly ROOT: string;
+    setRoot(path: string): string;
     open(path: string, mode?: FsOpenMode): Stream;
     list(path?: string): FsEntry[];
     stat(path: string): FsEntry;
@@ -421,6 +406,10 @@ namespace ESP32QJS {
     mkdir(path: string): boolean;
     rename(fromPath: string, toPath: string): boolean;
     remove(path: string): boolean;
+  }
+
+  interface FrameworkModule {
+    load(path: string): unknown;
   }
 
   interface NVSStatus {
@@ -503,11 +492,10 @@ namespace ESP32QJS {
    * gpio.digitalWrite(pin, true);
    * gpio.toggle(pin);
    *
-   * // Arduino-style interrupt registration. The callback runs later on the JS thread.
-   * gpio.attachInterrupt(pin, function (event) {
-   *   print(event.pin, event.mode, event.level);
-   * }, gpio.CHANGE);
-   * gpio.detachInterrupt(pin);
+   * var interrupts = gpio.watch(pin, gpio.CHANGE);
+   * var event = interrupts.receive(1000);
+   * if (event) print(event.pin, event.mode, event.level);
+   * interrupts.close();
    * ```
    */
   interface GpioModule {
@@ -548,20 +536,7 @@ namespace ESP32QJS {
       strength: GpioDriveStrength,
     ): GpioDriveStrength;
     hold(pin: number, enabled: boolean): boolean;
-    /**
-     * Register one interrupt callback for a GPIO.
-     *
-     * The callback is scheduled onto the JavaScript thread after the ISR queues
-     * an event, so higher-level behaviors such as debounce should be implemented
-     * in JavaScript rather than inside the native binding.
-     */
-    attachInterrupt(
-      pin: number,
-      callback: (event: GpioInterruptEvent) => void,
-      mode?: GpioInterruptMode | 0 | 1,
-    ): GpioStatus;
-    /** Remove the interrupt callback for a GPIO. */
-    detachInterrupt(pin: number): GpioStatus;
+    watch(pin: number, mode?: GpioInterruptMode | 0 | 1): EventQueue<GpioInterruptEvent>;
     reset(pin: number): number;
     led(value: boolean): boolean;
   }
@@ -996,7 +971,6 @@ namespace ESP32QJS {
     wifi: boolean;
     http: boolean;
     httpServer: boolean;
-    staticFileHandler: boolean;
   }
 
   /**
@@ -1336,7 +1310,7 @@ namespace ESP32QJS {
     peerClosed: boolean;
     localIp: string;
     localPort: number;
-    remoteIp: string;
+    remoteHost: string;
     remotePort: number;
     sentBytes: number;
     receivedBytes: number;
@@ -1346,20 +1320,20 @@ namespace ESP32QJS {
   interface SocketTcpModule {
     connect(
       socketId: number,
-      remoteIp: string,
+      remoteHost: string,
       remotePort: number,
       timeout?: number,
     ): boolean;
     listen(socketId: number, backlog?: number): boolean;
     accept(socketId: number, timeout?: number): number | null;
-    send(socketId: number, data: string, timeout?: number): number;
+    send(socketId: number, data: ByteSource, timeout?: number): number;
     /** Receive one currently available TCP stream chunk, not a framed message. */
-    recv(socketId: number, maxBytes?: number, timeout?: number): string | null;
+    recv(socketId: number, maxBytes?: number, timeout?: number): ByteView | null;
   }
 
   interface SocketUdpDatagram {
-    data: string;
-    remoteIp: string;
+    data: ByteView;
+    remoteHost: string;
     remotePort: number;
   }
 
@@ -1367,9 +1341,9 @@ namespace ESP32QJS {
   interface SocketUdpModule {
     sendto(
       socketId: number,
-      remoteIp: string,
+      remoteHost: string,
       remotePort: number,
-      data: string,
+      data: ByteSource,
     ): number;
     recvfrom(
       socketId: number,
@@ -1382,7 +1356,7 @@ namespace ESP32QJS {
     open(protocol: SocketProtocol, localPort?: number): number;
     close(socketId: number): boolean;
     status(socketId: number): SocketStatus;
-    get_max_message_bytes(socketId: number): number;
+    readonly MAX_TRANSFER_BYTES: number;
     tcp: SocketTcpModule;
     udp: SocketUdpModule;
   }
@@ -1398,16 +1372,19 @@ namespace ESP32QJS {
     receivedFrames: number;
     sentFrames: number;
     overflowFrames: number;
-    callbackErrors: number;
+    droppedFrames: number;
   }
 
-  type USBSerialCallback = (error?: string, data?: string) => void;
+  interface USBSerialHandle extends EventQueue<string> {
+    recv(timeoutMs?: number): string | null;
+    send(text: string): number;
+    status(): USBSerialStatus;
+  }
 
   /** Headless USB Serial/JTAG NDJSON transport; mutually exclusive with the REPL. */
   interface USBSerialModule {
     readonly MAX_FRAME_BYTES: number;
-    open(callback: USBSerialCallback): boolean;
-    open(options: USBSerialOpenOptions, callback: USBSerialCallback): boolean;
+    open(options?: USBSerialOpenOptions): USBSerialHandle;
     close(): boolean;
     send(text: string): number;
     status(): USBSerialStatus;
@@ -1445,16 +1422,19 @@ namespace ESP32QJS {
     sentMessages: number;
     droppedEvents: number;
     oversizedMessages: number;
-    callbackErrors: number;
+    queueDroppedEvents: number;
+  }
+
+  interface WebSocketClientHandle extends EventQueue<WebSocketClientEvent> {
+    recv(timeoutMs?: number): WebSocketClientEvent | null;
+    send(text: string): number;
+    status(): WebSocketClientStatus;
   }
 
   /** Singleton outbound WebSocket text client. */
   interface WebSocketClientModule {
     readonly MAX_MESSAGE_BYTES: number;
-    open(
-      options: WebSocketClientOpenOptions,
-      callback: (event: WebSocketClientEvent) => void,
-    ): boolean;
+    open(options: WebSocketClientOpenOptions): WebSocketClientHandle;
     close(): boolean;
     send(text: string): number;
     status(): WebSocketClientStatus;
@@ -1516,40 +1496,22 @@ namespace ESP32QJS {
     | "no-ap-rssi-threshold"
     | "unknown";
 
-  type WiFiConnectCallback = (status?: WiFiStatus, error?: unknown) => void;
-  type WiFiScanCallback = (results?: WiFiScanResult[], error?: unknown) => void;
-
   /**
    * Wi-Fi station helpers.
    *
    * @example
    * ```js
    * print(JSON.stringify(wifi.status()));
-   * wifi.async.scan(function (results, error) { print(error === undefined, results.length); });
+   * var scan = Future.call(wifi.scan, wifi, []);
+   * print(scan.wait(10000).length);
    * ```
    */
-  interface WiFiAsyncModule {
-    connect(
-      ssid: string,
-      password: string,
-      callback: WiFiConnectCallback,
-    ): void;
-    connect(
-      ssid: string,
-      password: string,
-      timeoutMs: number,
-      callback: WiFiConnectCallback,
-    ): void;
-    scan(callback: WiFiScanCallback): void;
-  }
-
   interface WiFiModule {
     readonly DEFAULT_TIMEOUT_MS: number;
     status(): WiFiStatus;
     connect(ssid: string, password: string, timeoutMs?: number): WiFiStatus;
     disconnect(): WiFiStatus;
     scan(): WiFiScanResult[];
-    async: WiFiAsyncModule;
   }
 
   /**
@@ -1569,37 +1531,9 @@ namespace ESP32QJS {
   }
 
   type FetchInput = string | Request;
-  type FetchCallback = (response?: Response, error?: unknown) => void;
-
   interface HttpFetchFunction {
     (input: FetchInput, options?: FetchOptions): Response;
   }
-
-  interface HttpAsyncModule {
-    fetch(input: FetchInput, callback: FetchCallback): HttpRequestHandle;
-    fetch(
-      input: FetchInput,
-      options: FetchOptions,
-      callback: FetchCallback,
-    ): HttpRequestHandle;
-    cancel(handle: HttpRequestHandle): boolean;
-  }
-
-  /**
-   * HTTP route handler object accepted by `server.get(...)` and friends.
-   *
-   * @example
-   * ```js
-   * server.get("/assets/*", staticFileHandler("./_sys"));
-   * ```
-   */
-  interface HttpRouteHandlerObject {
-    handle(request: Request): Response;
-  }
-
-  type HttpRouteHandler =
-    | ((request: Request) => Response)
-    | HttpRouteHandlerObject;
 
   /**
    * HTTP server instance created by `http.server(...)`.
@@ -1607,10 +1541,10 @@ namespace ESP32QJS {
    * @example
    * ```js
    * var server = http.server({ port: 8080, host: "0.0.0.0" });
-   * server.get("/ping", function () {
-   *   return Response.text("pong");
-   * });
+   * server.route("GET", "/ping");
    * server.start();
+   * var request = server.receive(1000);
+   * if (request !== null) server.respond(request, Response.text("pong"));
    * ```
    */
   class HttpServer {
@@ -1625,25 +1559,11 @@ namespace ESP32QJS {
     start(): void;
     stop(): void;
     close(): void;
-    removeRoute(pathOrPattern: RoutePattern, method?: string): number;
+    route(method: string, path: string): void;
+    receive(timeoutMs?: number): Request | null;
+    respond(request: Request, response: Response): boolean;
+    removeRoute(path: string, method?: string): number;
     clearRoutes(): number;
-    get(pathOrPattern: RoutePattern, handler: HttpRouteHandler): void;
-    post(pathOrPattern: RoutePattern, handler: HttpRouteHandler): void;
-    put(pathOrPattern: RoutePattern, handler: HttpRouteHandler): void;
-    patch(pathOrPattern: RoutePattern, handler: HttpRouteHandler): void;
-    delete(pathOrPattern: RoutePattern, handler: HttpRouteHandler): void;
-    head(pathOrPattern: RoutePattern, handler: HttpRouteHandler): void;
-    options(pathOrPattern: RoutePattern, handler: HttpRouteHandler): void;
-    all(pathOrPattern: RoutePattern, handler: HttpRouteHandler): void;
-  }
-
-  /**
-   * Static-file handler returned by `staticFileHandler(root)`.
-   */
-  class StaticFileHandler implements HttpRouteHandlerObject {
-    private constructor();
-    readonly root: string;
-    handle(request: Request | { relativePath: string }): Response;
   }
 
   /**
@@ -1658,11 +1578,7 @@ namespace ESP32QJS {
    * @example
    * ```js
    * var server = http.server({ port: 8080 });
-   * server.get("/core", function () {
-   *   return Response.stream(fs.open("_sys/display/core.js", "rb"), {
-   *     headers: { "content-type": "application/javascript; charset=utf-8" }
-   *   });
-   * });
+   * server.route("GET", "/core");
    * server.start();
    * ```
    */
@@ -1670,9 +1586,7 @@ namespace ESP32QJS {
     readonly DEFAULT_TIMEOUT_MS?: number;
     readonly MAX_BODY_BYTES?: number;
     fetch?: HttpFetchFunction;
-    async?: HttpAsyncModule;
     server?(options?: HttpServerOptions): HttpServer;
-    staticFileHandler?(root: string): StaticFileHandler;
   }
 }
 
@@ -1681,10 +1595,13 @@ namespace ESP32QJS {
   const Response: typeof ESP32QJS.Response;
   const Stream: typeof ESP32QJS.Stream;
   const HttpServer: typeof ESP32QJS.HttpServer;
-  const StaticFileHandler: typeof ESP32QJS.StaticFileHandler;
   const DisplayFont: ESP32QJS.DisplayFontConstructor;
   const DisplayBuffer: typeof ESP32QJS.DisplayBuffer;
   const DisplayCommandBuffer: typeof ESP32QJS.DisplayCommandBuffer;
+  const Future: ESP32QJS.FutureFactory;
+  const EventQueue: {
+    readonly prototype: ESP32QJS.EventQueue<unknown>;
+  };
 
   /**
    * Print a hint pointing to the generated API docs and declaration files.
@@ -1725,15 +1642,6 @@ namespace ESP32QJS {
   /** Alias of `sleep(...)`. */
   function delay(ms: number): number;
 
-  /** Create a deferred helper for callback-style async work. */
-  function defer<T = unknown>(): ESP32QJS.Deferred<T>;
-
-  /**
-   * Run an async starter function and block while host events continue to pump.
-   * The callback may optionally return a cancel function.
-   */
-  function waitFor<T>(start: ESP32QJS.WaitForStart<T>, timeoutMs?: number): T;
-
   /**
    * Global HTTP fetch helper.
    *
@@ -1755,6 +1663,8 @@ namespace ESP32QJS {
 
   /** File-system helpers bound to `/littlefs`. */
   var fs: ESP32QJS.FsModule;
+  /** Read-only system framework loader rooted below `/_sys`. */
+  var framework: ESP32QJS.FrameworkModule;
   /** Bounded strings in the default NVS partition. */
   var nvs: ESP32QJS.NVSModule;
   /** GPIO helpers for the active board profile. */
@@ -1786,19 +1696,6 @@ namespace ESP32QJS {
   /** HTTP client/server namespace. Exposed when either `sys.info().features.http` or `.httpServer` is enabled. */
   var http: ESP32QJS.HttpModule;
 
-  /**
-   * Create a static-file route handler rooted under LittleFS.
-   *
-   * @example
-   * ```js
-   * var server = http.server({ port: 8080 });
-   * server.get("/assets/*", staticFileHandler("./_sys"));
-   * server.start();
-   * ```
-   */
-  const staticFileHandler:
-    | ((root: string) => ESP32QJS.StaticFileHandler)
-    | undefined;
 }
 
 export {};

@@ -1,125 +1,92 @@
 test("timers/runtime", function () {
-  var deferred = defer();
-  var deferredRejected = defer();
-  var intervalTicks = waitFor(function (resolve) {
-    var ticks = 0;
-    var intervalId = setInterval(function () {
-      ticks++;
-      if (ticks >= 3) {
-        clearInterval(intervalId);
-        resolve(ticks);
-      }
-    }, 20);
-  }, 1000);
-  var timeoutValue = waitFor(function (resolve) {
-    setTimeout(function () {
-      resolve("timeout");
-    }, 30);
-  }, 1000);
-  var clearedTimeoutResult;
-  var clearedIntervalTicks;
-  var deferredRejectedCaught = false;
-  var waitForRejectedCaught = false;
-  var staleHandleResult;
-  var throwingIntervalTicks;
-  var callbackTimeoutRecovery;
+  var invoked = false;
+  var queued = Future.call(function (value) {
+    invoked = true;
+    return value + 1;
+  }, null, [41]);
+  var left;
+  var right;
+  var combined;
+  var raced;
+  var rejected;
+  var cancelled;
+  var timeoutInput;
+  var timed;
+  var rejectedCaught = false;
+  var timeoutCaught = false;
+  var fireAndForgetRan = false;
+  var intervalTicks = 0;
+  var intervalId;
 
-  clearedTimeoutResult = waitFor(function (resolve) {
-    var ran = false;
-    var timeoutId = setTimeout(function () {
-      ran = true;
-    }, 20);
+  test.ok(typeof Future === "function", "Future factory should exist");
+  test.ok(typeof EventQueue === "function", "EventQueue class should exist");
+  test.ok(typeof defer === "undefined", "legacy defer should be removed");
+  test.ok(typeof waitFor === "undefined", "legacy waitFor should be removed");
+  test.equal(queued.status(), "queued", "Future.call should defer invocation");
+  test.ok(!invoked, "Future.call must not invoke JavaScript before returning");
+  test.equal(queued.wait(1000), 42, "queued JavaScript future result");
+  test.ok(invoked, "wait should pump queued work");
+  queued = null;
+  gc();
 
-    clearTimeout(timeoutId);
-    setTimeout(function () {
-      resolve(ran);
-    }, 50);
-  }, 1000);
+  Future.call(function () {
+    fireAndForgetRan = true;
+  });
+  delay(20);
+  test.ok(fireAndForgetRan,
+    "unretained Future should start and settle at a later scheduler safe point");
+  gc();
 
-  clearedIntervalTicks = waitFor(function (resolve) {
-    var ticks = 0;
-    var intervalId = setInterval(function () {
-      ticks++;
-    }, 10);
+  left = Future.sleep(20);
+  right = Future.call(function () { return "right"; });
+  combined = Future.all([left, right]);
+  test.equal(combined.wait(1000)[1], "right", "Future.all should preserve input order");
+  left = null;
+  right = null;
+  combined = null;
+  gc();
 
-    setTimeout(function () {
-      clearInterval(intervalId);
-      setTimeout(function () {
-        resolve(ticks);
-      }, 40);
-    }, 35);
-  }, 1000);
+  raced = Future.race([Future.sleep(10), Future.sleep(80)]);
+  test.equal(raced.wait(1000).index, 0, "Future.race should report the first input");
+  raced = null;
+  gc();
 
-  setTimeout(function () {
-    deferred.resolve("deferred-ok");
-  }, 25);
-  setTimeout(function () {
-    deferredRejected.reject("deferred-fail");
-  }, 25);
-
-  test.equal(intervalTicks, 3, "interval tick count");
-  test.equal(timeoutValue, "timeout", "timeout result");
-  test.equal(deferred.wait(1000), "deferred-ok", "deferred wait");
-  test.ok(!clearedTimeoutResult, "cleared timeout should not run");
-  test.ok(clearedIntervalTicks >= 2, "cleared interval should tick before clear");
-
-  staleHandleResult = waitFor(function (resolve, reject) {
-    var staleHandle = setTimeout(function () {
-      reject("cleared stale timer ran");
-    }, 500);
-    var replacementHandle;
-
-    clearTimeout(staleHandle);
-    replacementHandle = setTimeout(function () {
-      resolve(staleHandle !== replacementHandle);
-    }, 20);
-    clearTimeout(staleHandle);
-  }, 1000);
-  test.ok(staleHandleResult, "stale handle should not cancel a reused timer slot");
-
-  throwingIntervalTicks = waitFor(function (resolve) {
-    var ticks = 0;
-
-    setInterval(function () {
-      ticks++;
-      throw "expected interval failure";
-    }, 10);
-    setTimeout(function () {
-      resolve(ticks);
-    }, 60);
-  }, 1000);
-  test.equal(throwingIntervalTicks, 1, "throwing interval should cancel itself");
-
+  rejected = Future.call(function () { throw "future-fail"; });
   try {
-    deferredRejected.wait(1000);
-  } catch (deferredError) {
-    deferredRejectedCaught = String(deferredError).indexOf("deferred-fail") >= 0;
+    rejected.wait(1000);
+  } catch (rejectionError) {
+    rejectedCaught = String(rejectionError).indexOf("future-fail") >= 0;
   }
-  test.ok(deferredRejectedCaught, "deferred reject should surface");
+  test.ok(rejectedCaught, "Future rejection should surface from wait");
+  rejected = null;
+  gc();
 
+  cancelled = Future.sleep(1000);
+  test.ok(cancelled.cancel(), "pending Future should be cancellable");
+  test.equal(cancelled.status(), "cancelled", "cancel should update status");
+  cancelled = null;
+  gc();
+
+  timeoutInput = Future.sleep(500);
+  timed = Future.timeout(timeoutInput, 10);
   try {
-    waitFor(function (resolve, reject) {
-      setTimeout(function () {
-        reject("waitFor-fail");
-      }, 20);
-    }, 1000);
-  } catch (waitForError) {
-    waitForRejectedCaught = String(waitForError).indexOf("waitFor-fail") >= 0;
+    timed.wait(1000);
+  } catch (timeoutError) {
+    timeoutCaught = String(timeoutError).indexOf("expired") >= 0;
   }
-  test.ok(waitForRejectedCaught, "waitFor reject should surface");
+  test.ok(timeoutCaught, "Future.timeout should reject and cancel its input");
+  timeoutInput = null;
+  timed = null;
+  gc();
 
-  callbackTimeoutRecovery = waitFor(function (resolve) {
-    setTimeout(function () {
-      while (true) {
-        // The native callback deadline must interrupt this loop.
-      }
-    }, 10);
-    setTimeout(function () {
-      resolve("recovered");
-    }, 40);
-  }, 1000);
-  test.equal(callbackTimeoutRecovery, "recovered", "runtime should recover after a timed-out timer callback");
+  intervalId = setInterval(function () {
+    intervalTicks++;
+    if (intervalTicks >= 3) clearInterval(intervalId);
+  }, 10);
+  Future.sleep(80).wait(500);
+  test.equal(intervalTicks, 3, "Future wait should keep timer callbacks progressing");
+
   test.equal(delay(5100), 5100, "long native delay should cooperate with the task watchdog");
 
-  return { intervalTicks: intervalTicks, timeoutValue: timeoutValue };
+  return { invoked: invoked, intervalTicks: intervalTicks };
 });

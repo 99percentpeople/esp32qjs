@@ -50,6 +50,7 @@ struct esp32_mquickjs_runtime {
     void *cooperate_opaque;
     void *timer_state;
     void *async_state;
+    void *future_state;
     uint64_t scoped_deadline_us;
     uint16_t load_root_depth;
     char fs_root[ESP32_MQUICKJS_FS_ROOT_MAX];

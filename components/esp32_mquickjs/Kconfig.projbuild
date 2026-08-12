@@ -104,16 +104,14 @@ config ESP32_MQUICKJS_FEATURE_HTTP_SERVER
     default y if ESP32_MQUICKJS_FEATURE_WIFI
     depends on ESP32_MQUICKJS_FEATURE_WIFI
     help
-        Enable http.server(), route registration, and related HTTP server
-        helpers. Composite helpers such as staticFileHandler() may add
-        further feature requirements such as fs.
+        Enable the declarative http.server() route/request EventQueue API.
 
 config ESP32_MQUICKJS_FEATURE_USB_SERIAL
     bool "Enable USB Serial/JTAG message transport"
     default n
     depends on SOC_USB_SERIAL_JTAG_SUPPORTED && !ESP32QJS_ENABLE_REPL
     help
-        Enable the bounded usbSerial callback/send API for headless JSON-line
+        Enable the bounded usbSerial EventQueue/send API for headless JSON-line
         protocols. The REPL and this transport are mutually exclusive because
         they consume the same USB Serial/JTAG input stream.
 
@@ -181,6 +179,50 @@ config ESP32_MQUICKJS_TIMER_QUEUE_LEN
     default 16
     help
         Queue depth used to deliver timer callbacks back to the REPL thread.
+
+config ESP32_MQUICKJS_MAX_FUTURES
+    int "Maximum retained Futures"
+    range 2 32
+    default 8
+    help
+        Bounded number of queued, pending, or completed Future operations.
+
+config ESP32_MQUICKJS_FUTURE_READY_QUEUE_LEN
+    int "Future ready queue length"
+    range 2 64
+    default 16
+    help
+        Wake-token queue depth shared by native Future drivers and timers.
+
+config ESP32_MQUICKJS_FUTURE_DISPATCH_BATCH
+    int "Future submission dispatch batch"
+    range 1 32
+    default 8
+    help
+        Maximum FIFO submissions started at one scheduler safe point.
+
+config ESP32_MQUICKJS_FUTURE_READY_BATCH
+    int "Future ready polling batch"
+    range 1 32
+    default 16
+    help
+        Maximum wake tokens polled at one scheduler safe point.
+
+config ESP32_MQUICKJS_FUTURE_WORKER_POOL_SIZE
+    int "Blocking I/O Future worker count"
+    range 1 4
+    default 2
+    help
+        Fixed FreeRTOS worker count shared by Future drivers for blocking
+        native operations such as I2C and flash storage.
+
+config ESP32_MQUICKJS_FUTURE_WORKER_QUEUE_LEN
+    int "Blocking I/O Future worker queue length"
+    range 2 32
+    default 8
+    help
+        Bounded number of prepared native operations waiting for a generic
+        Future worker. Submissions fail with BUSY when this queue is full.
 
 config ESP32_MQUICKJS_MAX_SCRIPT_PATH
     int "Maximum script path length"
@@ -418,8 +460,8 @@ config ESP32_MQUICKJS_USB_SERIAL_MAX_FRAME_BYTES
     depends on ESP32_MQUICKJS_FEATURE_USB_SERIAL
     help
         Maximum complete NDJSON line accepted or sent by usbSerial. Oversized
-        input is discarded through the next line boundary and reported to the
-        registered callback.
+        input is discarded through the next line boundary and emitted as an
+        EventQueue overflow error.
 
 config ESP32_MQUICKJS_USB_SERIAL_RX_BUFFER_SIZE
     int "USB serial driver RX buffer size (bytes)"

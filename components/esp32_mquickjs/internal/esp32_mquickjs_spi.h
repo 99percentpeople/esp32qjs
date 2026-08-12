@@ -4,7 +4,8 @@
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_SPI
 
-void esp32_mquickjs_init_spi_runtime(void);
+bool esp32_mquickjs_init_spi_runtime(JSContext *ctx,
+                                     esp32_mquickjs_runtime_t *runtime);
 void esp32_mquickjs_deinit_spi_runtime(void);
 
 JSValue js_spi_bus_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

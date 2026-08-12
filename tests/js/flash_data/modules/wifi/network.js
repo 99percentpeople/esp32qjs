@@ -7,15 +7,8 @@ test("wifi/network", function () {
     wifi.disconnect();
   } catch (_) {}
 
-  status = waitFor(function (resolve, reject) {
-    wifi.async.connect(cfg.wifiSsid, cfg.wifiPassword, 15000, function (nextStatus, error) {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(nextStatus);
-    });
-  }, 20000);
+  status = Future.call(wifi.connect, wifi,
+    [cfg.wifiSsid, cfg.wifiPassword, 15000]).wait(20000);
 
   test.ok(status.connected, "wifi should connect");
   test.ok(typeof status.ip === "string" && status.ip.length > 0, "wifi ip should be present");

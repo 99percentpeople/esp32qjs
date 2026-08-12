@@ -35,13 +35,11 @@ typedef struct {
 
 bool esp32_mquickjs_init_http_runtime(JSContext *ctx,
                                       esp32_mquickjs_runtime_t *runtime);
-bool esp32_mquickjs_init_http_async_runtime(JSContext *ctx,
-                                            esp32_mquickjs_runtime_t *runtime);
+bool esp32_mquickjs_init_http_future_runtime(JSContext *ctx,
+                                             esp32_mquickjs_runtime_t *runtime);
 bool esp32_mquickjs_deinit_http_runtime(JSContext *ctx);
 
 JSValue js_http_fetch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
-JSValue js_http_async_fetch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
-JSValue js_http_async_cancel(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_http_get_default_timeout_ms(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_http_get_max_body_bytes(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 
@@ -69,7 +67,7 @@ JSValue esp32_mquickjs_http_make_response_object(JSContext *ctx,
                                                  const esp32_mquickjs_http_response_t *response);
 int esp32_mquickjs_http_build_request_from_args(JSContext *ctx,
                                                 int argc,
-                                                JSValue *argv,
+                                                JSGCRef *argv,
                                                 esp32_mquickjs_http_request_t *request);
 
 #endif

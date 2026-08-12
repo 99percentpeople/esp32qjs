@@ -276,6 +276,26 @@ class RemoteConfigTests(unittest.TestCase):
         start.assert_called_once_with(flashed_config)
         close.assert_called_once_with(session)
 
+    def test_automated_monitor_session_does_not_reset_usb_serial_jtag(self):
+        args, board, app = REMOTE.parse_args([
+            "--board", "xiao_esp32s3",
+            "--app", "minimal",
+            "--target", "/dev/ttyACM0",
+            "show-config",
+        ])
+        config = REMOTE.build_project_config(args, board, app)
+
+        command = REMOTE.monitor_cmd(config, no_reset=True)
+
+        rendered = " ".join(command)
+        self.assertIn("monitor --no-reset", rendered)
+
+    def test_future_capacity_case_is_reset_isolated(self):
+        case = REMOTE.JS_TEST_MODULE_MAP["future"].cases[0]
+
+        self.assertTrue(case.reset_before)
+        self.assertTrue(case.reset_after)
+
     def test_complete_flash_data_override_is_preserved(self):
         override = ROOT / "tests" / "js" / "flash_data"
         args, board, app = REMOTE.parse_args([

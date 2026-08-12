@@ -129,9 +129,6 @@ static JSValue sys_make_features_object(JSContext *ctx)
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_WIFI)) ||
         !esp32_mquickjs_set_property_ref(ctx, features, "httpServer",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER)) ||
-        !esp32_mquickjs_set_property_ref(ctx, features, "staticFileHandler",
-                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER &&
-                                                CONFIG_ESP32_MQUICKJS_FEATURE_FS)) ||
         !esp32_mquickjs_set_property_ref(ctx, features, "displayBuffer",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER)) ||
         !esp32_mquickjs_set_property_ref(ctx, features, "http",

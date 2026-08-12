@@ -5,6 +5,8 @@
 #include "esp32_mquickjs_dac.h"
 #include "esp32_mquickjs_display_buffer.h"
 #include "esp32_mquickjs_fs.h"
+#include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_event_queue.h"
 #include "esp32_mquickjs_gpio.h"
 #include "esp32_mquickjs_http.h"
 #include "esp32_mquickjs_http_server.h"

@@ -208,6 +208,8 @@ endif()
 
 set(ESP32_MQUICKJS_SRCS
     "src/core/esp32_mquickjs.c"
+    "src/core/esp32_mquickjs_future.c"
+    "src/core/esp32_mquickjs_event_queue.c"
     "src/core/esp32_mquickjs_byte_span.c"
     "src/core/esp32_mquickjs_byte_source.c"
     "src/core/esp32_mquickjs_sys.c"
@@ -345,7 +347,7 @@ endif()
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
     "src/modules/http/esp32_mquickjs_http.c"
-    "src/modules/http/esp32_mquickjs_http_async.c"
+    "src/modules/http/esp32_mquickjs_http_future.c"
     PRIV_REQUIRES
         esp_http_client
         mbedtls
@@ -362,7 +364,7 @@ esp32_mquickjs_append_feature_component(
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     "src/modules/wifi/esp32_mquickjs_wifi.c"
-    "src/modules/wifi/esp32_mquickjs_wifi_async.c"
+    "src/modules/wifi/esp32_mquickjs_wifi_future.c"
     PRIV_REQUIRES
         esp_event
         esp_netif
