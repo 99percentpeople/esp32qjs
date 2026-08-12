@@ -119,6 +119,17 @@ class IoConcurrencyArchitectureTests(unittest.TestCase):
         self.assertIn("esp32_mquickjs_future_register_driver", nvs)
         self.assertIn("s_nvs_worker_lock", nvs)
 
+    def test_internal_sync_adapters_have_reserved_future_capacity(self):
+        future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
+            encoding="utf-8"
+        )
+        kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
+
+        self.assertIn("config ESP32_MQUICKJS_INTERNAL_FUTURE_RESERVE", kconfig)
+        self.assertIn("CONFIG_ESP32_MQUICKJS_INTERNAL_FUTURE_RESERVE", future)
+        self.assertIn("internal_allocation_depth", future)
+        self.assertIn("future_find_free_slot(state, internal)", future)
+
     def test_io_modules_do_not_invoke_javascript_callbacks_directly(self):
         module_sources = (MQUICKJS / "src/modules").rglob("*.c")
 

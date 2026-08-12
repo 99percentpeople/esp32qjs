@@ -181,11 +181,23 @@ config ESP32_MQUICKJS_TIMER_QUEUE_LEN
         Queue depth used to deliver timer callbacks back to the REPL thread.
 
 config ESP32_MQUICKJS_MAX_FUTURES
-    int "Maximum retained Futures"
+    int "Maximum active Futures"
     range 2 32
     default 8
     help
-        Bounded number of queued, pending, or completed Future operations.
+        Bounded number of queued or pending Future operations. Completed
+        results move to their JavaScript handles and no longer occupy an I/O
+        scheduler slot.
+
+config ESP32_MQUICKJS_INTERNAL_FUTURE_RESERVE
+    int "Reserved internal Future slots"
+    range 2 8
+    default 4
+    help
+        Additional scheduler slots reserved for synchronous native adapters
+        such as EventQueue, socket, filesystem, and transport operations.
+        JavaScript Future calls cannot consume this reserve, so protocol and
+        cancellation paths remain responsive when public capacity is full.
 
 config ESP32_MQUICKJS_FUTURE_READY_QUEUE_LEN
     int "Future ready queue length"

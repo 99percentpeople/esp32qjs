@@ -67,6 +67,12 @@ wifi.connect("your-ssid", "your-password", 10000);
   Inspect, cooperatively wait for, or cancel a Future. A wait timeout does not
   cancel the operation.
 
+Queued and pending operations occupy the bounded public Future table. On
+settlement, status and result move to the JavaScript handle so the scheduler
+slot is immediately reusable. Synchronous native adapters use a separate
+reserved slot pool, keeping transport and cancellation paths responsive when
+public Future capacity is full.
+
 Examples:
 
 ```js

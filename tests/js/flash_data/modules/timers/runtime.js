@@ -15,6 +15,13 @@ test("timers/runtime", function () {
   var rejectedCaught = false;
   var timeoutCaught = false;
   var fireAndForgetRan = false;
+  var completedHandle;
+  var futureWave;
+  var futureIndex;
+  var futureBatch;
+  var retainedTerminalHandles = [];
+  var capacityFutures = [];
+  var capacityCaught = false;
   var intervalTicks = 0;
   var intervalId;
 
@@ -35,6 +42,48 @@ test("timers/runtime", function () {
   delay(20);
   test.ok(fireAndForgetRan,
     "unretained Future should start and settle at a later scheduler safe point");
+
+  completedHandle = Future.call(function () { return 7; });
+  delay(20);
+  test.equal(completedHandle.status(), "fulfilled",
+    "completed Future handle should retain terminal status after releasing its scheduler slot");
+  test.equal(completedHandle.wait(0), 7,
+    "completed Future handle should retain its result after releasing its scheduler slot");
+
+  for (futureWave = 0; futureWave < 3; futureWave++) {
+    futureBatch = [];
+    for (futureIndex = 0; futureIndex < 6; futureIndex++) {
+      futureBatch.push(Future.sleep(10));
+    }
+    for (futureIndex = 0; futureIndex < futureBatch.length; futureIndex++) {
+      futureBatch[futureIndex].wait(1000);
+      retainedTerminalHandles.push(futureBatch[futureIndex]);
+    }
+  }
+  test.equal(Future.call(function () { return 9; }).wait(1000), 9,
+    "retained terminal Future handles should not exhaust active scheduler capacity");
+  test.equal(retainedTerminalHandles[0].status(), "fulfilled",
+    "retained handles should preserve terminal status after scheduler slot reuse");
+  completedHandle = null;
+  futureBatch = null;
+  retainedTerminalHandles = null;
+  gc();
+
+  for (futureIndex = 0; futureIndex < 8; futureIndex++) {
+    capacityFutures.push(Future.sleep(1000));
+  }
+  try {
+    Future.sleep(1000);
+  } catch (capacityError) {
+    capacityCaught = String(capacityError).indexOf("Future capacity is exhausted") >= 0;
+  }
+  test.ok(capacityCaught, "public Future capacity should remain bounded");
+  test.equal(typeof fs.exists("."), "boolean",
+    "native synchronous adapters should use internal slots when public capacity is full");
+  for (futureIndex = 0; futureIndex < capacityFutures.length; futureIndex++) {
+    capacityFutures[futureIndex].cancel();
+  }
+  capacityFutures = null;
   gc();
 
   left = Future.sleep(20);

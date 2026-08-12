@@ -14,6 +14,8 @@
 
 #define ESP32_MQUICKJS_FUTURE_MAX_ARGS 16U
 #define ESP32_MQUICKJS_FUTURE_MAX_DRIVERS 48U
+#define ESP32_MQUICKJS_FUTURE_SLOT_COUNT \
+    (CONFIG_ESP32_MQUICKJS_MAX_FUTURES + CONFIG_ESP32_MQUICKJS_INTERNAL_FUTURE_RESERVE)
 
 typedef enum {
     FUTURE_STATE_QUEUED,
@@ -37,6 +39,12 @@ typedef struct {
     esp32_mquickjs_runtime_t *runtime;
     uint8_t slot;
     uint32_t generation;
+    bool terminal;
+    bool observed;
+    bool rejection_reported;
+    bool result_retained;
+    future_state_t state;
+    JSGCRef result;
 } future_handle_t;
 
 typedef struct {
@@ -50,9 +58,6 @@ typedef struct {
     uint8_t slot_id;
     uint32_t generation;
     bool allocated;
-    bool handle_alive;
-    bool observed;
-    bool rejection_reported;
     bool call_refs_retained;
     bool result_retained;
     bool input_refs_retained;
@@ -71,6 +76,7 @@ typedef struct {
     esp_timer_handle_t timer;
     const esp32_mquickjs_future_driver_t *driver;
     esp32_mquickjs_future_driver_state_t *driver_state;
+    future_handle_t *handle;
 } future_slot_t;
 
 typedef struct {
@@ -81,6 +87,7 @@ typedef struct {
     future_driver_entry_t drivers[ESP32_MQUICKJS_FUTURE_MAX_DRIVERS];
     size_t driver_count;
     int running_slot;
+    uint16_t internal_allocation_depth;
     bool shutting_down;
 } future_runtime_t;
 
@@ -175,7 +182,7 @@ static future_slot_t *future_resolve_token(esp32_mquickjs_runtime_t *runtime,
     future_slot_t *slot;
 
     if (state == NULL || state->slots == NULL ||
-        token.slot >= CONFIG_ESP32_MQUICKJS_MAX_FUTURES) {
+        token.slot >= ESP32_MQUICKJS_FUTURE_SLOT_COUNT) {
         return NULL;
     }
     slot = &state->slots[token.slot];
@@ -275,25 +282,48 @@ static void future_clear_slot(JSContext *ctx, future_slot_t *slot)
     slot->runtime = runtime;
 }
 
-static void future_report_unobserved(JSContext *ctx, future_slot_t *slot)
+static void future_report_unobserved(JSContext *ctx, future_handle_t *handle)
 {
-    if (slot == NULL || slot->state != FUTURE_STATE_REJECTED ||
-        slot->observed || slot->rejection_reported || !slot->result_retained) {
+    if (handle == NULL || !handle->terminal || handle->state != FUTURE_STATE_REJECTED ||
+        handle->observed || handle->rejection_reported || !handle->result_retained) {
         return;
     }
-    slot->rejection_reported = true;
-    (void)JS_Throw(ctx, slot->result.val);
+    handle->rejection_reported = true;
+    (void)JS_Throw(ctx, handle->result.val);
     esp32_mquickjs_print_exception(ctx);
 }
 
-static void future_release_if_unowned(JSContext *ctx, future_slot_t *slot)
+static void future_release_if_terminal(JSContext *ctx, future_slot_t *slot)
 {
-    if (slot == NULL || !slot->allocated || slot->handle_alive ||
-        !future_is_terminal(slot->state) || slot->driver_active) {
+    if (slot == NULL || !slot->allocated || !future_is_terminal(slot->state) ||
+        slot->driver_active) {
         return;
     }
-    future_report_unobserved(ctx, slot);
     future_clear_slot(ctx, slot);
+}
+
+static void future_publish_terminal(JSContext *ctx, future_slot_t *slot)
+{
+    future_handle_t *handle;
+
+    if (slot == NULL || !slot->allocated || !future_is_terminal(slot->state)) {
+        return;
+    }
+    handle = slot->handle;
+    if (handle == NULL) {
+        if (slot->state == FUTURE_STATE_REJECTED && slot->result_retained) {
+            (void)JS_Throw(ctx, slot->result.val);
+            esp32_mquickjs_print_exception(ctx);
+        }
+        return;
+    }
+    handle->terminal = true;
+    handle->state = slot->state;
+    if (slot->result_retained) {
+        *JS_AddGCRef(ctx, &handle->result) = slot->result.val;
+        handle->result_retained = true;
+    }
+    slot->handle = NULL;
 }
 
 static void future_store_result(JSContext *ctx, future_slot_t *slot, JSValue value)
@@ -323,7 +353,8 @@ static void future_settle(JSContext *ctx,
     future_release_call_refs(ctx, slot);
     future_release_input_refs(ctx, slot);
     future_stop_timer(slot);
-    future_release_if_unowned(ctx, slot);
+    future_publish_terminal(ctx, slot);
+    future_release_if_terminal(ctx, slot);
 }
 
 static void future_reject_current_exception(JSContext *ctx, future_slot_t *slot)
@@ -344,31 +375,47 @@ static void future_reject_message(JSContext *ctx, future_slot_t *slot, const cha
                   JS_NewString(ctx, message != NULL ? message : "Future operation failed"));
 }
 
+static future_slot_t *future_find_free_slot(future_runtime_t *state,
+                                            bool internal)
+{
+    int i;
+
+    if (state == NULL || state->slots == NULL) {
+        return NULL;
+    }
+    if (internal) {
+        for (i = CONFIG_ESP32_MQUICKJS_MAX_FUTURES;
+             i < ESP32_MQUICKJS_FUTURE_SLOT_COUNT;
+             ++i) {
+            if (!state->slots[i].allocated) {
+                return &state->slots[i];
+            }
+        }
+    }
+    for (i = 0; i < CONFIG_ESP32_MQUICKJS_MAX_FUTURES; ++i) {
+        if (!state->slots[i].allocated) {
+            return &state->slots[i];
+        }
+    }
+    return NULL;
+}
+
 static future_slot_t *future_allocate_slot(JSContext *ctx,
                                            esp32_mquickjs_runtime_t *runtime,
                                            future_kind_t kind)
 {
     future_runtime_t *state = future_runtime(runtime);
-    future_slot_t *slot = NULL;
-    int i;
+    future_slot_t *slot;
+    bool internal;
 
     if (state == NULL || state->shutting_down) {
         return NULL;
     }
-    for (i = 0; i < CONFIG_ESP32_MQUICKJS_MAX_FUTURES; ++i) {
-        if (!state->slots[i].allocated) {
-            slot = &state->slots[i];
-            break;
-        }
-    }
+    internal = state->internal_allocation_depth > 0;
+    slot = future_find_free_slot(state, internal);
     if (slot == NULL && ctx != NULL) {
         JS_GC(ctx);
-        for (i = 0; i < CONFIG_ESP32_MQUICKJS_MAX_FUTURES; ++i) {
-            if (!state->slots[i].allocated) {
-                slot = &state->slots[i];
-                break;
-            }
-        }
+        slot = future_find_free_slot(state, internal);
     }
     if (slot == NULL) {
         return NULL;
@@ -378,7 +425,6 @@ static future_slot_t *future_allocate_slot(JSContext *ctx,
         slot->generation++;
     }
     slot->allocated = true;
-    slot->handle_alive = true;
     slot->kind = kind;
     slot->state = FUTURE_STATE_QUEUED;
     slot->submitted_us = (uint64_t)esp_timer_get_time();
@@ -393,21 +439,30 @@ static JSValue future_make_handle(JSContext *ctx, future_slot_t *slot)
 
     object = JS_NewObjectClassUser(ctx, JS_CLASS_FUTURE);
     if (JS_IsException(object)) {
-        slot->handle_alive = false;
         future_clear_slot(ctx, slot);
         return object;
     }
     handle = heap_caps_calloc(1, sizeof(*handle), MALLOC_CAP_8BIT);
     if (handle == NULL) {
-        slot->handle_alive = false;
         future_clear_slot(ctx, slot);
         return JS_ThrowOutOfMemory(ctx);
     }
     handle->runtime = slot->runtime;
     handle->slot = slot->slot_id;
     handle->generation = slot->generation;
+    handle->state = slot->state;
+    slot->handle = handle;
     JS_SetOpaque(ctx, object, handle);
     return object;
+}
+
+static void future_abandon_handle(future_slot_t *slot)
+{
+    if (slot == NULL || slot->handle == NULL) {
+        return;
+    }
+    slot->handle->runtime = NULL;
+    slot->handle = NULL;
 }
 
 static bool future_submit(future_slot_t *slot)
@@ -448,7 +503,7 @@ static bool future_submit(future_slot_t *slot)
     return true;
 }
 
-static future_slot_t *future_slot_from_value(JSContext *ctx, JSValue value)
+static future_handle_t *future_handle_from_value(JSContext *ctx, JSValue value)
 {
     future_handle_t *handle;
 
@@ -459,6 +514,14 @@ static future_slot_t *future_slot_from_value(JSContext *ctx, JSValue value)
     if (handle == NULL) {
         return NULL;
     }
+    return handle;
+}
+
+static future_slot_t *future_handle_slot(future_handle_t *handle)
+{
+    if (handle == NULL || handle->terminal) {
+        return NULL;
+    }
     return future_resolve_token(handle->runtime,
                                 (esp32_mquickjs_future_token_t){
                                     .slot = handle->slot,
@@ -466,16 +529,17 @@ static future_slot_t *future_slot_from_value(JSContext *ctx, JSValue value)
                                 });
 }
 
-static future_slot_t *future_this_slot(JSContext *ctx,
-                                       JSValue *this_val,
-                                       const char *api_name)
+static future_handle_t *future_this_handle(JSContext *ctx,
+                                           JSValue *this_val,
+                                           const char *api_name)
 {
-    future_slot_t *slot = this_val != NULL ? future_slot_from_value(ctx, *this_val) : NULL;
+    future_handle_t *handle = this_val != NULL
+        ? future_handle_from_value(ctx, *this_val) : NULL;
 
-    if (slot == NULL) {
+    if (handle == NULL || (!handle->terminal && future_handle_slot(handle) == NULL)) {
         JS_ThrowTypeError(ctx, "%s expects a live Future", api_name);
     }
-    return slot;
+    return handle;
 }
 
 static int future_array_length(JSContext *ctx, JSValue array, uint32_t *out_length)
@@ -607,7 +671,7 @@ static bool future_retain_inputs(JSContext *ctx,
         JSValue value = JS_GetPropertyUint32(ctx, *rooted_inputs, i);
         JSValue *rooted;
 
-        if (JS_IsException(value) || future_slot_from_value(ctx, value) == NULL) {
+        if (JS_IsException(value) || future_handle_from_value(ctx, value) == NULL) {
             if (!JS_IsException(value)) {
                 JS_ThrowTypeError(ctx, "Future combinator input %u is not a live Future", (unsigned)i);
             }
@@ -692,6 +756,7 @@ static void future_dispatch_call(JSContext *ctx,
         if (!driver->start(ctx, runtime, future_token(slot), slot->driver_state)) {
             future_reject_current_exception(ctx, slot);
             future_destroy_driver(slot);
+            future_release_if_terminal(ctx, slot);
         }
         return;
     }
@@ -729,7 +794,8 @@ static void future_dispatch_call(JSContext *ctx,
         if (JS_IsException(result)) {
             (void)JS_GetException(ctx);
         }
-        future_release_if_unowned(ctx, slot);
+        future_publish_terminal(ctx, slot);
+        future_release_if_terminal(ctx, slot);
     } else if (JS_IsException(result)) {
         future_reject_current_exception(ctx, slot);
     } else {
@@ -795,15 +861,45 @@ static void future_dispatch_submission(JSContext *ctx,
     }
 }
 
+static future_state_t future_handle_state(future_handle_t *handle)
+{
+    future_slot_t *slot;
+
+    if (handle == NULL) {
+        return FUTURE_STATE_CANCELLED;
+    }
+    if (handle->terminal) {
+        return handle->state;
+    }
+    slot = future_handle_slot(handle);
+    return slot != NULL ? slot->state : FUTURE_STATE_CANCELLED;
+}
+
+static JSValue future_handle_result(future_handle_t *handle)
+{
+    future_slot_t *slot;
+
+    if (handle == NULL) {
+        return JS_UNDEFINED;
+    }
+    if (handle->terminal) {
+        return handle->result_retained ? handle->result.val : JS_UNDEFINED;
+    }
+    slot = future_handle_slot(handle);
+    return slot != NULL && slot->result_retained ? slot->result.val : JS_UNDEFINED;
+}
+
 static void future_copy_terminal(JSContext *ctx,
                                  future_slot_t *target,
-                                 future_slot_t *source)
+                                 future_handle_t *source)
 {
-    if (source->state == FUTURE_STATE_FULFILLED) {
-        future_settle(ctx, target, FUTURE_STATE_FULFILLED, source->result.val);
-    } else if (source->state == FUTURE_STATE_REJECTED) {
-        future_settle(ctx, target, FUTURE_STATE_REJECTED, source->result.val);
-    } else if (source->state == FUTURE_STATE_CANCELLED) {
+    future_state_t state = future_handle_state(source);
+
+    if (state == FUTURE_STATE_FULFILLED) {
+        future_settle(ctx, target, FUTURE_STATE_FULFILLED, future_handle_result(source));
+    } else if (state == FUTURE_STATE_REJECTED) {
+        future_settle(ctx, target, FUTURE_STATE_REJECTED, future_handle_result(source));
+    } else if (state == FUTURE_STATE_CANCELLED) {
         future_settle(ctx, target, FUTURE_STATE_CANCELLED, JS_UNDEFINED);
     }
 }
@@ -815,18 +911,19 @@ static void future_advance_all(JSContext *ctx, future_slot_t *slot)
     uint16_t i;
 
     for (i = 0; i < slot->input_count; ++i) {
-        future_slot_t *input = future_slot_from_value(ctx, slot->inputs[i].val);
+        future_handle_t *input = future_handle_from_value(ctx, slot->inputs[i].val);
+        future_state_t state;
 
         if (input == NULL) {
             future_reject_message(ctx, slot, "Future.all() input became stale");
             return;
         }
-        if (input->state == FUTURE_STATE_REJECTED ||
-            input->state == FUTURE_STATE_CANCELLED) {
+        state = future_handle_state(input);
+        if (state == FUTURE_STATE_REJECTED || state == FUTURE_STATE_CANCELLED) {
             future_copy_terminal(ctx, slot, input);
             return;
         }
-        if (input->state != FUTURE_STATE_FULFILLED) {
+        if (state != FUTURE_STATE_FULFILLED) {
             return;
         }
     }
@@ -839,10 +936,11 @@ static void future_advance_all(JSContext *ctx, future_slot_t *slot)
         return;
     }
     for (i = 0; i < slot->input_count; ++i) {
-        future_slot_t *input = future_slot_from_value(ctx, slot->inputs[i].val);
+        future_handle_t *input = future_handle_from_value(ctx, slot->inputs[i].val);
 
         if (input == NULL ||
-            JS_IsException(JS_SetPropertyUint32(ctx, *results, i, input->result.val))) {
+            JS_IsException(JS_SetPropertyUint32(ctx, *results, i,
+                                                future_handle_result(input)))) {
             JS_PopGCRef(ctx, &results_ref);
             future_reject_current_exception(ctx, slot);
             return;
@@ -857,23 +955,26 @@ static void future_advance_race(JSContext *ctx, future_slot_t *slot)
     uint16_t i;
 
     for (i = 0; i < slot->input_count; ++i) {
-        future_slot_t *input = future_slot_from_value(ctx, slot->inputs[i].val);
+        future_handle_t *input = future_handle_from_value(ctx, slot->inputs[i].val);
+        future_state_t state;
 
         if (input == NULL) {
             future_reject_message(ctx, slot, "Future.race() input became stale");
             return;
         }
-        if (!future_is_terminal(input->state)) {
+        state = future_handle_state(input);
+        if (!future_is_terminal(state)) {
             continue;
         }
-        if (input->state == FUTURE_STATE_FULFILLED) {
+        if (state == FUTURE_STATE_FULFILLED) {
             JSGCRef result_ref;
             JSValue *result = JS_PushGCRef(ctx, &result_ref);
 
             *result = JS_NewObject(ctx);
             if (JS_IsException(*result) ||
                 !esp32_mquickjs_set_property_ref(ctx, result, "index", JS_NewUint32(ctx, i)) ||
-                !esp32_mquickjs_set_property_ref(ctx, result, "value", input->result.val)) {
+                !esp32_mquickjs_set_property_ref(ctx, result, "value",
+                                                future_handle_result(input))) {
                 JS_PopGCRef(ctx, &result_ref);
                 future_reject_current_exception(ctx, slot);
                 return;
@@ -899,28 +1000,38 @@ static bool future_cancel_slot(JSContext *ctx, future_slot_t *slot)
     future_release_input_refs(ctx, slot);
     future_stop_timer(slot);
     slot->state = FUTURE_STATE_CANCELLED;
-    future_release_if_unowned(ctx, slot);
+    future_publish_terminal(ctx, slot);
+    future_release_if_terminal(ctx, slot);
     return true;
 }
 
 static void future_advance_timeout(JSContext *ctx, future_slot_t *slot, uint64_t now_us)
 {
-    future_slot_t *input;
+    future_handle_t *input;
+    future_slot_t *input_slot;
+    future_state_t input_state;
 
     if (slot->input_count != 1) {
         future_reject_message(ctx, slot, "Future.timeout() lost its input");
         return;
     }
-    input = future_slot_from_value(ctx, slot->inputs[0].val);
+    input = future_handle_from_value(ctx, slot->inputs[0].val);
     if (input == NULL) {
         future_reject_message(ctx, slot, "Future.timeout() input became stale");
-    } else if (future_is_terminal(input->state)) {
+        return;
+    }
+    input_state = future_handle_state(input);
+    if (future_is_terminal(input_state)) {
         future_copy_terminal(ctx, slot, input);
     } else if (slot->deadline_us > 0 && now_us >= slot->deadline_us) {
         char message[96];
         uint32_t timeout_ms = (uint32_t)((slot->deadline_us - slot->submitted_us) / 1000ULL);
 
-        (void)future_cancel_slot(ctx, input);
+        input_slot = future_handle_slot(input);
+        if (input_slot != NULL) {
+            input->observed = true;
+            (void)future_cancel_slot(ctx, input_slot);
+        }
         snprintf(message, sizeof(message), "Future.timeout() expired after %" PRIu32 " ms", timeout_ms);
         future_reject_message(ctx, slot, message);
     }
@@ -934,7 +1045,7 @@ static bool future_advance_combinators(JSContext *ctx,
     bool handled = false;
     int i;
 
-    for (i = 0; i < CONFIG_ESP32_MQUICKJS_MAX_FUTURES; ++i) {
+    for (i = 0; i < ESP32_MQUICKJS_FUTURE_SLOT_COUNT; ++i) {
         future_slot_t *slot = &state->slots[i];
         future_state_t before;
 
@@ -962,7 +1073,7 @@ static bool future_expire_deadlines(JSContext *ctx,
     bool handled = false;
     int i;
 
-    for (i = 0; i < CONFIG_ESP32_MQUICKJS_MAX_FUTURES; ++i) {
+    for (i = 0; i < ESP32_MQUICKJS_FUTURE_SLOT_COUNT; ++i) {
         future_slot_t *slot = &state->slots[i];
         char message[96];
         uint32_t timeout_ms;
@@ -1005,7 +1116,8 @@ static bool future_poll_ready(JSContext *ctx,
     }
     if (future_is_terminal(slot->state)) {
         future_destroy_driver(slot);
-        future_release_if_unowned(ctx, slot);
+        future_publish_terminal(ctx, slot);
+        future_release_if_terminal(ctx, slot);
         return true;
     }
     result = slot->driver->finish(ctx, slot->driver_state);
@@ -1037,10 +1149,10 @@ bool esp32_mquickjs_init_future_runtime(JSContext *ctx,
     if (state == NULL) {
         return false;
     }
-    state->slots = heap_caps_calloc(CONFIG_ESP32_MQUICKJS_MAX_FUTURES,
+    state->slots = heap_caps_calloc(ESP32_MQUICKJS_FUTURE_SLOT_COUNT,
                                     sizeof(*state->slots),
                                     MALLOC_CAP_8BIT);
-    state->submissions = xQueueCreate(CONFIG_ESP32_MQUICKJS_MAX_FUTURES,
+    state->submissions = xQueueCreate(ESP32_MQUICKJS_FUTURE_SLOT_COUNT,
                                       sizeof(esp32_mquickjs_future_token_t));
     state->ready = xQueueCreate(CONFIG_ESP32_MQUICKJS_FUTURE_READY_QUEUE_LEN,
                                 sizeof(esp32_mquickjs_future_token_t));
@@ -1057,7 +1169,7 @@ bool esp32_mquickjs_init_future_runtime(JSContext *ctx,
     }
     state->ctx = ctx;
     state->running_slot = -1;
-    for (i = 0; i < CONFIG_ESP32_MQUICKJS_MAX_FUTURES; ++i) {
+    for (i = 0; i < ESP32_MQUICKJS_FUTURE_SLOT_COUNT; ++i) {
         state->slots[i].runtime = runtime;
         state->slots[i].slot_id = (uint8_t)i;
     }
@@ -1076,7 +1188,7 @@ bool esp32_mquickjs_prepare_future_runtime_destroy(JSContext *ctx,
         return true;
     }
     state->shutting_down = true;
-    for (i = 0; i < CONFIG_ESP32_MQUICKJS_MAX_FUTURES; ++i) {
+    for (i = 0; i < ESP32_MQUICKJS_FUTURE_SLOT_COUNT; ++i) {
         future_slot_t *slot = &state->slots[i];
 
         if (!slot->allocated) {
@@ -1094,7 +1206,6 @@ bool esp32_mquickjs_prepare_future_runtime_destroy(JSContext *ctx,
                 continue;
             }
         }
-        slot->handle_alive = false;
         future_clear_slot(ctx, slot);
     }
     if (driver_pending) {
@@ -1262,7 +1373,7 @@ uint32_t esp32_mquickjs_future_next_wait_ms(esp32_mquickjs_runtime_t *runtime,
         uxQueueMessagesWaiting(state->ready) > 0) {
         return 0;
     }
-    for (i = 0; i < CONFIG_ESP32_MQUICKJS_MAX_FUTURES; ++i) {
+    for (i = 0; i < ESP32_MQUICKJS_FUTURE_SLOT_COUNT; ++i) {
         future_slot_t *slot = &state->slots[i];
         uint64_t remaining_us;
         uint32_t remaining_ms;
@@ -1301,11 +1412,11 @@ JSValue esp32_mquickjs_future_call_and_wait(JSContext *ctx,
     JSValue *result;
     JSValue return_value;
     JSValue call_args[3];
+    future_runtime_t *state = future_runtime(runtime);
     future_handle_t *handle;
     int i;
 
-    (void)runtime;
-    if (ctx == NULL || argc < 0 || (argc > 0 && argv == NULL)) {
+    if (ctx == NULL || state == NULL || argc < 0 || (argc > 0 && argv == NULL)) {
         return JS_EXCEPTION;
     }
     rooted_function = JS_PushGCRef(ctx, &function_ref);
@@ -1329,7 +1440,9 @@ JSValue esp32_mquickjs_future_call_and_wait(JSContext *ctx,
     call_args[0] = *rooted_function;
     call_args[1] = *rooted_receiver;
     call_args[2] = *args_array;
+    state->internal_allocation_depth++;
     *future = js_future_call(ctx, NULL, 3, call_args);
+    state->internal_allocation_depth--;
     if (JS_IsException(*future)) {
         goto done;
     }
@@ -1365,14 +1478,15 @@ void js_future_finalizer(JSContext *ctx, void *opaque)
     if (handle == NULL) {
         return;
     }
-    slot = future_resolve_token(handle->runtime,
-                                (esp32_mquickjs_future_token_t){
-                                    .slot = handle->slot,
-                                    .generation = handle->generation,
-                                });
-    if (slot != NULL) {
-        slot->handle_alive = false;
-        future_release_if_unowned(ctx, slot);
+    slot = future_handle_slot(handle);
+    if (slot != NULL && slot->handle == handle) {
+        slot->handle = NULL;
+        future_release_if_terminal(ctx, slot);
+    }
+    future_report_unobserved(ctx, handle);
+    if (handle->result_retained) {
+        JS_DeleteGCRef(ctx, &handle->result);
+        handle->result_retained = false;
     }
     heap_caps_free(handle);
 }
@@ -1408,7 +1522,6 @@ JSValue js_future_call(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
                             *function,
                             *receiver,
                             *args)) {
-        slot->handle_alive = false;
         future_clear_slot(ctx, slot);
         result = JS_EXCEPTION;
         goto done;
@@ -1418,12 +1531,7 @@ JSValue js_future_call(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
         goto done;
     }
     if (!future_submit(slot)) {
-        future_handle_t *handle = JS_GetOpaque(ctx, result);
-
-        if (handle != NULL) {
-            handle->runtime = NULL;
-        }
-        slot->handle_alive = false;
+        future_abandon_handle(slot);
         future_clear_slot(ctx, slot);
         result = JS_ThrowInternalError(ctx, "Future submission queue is full");
     }
@@ -1453,7 +1561,6 @@ static JSValue future_make_combinator(JSContext *ctx,
         goto done;
     }
     if (!future_retain_inputs(ctx, slot, *rooted_inputs, allow_empty)) {
-        slot->handle_alive = false;
         future_clear_slot(ctx, slot);
         result = JS_EXCEPTION;
         goto done;
@@ -1463,7 +1570,7 @@ static JSValue future_make_combinator(JSContext *ctx,
         goto done;
     }
     if (!future_submit(slot)) {
-        slot->handle_alive = false;
+        future_abandon_handle(slot);
         future_clear_slot(ctx, slot);
         result = JS_ThrowInternalError(ctx, "Future submission queue is full");
     }
@@ -1512,7 +1619,7 @@ JSValue js_future_sleep(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
         return result;
     }
     if (!future_submit(slot)) {
-        slot->handle_alive = false;
+        future_abandon_handle(slot);
         future_clear_slot(ctx, slot);
         return JS_ThrowInternalError(ctx, "Future submission queue is full");
     }
@@ -1529,7 +1636,7 @@ JSValue js_future_timeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *
     int timeout_ms;
 
     (void)this_val;
-    if (argc != 2 || future_slot_from_value(ctx, argv[0]) == NULL ||
+    if (argc != 2 || future_handle_from_value(ctx, argv[0]) == NULL ||
         JS_ToInt32(ctx, &timeout_ms, argv[1]) != 0 || timeout_ms < 0) {
         return JS_ThrowTypeError(ctx, "Future.timeout(future, timeoutMs) expects a Future and non-negative integer");
     }
@@ -1542,7 +1649,6 @@ JSValue js_future_timeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *
     if (JS_IsException(*inputs) || JS_IsException(JS_SetPropertyUint32(ctx, *inputs, 0, argv[0])) ||
         !future_retain_inputs(ctx, slot, *inputs, false)) {
         JS_PopGCRef(ctx, &inputs_ref);
-        slot->handle_alive = false;
         future_clear_slot(ctx, slot);
         return JS_EXCEPTION;
     }
@@ -1553,7 +1659,7 @@ JSValue js_future_timeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *
         return result;
     }
     if (!future_submit(slot)) {
-        slot->handle_alive = false;
+        future_abandon_handle(slot);
         future_clear_slot(ctx, slot);
         return JS_ThrowInternalError(ctx, "Future submission queue is full");
     }
@@ -1562,21 +1668,23 @@ JSValue js_future_timeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *
 
 JSValue js_future_status(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    future_slot_t *slot = future_this_slot(ctx, this_val, "future.status()");
+    future_handle_t *handle = future_this_handle(ctx, this_val, "future.status()");
 
     (void)argc;
     (void)argv;
-    return slot != NULL ? JS_NewString(ctx, future_state_name(slot->state)) : JS_EXCEPTION;
+    return handle != NULL
+        ? JS_NewString(ctx, future_state_name(future_handle_state(handle)))
+        : JS_EXCEPTION;
 }
 
 JSValue js_future_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
-    future_slot_t *slot = future_this_slot(ctx, this_val, "future.wait()");
+    future_handle_t *handle = future_this_handle(ctx, this_val, "future.wait()");
     uint64_t wait_deadline_us = 0;
     int timeout_ms = 0;
 
-    if (slot == NULL) {
+    if (handle == NULL) {
         return JS_EXCEPTION;
     }
     if (argc > 1 ||
@@ -1587,10 +1695,14 @@ JSValue js_future_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
         wait_deadline_us = (uint64_t)esp_timer_get_time() +
                            ((uint64_t)(uint32_t)timeout_ms * 1000ULL);
     }
-    slot->observed = true;
-    while (!future_is_terminal(slot->state)) {
+    handle->observed = true;
+    while (!handle->terminal) {
         uint32_t wait_ms = ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS;
         uint64_t now_us;
+
+        if (future_handle_slot(handle) == NULL) {
+            return JS_ThrowInternalError(ctx, "future.wait() lost its operation");
+        }
 
         if (esp32_mquickjs_poll(ctx, runtime) != ESP32_MQUICKJS_POLL_NONE) {
             continue;
@@ -1616,24 +1728,26 @@ JSValue js_future_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
         }
         (void)esp32_mquickjs_wait_for_activity(runtime, wait_ms);
     }
-    if (slot->state == FUTURE_STATE_FULFILLED) {
-        return slot->result.val;
+    if (handle->state == FUTURE_STATE_FULFILLED) {
+        return handle->result.val;
     }
-    if (slot->state == FUTURE_STATE_REJECTED) {
-        return JS_Throw(ctx, slot->result.val);
+    if (handle->state == FUTURE_STATE_REJECTED) {
+        return JS_Throw(ctx, handle->result.val);
     }
     return JS_ThrowInternalError(ctx, "future.wait() was cancelled");
 }
 
 JSValue js_future_cancel(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    future_slot_t *slot = future_this_slot(ctx, this_val, "future.cancel()");
+    future_handle_t *handle = future_this_handle(ctx, this_val, "future.cancel()");
+    future_slot_t *slot;
 
     (void)argc;
     (void)argv;
-    if (slot == NULL) {
+    if (handle == NULL) {
         return JS_EXCEPTION;
     }
-    slot->observed = true;
-    return JS_NewBool(future_cancel_slot(ctx, slot));
+    handle->observed = true;
+    slot = future_handle_slot(handle);
+    return JS_NewBool(slot != NULL && future_cancel_slot(ctx, slot));
 }
