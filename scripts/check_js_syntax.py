@@ -27,6 +27,7 @@ DEFAULT_DOCUMENTS = (
     ROOT_DIR / "docs" / "c-api.md",
     ROOT_DIR / "docs" / "js-api.md",
     ROOT_DIR / "docs" / "display-driver-redesign.md",
+    ROOT_DIR / "docs" / "io-concurrency-refactor.md",
 )
 
 

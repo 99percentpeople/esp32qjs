@@ -12,6 +12,12 @@ This plan covers:
 
 It does not treat JS-side LittleFS libraries such as `display` and `ui` as firmware ABI. Those should remain versioned JS libraries layered on top of the built-in host APIs.
 
+> The callback and `*.async` recommendations in this document predate
+> [I/O Concurrency Refactor](io-concurrency-refactor.md). The newer document is
+> authoritative for synchronous I/O, generic task composition, and callback
+> removal. The remaining module-shape and feature-gating guidance here still
+> applies.
+
 ## Goals
 
 The stable API should satisfy these rules:
