@@ -249,11 +249,6 @@ static JSValue ledc_make_timer_status(JSContext *ctx, ledc_timer_t timer)
     esp32_mquickjs_ledc_timer_state_t *state = ledc_timer_state(timer);
     JSGCRef status_ref;
     JSValue *status_obj;
-    uint32_t freq_hz = state->configured ? ledc_get_freq(LEDC_LOW_SPEED_MODE, timer) : 0;
-
-    if (state->configured && freq_hz != 0) {
-        state->freq_hz = freq_hz;
-    }
 
     status_obj = JS_PushGCRef(ctx, &status_ref);
     *status_obj = JS_NewObject(ctx);

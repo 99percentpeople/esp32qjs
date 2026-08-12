@@ -147,6 +147,19 @@ class IoConcurrencyArchitectureTests(unittest.TestCase):
                 f"{source_path.relative_to(ROOT)} must not retain an I/O callback",
             )
 
+    def test_ledc_status_does_not_enter_the_live_driver_read_path(self):
+        ledc = (
+            MQUICKJS / "src/modules/ledc/esp32_mquickjs_ledc.c"
+        ).read_text(encoding="utf-8")
+        status_start = ledc.index("static JSValue ledc_make_timer_status(")
+        status_end = ledc.index(
+            "\nstatic JSValue ledc_make_channel_status(", status_start
+        )
+        timer_status = ledc[status_start:status_end]
+
+        self.assertNotIn("ledc_get_freq", timer_status)
+        self.assertIn("state->freq_hz", timer_status)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,7 @@ test("ledc/basic", function () {
   var channel = 0;
   var timerStatus;
   var channelStatus;
+  var statusIndex;
 
   test.ok(typeof ledc.AUTO_CLOCK === "string", "ledc.AUTO_CLOCK should be a string");
   test.ok(typeof ledc.APB_CLOCK === "string", "ledc.APB_CLOCK should be a string");
@@ -99,6 +100,16 @@ test("ledc/basic", function () {
     test.ok(timerStatus.paused, "timerPause should update paused state");
     timerStatus = ledc.timerResume(timer);
     test.ok(!timerStatus.paused, "timerResume should clear paused state");
+
+    for (statusIndex = 0; statusIndex < ledc.TIMER_COUNT; statusIndex++) {
+      timerStatus = ledc.timerStatus(statusIndex);
+      test.equal(timerStatus.timer, statusIndex, "timerStatus sweep should return each timer");
+    }
+    for (statusIndex = 0; statusIndex < ledc.CHANNEL_COUNT; statusIndex++) {
+      channelStatus = ledc.channelStatus(statusIndex);
+      test.equal(channelStatus.channel, statusIndex,
+        "channelStatus sweep should return each channel");
+    }
 
     channelStatus = ledc.stop(channel, false);
     test.equal(channelStatus.channel, channel, "stop should return channel status");

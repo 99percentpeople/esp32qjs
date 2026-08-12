@@ -872,7 +872,10 @@ This module exposes the ESP-IDF LEDC low-level timer/channel primitives. It does
 - `ledc.channelConfig(channel, options)`
   Configure or deconfigure one channel. `options` accepts `{ pin, timer, duty, hpoint, outputInvert, sleepMode, deconfigure }`.
 - `ledc.timerStatus(timer)`
-  Return `{ timer, configured, paused, freqHz, dutyResolution, maxDuty, clock }`.
+  Return the runtime's tracked timer state as
+  `{ timer, configured, paused, freqHz, dutyResolution, maxDuty, clock }`
+  without entering the live driver read path. Use `ledc.getFreq(timer)` when a
+  live hardware frequency read is explicitly required.
 - `ledc.channelStatus(channel)`
   Return `{ channel, configured, pin, timer, duty, hpoint, maxDuty, outputInvert, sleepMode }`.
 - `ledc.setDuty(channel, duty)`
