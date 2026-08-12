@@ -22,6 +22,7 @@ CHECKER_STUB(js_gc)
 CHECKER_STUB(js_load)
 CHECKER_STUB(js_setTimeout)
 CHECKER_STUB(js_clearTimeout)
+CHECKER_STUB(js_date_constructor)
 
 static JSValue js_date_now(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {

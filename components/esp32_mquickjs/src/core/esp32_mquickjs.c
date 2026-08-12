@@ -1286,6 +1286,24 @@ JSValue js_clearTimeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
     return JS_UNDEFINED;
 }
 
+JSValue js_date_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    double value;
+
+    (void)this_val;
+    argc &= ~FRAME_CF_CTOR;
+    if (argc == 0) {
+        value = (double)(esp_timer_get_time() / 1000);
+    } else if (argc == 1 && JS_IsNumber(ctx, argv[0])) {
+        if (JS_ToNumber(ctx, &value, argv[0]) != 0) {
+            return JS_EXCEPTION;
+        }
+    } else {
+        return JS_ThrowTypeError(ctx, "unsupported Date() parameter");
+    }
+    return JS_NewDate(ctx, value);
+}
+
 JSValue js_date_now(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;

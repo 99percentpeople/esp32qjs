@@ -32,5 +32,6 @@ JSValue js_sleep(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_setTimeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_setInterval(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_clearTimeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_date_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_date_now(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_performance_now(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
