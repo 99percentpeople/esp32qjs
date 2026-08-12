@@ -17,6 +17,7 @@ set(ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS
     CONFIG_ESP32_MQUICKJS_FEATURE_SPI
     CONFIG_ESP32_MQUICKJS_FEATURE_UART
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
+    CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
     CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
@@ -209,7 +210,7 @@ set(ESP32_MQUICKJS_SRCS
     "src/core/esp32_mquickjs.c"
     "src/core/esp32_mquickjs_byte_span.c"
     "src/core/esp32_mquickjs_byte_source.c"
-    "src/core/esp32_mquickjs_esp32.c"
+    "src/core/esp32_mquickjs_sys.c"
     "src/core/esp32_mquickjs_stream.c"
     "src/core/esp32_mquickjs_request_response.c"
     "src/core/js_stdlib.c"
@@ -242,9 +243,27 @@ set(ESP32_MQUICKJS_PRIV_REQUIRES
     mbedtls
     spi_flash
     esp_psram
-    # IDF resolves component include paths during early expansion, before the
-    # application feature sdkconfig is always available.
+    # IDF resolves component requirements during early expansion, before an
+    # external application's feature sdkconfig is reliably available. Keep the
+    # possible feature dependencies in the component graph unconditionally;
+    # source files and linked code remain gated by their Kconfig symbols.
+    joltwallet__littlefs
+    nvs_flash
+    esp_driver_gpio
+    esp_driver_ledc
+    esp_adc
+    esp_driver_dac
+    esp_driver_i2c
+    esp_driver_spi
+    esp_driver_uart
+    esp_http_client
+    esp_http_server
+    esp_event
+    esp_netif
+    esp_wifi
     esp_driver_usb_serial_jtag
+    esp_websocket_client
+    lwip
 )
 
 esp32_mquickjs_append_feature_component(
@@ -352,6 +371,13 @@ esp32_mquickjs_append_feature_component(
 )
 
 esp32_mquickjs_append_feature_component(
+    CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
+    "src/modules/socket/esp32_mquickjs_socket.c"
+    PRIV_REQUIRES
+        lwip
+)
+
+esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
     "src/core/esp32_mquickjs_line_framer.c"
     "src/modules/usb_serial/esp32_mquickjs_usb_serial.c"
@@ -387,15 +413,17 @@ esp32_mquickjs_append_feature_component(
 
 list(REMOVE_DUPLICATES ESP32_MQUICKJS_PRIV_REQUIRES)
 
+set(ESP32_MQUICKJS_PRIV_INCLUDE_DIRS
+    "internal"
+    "${MQUICKJS_GENERATED_BINARY_DIR}"
+    "${MQUICKJS_DIR}"
+)
 idf_component_register(
     SRCS ${ESP32_MQUICKJS_SRCS}
     INCLUDE_DIRS
         "include"
         "${MQUICKJS_DIR}"
-    PRIV_INCLUDE_DIRS
-        "internal"
-        "${MQUICKJS_GENERATED_BINARY_DIR}"
-        "${MQUICKJS_DIR}"
+    PRIV_INCLUDE_DIRS ${ESP32_MQUICKJS_PRIV_INCLUDE_DIRS}
     REQUIRES ${ESP32_MQUICKJS_PUBLIC_REQUIRES}
     PRIV_REQUIRES ${ESP32_MQUICKJS_PRIV_REQUIRES}
 )

@@ -11,7 +11,7 @@ Versioning; the native Host API uses a separate integer compatibility version.
 - Add the reusable `esp32qjs_runtime` lifecycle component with cooperative
   stop/destroy, native callback cleanup, and guarded in-flight HTTP teardown.
 - Apply deadlines to every native-to-JavaScript callback path and add
-  `esp32.withTimeout()` for nested scoped execution budgets.
+  `sys.withTimeout()` for nested scoped execution budgets.
 - Add optional runtime-task watchdog integration.
 - Make timer handles generation-checked, clamp tight intervals, and cancel
   repeating timers whose callbacks fail.
@@ -29,7 +29,9 @@ Versioning; the native Host API uses a separate integer compatibility version.
   handle close/ping/pong control frames internally instead of reporting them as
   application-message errors.
 - Add an optional bounded NVS string module with purge updates and explicit
-  encryption status, plus a true-entropy-seeded `esp32.randomHex()` DRBG for
+  encryption status, plus a true-entropy-seeded `sys.randomHex()` DRBG for
   device identity and credential material.
-- Publish Host API version `1` through `esp32.info()`.
+- Keep optional module component dependencies available during ESP-IDF early
+  expansion so external application sdkconfig overlays build from clean trees.
+- Publish Host API version `1` through `sys.info()`.
 - Establish Apache-2.0 licensing and initial framework documentation.

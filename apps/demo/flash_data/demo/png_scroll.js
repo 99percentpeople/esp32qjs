@@ -347,8 +347,8 @@ load("_sys/display/st7789.js");
   }
 
   function nowUs() {
-    return typeof esp32 === "object" && esp32 && typeof esp32.micros === "function"
-      ? esp32.micros()
+    return typeof sys === "object" && sys && typeof sys.micros === "function"
+      ? sys.micros()
       : Date.now() * 1000;
   }
 

@@ -18,6 +18,7 @@
 
 #define ESP32QJS_RUNTIME_STARTUP_PATH_MAX 256
 #define ESP32QJS_RUNTIME_TASK_NAME_MAX 24
+#define ESP32QJS_RUNTIME_PARTITION_LABEL_MAX 17
 
 static const char *TAG = "esp32qjs_runtime";
 static esp32qjs_runtime_t *s_active_runtime;
@@ -32,9 +33,12 @@ struct esp32qjs_runtime {
     volatile bool stop_requested;
     volatile bool running;
     bool littlefs_mounted;
+    bool secondary_littlefs_mounted;
     bool watchdog_registered;
     char startup_script[ESP32QJS_RUNTIME_STARTUP_PATH_MAX];
     char task_name[ESP32QJS_RUNTIME_TASK_NAME_MAX];
+    char secondary_littlefs_partition_label[ESP32QJS_RUNTIME_PARTITION_LABEL_MAX];
+    char secondary_littlefs_base_path[ESP32_MQUICKJS_FS_ROOT_MAX];
 #if CONFIG_ESP32QJS_ENABLE_REPL
     esp32qjs_interactive_host_t interactive_host;
     esp32qjs_interactive_banner_t banner;
@@ -72,6 +76,15 @@ void esp32qjs_runtime_default_config(esp32qjs_runtime_config_t *config)
     config->mount_littlefs = true;
 #endif
     config->require_littlefs = false;
+#ifdef CONFIG_ESP32QJS_SECONDARY_LITTLEFS
+    config->require_littlefs = true;
+    config->mount_secondary_littlefs = true;
+    config->require_secondary_littlefs = true;
+    config->secondary_littlefs_partition_label =
+        CONFIG_ESP32QJS_SECONDARY_LITTLEFS_PARTITION_LABEL;
+    config->secondary_littlefs_base_path =
+        CONFIG_ESP32QJS_SECONDARY_LITTLEFS_BASE_PATH;
+#endif
 #ifdef CONFIG_ESP32QJS_LITTLEFS_FORMAT_ON_MOUNT_FAIL
     config->format_littlefs_on_mount_fail = true;
 #endif
@@ -105,6 +118,11 @@ static bool runtime_release_unstarted(esp32qjs_runtime_t *runtime)
         esp32qjs_interactive_console_init(NULL);
     }
 #endif
+    if (runtime->secondary_littlefs_mounted) {
+        esp32_mquickjs_unmount_littlefs_partition(
+            runtime->secondary_littlefs_partition_label);
+        runtime->secondary_littlefs_mounted = false;
+    }
     if (runtime->littlefs_mounted) {
         esp32_mquickjs_unmount_littlefs();
         runtime->littlefs_mounted = false;
@@ -347,8 +365,20 @@ esp_err_t esp32qjs_runtime_create(const esp32qjs_runtime_config_t *config,
                         sizeof(runtime->task_name),
                         config->task_name,
                         "js_runtime");
+    runtime_copy_string(runtime->secondary_littlefs_partition_label,
+                        sizeof(runtime->secondary_littlefs_partition_label),
+                        config->secondary_littlefs_partition_label,
+                        "data");
+    runtime_copy_string(runtime->secondary_littlefs_base_path,
+                        sizeof(runtime->secondary_littlefs_base_path),
+                        config->secondary_littlefs_base_path,
+                        "/data");
     runtime->config.startup_script = runtime->startup_script;
     runtime->config.task_name = runtime->task_name;
+    runtime->config.secondary_littlefs_partition_label =
+        runtime->secondary_littlefs_partition_label;
+    runtime->config.secondary_littlefs_base_path =
+        runtime->secondary_littlefs_base_path;
     runtime->stopped = xSemaphoreCreateBinary();
     if (runtime->stopped == NULL) {
         runtime_release_unstarted(runtime);
@@ -393,6 +423,18 @@ esp_err_t esp32qjs_runtime_create(const esp32qjs_runtime_config_t *config,
             esp32_mquickjs_mount_littlefs(config->format_littlefs_on_mount_fail);
         runtime->engine.littlefs_mounted = runtime->littlefs_mounted;
         if (!runtime->littlefs_mounted && config->require_littlefs) {
+            runtime_release_unstarted(runtime);
+            return ESP_FAIL;
+        }
+    }
+    if (config->mount_secondary_littlefs) {
+        runtime->secondary_littlefs_mounted =
+            esp32_mquickjs_mount_littlefs_partition(
+                runtime->secondary_littlefs_partition_label,
+                runtime->secondary_littlefs_base_path,
+                false);
+        if (!runtime->secondary_littlefs_mounted &&
+            config->require_secondary_littlefs) {
             runtime_release_unstarted(runtime);
             return ESP_FAIL;
         }

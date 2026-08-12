@@ -13,8 +13,8 @@
   }
 
   function nowUs() {
-    return global.esp32 && typeof global.esp32.micros === "function"
-      ? global.esp32.micros()
+    return global.sys && typeof global.sys.micros === "function"
+      ? global.sys.micros()
       : 0;
   }
 

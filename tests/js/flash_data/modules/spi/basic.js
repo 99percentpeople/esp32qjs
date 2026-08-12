@@ -1,5 +1,5 @@
 test("spi/basic", function () {
-  var info = esp32.info();
+  var info = sys.info();
   var bus;
   var busStatus;
   var device;

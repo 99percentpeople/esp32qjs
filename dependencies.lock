@@ -27,5 +27,5 @@ direct_dependencies:
 - espressif/esp_websocket_client
 - joltwallet/littlefs
 manifest_hash: d28bba41a1cdcd0fccee5ab2c2f72792211cd336dd99422540d75fa0a0fe1c14
-target: esp32s3
+target: esp32c3
 version: 3.0.0

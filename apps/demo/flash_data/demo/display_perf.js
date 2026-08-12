@@ -89,7 +89,7 @@ function makeDisplayOptions() {
 }
 
 var screen = display.profiles.open("wlk1501spi8p", makeDisplayOptions());
-var info = esp32.info();
+var info = sys.info();
 var width = screen.width | 0;
 var height = screen.height | 0;
 var bodyY = HUD_H;
@@ -103,7 +103,7 @@ var historyIndex = 0;
 var frame = 0;
 var timer = null;
 var modeIndex = 0;
-var modeStartUs = esp32.micros();
+var modeStartUs = sys.micros();
 var forceFullFrame = true;
 var cjk12 = null;
 var cjk16 = null;
@@ -111,7 +111,7 @@ var cjk24 = null;
 var lastFrameUs = 0;
 var lastDrawUs = 0;
 var lastFlushUs = 0;
-var reportLastUs = esp32.micros();
+var reportLastUs = sys.micros();
 var reportFrames = 0;
 var reportFrameUs = 0;
 var reportDrawUs = 0;
@@ -202,7 +202,7 @@ function kb(bytes) {
 }
 
 function addShapeTime(name, startedUs) {
-  var elapsed = esp32.micros() - startedUs;
+  var elapsed = sys.micros() - startedUs;
 
   if (name === "bg") {
     reportShapeBgUs += elapsed;
@@ -281,7 +281,7 @@ function shouldUseBatch(mode) {
 
 function setMode(index) {
   modeIndex = ((index % MODES.length) + MODES.length) % MODES.length;
-  modeStartUs = esp32.micros();
+  modeStartUs = sys.micros();
   forceFullFrame = true;
   partialLastBox = null;
   partialHudUs = 0;
@@ -310,7 +310,7 @@ function drawBase(surface) {
 
 function drawHud(surface, dirty) {
   var mode = activeMode();
-  var seconds = ((esp32.micros() - modeStartUs) / 1000000) | 0;
+  var seconds = ((sys.micros() - modeStartUs) / 1000000) | 0;
 
   surface.fillRect(0, 0, width, HUD_H, COLORS.panel);
   surface.drawText(6, 4, "DISPLAY PERF " + mode.name, { color: COLORS.yellow, spacing: 0 });
@@ -333,7 +333,7 @@ function drawHud(surface, dirty) {
 }
 
 function drawPartialHud(surface, dirty) {
-  var seconds = ((esp32.micros() - modeStartUs) / 1000000) | 0;
+  var seconds = ((sys.micros() - modeStartUs) / 1000000) | 0;
 
   surface.fillRect(0, 18, width, HUD_H - 18, COLORS.panel);
   surface.drawText(6, 18,
@@ -475,7 +475,7 @@ function drawTextScene(surface, dirty) {
   surface.drawRect(8, y, width - 16, panelH, COLORS.dim);
   surface.drawText(16, y + 8, "TEXT STRESS " + pad(n, 3), { color: COLORS.yellow, spacing: 0 });
   surface.drawText(16, y + 22, "ASCII 0123456789 ABCD", { color: COLORS.text, spacing: 0 });
-  surface.drawText(16, y + 36, "FRAME " + frame + " HEAP " + (esp32.freeHeap() / 1024 | 0) + "K", { color: COLORS.cyan, spacing: 0 });
+  surface.drawText(16, y + 36, "FRAME " + frame + " HEAP " + (sys.freeHeap() / 1024 | 0) + "K", { color: COLORS.cyan, spacing: 0 });
   if (cjk12 && cjk16 && cjk24) {
     surface.drawText(16, y + 54, "中文显示", { color: COLORS.green, font: cjk16 });
     surface.drawText(16, y + 76, "性能 测试 延迟", { color: COLORS.orange, font: cjk12 });
@@ -501,21 +501,21 @@ function drawShapeScene(surface, dirty) {
   var py;
   var stageUs;
 
-  stageUs = esp32.micros();
+  stageUs = sys.micros();
   surface.fillRect(areaX, areaY, areaW, areaH, COLORS.bg);
   surface.drawRoundRect(areaX, areaY, areaW, areaH, 10, COLORS.dim);
   surface.fillRoundRect(areaX + 6, areaY + 6, 58, 22, 7, COLORS.panel2);
   surface.drawText(areaX + 13, areaY + 13, "SHAPES", { color: COLORS.yellow, spacing: 0 });
   addShapeTime("bg", stageUs);
 
-  stageUs = esp32.micros();
+  stageUs = sys.micros();
   surface.fillCircle(areaX + 34 + pulse, areaY + 58, 18, COLORS.blue);
   surface.drawCircle(areaX + 34 + pulse, areaY + 58, 23, COLORS.cyan);
   surface.fillEllipse(width - 48, areaY + 52 + pingPong(frame, 18), 30, 14, COLORS.magenta);
   surface.drawEllipse(width - 48, areaY + 52 + pingPong(frame, 18), 38, 20, COLORS.text, { segments: 28 });
   addShapeTime("oval", stageUs);
 
-  stageUs = esp32.micros();
+  stageUs = sys.micros();
   for (i = 0; i < 10; i += 1) {
     angle = (Math.PI * 2 * (i * 9 + spin)) / 96;
     radius = (i & 1) ? 18 : 36;
@@ -527,7 +527,7 @@ function drawShapeScene(surface, dirty) {
   surface.drawPolygon(star, COLORS.text);
   addShapeTime("polygon", stageUs);
 
-  stageUs = esp32.micros();
+  stageUs = sys.micros();
   surface.drawQuadraticBezier(
     areaX + 12,
     graphY - 34,
@@ -552,7 +552,7 @@ function drawShapeScene(surface, dirty) {
   );
   addShapeTime("curve", stageUs);
 
-  stageUs = esp32.micros();
+  stageUs = sys.micros();
   surface.fillTriangle(cx - 18, areaY + 18, cx + 20, areaY + 22, cx + 2, areaY + 52, COLORS.cyan);
   surface.drawTriangle(cx - 18, areaY + 18, cx + 20, areaY + 22, cx + 2, areaY + 52, COLORS.bg);
   addShapeTime("triangle", stageUs);
@@ -638,7 +638,7 @@ function publish(nowUs) {
   latest.chunks = stats.chunks;
   latest.pixels = stats.pixels;
   latest.bytes = stats.bytes;
-  latest.heap = esp32.freeHeap();
+  latest.heap = sys.freeHeap();
   latest.batch = lastBatch;
   latest.commandCount = lastBatch && commandStats ? commandStats.count : 0;
   latest.commandTextBytes = lastBatch && commandStats ? commandStats.textBytes : 0;
@@ -693,7 +693,7 @@ function publish(nowUs) {
 }
 
 function drawFrame() {
-  var frameStartUs = esp32.micros();
+  var frameStartUs = sys.micros();
   var drawStartUs = frameStartUs;
   var flushStartUs;
   var nowUs;
@@ -755,12 +755,12 @@ function drawFrame() {
   } else {
     lastCommandStats = null;
   }
-  lastDrawUs = esp32.micros() - drawStartUs;
+  lastDrawUs = sys.micros() - drawStartUs;
 
-  flushStartUs = esp32.micros();
+  flushStartUs = sys.micros();
   flushRects(dirty, forceFullFrame || mode.fullFlush, partialMode ? { merge: false } : undefined);
-  lastFlushUs = esp32.micros() - flushStartUs;
-  lastFrameUs = esp32.micros() - frameStartUs;
+  lastFlushUs = sys.micros() - flushStartUs;
+  lastFrameUs = sys.micros() - frameStartUs;
   forceFullFrame = false;
 
   pushSample(lastFrameUs);
@@ -773,7 +773,7 @@ function drawFrame() {
   }
 
   frame += 1;
-  nowUs = esp32.micros();
+  nowUs = sys.micros();
   if (nowUs - reportLastUs >= 1000000) {
     publish(nowUs);
   }

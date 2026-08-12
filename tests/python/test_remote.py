@@ -221,7 +221,9 @@ class RemoteConfigTests(unittest.TestCase):
         )
         test_defaults = REMOTE.JS_TEST_SDKCONFIG_DEFAULTS.read_text()
         self.assertIn("CONFIG_ESP32_MQUICKJS_DEBUG_GC=y", test_defaults)
+        self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET=y", test_defaults)
         self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET=y", test_defaults)
+        self.assertIn("socket", REMOTE.JS_TEST_MODULE_MAP)
         self.assertIn("websocket", REMOTE.JS_TEST_MODULE_MAP)
         self.assertIn(
             "-DESP32QJS_FLASH_DATA_INCLUDE_SHARED=ON",
@@ -299,6 +301,50 @@ class RemoteConfigTests(unittest.TestCase):
 
         self.assertEqual(config.partition_table.name, "esp32c3_supermini.csv")
         self.assertIn("0x1F0000", config.partition_table.read_text())
+
+    def test_flash_preserves_workspace_by_default(self):
+        args, board, app = REMOTE.parse_args([
+            "--board", "xiao_esp32s3",
+            "--app", "minimal",
+            "show-config",
+        ])
+        config = REMOTE.build_project_config(args, board, app)
+
+        with (
+            patch.object(REMOTE, "write_esptool_config"),
+            patch.object(REMOTE, "load_flasher_args", return_value={}),
+            patch.object(REMOTE, "resolve_flash_pairs", return_value=["0x0", "app.bin"]) as resolve,
+            patch.object(REMOTE, "write_flash"),
+        ):
+            REMOTE.flash(config, build_first=False)
+
+        self.assertEqual(resolve.call_args.kwargs["exclude_entries"], ("workspace",))
+
+    def test_flash_can_explicitly_initialize_workspace(self):
+        args, board, app = REMOTE.parse_args([
+            "--board", "xiao_esp32s3",
+            "--app", "minimal",
+            "show-config",
+        ])
+        config = REMOTE.build_project_config(args, board, app)
+
+        with (
+            patch.object(REMOTE, "write_esptool_config"),
+            patch.object(REMOTE, "load_flasher_args", return_value={}),
+            patch.object(REMOTE, "resolve_flash_pairs", return_value=["0x0", "app.bin"]) as resolve,
+            patch.object(REMOTE, "write_flash"),
+        ):
+            REMOTE.flash(config, build_first=False, initialize_workspace=True)
+
+        self.assertEqual(resolve.call_args.kwargs["exclude_entries"], ())
+
+    def test_workspace_flash_commands_are_explicit(self):
+        flash_args, _, _ = REMOTE.parse_args(["flash", "--erase-workspace"])
+        workspace_args, _, _ = REMOTE.parse_args(["flash-workspace", "--no-build"])
+
+        self.assertTrue(flash_args.erase_workspace)
+        self.assertEqual(workspace_args.command, "flash-workspace")
+        self.assertTrue(workspace_args.no_build)
 
     def test_missing_board_partition_fails_before_build(self):
         with self.assertRaises(SystemExit):

@@ -22,12 +22,16 @@ typedef struct {
     bool prefer_psram;
     bool mount_littlefs;
     bool require_littlefs;
+    bool mount_secondary_littlefs;
+    bool require_secondary_littlefs;
     bool format_littlefs_on_mount_fail;
     bool autorun_startup_script;
     bool enable_repl;
     bool task_watchdog;
     const char *startup_script;
     const char *task_name;
+    const char *secondary_littlefs_partition_label;
+    const char *secondary_littlefs_base_path;
     esp32qjs_runtime_install_globals_fn install_globals;
     void *opaque;
 } esp32qjs_runtime_config_t;

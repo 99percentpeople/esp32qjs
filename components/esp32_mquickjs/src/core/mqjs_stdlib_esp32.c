@@ -232,7 +232,8 @@ static const JSClassDef js_display_buffer_obj =
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
 static const JSPropDef js_fs[] = {
-    JS_PROP_STRING_DEF("ROOT", "/littlefs", 0),
+    JS_CGETSET_DEF("ROOT", js_fs_get_root, NULL),
+    JS_CFUNC_DEF("setRoot", 1, js_fs_set_root),
     JS_CFUNC_DEF("open", 2, js_fs_open),
     JS_CFUNC_DEF("list", 1, js_fs_list),
     JS_CFUNC_DEF("stat", 1, js_fs_stat),
@@ -248,6 +249,15 @@ static const JSPropDef js_fs[] = {
 
 static const JSClassDef js_fs_obj =
     JS_OBJECT_DEF("fs", js_fs);
+
+static const JSPropDef js_framework[] = {
+    JS_CFUNC_DEF("load", 1, js_framework_load),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_framework_obj =
+    JS_OBJECT_DEF("framework", js_framework);
+
 #endif
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_NVS
@@ -398,18 +408,18 @@ static const JSClassDef js_dac_obj =
     JS_OBJECT_DEF("dac", js_dac);
 #endif
 
-static const JSPropDef js_esp32[] = {
-    JS_CFUNC_DEF("info", 0, js_esp32_info),
-    JS_CFUNC_DEF("millis", 0, js_esp32_millis),
-    JS_CFUNC_DEF("micros", 0, js_esp32_micros),
-    JS_CFUNC_DEF("freeHeap", 0, js_esp32_freeHeap),
-    JS_CFUNC_DEF("randomHex", 1, js_esp32_randomHex),
-    JS_CFUNC_DEF("withTimeout", 2, js_esp32_withTimeout),
+static const JSPropDef js_sys[] = {
+    JS_CFUNC_DEF("info", 0, js_sys_info),
+    JS_CFUNC_DEF("millis", 0, js_sys_millis),
+    JS_CFUNC_DEF("micros", 0, js_sys_micros),
+    JS_CFUNC_DEF("freeHeap", 0, js_sys_freeHeap),
+    JS_CFUNC_DEF("randomHex", 1, js_sys_randomHex),
+    JS_CFUNC_DEF("withTimeout", 2, js_sys_withTimeout),
     JS_PROP_END,
 };
 
-static const JSClassDef js_esp32_obj =
-    JS_OBJECT_DEF("esp32", js_esp32);
+static const JSClassDef js_sys_obj =
+    JS_OBJECT_DEF("sys", js_sys);
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_I2C
 static const JSPropDef js_i2c_bus_proto[] = {
@@ -532,6 +542,42 @@ static const JSClassDef js_usb_serial_obj =
     JS_OBJECT_DEF("usbSerial", js_usb_serial);
 #endif
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
+static const JSPropDef js_socket_tcp[] = {
+    JS_CFUNC_DEF("connect", 4, js_socket_tcp_connect),
+    JS_CFUNC_DEF("listen", 2, js_socket_tcp_listen),
+    JS_CFUNC_DEF("accept", 2, js_socket_tcp_accept),
+    JS_CFUNC_DEF("send", 3, js_socket_tcp_send),
+    JS_CFUNC_DEF("recv", 3, js_socket_tcp_recv),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_socket_tcp_obj =
+    JS_OBJECT_DEF("tcp", js_socket_tcp);
+
+static const JSPropDef js_socket_udp[] = {
+    JS_CFUNC_DEF("sendto", 4, js_socket_udp_sendto),
+    JS_CFUNC_DEF("recvfrom", 3, js_socket_udp_recvfrom),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_socket_udp_obj =
+    JS_OBJECT_DEF("udp", js_socket_udp);
+
+static const JSPropDef js_socket[] = {
+    JS_CFUNC_DEF("open", 2, js_socket_open),
+    JS_CFUNC_DEF("close", 1, js_socket_close),
+    JS_CFUNC_DEF("status", 1, js_socket_status),
+    JS_CFUNC_DEF("get_max_message_bytes", 1, js_socket_get_max_message_bytes),
+    JS_PROP_CLASS_DEF("tcp", &js_socket_tcp_obj),
+    JS_PROP_CLASS_DEF("udp", &js_socket_udp_obj),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_socket_obj =
+    JS_OBJECT_DEF("socket", js_socket);
+#endif
+
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
 static const JSPropDef js_websocket_client[] = {
     JS_CGETSET_DEF("MAX_MESSAGE_BYTES", js_websocket_get_max_message_bytes, NULL),
@@ -651,6 +697,7 @@ static const JSPropDef js_global_object_extra[] = {
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
     JS_PROP_CLASS_DEF("fs", &js_fs_obj),
+    JS_PROP_CLASS_DEF("framework", &js_framework_obj),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_NVS
     JS_PROP_CLASS_DEF("nvs", &js_nvs_obj),
@@ -667,7 +714,7 @@ static const JSPropDef js_global_object_extra[] = {
 #if CONFIG_ESP32_MQUICKJS_FEATURE_DAC
     JS_PROP_CLASS_DEF("dac", &js_dac_obj),
 #endif
-    JS_PROP_CLASS_DEF("esp32", &js_esp32_obj),
+    JS_PROP_CLASS_DEF("sys", &js_sys_obj),
 #if CONFIG_ESP32_MQUICKJS_FEATURE_I2C
     JS_PROP_CLASS_DEF("i2c", &js_i2c_obj),
     JS_PROP_CLASS_DEF("I2CBus", &js_i2c_bus_class),
@@ -687,6 +734,9 @@ static const JSPropDef js_global_object_extra[] = {
 #if CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
     JS_PROP_CLASS_DEF("usbSerial", &js_usb_serial_obj),
 #endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
+    JS_PROP_CLASS_DEF("socket", &js_socket_obj),
+#endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
     JS_PROP_CLASS_DEF("websocketClient", &js_websocket_client_obj),
 #endif
@@ -698,9 +748,6 @@ static const JSPropDef js_global_object_extra[] = {
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER && CONFIG_ESP32_MQUICKJS_FEATURE_FS
     JS_PROP_CLASS_DEF("StaticFileHandler", &js_static_file_handler_class),
-#endif
-#if CONFIG_ESP32_MQUICKJS_FEATURE_FS
-    JS_PROP_STRING_DEF("SCRIPTS_DIR", "/littlefs", 0),
 #endif
     JS_CFUNC_DEF("help", 0, js_help),
     JS_CFUNC_DEF("defer", 0, js_defer),

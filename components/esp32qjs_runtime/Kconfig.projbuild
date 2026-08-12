@@ -27,6 +27,25 @@ config ESP32QJS_LITTLEFS_FORMAT_ON_MOUNT_FAIL
         Development convenience that may erase application data. Production
         profiles should leave this disabled.
 
+config ESP32QJS_SECONDARY_LITTLEFS
+    bool "Mount a secondary LittleFS partition"
+    depends on ESP32_MQUICKJS_FEATURE_FS
+    default n
+    help
+        Mount a second application-defined LittleFS partition. The runtime
+        only provides the mount; application code decides whether and when to
+        select it as the active filesystem root.
+
+config ESP32QJS_SECONDARY_LITTLEFS_PARTITION_LABEL
+    string "Secondary LittleFS partition label"
+    depends on ESP32QJS_SECONDARY_LITTLEFS
+    default "data"
+
+config ESP32QJS_SECONDARY_LITTLEFS_BASE_PATH
+    string "Secondary LittleFS base path"
+    depends on ESP32QJS_SECONDARY_LITTLEFS
+    default "/data"
+
 config ESP32QJS_AUTORUN_INDEX_JS
     bool "Auto-run /littlefs/index.js at boot"
     default y

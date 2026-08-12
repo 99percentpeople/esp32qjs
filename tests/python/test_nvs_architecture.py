@@ -35,7 +35,7 @@ class NvsArchitectureTests(unittest.TestCase):
             MQUICKJS / "src" / "core" / "mqjs_stdlib_esp32.c"
         ).read_text(encoding="utf-8")
         info = (
-            MQUICKJS / "src" / "core" / "esp32_mquickjs_esp32.c"
+            MQUICKJS / "src" / "core" / "esp32_mquickjs_sys.c"
         ).read_text(encoding="utf-8")
 
         self.assertIn("CONFIG_NVS_ENCRYPTION", source)

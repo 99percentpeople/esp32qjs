@@ -1,5 +1,5 @@
 test("http_server/offline", function () {
-  var features = esp32.info().features;
+  var features = sys.info().features;
   var server;
   var replacementServer;
   var staleServerError = "";

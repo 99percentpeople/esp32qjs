@@ -100,8 +100,8 @@ var profilePanelActive = false;
 var profileMarks = null;
 
 function nowUs() {
-  if (globalThis.esp32 && typeof globalThis.esp32.micros === "function") {
-    return globalThis.esp32.micros();
+  if (globalThis.sys && typeof globalThis.sys.micros === "function") {
+    return globalThis.sys.micros();
   }
   if (typeof Date !== "undefined" && Date && typeof Date.now === "function") {
     return Date.now() * 1000;

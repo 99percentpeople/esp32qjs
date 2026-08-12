@@ -14,6 +14,7 @@
 #define ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS ((uint32_t)CONFIG_ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS)
 #define ESP32_MQUICKJS_LITTLEFS_BASE_PATH "/littlefs"
 #define ESP32_MQUICKJS_LITTLEFS_PARTITION_LABEL "storage"
+#define ESP32_MQUICKJS_FS_ROOT_MAX 64U
 
 typedef struct esp32_mquickjs_runtime esp32_mquickjs_runtime_t;
 typedef uint32_t esp32_mquickjs_poll_result_t;
@@ -49,6 +50,10 @@ struct esp32_mquickjs_runtime {
     void *cooperate_opaque;
     void *timer_state;
     void *async_state;
+    uint64_t scoped_deadline_us;
+    uint16_t load_root_depth;
+    char fs_root[ESP32_MQUICKJS_FS_ROOT_MAX];
+    char load_root[ESP32_MQUICKJS_FS_ROOT_MAX];
 };
 
 JSContext *esp32_mquickjs_create(void *mem_start,
@@ -62,6 +67,10 @@ bool esp32_mquickjs_destroy(JSContext *ctx,
 
 bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed);
 void esp32_mquickjs_unmount_littlefs(void);
+bool esp32_mquickjs_mount_littlefs_partition(const char *partition_label,
+                                             const char *base_path,
+                                             bool format_if_mount_failed);
+void esp32_mquickjs_unmount_littlefs_partition(const char *partition_label);
 
 void esp32_mquickjs_set_eval_timeout(esp32_mquickjs_runtime_t *runtime,
                                      uint32_t eval_timeout_ms);

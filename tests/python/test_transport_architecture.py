@@ -28,6 +28,43 @@ class TransportArchitectureTests(unittest.TestCase):
         self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET", cmake)
         self.assertIn("src/modules/websocket/esp32_mquickjs_websocket.c", cmake)
 
+    def test_socket_is_a_framework_feature_without_application_protocol(self):
+        cmake = (MQUICKJS / "CMakeLists.txt").read_text(encoding="utf-8")
+        stdlib = (
+            MQUICKJS / "src" / "core" / "mqjs_stdlib_esp32.c"
+        ).read_text(encoding="utf-8")
+        socket_dir = MQUICKJS / "src" / "modules" / "socket"
+        source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(socket_dir.glob("*.c"))
+        )
+
+        self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET", cmake)
+        self.assertIn("src/modules/socket/esp32_mquickjs_socket.c", cmake)
+        self.assertIn('JS_PROP_CLASS_DEF("sys", &js_sys_obj)', stdlib)
+        self.assertNotIn('JS_PROP_CLASS_DEF("esp32",', stdlib)
+        self.assertIn('JS_PROP_CLASS_DEF("socket", &js_socket_obj)', stdlib)
+        self.assertIn("socket.tcp", source)
+        self.assertIn("socket.udp", source)
+        for operation in (
+            "js_socket_open",
+            "js_socket_close",
+            "js_socket_status",
+            "js_socket_get_max_message_bytes",
+            "js_socket_tcp_connect",
+            "js_socket_tcp_listen",
+            "js_socket_tcp_accept",
+            "js_socket_tcp_send",
+            "js_socket_tcp_recv",
+            "js_socket_udp_sendto",
+            "js_socket_udp_recvfrom",
+        ):
+            self.assertIn(operation, source)
+        self.assertNotIn("tcpClient", source)
+        self.assertNotIn("agent.", source)
+        self.assertNotIn("deviceId", source)
+        self.assertNotIn("token", source)
+
     def test_websocket_control_frames_are_not_application_errors(self):
         source = (
             MQUICKJS / "src" / "modules" / "websocket" / "esp32_mquickjs_websocket.c"

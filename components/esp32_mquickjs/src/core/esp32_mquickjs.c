@@ -1,6 +1,6 @@
 #include "esp32_mquickjs_core.h"
 #include "utils/esp32_mquickjs_byte_source.h"
-#include "esp32_mquickjs_esp32.h"
+#include "esp32_mquickjs_sys.h"
 #include "esp32_mquickjs_adc.h"
 #include "esp32_mquickjs_dac.h"
 #include "esp32_mquickjs_fs.h"
@@ -12,6 +12,7 @@
 #include "esp32_mquickjs_nvs.h"
 #include "esp32_mquickjs_spi.h"
 #include "esp32_mquickjs_stream.h"
+#include "esp32_mquickjs_socket.h"
 #include "esp32_mquickjs_uart.h"
 #include "esp32_mquickjs_usb_serial.h"
 #include "esp32_mquickjs_websocket.h"
@@ -212,7 +213,14 @@ void esp32_mquickjs_set_cooperate_hook(esp32_mquickjs_runtime_t *runtime,
 
 bool esp32_mquickjs_cooperate(esp32_mquickjs_runtime_t *runtime)
 {
-    return runtime == NULL || runtime->cooperate == NULL || runtime->cooperate(runtime->cooperate_opaque);
+    if (runtime == NULL) {
+        return true;
+    }
+    if (runtime->scoped_deadline_us > 0 &&
+        (uint64_t)esp_timer_get_time() >= runtime->scoped_deadline_us) {
+        return false;
+    }
+    return runtime->cooperate == NULL || runtime->cooperate(runtime->cooperate_opaque);
 }
 
 void esp32_mquickjs_native_wait_begin(esp32_mquickjs_runtime_t *runtime,
@@ -248,6 +256,26 @@ void esp32_mquickjs_native_wait_end(esp32_mquickjs_runtime_t *runtime,
     wait->started_us = 0;
 }
 
+static uint32_t esp32_mquickjs_bound_wait_slice(
+    const esp32_mquickjs_runtime_t *runtime,
+    uint32_t slice_ms)
+{
+    uint64_t now_us;
+    uint64_t remaining_us;
+    uint32_t remaining_ms;
+
+    if (runtime == NULL || runtime->scoped_deadline_us == 0) {
+        return slice_ms;
+    }
+    now_us = (uint64_t)esp_timer_get_time();
+    if (now_us >= runtime->scoped_deadline_us) {
+        return 0;
+    }
+    remaining_us = runtime->scoped_deadline_us - now_us;
+    remaining_ms = (uint32_t)((remaining_us + 999ULL) / 1000ULL);
+    return remaining_ms < slice_ms ? remaining_ms : slice_ms;
+}
+
 bool esp32_mquickjs_cooperative_delay(esp32_mquickjs_runtime_t *runtime,
                                       uint32_t delay_ms)
 {
@@ -270,6 +298,11 @@ bool esp32_mquickjs_cooperative_delay(esp32_mquickjs_runtime_t *runtime,
         slice_ms = remaining_ms > ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS
                        ? ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS
                        : remaining_ms;
+        slice_ms = esp32_mquickjs_bound_wait_slice(runtime, slice_ms);
+        if (slice_ms == 0) {
+            completed = false;
+            break;
+        }
         wait_ticks = pdMS_TO_TICKS(slice_ms);
         if (wait_ticks == 0) {
             wait_ticks = 1;
@@ -305,6 +338,10 @@ bool esp32_mquickjs_wait_for_activity(esp32_mquickjs_runtime_t *runtime,
             slice_ms = remaining_ms > ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS
                            ? ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS
                            : remaining_ms;
+        }
+        slice_ms = esp32_mquickjs_bound_wait_slice(runtime, slice_ms);
+        if (slice_ms == 0) {
+            return false;
         }
         wait_ticks = pdMS_TO_TICKS(slice_ms);
         if (slice_ms > 0 && wait_ticks == 0) {
@@ -377,6 +414,9 @@ static int js_interrupt_handler(JSContext *ctx, void *opaque)
     (void)ctx;
     if (runtime == NULL || runtime->deadline_us == 0) {
         return 0;
+    }
+    if (!esp32_mquickjs_cooperate(runtime)) {
+        return 1;
     }
     return esp_timer_get_time() > runtime->deadline_us;
 }
@@ -1217,6 +1257,13 @@ JSContext *esp32_mquickjs_create(void *mem_start,
     runtime->async_generation = 0;
     runtime->output_generation = 0;
     runtime->littlefs_mounted = false;
+    runtime->scoped_deadline_us = 0;
+    runtime->load_root_depth = 0;
+    snprintf(runtime->fs_root,
+             sizeof(runtime->fs_root),
+             "%s",
+             ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
+    runtime->load_root[0] = '\0';
     runtime->repl_enabled = false;
     runtime->auto_run_startup_script = false;
     runtime->format_littlefs_on_mount_fail = false;
@@ -1265,6 +1312,9 @@ bool esp32_mquickjs_destroy(JSContext *ctx,
         return false;
     }
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
+    esp32_mquickjs_deinit_socket_runtime(ctx);
+#endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
     esp32_mquickjs_deinit_websocket_runtime(ctx);
 #endif
@@ -1313,7 +1363,11 @@ bool esp32_mquickjs_destroy(JSContext *ctx,
     }
     esp32_mquickjs_deinit_async_state(runtime);
     runtime->deadline_us = 0;
+    runtime->scoped_deadline_us = 0;
     runtime->littlefs_mounted = false;
+    runtime->load_root_depth = 0;
+    runtime->fs_root[0] = '\0';
+    runtime->load_root[0] = '\0';
     runtime->repl_enabled = false;
     runtime->auto_run_startup_script = false;
     runtime->format_littlefs_on_mount_fail = false;
@@ -1426,6 +1480,12 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     if (!esp32_mquickjs_init_wifi_runtime(ctx, runtime)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
+    if (!esp32_mquickjs_init_socket_runtime(ctx, runtime)) {
         esp32_mquickjs_print_exception(ctx);
         return false;
     }
@@ -1602,7 +1662,7 @@ JSValue js_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 
     command = JS_ToCString(ctx, argv[0], &command_buf);
 
-    return esp32_mquickjs_load_from_littlefs(ctx, s_active_runtime, command);
+    return esp32_mquickjs_load_from_active_fs(ctx, s_active_runtime, command);
 #endif
 }
 

@@ -16,11 +16,11 @@ It does not treat JS-side LittleFS libraries such as `display` and `ui` as firmw
 
 The stable API should satisfy these rules:
 
-- Module names stay small and literal. Prefer raw ESP-IDF or platform names such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `wifi`, `http`, `esp32`, `fs`, `nvs`.
+- Module names stay small and literal. Prefer raw ESP-IDF or platform names such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `wifi`, `http`, `socket`, `sys`, `fs`, `nvs`.
 - Built-in host APIs stay low-level. Board-independent drivers, widgets, protocol stacks, debounce logic, animation helpers, and other policy belong in JavaScript.
 - Additive change is preferred. Once a module shape is frozen, new fields and methods may be added, but existing names and semantics should not be renamed or weakened.
 - Host modules should be board-selectable features. Each optional module should be enabled or disabled by a `CONFIG_...` feature macro and chosen per board profile under `configs/boards/<board>/sdkconfig.defaults`.
-- Compiled feature sets should be discoverable from JS in one stable place such as `esp32.info().features`, instead of forcing user scripts to probe globals with `typeof`.
+- Compiled feature sets should be discoverable from JS in one stable place such as `sys.info().features`, instead of forcing user scripts to probe globals with `typeof`.
 - Mutating peripheral calls should return state objects when that improves observability, but status objects must reflect real or intentionally tracked state, not guessed state.
 - Asynchronous callbacks from ISR or background tasks must always be bridged back onto the JS thread.
 - Synchronous and asynchronous variants should use distinct public names. Do not overload one function name so a callback parameter silently switches it from sync to async behavior.
@@ -69,6 +69,7 @@ Recommended feature symbols:
 - `CONFIG_ESP32_MQUICKJS_FEATURE_SPI`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_UART`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_WIFI`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_HTTP`
@@ -85,6 +86,7 @@ Recommended dependency rules:
 - `FEATURE_SPI` depends on `SOC_GPSPI_SUPPORTED`
 - `FEATURE_UART` depends on `SOC_UART_SUPPORTED`
 - `FEATURE_USB_SERIAL` depends on `SOC_USB_SERIAL_JTAG_SUPPORTED` and conflicts with the REPL frontend
+- `FEATURE_SOCKET` has no application-protocol dependency and can use any initialized network interface
 - `FEATURE_WEBSOCKET` depends on `FEATURE_WIFI`
 - `FEATURE_WIFI` depends on `SOC_WIFI_SUPPORTED`
 - `FEATURE_HTTP` depends on `FEATURE_WIFI` in the current firmware, unless another network backend is introduced later
@@ -95,10 +97,10 @@ Recommended dependency rules:
 
 Recommended runtime discovery:
 
-- Add a stable `features` object to `esp32.info()`:
+- Add a stable `features` object to `sys.info()`:
 
 ```js
-print(JSON.stringify(esp32.info().features));
+print(JSON.stringify(sys.info().features));
 // Example:
 // {
 //   fs: true,
@@ -123,7 +125,7 @@ print(JSON.stringify(esp32.info().features));
 Behavior rule:
 
 - If a feature is disabled at compile time, that module is not registered into the JS global object.
-- Cross-board scripts should prefer `esp32.info().features.<name>` over probing module globals directly.
+- Cross-board scripts should prefer `sys.info().features.<name>` over probing module globals directly.
 
 ## Board Profiles as Feature Presets
 
@@ -181,13 +183,13 @@ Built-in modules and types currently in scope:
 
 - Global helpers: `help`, `load`, `defer`, `waitFor`, `sleep`, `delay`, `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`, `gc`
 - Data/runtime types: `Headers`, `Request`, `Response`, `Stream`
-- Filesystem/runtime modules: `fs`, `nvs`, `esp32`
+- Filesystem/runtime modules: `fs`, `nvs`, `sys`
 - Peripheral modules: `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`
 - Low-level graphics buffer modules: `displayBuffer`
-- Transport/connectivity modules: `usbSerial`, `websocketClient`, `wifi`, `http`, `HttpServer`, `StaticFileHandler`
+- Transport/connectivity modules: `usbSerial`, `socket`, `websocketClient`, `wifi`, `http`, `HttpServer`, `StaticFileHandler`
 - JS-side libraries outside the firmware ABI: `display`, `ui`
 
-In the long-term plan, `nvs`, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `usbSerial`, `websocketClient`, `displayBuffer`, `wifi`, `http`, and `httpServer` should all be treated as optional host features rather than unconditional globals.
+In the long-term plan, `nvs`, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `usbSerial`, `socket`, `websocketClient`, `displayBuffer`, `wifi`, `http`, and `httpServer` should all be treated as optional host features rather than unconditional globals.
 
 ## Freeze Principles By Area
 
@@ -269,22 +271,22 @@ Freeze recommendations:
 - Avoid adding browser-only semantics that the firmware cannot honor consistently.
 - Prefer small additive helpers over deep Fetch-compat work.
 
-### `esp32`
+### `sys`
 
 Status: `Stable now`
 
 Why:
 
-- `esp32.info()`, `millis()`, `micros()`, `freeHeap()`, and bounded `randomHex()` are generic runtime/platform helpers.
-- `esp32.withTimeout()` provides a scoped execution budget without extending an outer native callback deadline.
+- `sys.info()`, `millis()`, `micros()`, `freeHeap()`, and bounded `randomHex()` are generic runtime/platform helpers.
+- `sys.withTimeout()` provides a scoped wall-clock budget without extending an outer native callback deadline.
 - The module is not overloaded with peripheral control.
 
 Freeze recommendations:
 
 - Keep this module focused on platform/runtime introspection.
-- Do not move unrelated peripheral helpers into `esp32`.
+- Do not move unrelated peripheral helpers into `sys`.
 - If later adding power-management or reboot helpers, do so carefully and explicitly.
-- Extend `esp32.info()` with a stable `features` object so scripts can discover compiled host modules safely.
+- Extend `sys.info()` with a stable `features` object so scripts can discover compiled host modules safely.
 
 ## Peripheral Modules
 
@@ -509,7 +511,7 @@ The old display buffer plan has been implemented and the remaining active surfac
 
 What is already good:
 
-- `displayBuffer` is feature-gated and reported through `esp32.info().features.displayBuffer`.
+- `displayBuffer` is feature-gated and reported through `sys.info().features.displayBuffer`.
 - The module exposes native `mono1` and `rgb565` buffers, dirty bounds, drawing primitives, EQF1 fixed bitmap font loading, and byte-view rectangle export.
 - `readRect(...)` and `readRectChunks(...)` return generic native byte sources; `createSpanSource(...)` returns a retained `DisplayBufferSpanSource` whose display-only `setRect(...)` control is separate from the generic `ByteSpanSource` consumed by SPI.
 - The layered JavaScript display library separates framebuffer rendering, panel command sequencing, presentation policy, and SPI/I2C transport ownership.
@@ -542,7 +544,7 @@ For cross-board stability, the proposed API is:
 
 - gate `dac` behind `FEATURE_DAC`
 - make `FEATURE_DAC` depend on `SOC_DAC_SUPPORTED`
-- expose compile-time availability through `esp32.info().features.dac`
+- expose compile-time availability through `sys.info().features.dac`
 - do not register the module at all on boards where the feature is disabled
 
 Recommended first stable scope: oneshot DAC only.
@@ -689,7 +691,7 @@ Before calling the built-in host API stable, adopt these rules:
 Recommended order for stabilization:
 
 1. Freeze now:
-   `help/load/defer/waitFor/timers`, `fs`, `Stream`, `Headers`, `Request`, `Response`, `esp32`, `gpio`, `adc`
+   `help/load/defer/waitFor/timers`, `fs`, `Stream`, `Headers`, `Request`, `Response`, `sys`, `gpio`, `adc`
 2. Candidate for freeze after focused validation:
    `nvs`, `i2c`, `spi`, `uart`, `displayBuffer`, `wifi`, `http`
 3. Adjust before freeze:

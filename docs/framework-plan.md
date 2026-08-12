@@ -180,7 +180,7 @@ Deliverables:
 - Root Apache-2.0 `LICENSE`.
 - `version.txt` containing framework SemVer.
 - `ESP32QJS_VERSION` and `ESP32QJS_HOST_API_VERSION` in the public C API.
-- `esp32.info()` fields `runtimeVersion` and `hostApiVersion`.
+- `sys.info()` fields `runtimeVersion` and `hostApiVersion`.
 - A compatibility statement covering SemVer, Host API changes, JS library
   versions, and deprecation policy.
 - Repository-relative documentation links.

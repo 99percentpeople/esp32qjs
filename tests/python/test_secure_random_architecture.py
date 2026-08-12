@@ -4,13 +4,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MQUICKJS = ROOT / "components" / "esp32_mquickjs"
-ESP32_SOURCE = MQUICKJS / "src" / "core" / "esp32_mquickjs_esp32.c"
+SYS_SOURCE = MQUICKJS / "src" / "core" / "esp32_mquickjs_sys.c"
 CORE_SOURCE = MQUICKJS / "src" / "core" / "esp32_mquickjs.c"
 
 
 class SecureRandomArchitectureTests(unittest.TestCase):
     def test_random_hex_uses_a_true_entropy_seeded_drbg(self):
-        source = ESP32_SOURCE.read_text(encoding="utf-8")
+        source = SYS_SOURCE.read_text(encoding="utf-8")
         cmake = (MQUICKJS / "CMakeLists.txt").read_text(encoding="utf-8")
 
         self.assertIn("bootloader_random_enable()", source)

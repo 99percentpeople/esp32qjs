@@ -967,7 +967,7 @@ namespace ESP32QJS {
 
   /**
    * Native display-buffer module. Exposed only when
-   * `esp32.info().features.displayBuffer` is enabled.
+   * `sys.info().features.displayBuffer` is enabled.
    */
   interface DisplayBufferModule {
     readonly MONO1: "mono1";
@@ -977,9 +977,9 @@ namespace ESP32QJS {
   }
 
   /**
-   * Runtime information returned by `esp32.info()`.
+   * Runtime information returned by `sys.info()`.
    */
-  interface Esp32Features {
+  interface SysFeatures {
     fs: boolean;
     nvs: boolean;
     gpio: boolean;
@@ -990,6 +990,7 @@ namespace ESP32QJS {
     spi: boolean;
     uart: boolean;
     usbSerial: boolean;
+    socket: boolean;
     websocket: boolean;
     displayBuffer: boolean;
     wifi: boolean;
@@ -999,14 +1000,14 @@ namespace ESP32QJS {
   }
 
   /**
-   * Runtime information returned by `esp32.info()`.
+   * Runtime information returned by `sys.info()`.
    */
-  interface Esp32Info {
+  interface SysInfo {
     runtimeVersion: string;
     hostApiVersion: number;
     board: string;
     chip: string;
-    features: Esp32Features;
+    features: SysFeatures;
     userLedPin: number;
     userLedActiveLow: boolean;
     scriptsDir: string;
@@ -1027,16 +1028,16 @@ namespace ESP32QJS {
   }
 
   /**
-   * ESP32 runtime helpers.
+   * System runtime helpers.
    *
    * @example
    * ```js
-   * print(JSON.stringify(esp32.info()));
-   * print(esp32.millis());
+   * print(JSON.stringify(sys.info()));
+   * print(sys.millis());
    * ```
    */
-  interface Esp32Module {
-    info(): Esp32Info;
+  interface SysModule {
+    info(): SysInfo;
     millis(): number;
     micros(): number;
     freeHeap(): number;
@@ -1323,6 +1324,67 @@ namespace ESP32QJS {
     readonly DEFAULT_TX_BUFFER_SIZE: number;
     readonly DEFAULT_TIMEOUT_MS: number;
     open(options?: UARTOpenOptions): UARTPort;
+  }
+
+  type SocketProtocol = "tcp" | "udp";
+
+  interface SocketStatus {
+    id: number;
+    protocol: SocketProtocol;
+    connected: boolean;
+    listening: boolean;
+    peerClosed: boolean;
+    localIp: string;
+    localPort: number;
+    remoteIp: string;
+    remotePort: number;
+    sentBytes: number;
+    receivedBytes: number;
+  }
+
+  /** Operations on TCP stream and listener handles. */
+  interface SocketTcpModule {
+    connect(
+      socketId: number,
+      remoteIp: string,
+      remotePort: number,
+      timeout?: number,
+    ): boolean;
+    listen(socketId: number, backlog?: number): boolean;
+    accept(socketId: number, timeout?: number): number | null;
+    send(socketId: number, data: string, timeout?: number): number;
+    /** Receive one currently available TCP stream chunk, not a framed message. */
+    recv(socketId: number, maxBytes?: number, timeout?: number): string | null;
+  }
+
+  interface SocketUdpDatagram {
+    data: string;
+    remoteIp: string;
+    remotePort: number;
+  }
+
+  /** Operations on UDP datagram handles. */
+  interface SocketUdpModule {
+    sendto(
+      socketId: number,
+      remoteIp: string,
+      remotePort: number,
+      data: string,
+    ): number;
+    recvfrom(
+      socketId: number,
+      maxBytes?: number,
+      timeout?: number,
+    ): SocketUdpDatagram | null;
+  }
+
+  interface SocketModule {
+    open(protocol: SocketProtocol, localPort?: number): number;
+    close(socketId: number): boolean;
+    status(socketId: number): SocketStatus;
+    get_max_message_bytes(socketId: number): number;
+    tcp: SocketTcpModule;
+    udp: SocketUdpModule;
   }
 
   interface USBSerialOpenOptions {
@@ -1624,9 +1686,6 @@ namespace ESP32QJS {
   const DisplayBuffer: typeof ESP32QJS.DisplayBuffer;
   const DisplayCommandBuffer: typeof ESP32QJS.DisplayCommandBuffer;
 
-  /** LittleFS script root exposed to JavaScript when `esp32.info().features.fs` is enabled. */
-  const SCRIPTS_DIR: string;
-
   /**
    * Print a hint pointing to the generated API docs and declaration files.
    *
@@ -1704,10 +1763,10 @@ namespace ESP32QJS {
   var ledc: ESP32QJS.LedcModule;
   /** ADC oneshot helpers. */
   var adc: ESP32QJS.AdcModule;
-  /** DAC oneshot helpers. Exposed only when `esp32.info().features.dac` is enabled. */
+  /** DAC oneshot helpers. Exposed only when `sys.info().features.dac` is enabled. */
   var dac: ESP32QJS.DacModule;
-  /** ESP32 runtime information helpers. */
-  var esp32: ESP32QJS.Esp32Module;
+  /** System runtime information and deadline helpers. */
+  var sys: ESP32QJS.SysModule;
   /** Shared I2C bus helpers. */
   var i2c: ESP32QJS.I2CModule;
   /** SPI master bus/device helpers. */
@@ -1716,13 +1775,15 @@ namespace ESP32QJS {
   var uart: ESP32QJS.UARTModule;
   /** Headless USB Serial/JTAG framed transport; unavailable when the REPL is compiled in. */
   var usbSerial: ESP32QJS.USBSerialModule;
+  /** Generic TCP and UDP socket namespace. */
+  var socket: ESP32QJS.SocketModule;
   /** Outbound WebSocket text client. */
   var websocketClient: ESP32QJS.WebSocketClientModule;
-  /** Native display-buffer helpers. Exposed only when `esp32.info().features.displayBuffer` is enabled. */
+  /** Native display-buffer helpers. Exposed only when `sys.info().features.displayBuffer` is enabled. */
   var displayBuffer: ESP32QJS.DisplayBufferModule;
   /** Wi-Fi station helpers. */
   var wifi: ESP32QJS.WiFiModule;
-  /** HTTP client/server namespace. Exposed when either `esp32.info().features.http` or `.httpServer` is enabled. */
+  /** HTTP client/server namespace. Exposed when either `sys.info().features.http` or `.httpServer` is enabled. */
   var http: ESP32QJS.HttpModule;
 
   /**

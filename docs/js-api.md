@@ -7,8 +7,8 @@ This document covers APIs implemented in JavaScript on top of the built-in C hos
 Load the entry point for the panel in use, then load optional UI helpers:
 
 ```js
-load("_sys/display/wlk1501spi8p.js");
-load("_sys/ui.js");
+framework.load("display/wlk1501spi8p.js");
+framework.load("ui.js");
 ```
 
 `_sys/display.js` loads only the display facade, surface, fonts, and registries.
@@ -53,7 +53,7 @@ Unknown options fail before hardware initialization.
 ### Explicit ST7789 Construction
 
 ```js
-load("_sys/display/st7789.js");
+framework.load("display/st7789.js");
 
 var transport = display.transports.create("spi4wire", {
   busOptions: {

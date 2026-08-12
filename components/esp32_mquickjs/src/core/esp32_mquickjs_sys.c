@@ -1,4 +1,4 @@
-#include "esp32_mquickjs_esp32.h"
+#include "esp32_mquickjs_sys.h"
 #include "esp32_mquickjs_core.h"
 
 #include <limits.h>
@@ -14,6 +14,8 @@
 #include "esp_timer.h"
 #include "mbedtls/private/ctr_drbg.h"
 #include "mbedtls/platform_util.h"
+
+#define ESP32_MQUICKJS_MAX_SCOPED_TIMEOUT_MS 60000
 
 static mbedtls_ctr_drbg_context s_secure_random;
 static bool s_secure_random_initialized;
@@ -88,7 +90,7 @@ static const char *esp32_chip_model_name(void)
     }
 }
 
-static JSValue esp32_make_features_object(JSContext *ctx)
+static JSValue sys_make_features_object(JSContext *ctx)
 {
     JSGCRef features_ref;
     JSValue *features;
@@ -119,6 +121,8 @@ static JSValue esp32_make_features_object(JSContext *ctx)
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_UART)) ||
         !esp32_mquickjs_set_property_ref(ctx, features, "usbSerial",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL)) ||
+        !esp32_mquickjs_set_property_ref(ctx, features, "socket",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET)) ||
         !esp32_mquickjs_set_property_ref(ctx, features, "websocket",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET)) ||
         !esp32_mquickjs_set_property_ref(ctx, features, "wifi",
@@ -142,7 +146,7 @@ fail:
     return JS_EXCEPTION;
 }
 
-static JSValue esp32_make_info_object(JSContext *ctx)
+static JSValue sys_make_info_object(JSContext *ctx)
 {
     esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
     JSGCRef info_ref;
@@ -179,7 +183,7 @@ static JSValue esp32_make_info_object(JSContext *ctx)
     if (JS_IsException(*info)) {
         goto fail;
     }
-    *features = esp32_make_features_object(ctx);
+    *features = sys_make_features_object(ctx);
     if (JS_IsException(*features)) {
         goto fail;
     }
@@ -197,7 +201,10 @@ static JSValue esp32_make_info_object(JSContext *ctx)
         !esp32_mquickjs_set_property_ref(ctx, info, "userLedActiveLow",
                                          JS_NewBool(ESP32_MQUICKJS_USER_LED_ACTIVE_LOW)) ||
         !esp32_mquickjs_set_property_ref(ctx, info, "scriptsDir",
-                                         JS_NewString(ctx, ESP32_MQUICKJS_LITTLEFS_BASE_PATH)) ||
+                                         JS_NewString(ctx,
+                                             runtime != NULL && runtime->fs_root[0] != '\0'
+                                                 ? runtime->fs_root
+                                                 : ESP32_MQUICKJS_LITTLEFS_BASE_PATH)) ||
         !esp32_mquickjs_set_property_ref(ctx, info, "flashSize",
                                          JS_NewUint32(ctx, flash_size)) ||
         !esp32_mquickjs_set_property_ref(ctx, info, "psramEnabled",
@@ -238,15 +245,15 @@ fail:
     return JS_EXCEPTION;
 }
 
-JSValue js_esp32_info(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_sys_info(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;
     (void)argc;
     (void)argv;
-    return esp32_make_info_object(ctx);
+    return sys_make_info_object(ctx);
 }
 
-JSValue js_esp32_millis(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_sys_millis(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;
     (void)argc;
@@ -254,7 +261,7 @@ JSValue js_esp32_millis(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
     return JS_NewInt64(ctx, esp_timer_get_time() / 1000);
 }
 
-JSValue js_esp32_micros(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_sys_micros(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;
     (void)argc;
@@ -262,7 +269,7 @@ JSValue js_esp32_micros(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
     return JS_NewInt64(ctx, esp_timer_get_time());
 }
 
-JSValue js_esp32_freeHeap(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_sys_freeHeap(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;
     (void)argc;
@@ -270,7 +277,7 @@ JSValue js_esp32_freeHeap(JSContext *ctx, JSValue *this_val, int argc, JSValue *
     return JS_NewUint32(ctx, esp_get_free_heap_size());
 }
 
-JSValue js_esp32_randomHex(JSContext *ctx,
+JSValue js_sys_randomHex(JSContext *ctx,
                            JSValue *this_val,
                            int argc,
                            JSValue *argv)
@@ -287,7 +294,7 @@ JSValue js_esp32_randomHex(JSContext *ctx,
     if (argc != 1 || JS_ToInt32(ctx, &byte_count, argv[0]) != 0 ||
         byte_count < 1 || byte_count > (int)sizeof(bytes)) {
         return JS_ThrowRangeError(ctx,
-                                  "esp32.randomHex(byteLength) expects 1..%u bytes",
+                                  "sys.randomHex(byteLength) expects 1..%u bytes",
                                   (unsigned)sizeof(bytes));
     }
 
@@ -314,13 +321,14 @@ JSValue js_esp32_randomHex(JSContext *ctx,
     return result;
 }
 
-JSValue js_esp32_withTimeout(JSContext *ctx,
+JSValue js_sys_withTimeout(JSContext *ctx,
                              JSValue *this_val,
                              int argc,
                              JSValue *argv)
 {
     esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
     uint64_t previous_deadline_us;
+    uint64_t previous_scoped_deadline_us;
     uint64_t requested_deadline_us;
     uint64_t effective_deadline_us;
     int timeout_ms;
@@ -328,33 +336,42 @@ JSValue js_esp32_withTimeout(JSContext *ctx,
 
     (void)this_val;
     if (argc < 2 || JS_ToInt32(ctx, &timeout_ms, argv[0]) != 0 ||
-        timeout_ms <= 0 || timeout_ms > 10000) {
+        timeout_ms <= 0 || timeout_ms > ESP32_MQUICKJS_MAX_SCOPED_TIMEOUT_MS) {
         return JS_ThrowRangeError(ctx,
-                                  "esp32.withTimeout(timeoutMs, callback) expects timeoutMs between 1 and 10000");
+                                  "sys.withTimeout(timeoutMs, callback) expects timeoutMs between 1 and 60000");
     }
     if (!JS_IsFunction(ctx, argv[1])) {
         return JS_ThrowTypeError(ctx,
-                                 "esp32.withTimeout(timeoutMs, callback) expects a callback function");
+                                 "sys.withTimeout(timeoutMs, callback) expects a callback function");
     }
     if (runtime == NULL) {
         return JS_ThrowInternalError(ctx, "ESP32 runtime is not active");
     }
 
     previous_deadline_us = runtime->deadline_us;
+    previous_scoped_deadline_us = runtime->scoped_deadline_us;
     requested_deadline_us = (uint64_t)esp_timer_get_time() +
                             ((uint64_t)(uint32_t)timeout_ms * 1000ULL);
     if (previous_deadline_us == 0 || requested_deadline_us < previous_deadline_us) {
         runtime->deadline_us = requested_deadline_us;
     }
-    effective_deadline_us = runtime->deadline_us;
+    if (previous_scoped_deadline_us == 0 ||
+        requested_deadline_us < previous_scoped_deadline_us) {
+        runtime->scoped_deadline_us = requested_deadline_us;
+    }
+    effective_deadline_us = runtime->scoped_deadline_us;
 
     result = esp32_mquickjs_call(ctx, runtime, argv[1], JS_NULL, 0, NULL);
-    if (JS_IsException(result) && effective_deadline_us > 0 &&
+    if (effective_deadline_us > 0 &&
         (uint64_t)esp_timer_get_time() >= effective_deadline_us) {
-        (void)JS_GetException(ctx);
+        if (JS_IsException(result)) {
+            (void)JS_GetException(ctx);
+        }
         runtime->deadline_us = previous_deadline_us;
-        return JS_ThrowInternalError(ctx, "esp32.withTimeout() deadline exceeded");
+        runtime->scoped_deadline_us = previous_scoped_deadline_us;
+        return JS_ThrowInternalError(ctx, "sys.withTimeout() deadline exceeded");
     }
     runtime->deadline_us = previous_deadline_us;
+    runtime->scoped_deadline_us = previous_scoped_deadline_us;
     return result;
 }

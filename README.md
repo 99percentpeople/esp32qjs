@@ -2,7 +2,7 @@
 
 ESP32QJS is an ESP-IDF framework for running trusted JavaScript applications on
 ESP32 boards with mquickjs. It provides feature-gated native APIs for GPIO,
-I2C, SPI, UART, USB serial frames, Wi-Fi, HTTP, WebSocket, LittleFS, bounded NVS strings, timers, and display buffers, plus
+I2C, SPI, UART, USB serial frames, TCP lines, Wi-Fi, HTTP, WebSocket, LittleFS, bounded NVS strings, timers, and display buffers, plus
 versioned JavaScript display and immediate-mode UI libraries.
 
 Framework version: **0.1.0**
@@ -117,8 +117,12 @@ An application may also live outside this repository. Pass its directory or
 ```bash
 python scripts/remote.py --app ../agent/device show-config
 python scripts/remote.py --app ../agent/device --assume y build
-python scripts/remote.py --app ../agent/device flash-fs
+python scripts/remote.py --app ../agent/device flash --erase-workspace
 ```
+
+The destructive flag initializes an external profile's optional workspace
+partition. Subsequent `flash` and `flash-fs` calls preserve it; use
+`flash-workspace` only when an explicit workspace reset is intended.
 
 External profiles own the same `app.env`, `sdkconfig.defaults`, board-specific
 partition files, and `flash_data/` layout as bundled profiles. Set `APP_FILE`
@@ -159,6 +163,7 @@ dedicated JS test sdkconfig defaults, then flashes a dedicated test LittleFS ima
 
 ```bash
 python scripts/remote.py test --scope js --module nvs
+python scripts/remote.py test --scope js --module tcp
 python scripts/remote.py test --scope js --module wifi --module http --network
 python scripts/remote.py test --scope js --module spi --module uart --loopback
 ```

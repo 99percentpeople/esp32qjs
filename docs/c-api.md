@@ -15,7 +15,12 @@ This document covers the APIs exported directly by the firmware runtime.
 - `fetch(input, options?)`
   Run a blocking HTTP request and return a `Response`.
 - `load(path)`
-  Evaluate a script from LittleFS. Relative paths resolve under `/littlefs`, and paths cannot escape that root.
+  Evaluate a script from the active filesystem root. It starts at `/littlefs`;
+  applications may select any mounted root with `fs.setRoot(path)`.
+- `framework.load(path)`
+  Evaluate a bundled framework script below `/littlefs/_sys`, regardless of
+  the active application root. Nested `load(...)` calls made while evaluating the
+  framework module also remain on the system partition.
 - `sleep(ms)` / `delay(ms)`
   Block the REPL task for `ms` milliseconds.
 - `waitFor(start, timeoutMs?)`
@@ -25,7 +30,7 @@ Startup behavior:
 
 - If `/littlefs/index.js` exists, it is loaded automatically before the first `js>` prompt appears.
 - `index.js` is the single startup entry point. Keep it empty when you want the board to boot into the REPL, or use it to `load(...)` scripts, drivers, and app code.
-- This is the recommended place for board startup logic such as loading a panel entry point (`load("_sys/display/st7789.js")`), `load("_sys/ui.js")`, and `wifi.connect(...)`.
+- This is the recommended place for board startup logic such as loading a panel entry point (`framework.load("display/st7789.js")`), `framework.load("ui.js")`, and `wifi.connect(...)`.
 - Optional examples can live under `demo/` and be started manually, for example `load("demo/display_perf.js")`.
 
 Examples:
@@ -45,8 +50,8 @@ Example `index.js`:
 
 ```js
 print("[startup] boot script running");
-load("_sys/display/st7789.js");
-load("_sys/ui.js");
+framework.load("display/st7789.js");
+framework.load("ui.js");
 wifi.async.connect("your-ssid", "your-password", function (status, error) {
   print(error === undefined, status && status.ip);
 });
@@ -105,18 +110,16 @@ var handle = setInterval(function () { print("tick"); }, 500);
 clearInterval(handle);
 ```
 
-## Constants
-
-- `SCRIPTS_DIR`
-  Exposed only when the `fs` feature is compiled in.
-  Script base directory, `"/littlefs"`.
-
 ## `fs` Module
 
-All `fs` operations are restricted to `/littlefs`.
+All `fs` operations are restricted to the active filesystem root.
 
 - `fs.ROOT`
-  File-system root, `"/littlefs"`.
+  Dynamic current filesystem root. It starts at `"/littlefs"`.
+- `fs.setRoot(path)`
+  Select an existing mounted directory as the root for relative `fs` operations
+  and `load()`. The framework validates the mount/path only; the application
+  owns policy about which root to select.
 - `fs.list(path = ".")`
   Return an array of entries for a directory.
 - `fs.stat(path)`
@@ -148,6 +151,15 @@ print(JSON.stringify(fs.list(".")));
 fs.rename("notes.txt", "notes-old.txt");
 fs.remove("notes-old.txt");
 ```
+
+## Secondary LittleFS
+
+Profiles may enable `CONFIG_ESP32QJS_SECONDARY_LITTLEFS` and configure its
+partition label and base path. The runtime mounts that partition through the
+same generic LittleFS API but does not assign it any business meaning or select
+it automatically. Application bootstrap code can call `fs.setRoot(path)` after
+loading its system services. Bundled `_sys` modules remain available through
+`framework.load(path)`.
 
 ## `nvs` Module
 
@@ -493,7 +505,7 @@ python scripts/remote.py test --scope js --module uart --loopback
 ## `usbSerial` Module
 
 `usbSerial` is a bounded USB Serial/JTAG text-frame transport for headless
-applications. It is compiled only when `esp32.info().features.usbSerial` is
+applications. It is compiled only when `sys.info().features.usbSerial` is
 true and is mutually exclusive with `CONFIG_ESP32QJS_ENABLE_REPL`, because both
 consume the same USB input stream.
 
@@ -529,7 +541,7 @@ line is JSON.
 
 ## `displayBuffer` Module
 
-This module exposes native display buffers for heavy pixel work. It is registered only when `esp32.info().features.displayBuffer` is enabled. The JS `Surface` owns rendering, `PanelDriver` owns controller sequencing, and `DisplayTransport` owns SPI/I2C/GPIO operations; `displayBuffer` only owns pixels and export bytes.
+This module exposes native display buffers for heavy pixel work. It is registered only when `sys.info().features.displayBuffer` is enabled. The JS `Surface` owns rendering, `PanelDriver` owns controller sequencing, and `DisplayTransport` owns SPI/I2C/GPIO operations; `displayBuffer` only owns pixels and export bytes.
 
 - `displayBuffer.MONO1`
   Pixel format string `"mono1"`.
@@ -1025,44 +1037,44 @@ if (ref) {
 }
 ```
 
-## `esp32` Module
+## `sys` Module
 
-- `esp32.info()`
+- `sys.info()`
   Return board/chip identity plus memory/runtime fields:
   `{ runtimeVersion, hostApiVersion, board, chip, features, userLedPin, userLedActiveLow, scriptsDir, flashSize, psramEnabled, psramSize, freePsram, totalInternalHeap, freeInternalHeap, jsHeapSize, jsHeapRegion, littlefsMounted, replEnabled, autoRunIndexJs, formatLittlefsOnMountFail, freeHeap, jsTimeMs }`. `runtimeVersion` follows framework SemVer; `hostApiVersion` is the integer native compatibility level.
-  `features` is `{ fs, nvs, gpio, ledc, adc, dac, i2c, spi, uart, usbSerial, websocket, displayBuffer, wifi, http, httpServer, staticFileHandler }` and is the stable way to discover which optional host modules or composite helpers were compiled into the firmware for the current board.
-- `esp32.millis()`
+  `features` is `{ fs, nvs, gpio, ledc, adc, dac, i2c, spi, uart, usbSerial, socket, websocket, displayBuffer, wifi, http, httpServer, staticFileHandler }` and is the stable way to discover which optional host modules or composite helpers were compiled into the firmware for the current board.
+- `sys.millis()`
   Return monotonic milliseconds from `esp_timer`.
-- `esp32.micros()`
+- `sys.micros()`
   Return monotonic microseconds from `esp_timer`.
-- `esp32.freeHeap()`
+- `sys.freeHeap()`
   Return current free heap in bytes.
-- `esp32.randomHex(byteLength)`
+- `sys.randomHex(byteLength)`
   Return 1–64 cryptographically strong random bytes as two lowercase
   hexadecimal characters per byte. Before JavaScript-visible RF or ADC modules
   initialize, the runtime temporarily enables the SoC entropy source and seeds
   a process-lifetime CTR-DRBG; calls draw from that DRBG and wipe temporary
   native buffers. Native embedders must therefore install the standard globals
   before another task starts using RF or ADC hardware.
-- `esp32.withTimeout(timeoutMs, callback)`
-  Run `callback` with a scoped JavaScript execution deadline between 1 and
-  10000 milliseconds and return its value. A nested call only shortens an
-  already active runtime deadline; it never extends the surrounding native
-  callback or evaluation budget. A native interrupt caused by the scoped
-  deadline is normalized after restoring the outer deadline and becomes the
-  catchable `InternalError: esp32.withTimeout() deadline exceeded`.
+- `sys.withTimeout(timeoutMs, callback)`
+  Run `callback` with a scoped wall-clock deadline between 1 and 60000
+  milliseconds and return its value. A nested call only shortens an already
+  active deadline; it never extends the surrounding callback or evaluation
+  budget. The deadline remains active across cooperative native waits. A
+  timeout is normalized after restoring the outer deadline and becomes the
+  catchable `InternalError: sys.withTimeout() deadline exceeded`.
 
 Example:
 
 ```js
-print(JSON.stringify(esp32.info().features));
-if (esp32.info().features.fs) {
-  print(SCRIPTS_DIR);
+print(JSON.stringify(sys.info().features));
+if (sys.info().features.fs) {
+  print(fs.ROOT);
 }
-print(esp32.millis());
-print(esp32.freeHeap());
-print(esp32.randomHex(16));
-var answer = esp32.withTimeout(100, function () {
+print(sys.millis());
+print(sys.freeHeap());
+print(sys.randomHex(16));
+var answer = sys.withTimeout(100, function () {
   return 42;
 });
 ```
@@ -1103,11 +1115,59 @@ print(JSON.stringify(wifi.status()));
 wifi.disconnect();
 ```
 
+## `socket` Module
+
+`socket` is exposed when `sys.info().features.socket` is enabled. It provides
+bounded, handle-based raw sockets. The framework does not add line framing,
+reconnect policy, authentication, or an application protocol.
+
+- `socket.open(protocol, local_port = 0)`
+  Open and bind a `"tcp"` or `"udp"` socket and return its numeric handle.
+- `socket.close(socket_id)`
+  Close a handle. Closing an already closed handle returns `false`.
+- `socket.status(socket_id)`
+  Return protocol, local/remote endpoint, connected/listening state, peer-close
+  state, and byte counters.
+- `socket.get_max_message_bytes(socket_id)`
+  Return the maximum bytes accepted by one send or receive call. For TCP this
+  is a chunk limit, not a message boundary.
+- `socket.tcp.connect(socket_id, remote_ip, remote_port, timeout = 5000)`
+  Connect a TCP handle. The host string may be an IP address or DNS name.
+- `socket.tcp.listen(socket_id, backlog = 4)`
+  Turn a bound TCP handle into a listener.
+- `socket.tcp.accept(socket_id, timeout = 0)`
+  Return a connected client handle or `null` when no connection is ready.
+- `socket.tcp.send(socket_id, data, timeout = 0)`
+  Send a raw string and return the number of bytes written.
+- `socket.tcp.recv(socket_id, max_bytes, timeout = 0)`
+  Return one raw stream chunk or `null`. TCP has no message boundaries.
+- `socket.udp.sendto(socket_id, remote_ip, remote_port, data)`
+  Send one UDP datagram.
+- `socket.udp.recvfrom(socket_id, max_bytes, timeout = 0)`
+  Return `{ data, remoteIp, remotePort }` or `null`.
+
+`accept`, `recv`, and `recvfrom` default to non-blocking operation. Their
+optional `timeout` is bounded to 60000 ms and remains subordinate to an outer
+`sys.withTimeout()` deadline.
+
+```js
+var client = socket.open("tcp", 0);
+socket.tcp.connect(client, "192.0.2.10", 9000, 5000);
+socket.tcp.send(client, "hello", 1000);
+print(socket.tcp.recv(client, 1024, 100));
+socket.close(client);
+
+var udp = socket.open("udp", 0);
+socket.udp.sendto(udp, "192.0.2.10", 9001, "hello");
+print(JSON.stringify(socket.udp.recvfrom(udp, 1024, 100)));
+socket.close(udp);
+```
+
 ## `websocketClient` Module
 
 `websocketClient` is a singleton outbound text client backed by Espressif's
 managed `esp_websocket_client` component. It is exposed only when
-`esp32.info().features.websocket` is enabled. Connect after Wi-Fi is ready.
+`sys.info().features.websocket` is enabled. Connect after Wi-Fi is ready.
 
 - `websocketClient.MAX_MESSAGE_BYTES`
   Compile-time upper bound for complete inbound and outbound text messages.
@@ -1160,18 +1220,18 @@ explicit `close()`.
 The `http` namespace is exposed when either the HTTP client feature or the HTTP server feature is enabled. Individual members are still feature-gated.
 
 - `http.DEFAULT_TIMEOUT_MS`
-  Default request timeout in milliseconds. Exposed only when `esp32.info().features.http` is enabled.
+  Default request timeout in milliseconds. Exposed only when `sys.info().features.http` is enabled.
 - `http.MAX_BODY_BYTES`
   Default maximum captured response body size. Exposed only when
-  `esp32.info().features.http` is enabled.
+  `sys.info().features.http` is enabled.
 - `http.server(options?)`
-  Create a lightweight HTTP server object backed by `esp_http_server`. Exposed only when `esp32.info().features.httpServer` is enabled.
+  Create a lightweight HTTP server object backed by `esp_http_server`. Exposed only when `sys.info().features.httpServer` is enabled.
 - `http.fetch(input, options?)`
-  Alias of global `fetch(input, options?)`. Exposed only when `esp32.info().features.http` is enabled.
+  Alias of global `fetch(input, options?)`. Exposed only when `sys.info().features.http` is enabled.
 - `http.async.fetch(input, callback)` / `http.async.fetch(input, options, callback)`
   Run an asynchronous HTTP request, return an opaque generation-checked request
   handle, and call `callback(response, error)` on completion. Exposed only when
-  `esp32.info().features.http` is enabled.
+  `sys.info().features.http` is enabled.
 - `http.async.cancel(handle)`
   Cancel an active asynchronous request. Return `true` only when the handle
   still identifies an active request; stale handles cannot cancel a reused
@@ -1233,7 +1293,7 @@ print(response.text());
 - `server.all(pathOrPattern, handler)`
   Register a route handler.
 - `http.staticFileHandler(root)` / `staticFileHandler(root)`
-  Create a static file handler suitable for routes such as `server.get("/assets/*", staticFileHandler("./www"))`. Exposed only when both `esp32.info().features.httpServer` and `esp32.info().features.fs` are enabled.
+  Create a static file handler suitable for routes such as `server.get("/assets/*", staticFileHandler("./www"))`. Exposed only when both `sys.info().features.httpServer` and `sys.info().features.fs` are enabled.
 - `server.start()`
 - `server.stop()`
   Stop listening while retaining the server slot and registered routes.

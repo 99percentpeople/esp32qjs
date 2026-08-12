@@ -81,7 +81,7 @@ class JsTestModule:
 
 JS_TEST_MODULES = (
     JsTestModule("core", (JsTestCase("modules/core/eval.js"),)),
-    JsTestModule("esp32", (JsTestCase("modules/esp32/runtime.js"),)),
+    JsTestModule("sys", (JsTestCase("modules/sys/runtime.js"),)),
     JsTestModule("gpio", (JsTestCase("modules/gpio/basic.js"),), required_features=("gpio",)),
     JsTestModule("ledc", (JsTestCase("modules/ledc/basic.js"),), required_features=("ledc",)),
     JsTestModule("adc", (JsTestCase("modules/adc/basic.js"),), required_features=("adc",)),
@@ -141,6 +141,11 @@ JS_TEST_MODULES = (
         "http_server",
         (JsTestCase("modules/http_server/offline.js"),),
         required_features=("httpServer",),
+    ),
+    JsTestModule(
+        "socket",
+        (JsTestCase("modules/socket/offline.js"),),
+        required_features=("socket",),
     ),
     JsTestModule(
         "websocket",
@@ -1031,6 +1036,11 @@ def build_fs_image(config: ProjectConfig) -> None:
     run_idf_action_with_stale_build_recovery(["littlefs_storage_bin"], config)
 
 
+def build_workspace_image(config: ProjectConfig) -> None:
+    """Build only the empty image used to initialize the workspace partition."""
+    run_idf_action_with_stale_build_recovery(["littlefs_workspace_bin"], config)
+
+
 def default_remote_url(host: str, port: int) -> str:
     """Return the project's default RFC2217 URL."""
     return f"rfc2217://{host}:{port}?ign_set_control&timeout=10"
@@ -1209,12 +1219,22 @@ def write_flash(config: ProjectConfig, write_flash_args: list[str], flash_pairs:
     )
 
 
-def flash(config: ProjectConfig, build_first: bool, exclude_entries: tuple[str, ...] = ()) -> None:
-    """Flash all ESP-IDF build outputs listed in flasher_args.json."""
+def flash(
+    config: ProjectConfig,
+    build_first: bool,
+    exclude_entries: tuple[str, ...] = (),
+    initialize_workspace: bool = False,
+) -> None:
+    """Flash build outputs while preserving workspace unless explicitly initialized."""
     write_esptool_config()
 
+    effective_exclusions = tuple(dict.fromkeys((
+        *exclude_entries,
+        *(("workspace",) if not initialize_workspace else ()),
+    )))
+
     if build_first:
-        if "storage" in exclude_entries:
+        if "storage" in effective_exclusions and "workspace" in effective_exclusions:
             build_firmware_images(config)
         else:
             build(config)
@@ -1222,7 +1242,11 @@ def flash(config: ProjectConfig, build_first: bool, exclude_entries: tuple[str, 
     flasher_args = load_flasher_args(config.build_dir)
     extra_esptool_args = dict(flasher_args.get("extra_esptool_args", {}))
     write_flash_args = [str(arg) for arg in flasher_args.get("write_flash_args", [])]
-    flash_pairs = resolve_flash_pairs(flasher_args, config.build_dir, exclude_entries=exclude_entries)
+    flash_pairs = resolve_flash_pairs(
+        flasher_args,
+        config.build_dir,
+        exclude_entries=effective_exclusions,
+    )
 
     write_flash(
         config,
@@ -1256,6 +1280,28 @@ def flash_fs(config: ProjectConfig, build_first: bool) -> None:
     )
 
 
+def flash_workspace(config: ProjectConfig, build_first: bool) -> None:
+    """Build and flash an empty workspace image as an explicit destructive action."""
+    write_esptool_config()
+
+    if build_first:
+        build_workspace_image(config)
+
+    flasher_args = load_flasher_args(config.build_dir)
+    extra_esptool_args = dict(flasher_args.get("extra_esptool_args", {}))
+    write_flash_args = [str(arg) for arg in flasher_args.get("write_flash_args", [])]
+    offset, file_path = resolve_flash_entry(flasher_args, config.build_dir, "workspace")
+
+    write_flash(
+        config,
+        write_flash_args,
+        [offset, str(file_path)],
+        chip=str(extra_esptool_args.get("chip", config.idf_target)),
+        before=str(extra_esptool_args.get("before", "default-reset")),
+        after=str(extra_esptool_args.get("after", "hard-reset")),
+    )
+
+
 def monitor_cmd(config: ProjectConfig) -> list[str]:
     """Build the monitor command for the selected board profile."""
     write_monitor_config()
@@ -1274,9 +1320,17 @@ def monitor(config: ProjectConfig) -> None:
     )
 
 
-def flash_monitor(config: ProjectConfig, build_first: bool) -> None:
+def flash_monitor(
+    config: ProjectConfig,
+    build_first: bool,
+    initialize_workspace: bool = False,
+) -> None:
     """Build/flash, then open monitor over the selected target."""
-    flash(config, build_first=build_first)
+    flash(
+        config,
+        build_first=build_first,
+        initialize_workspace=initialize_workspace,
+    )
     monitor(config)
 
 
@@ -1809,10 +1863,10 @@ def ensure_js_test_runtime(session: MonitorSession) -> None:
 
 
 def probe_js_runtime_features(session: MonitorSession) -> dict[str, bool]:
-    """Read the runtime feature map from `esp32.info().features`."""
+    """Read the runtime feature map from `sys.info().features`."""
     send_js_command(
         session,
-        'print("__ESP32QJS_TEST_FEATURES__:" + JSON.stringify(esp32.info().features))',
+        'print("__ESP32QJS_TEST_FEATURES__:" + JSON.stringify(sys.info().features))',
     )
     output = read_monitor_until_line_prefix(
         session,
@@ -2455,14 +2509,30 @@ def parse_args(
 
     flash_parser = sub.add_parser("flash", help="Build and flash over the selected target.")
     flash_parser.add_argument("--no-build", action="store_true")
+    flash_parser.add_argument(
+        "--erase-workspace",
+        action="store_true",
+        help="Also flash the generated empty workspace image. Default: preserve workspace.",
+    )
 
     flash_fs_parser = sub.add_parser("flash-fs", help="Build and flash only the LittleFS storage partition.")
     flash_fs_parser.add_argument("--no-build", action="store_true")
+
+    flash_workspace_parser = sub.add_parser(
+        "flash-workspace",
+        help="Explicitly erase and initialize only the workspace partition.",
+    )
+    flash_workspace_parser.add_argument("--no-build", action="store_true")
 
     mon = sub.add_parser("monitor", help="Open ESP-IDF monitor over the selected target.")
 
     fm = sub.add_parser("flash-monitor", help="Build/flash, then open monitor over the selected target.")
     fm.add_argument("--no-build", action="store_true")
+    fm.add_argument(
+        "--erase-workspace",
+        action="store_true",
+        help="Also flash the generated empty workspace image. Default: preserve workspace.",
+    )
 
     test = sub.add_parser("test", help="Run host C tests and/or board-backed JS tests.")
     test.add_argument(
@@ -2537,11 +2607,19 @@ def main() -> int:
         return 0
 
     if args.command == "flash":
-        flash(config, build_first=not args.no_build)
+        flash(
+            config,
+            build_first=not args.no_build,
+            initialize_workspace=args.erase_workspace,
+        )
         return 0
 
     if args.command == "flash-fs":
         flash_fs(config, build_first=not args.no_build)
+        return 0
+
+    if args.command == "flash-workspace":
+        flash_workspace(config, build_first=not args.no_build)
         return 0
 
     if args.command == "monitor":
@@ -2549,7 +2627,11 @@ def main() -> int:
         return 0
 
     if args.command == "flash-monitor":
-        flash_monitor(config, build_first=not args.no_build)
+        flash_monitor(
+            config,
+            build_first=not args.no_build,
+            initialize_workspace=args.erase_workspace,
+        )
         return 0
 
     if args.command == "test":

@@ -93,17 +93,20 @@ asynchronous work until `esp32qjs_runtime_create()` has returned successfully.
 
 Native-to-JavaScript calls go through `esp32_mquickjs_call()`. It applies the
 runtime deadline and never extends an earlier nested deadline. Trusted
-JavaScript can use `esp32.withTimeout(timeoutMs, callback)` to tighten that
-active deadline around one operation; the scoped helper restores the previous
+JavaScript can use `sys.withTimeout(timeoutMs, callback)` to add a wall-clock
+deadline around one operation; the scoped helper restores the previous
 deadline and cannot extend its caller's budget. The runtime task watchdog is a
-final recovery layer, not a replacement for callback deadlines.
+final recovery layer, not a replacement for callback deadlines. While bounded
+JavaScript runs, VM interrupt checks invoke the runtime cooperate hook so long
+deadlines can feed the watchdog and still observe runtime stop requests.
 
 Native waits are split according to
 `CONFIG_ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS` (250 ms by default). Between
 slices the runtime feeds its task watchdog and observes stop requests. This
 covers `sleep()`/`delay()`, deferred activity waits, synchronous Wi-Fi waits,
 SPI queue waits, and synchronous HTTP requests. Intentional native wait time is
-excluded from the JavaScript execution deadline. An in-flight SPI transaction
+excluded from the ordinary JavaScript evaluation budget, while an explicit
+`sys.withTimeout()` wall-clock deadline remains active across those waits. An in-flight SPI transaction
 is drained before an interrupted call returns so DMA buffers remain valid; a
 synchronous HTTP request similarly waits for its bounded worker to finish.
 

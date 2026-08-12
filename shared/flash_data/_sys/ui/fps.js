@@ -53,8 +53,8 @@
   }
 
   function nowUs() {
-    if (global.esp32 && typeof global.esp32.micros === "function") {
-      return global.esp32.micros();
+    if (global.sys && typeof global.sys.micros === "function") {
+      return global.sys.micros();
     }
     if (typeof Date !== "undefined" && Date && typeof Date.now === "function") {
       return Date.now() * 1000;
