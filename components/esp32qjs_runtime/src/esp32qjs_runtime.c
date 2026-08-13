@@ -457,7 +457,7 @@ esp_err_t esp32qjs_runtime_create(const esp32qjs_runtime_config_t *config,
     runtime->interactive_host.notify_activity = runtime_notify_activity;
     runtime->interactive_host.notify_activity_from_isr = runtime_notify_activity_from_isr;
     runtime->interactive_host.opaque = runtime;
-    runtime->banner.title = "mquickjs REPL on " CONFIG_ESP32_MQUICKJS_BOARD_NAME;
+    runtime->banner.title = "mquickjs REPL on " CONFIG_ESP32_MQUICKJS_MCU_NAME;
     runtime->banner.subtitle = "Type JavaScript and press Enter.";
     runtime->banner.hint = "Run help() for usage.";
     if (config->enable_repl) {

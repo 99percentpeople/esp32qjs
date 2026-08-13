@@ -8,6 +8,7 @@
 #include "esp_chip_info.h"
 #include "esp_flash.h"
 #include "esp_heap_caps.h"
+#include "esp_mac.h"
 #include "esp_psram.h"
 #include "esp_random.h"
 #include "esp_system.h"
@@ -90,6 +91,26 @@ static const char *esp32_chip_model_name(void)
     }
 }
 
+static bool esp32_hardware_id(char output[16])
+{
+    static const char hex_digits[] = "0123456789abcdef";
+    uint8_t mac[6];
+    size_t i;
+
+    if (esp_efuse_mac_get_default(mac) != ESP_OK) {
+        return false;
+    }
+    output[0] = 'h';
+    output[1] = 'w';
+    output[2] = '-';
+    for (i = 0; i < sizeof(mac); ++i) {
+        output[3 + (i * 2)] = hex_digits[mac[i] >> 4];
+        output[4 + (i * 2)] = hex_digits[mac[i] & 0x0f];
+    }
+    output[15] = '\0';
+    return true;
+}
+
 static JSValue sys_make_features_object(JSContext *ctx)
 {
     JSGCRef features_ref;
@@ -163,6 +184,8 @@ static JSValue sys_make_info_object(JSContext *ctx)
     bool format_littlefs_on_mount_fail =
         runtime != NULL && runtime->format_littlefs_on_mount_fail;
     bool repl_enabled = runtime != NULL && runtime->repl_enabled;
+    char hardware_id[16];
+    bool hardware_id_valid = esp32_hardware_id(hardware_id);
 
 #ifdef CONFIG_SPIRAM
     psram_enabled = esp_psram_is_initialized();
@@ -188,10 +211,14 @@ static JSValue sys_make_info_object(JSContext *ctx)
                                          JS_NewString(ctx, ESP32QJS_VERSION)) ||
         !esp32_mquickjs_set_property_ref(ctx, info, "hostApiVersion",
                                          JS_NewUint32(ctx, ESP32QJS_HOST_API_VERSION)) ||
-        !esp32_mquickjs_set_property_ref(ctx, info, "board",
-                                         JS_NewString(ctx, ESP32_MQUICKJS_BOARD_NAME)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "mcu",
+                                         JS_NewString(ctx, ESP32_MQUICKJS_MCU_NAME)) ||
         !esp32_mquickjs_set_property_ref(ctx, info, "chip",
                                          JS_NewString(ctx, esp32_chip_model_name())) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "hardwareId",
+                                         hardware_id_valid
+                                             ? JS_NewString(ctx, hardware_id)
+                                             : JS_NULL) ||
         !esp32_mquickjs_set_property_ref(ctx, info, "features", *features) ||
         !esp32_mquickjs_set_property_ref(ctx, info, "userLedPin",
                                          JS_NewInt32(ctx, ESP32_MQUICKJS_USER_LED_PIN)) ||
@@ -206,6 +233,8 @@ static JSValue sys_make_info_object(JSContext *ctx)
                                          JS_NewUint32(ctx, flash_size)) ||
         !esp32_mquickjs_set_property_ref(ctx, info, "psramEnabled",
                                          JS_NewBool(psram_enabled)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "psramMode",
+                                         JS_NewString(ctx, ESP32_MQUICKJS_PSRAM_MODE)) ||
         !esp32_mquickjs_set_property_ref(ctx, info, "psramSize",
                                          JS_NewUint32(ctx, (uint32_t)total_psram)) ||
         !esp32_mquickjs_set_property_ref(ctx, info, "freePsram",

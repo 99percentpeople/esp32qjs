@@ -743,11 +743,11 @@ fb.close();
 - `gpio.DRIVE_0` .. `gpio.DRIVE_3`
   Drive-strength levels accepted by `gpio.setDriveStrength()` and `gpio.configure()`.
 - `gpio.LED_BUILTIN`
-  Built-in LED pin number for the current board.
+  LED pin from the current wiring profile, or `-1` when unset.
 - `gpio.USER_LED_PIN`
-  User LED pin number for the current board.
+  User LED pin from the current wiring profile, or `-1` when unset.
 - `gpio.USER_LED_ACTIVE_LOW`
-  Whether the board LED is active-low.
+  Whether the configured LED is active-low.
 - `gpio.isValid(pin)`
   Return `true` when `pin` is a usable digital GPIO on the current target.
 - `gpio.isOutputCapable(pin)`
@@ -780,7 +780,8 @@ fb.close();
 - `gpio.reset(pin)`
   Reset the pad back to the ESP-IDF default GPIO state.
 - `gpio.led(value)`
-  Control the board user LED. `true` turns it on.
+  Control the configured user LED. `true` turns it on. Throws when no LED pin
+  is defined by the wiring profile.
 
 Examples:
 
@@ -923,7 +924,7 @@ ledc.timerConfig(0, { deconfigure: true });
 
 ## `adc` Module
 
-This module exposes ESP-IDF ADC oneshot primitives and GPIO/channel mapping helpers. It does not implement board-specific sensor drivers.
+This module exposes ESP-IDF ADC oneshot primitives and GPIO/channel mapping helpers. It does not implement development-board-specific sensor drivers.
 
 - `adc.UNIT_1`, `adc.UNIT_2`
   ADC unit identifiers accepted by `adc.open(...)`, `adc.status(...)`, and the read/configure helpers.
@@ -1029,9 +1030,9 @@ if (ref) {
 ## `sys` Module
 
 - `sys.info()`
-  Return board/chip identity plus memory/runtime fields:
-  `{ runtimeVersion, hostApiVersion, board, chip, features, userLedPin, userLedActiveLow, scriptsDir, flashSize, psramEnabled, psramSize, freePsram, totalInternalHeap, freeInternalHeap, jsHeapSize, jsHeapRegion, littlefsMounted, replEnabled, autoRunIndexJs, formatLittlefsOnMountFail, freeHeap, jsTimeMs }`. `runtimeVersion` follows framework SemVer; `hostApiVersion` is the integer native compatibility level.
-  `features` is `{ fs, nvs, gpio, ledc, adc, dac, i2c, spi, uart, usbSerial, socket, websocket, displayBuffer, wifi, http, httpServer }` and is the stable way to discover which optional host modules were compiled into the firmware for the current board.
+  Return MCU/chip identity plus memory/runtime fields:
+  `{ runtimeVersion, hostApiVersion, mcu, chip, hardwareId, features, userLedPin, userLedActiveLow, scriptsDir, flashSize, psramEnabled, psramMode, psramSize, freePsram, totalInternalHeap, freeInternalHeap, jsHeapSize, jsHeapRegion, littlefsMounted, replEnabled, autoRunIndexJs, formatLittlefsOnMountFail, freeHeap, jsTimeMs }`. `hardwareId` is `hw-` plus the lowercase factory eFuse Base MAC and remains stable across erase/flash/reset operations. `runtimeVersion` follows framework SemVer; `hostApiVersion` is the integer native compatibility level. `psramMode` is `none`, `quad`, or `octal`.
+  `features` is `{ fs, nvs, gpio, ledc, adc, dac, i2c, spi, uart, usbSerial, socket, websocket, displayBuffer, wifi, http, httpServer }` and is the stable way to discover which optional host modules were compiled into the firmware for the current MCU profile.
 - `sys.millis()`
   Return monotonic milliseconds from `esp_timer`.
 - `sys.micros()`
@@ -1081,7 +1082,7 @@ Wi-Fi credentials are kept in RAM. Rebooting the board clears the active station
 - `wifi.disconnect()`
   Disconnect the station and return the updated status object.
 - `wifi.scan()`
-  Run an event-driven AP scan and return an array of `{ ssid, bssid, rssi, channel, authMode, hidden }`.
+  Run an event-driven AP scan, including hidden access points, and return an array of `{ ssid, bssid, rssi, channel, authMode, hidden }`. Hidden beacon records have an empty `ssid` and require the caller to obtain and enter the exact SSID separately.
 
 Example:
 

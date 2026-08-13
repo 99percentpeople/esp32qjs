@@ -1042,6 +1042,11 @@ JSValue js_gpio_led(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     if (argc < 1 || js_value_to_bool(ctx, argv[0], &led_on) != 0) {
         return JS_ThrowTypeError(ctx, "gpio.led(value) expects a boolean-like value");
     }
+    if (ESP32_MQUICKJS_USER_LED_PIN < 0) {
+        return JS_ThrowTypeError(
+            ctx,
+            "gpio.led() requires a user LED pin in the selected wiring template");
+    }
 
     gpio_level = ESP32_MQUICKJS_USER_LED_ACTIVE_LOW ? !led_on : led_on;
     write_result = gpio_write(ctx, (gpio_num_t)ESP32_MQUICKJS_USER_LED_PIN, gpio_level);

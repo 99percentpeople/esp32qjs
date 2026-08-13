@@ -481,7 +481,7 @@ namespace ESP32QJS {
   }
 
   /**
-   * GPIO helpers bound to the active board profile.
+   * GPIO helpers bound to the optional wiring profile.
    *
    * @example
    * ```js
@@ -978,8 +978,10 @@ namespace ESP32QJS {
    */
   interface SysInfo {
     runtimeVersion: string;
+    /** Stable `hw-xxxxxxxxxxxx` identity derived from the factory eFuse Base MAC. */
+    hardwareId: string | null;
     hostApiVersion: number;
-    board: string;
+    mcu: string;
     chip: string;
     features: SysFeatures;
     userLedPin: number;
@@ -987,6 +989,7 @@ namespace ESP32QJS {
     scriptsDir: string;
     flashSize: number;
     psramEnabled: boolean;
+    psramMode: "none" | "quad" | "octal";
     psramSize: number;
     freePsram: number;
     totalInternalHeap: number;
@@ -1667,7 +1670,7 @@ namespace ESP32QJS {
   var framework: ESP32QJS.FrameworkModule;
   /** Bounded strings in the default NVS partition. */
   var nvs: ESP32QJS.NVSModule;
-  /** GPIO helpers for the active board profile. */
+  /** GPIO helpers for the optional wiring profile. */
   var gpio: ESP32QJS.GpioModule;
   /** LEDC PWM timer/channel helpers. */
   var ledc: ESP32QJS.LedcModule;

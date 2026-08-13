@@ -6,7 +6,7 @@ It is intentionally more opinionated than [docs/c-api.md](c-api.md): the goal he
 This plan covers:
 
 - built-in C-side host APIs exported by the firmware runtime
-- board/peripheral bindings such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, and `uart`
+- MCU/peripheral bindings such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, and `uart`
 - low-level native helpers such as `displayBuffer`
 - transport/runtime helpers such as `wifi`, `http`, timers, and `load(...)`
 
@@ -24,7 +24,7 @@ The stable API should satisfy these rules:
 - Module names stay small and literal. Prefer raw ESP-IDF or platform names such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `wifi`, `http`, `socket`, `sys`, `fs`, `nvs`.
 - Built-in host APIs stay low-level. Board-independent drivers, widgets, protocol stacks, debounce logic, animation helpers, and other policy belong in JavaScript.
 - Additive change is preferred. Once a module shape is frozen, new fields and methods may be added, but existing names and semantics should not be renamed or weakened.
-- Host modules should be board-selectable features. Each optional module should be enabled or disabled by a `CONFIG_...` feature macro and chosen per board profile under `configs/boards/<board>/sdkconfig.defaults`.
+- Host modules should be MCU-selectable features. Each optional module should be enabled or disabled by a `CONFIG_...` feature macro and chosen from SoC capability under `configs/mcus/<mcu>/sdkconfig.defaults`.
 - Compiled feature sets should be discoverable from JS in one stable place such as `sys.info().features`, instead of forcing user scripts to probe globals with `typeof`.
 - Mutating peripheral calls should return state objects when that improves observability, but status objects must reflect real or intentionally tracked state, not guessed state.
 - ISR and background-task events must always be bridged back onto the single JS runtime task.
@@ -50,7 +50,7 @@ The built-in host API should be split into:
 - `Core runtime surface`
   Small helpers and types that are effectively part of the runtime itself.
 - `Optional host features`
-  Peripheral or connectivity modules that may be compiled in or out per board.
+  Peripheral or connectivity modules that may be compiled in or out per MCU.
 
 Recommended compile-time model:
 
@@ -60,7 +60,7 @@ Recommended compile-time model:
   - compile out implementation files or guard their registration paths
   - conditionally include component dependencies
 - Use those generated `CONFIG_...` symbols directly in source code; do not add a second alias layer such as `ESP32_MQUICKJS_FEATURE_*`.
-- Let each board profile set defaults in `configs/boards/<board>/sdkconfig.defaults`.
+- Let each MCU profile set intrinsic feature defaults in `configs/mcus/<mcu>/sdkconfig.defaults`; generated hardware overlays own Flash, PSRAM, and optional wiring.
 
 Recommended feature symbols:
 
@@ -96,9 +96,9 @@ Recommended dependency rules:
 - `FEATURE_WIFI` depends on `SOC_WIFI_SUPPORTED`
 - `FEATURE_HTTP` depends on `FEATURE_WIFI` in the current firmware, unless another network backend is introduced later
 - `FEATURE_HTTP_SERVER` depends on `FEATURE_WIFI` in the current firmware
-- `FEATURE_DISPLAY_BUFFER` has no direct peripheral dependency, but full-frame RGB buffers should be enabled per board with memory budget in mind
+- `FEATURE_DISPLAY_BUFFER` has no direct peripheral dependency, but full-frame RGB buffers should be enabled only by a measured PSRAM profile with a sufficient memory budget
 - `staticFileHandler` is a composite capability that depends on `FEATURE_HTTP_SERVER && FEATURE_FS`
-- `FEATURE_FS` stays enabled on most boards because `load(...)`, LittleFS startup, and static file serving depend on it
+- `FEATURE_FS` stays enabled on supported MCUs because `load(...)`, LittleFS startup, and static file serving depend on it
 
 Recommended runtime discovery:
 
@@ -130,57 +130,26 @@ print(JSON.stringify(sys.info().features));
 Behavior rule:
 
 - If a feature is disabled at compile time, that module is not registered into the JS global object.
-- Cross-board scripts should prefer `sys.info().features.<name>` over probing module globals directly.
+- Cross-MCU scripts should prefer `sys.info().features.<name>` over probing module globals directly.
 
-## Board Profiles as Feature Presets
+## MCU and Hardware Profiles
 
-Board directories under [configs/boards](../configs/boards) should become the canonical place where runtime feature sets are selected.
+MCU directories under [configs/mcus](../configs/mcus) are the canonical intrinsic
+feature presets. Current presets are `esp32c3` and `esp32s3`; they do not identify a
+development board and must not provide guessed LED or bus pins.
 
-Each board's `sdkconfig.defaults` should describe:
+Each concrete build combines:
 
-- chip-independent board identity
-- pin defaults
-- memory defaults
-- enabled host features for that board
+- detected MCU and Flash capacity;
+- detected PSRAM mode/capacity, or the safe no-PSRAM profile when it is unknown;
+- an optional server-stored named wiring template;
+- the application behavior and partition layout.
 
-Recommended examples for current boards:
-
-`esp32c3_supermini`
-
-- `FEATURE_FS=y`
-- `FEATURE_GPIO=y`
-- `FEATURE_LEDC=y`
-- `FEATURE_ADC=y`
-- `FEATURE_DAC=n`
-- `FEATURE_I2C=y`
-- `FEATURE_SPI=y`
-- `FEATURE_DISPLAY_BUFFER=y`
-- `FEATURE_WIFI=y`
-- `FEATURE_HTTP=y`
-- `FEATURE_HTTP_SERVER=y`
-
-`xiao_esp32s3`
-
-- `FEATURE_FS=y`
-- `FEATURE_GPIO=y`
-- `FEATURE_LEDC=y`
-- `FEATURE_ADC=y`
-- `FEATURE_DAC=n`
-- `FEATURE_I2C=y`
-- `FEATURE_SPI=y`
-- `FEATURE_DISPLAY_BUFFER=y`
-- `FEATURE_WIFI=y`
-- `FEATURE_HTTP=y`
-- `FEATURE_HTTP_SERVER=y`
-
-Future `esp32` or `esp32s2` boards can enable `FEATURE_DAC=y` when DAC pins are actually usable on the board.
-
-Board-level enablement should reflect both:
-
-- chip capability
-- practical board usefulness
-
-For example, a chip may support DAC while a specific board routes those pins poorly or reserves them for another function; in that case the board profile should still be free to disable the feature.
+Peripheral modules remain compiled when the MCU supports them. If a wiring template
+does not define a default pin, convenience calls must reject the missing default while
+explicit-pin APIs remain available. Future MCU presets may enable `FEATURE_DAC=y` only
+when the SoC supports it; board routing remains user wiring data, not a compile-time
+MCU assumption.
 
 ## Module Inventory
 

@@ -34,5 +34,8 @@ API-shape and freeze work is tracked separately in
   hardware.
 - Add fault-injection coverage for allocation failure, queue saturation,
   transport loss, storage corruption, and interrupted writes.
+- Complete repeated HTTP/HTTPS worker lifecycle and PSRAM memory-regression
+  qualification, including reliable USB Serial/JTAG re-enumeration after host
+  reset operations.
 - Complete repeated hardware lifecycle and memory-regression qualification for
   SSD1306, ST7789, shared buses, and supported ESP32-S3/ESP32-C3 boards.

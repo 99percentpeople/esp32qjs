@@ -10,6 +10,10 @@
 
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
+#if defined(CONFIG_ESP32_MQUICKJS_HTTP_TASK_STACK_IN_PSRAM) && \
+    CONFIG_ESP32_MQUICKJS_HTTP_TASK_STACK_IN_PSRAM
+#include "freertos/idf_additions.h"
+#endif
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
@@ -26,6 +30,7 @@ struct esp32_mquickjs_future_driver_state {
     volatile bool completed;
     bool started;
     bool cancel_requested;
+    bool worker_uses_caps;
 };
 
 typedef struct {
@@ -86,14 +91,30 @@ static void http_future_release_worker(void)
     http_future_unlock();
 }
 
+static void http_future_delete_worker(bool worker_uses_caps)
+{
+#if defined(CONFIG_ESP32_MQUICKJS_HTTP_TASK_STACK_IN_PSRAM) && \
+    CONFIG_ESP32_MQUICKJS_HTTP_TASK_STACK_IN_PSRAM
+    if (worker_uses_caps) {
+        vTaskDeleteWithCaps(NULL);
+        return;
+    }
+#else
+    (void)worker_uses_caps;
+#endif
+    vTaskDelete(NULL);
+}
+
 static void http_future_worker(void *opaque)
 {
     esp32_mquickjs_future_driver_state_t *state = opaque;
+    bool worker_uses_caps;
 
     if (state == NULL) {
         vTaskDelete(NULL);
         return;
     }
+    worker_uses_caps = state->worker_uses_caps;
     state->response = esp32_mquickjs_http_perform_request(&state->request,
                                                           state->operation,
                                                           &state->err,
@@ -107,7 +128,32 @@ static void http_future_worker(void *opaque)
     }
     state->completed = true;
     (void)esp32_mquickjs_future_wake(state->runtime, state->token);
-    vTaskDelete(NULL);
+    http_future_delete_worker(worker_uses_caps);
+}
+
+static BaseType_t http_future_create_worker(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+#if defined(CONFIG_ESP32_MQUICKJS_HTTP_TASK_STACK_IN_PSRAM) && \
+    CONFIG_ESP32_MQUICKJS_HTTP_TASK_STACK_IN_PSRAM
+    state->worker_uses_caps = true;
+    if (xTaskCreateWithCaps(http_future_worker,
+                            "http_future",
+                            ESP32_MQUICKJS_HTTP_TASK_STACK_SIZE,
+                            state,
+                            tskIDLE_PRIORITY + 4,
+                            NULL,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS) {
+        return pdPASS;
+    }
+#endif
+    state->worker_uses_caps = false;
+    return xTaskCreate(http_future_worker,
+                       "http_future",
+                       ESP32_MQUICKJS_HTTP_TASK_STACK_SIZE,
+                       state,
+                       tskIDLE_PRIORITY + 4,
+                       NULL);
 }
 
 static bool http_future_prepare(JSContext *ctx,
@@ -159,12 +205,7 @@ static bool http_future_start(JSContext *ctx,
     state->runtime = runtime;
     state->token = token;
     state->started = true;
-    if (xTaskCreate(http_future_worker,
-                    "http_future",
-                    ESP32_MQUICKJS_HTTP_TASK_STACK_SIZE,
-                    state,
-                    tskIDLE_PRIORITY + 4,
-                    NULL) != pdPASS) {
+    if (http_future_create_worker(state) != pdPASS) {
         state->started = false;
         http_future_release_worker();
         JS_ThrowInternalError(ctx, "failed to start fetch worker task");

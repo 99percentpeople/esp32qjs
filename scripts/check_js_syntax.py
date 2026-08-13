@@ -16,7 +16,7 @@ from typing import Iterable
 ROOT_DIR = Path(__file__).resolve().parents[1]
 VENDOR_DIR = ROOT_DIR / "components" / "esp32_mquickjs" / "vendor" / "mquickjs"
 CHECKER_SOURCE = ROOT_DIR / "scripts" / "mquickjs_syntax_check.c"
-DEFAULT_BUILD_DIR = ROOT_DIR / "build-js-syntax"
+DEFAULT_BUILD_DIR = ROOT_DIR / "build" / "js-syntax"
 DEFAULT_SOURCE_ROOTS = (
     ROOT_DIR / "apps",
     ROOT_DIR / "shared" / "flash_data",

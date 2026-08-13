@@ -72,8 +72,9 @@ test("sys/runtime", function () {
   test.ok(info && typeof info === "object", "sys.info() should return an object");
   test.ok(features && typeof features === "object", "sys.info().features should return an object");
   test.equal(info.runtimeVersion, "0.1.0", "runtime version should match the framework release");
+  test.ok(/^hw-[0-9a-f]{12}$/.test(info.hardwareId), "hardware ID should derive from the factory Base MAC");
   test.equal(info.hostApiVersion, 1, "Host API version should match the native compatibility level");
-  test.ok(typeof info.board === "string" && info.board.length > 0, "board name should be present");
+  test.ok(typeof info.mcu === "string" && info.mcu.length > 0, "MCU name should be present");
   test.ok(typeof info.chip === "string" && info.chip.length > 0, "chip name should be present");
   test.ok(typeof info.freeHeap === "number" && info.freeHeap >= 0, "info.freeHeap should be numeric");
   test.ok(typeof heap === "number" && heap >= 0, "sys.freeHeap() should be numeric");
@@ -124,7 +125,7 @@ test("sys/runtime", function () {
   }
 
   return {
-    board: info.board,
+    mcu: info.mcu,
     chip: info.chip,
     freeHeap: heap,
     features: features,

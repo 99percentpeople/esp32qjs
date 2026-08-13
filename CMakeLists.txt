@@ -9,21 +9,21 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/components/esp32qjs_interactive/Kconfig.projbuild")
 
 file(GLOB_RECURSE _esp32qjs_profile_config_files CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/configs/boards/*/.env"
-    "${CMAKE_SOURCE_DIR}/configs/boards/*/sdkconfig.defaults"
+    "${CMAKE_SOURCE_DIR}/configs/mcus/*/.env"
+    "${CMAKE_SOURCE_DIR}/configs/mcus/*/sdkconfig.defaults"
     "${CMAKE_SOURCE_DIR}/apps/*/app.env"
     "${CMAKE_SOURCE_DIR}/apps/*/sdkconfig.defaults"
     "${CMAKE_SOURCE_DIR}/apps/*/partitions/*.csv")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_esp32qjs_profile_config_files})
 
-set(ESP32QJS_BOARD "xiao_esp32s3" CACHE STRING "Default board profile under configs/boards/")
+set(ESP32QJS_MCU "esp32s3" CACHE STRING "MCU capability profile under configs/mcus/")
 set(ESP32QJS_APP "minimal" CACHE STRING "Selected application identifier")
 set(ESP32QJS_APP_PROFILE_DIR "${CMAKE_SOURCE_DIR}/apps/${ESP32QJS_APP}" CACHE PATH
     "Selected bundled or external application profile directory")
 get_filename_component(ESP32QJS_APP_PROFILE_DIR "${ESP32QJS_APP_PROFILE_DIR}"
     ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
-set(ESP32QJS_BOARD_SDKCONFIG_DEFAULTS "" CACHE FILEPATH
-    "Optional board sdkconfig defaults override")
+set(ESP32QJS_MCU_SDKCONFIG_DEFAULTS "" CACHE FILEPATH
+    "Optional MCU sdkconfig defaults override")
 set(ESP32QJS_APP_SDKCONFIG_DEFAULTS "" CACHE FILEPATH
     "Optional application sdkconfig defaults override")
 set(ESP32QJS_PARTITION_TABLE "" CACHE FILEPATH
@@ -57,10 +57,10 @@ foreach(_esp32qjs_flash_data_dir
 endforeach()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_esp32qjs_flash_data_files})
 
-set(_esp32qjs_board_defaults "${ESP32QJS_BOARD_SDKCONFIG_DEFAULTS}")
-if(_esp32qjs_board_defaults STREQUAL "")
-    set(_esp32qjs_board_defaults
-        "${CMAKE_SOURCE_DIR}/configs/boards/${ESP32QJS_BOARD}/sdkconfig.defaults")
+set(_esp32qjs_mcu_defaults "${ESP32QJS_MCU_SDKCONFIG_DEFAULTS}")
+if(_esp32qjs_mcu_defaults STREQUAL "")
+    set(_esp32qjs_mcu_defaults
+        "${CMAKE_SOURCE_DIR}/configs/mcus/${ESP32QJS_MCU}/sdkconfig.defaults")
 endif()
 set(_esp32qjs_app_defaults "${ESP32QJS_APP_SDKCONFIG_DEFAULTS}")
 if(_esp32qjs_app_defaults STREQUAL "")
@@ -68,7 +68,7 @@ if(_esp32qjs_app_defaults STREQUAL "")
         "${ESP32QJS_APP_PROFILE_DIR}/sdkconfig.defaults")
 endif()
 if(NOT DEFINED SDKCONFIG_DEFAULTS OR SDKCONFIG_DEFAULTS STREQUAL "")
-    foreach(_esp32qjs_defaults "${_esp32qjs_board_defaults}" "${_esp32qjs_app_defaults}")
+    foreach(_esp32qjs_defaults "${_esp32qjs_mcu_defaults}" "${_esp32qjs_app_defaults}")
         if(EXISTS "${_esp32qjs_defaults}")
             list(APPEND SDKCONFIG_DEFAULTS "${_esp32qjs_defaults}")
         endif()
@@ -77,8 +77,7 @@ endif()
 
 set(_esp32qjs_partition_table "${ESP32QJS_PARTITION_TABLE}")
 if(_esp32qjs_partition_table STREQUAL "")
-    set(_esp32qjs_partition_table
-        "${ESP32QJS_APP_PROFILE_DIR}/partitions/${ESP32QJS_BOARD}.csv")
+    message(FATAL_ERROR "ESP32QJS_PARTITION_TABLE must be generated for the selected flash size")
 endif()
 get_filename_component(_esp32qjs_partition_table "${_esp32qjs_partition_table}"
     ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
@@ -102,14 +101,5 @@ endif()
 list(APPEND SDKCONFIG_DEFAULTS "${_esp32qjs_partition_defaults}")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+idf_build_set_property(DEPENDENCIES_LOCK "dependencies.lock.${IDF_TARGET}")
 project(esp32qjs)
-
-if(EXISTS "${CMAKE_SOURCE_DIR}/scripts/fix_compile_commands.py")
-    add_custom_target(
-        fix_clangd ALL
-        COMMAND ${CMAKE_COMMAND} -E echo "Running fix_compile_commands.py..."
-        COMMAND ${CMAKE_COMMAND} -E env python3 ${CMAKE_SOURCE_DIR}/scripts/fix_compile_commands.py
-        COMMENT "Cleaning compile_commands.json for clangd"
-        VERBATIM
-    )
-endif()

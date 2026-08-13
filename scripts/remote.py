@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Unified helper for local and remote ESP32QJS application development.
 
-The script combines a board profile from `configs/boards/*/.env` with a
+The script combines a mcu profile from `configs/mcus/*/.env` with a
 bundled or directly referenced application profile. That keeps hardware
 configuration independent from application behavior, partitions, and
 LittleFS resources.
@@ -27,9 +27,10 @@ from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+BUILD_ROOT = ROOT_DIR / "build"
 ENV_PATH = ROOT_DIR / ".env"
 CONFIG_DIR = ROOT_DIR / "configs"
-BOARD_DIR = CONFIG_DIR / "boards"
+MCU_DIR = CONFIG_DIR / "mcus"
 APP_DIR = ROOT_DIR / "apps"
 SHARED_FLASH_DATA_DIR = ROOT_DIR / "shared" / "flash_data"
 
@@ -47,7 +48,7 @@ custom_reset_sequence = R0|D0|W0.1|D1|R0|W0.1|R1|D0|R1|W0.1|D0|R0
 custom_hard_reset_sequence = R1|W0.2|R0
 """
 
-HOST_TEST_BUILD_DIR = ROOT_DIR / "build-host-tests"
+HOST_TEST_BUILD_DIR = BUILD_ROOT / "host-tests"
 JS_TEST_DIR = ROOT_DIR / "tests" / "js"
 JS_TEST_FLASH_DATA_DIR = JS_TEST_DIR / "flash_data"
 JS_TEST_SDKCONFIG_DEFAULTS = JS_TEST_DIR / "sdkconfig.defaults"
@@ -63,6 +64,10 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])")
 CTEST_SUMMARY_RE = re.compile(r"(?m)^(\d+)% tests passed, (\d+) tests failed out of (\d+)$")
 APP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 TEST_SCOPE_ORDER = ("c", "js")
+SUPPORTED_MCU_TARGETS = frozenset(("esp32c3", "esp32s3"))
+SUPPORTED_FLASH_SIZE_MB = frozenset((4, 8, 16, 32))
+SUPPORTED_PSRAM_MODES = frozenset(("none", "quad", "octal"))
+GPIO_MAX_BY_MCU = {"esp32c3": 21, "esp32s3": 48}
 
 
 @dataclass(frozen=True)
@@ -251,12 +256,13 @@ class JsCaseResult:
 
 
 @dataclass(frozen=True)
-class BoardProfile:
+class MCUProfile:
     reference: str
     name: str
     file: Path
     label: str
     idf_target: str
+    default_flash_size_mb: int
     build_dir: Path
     sdkconfig_defaults: Path | None
     idf_path: str
@@ -280,14 +286,15 @@ class AppProfile:
     label: str
     flash_data_dir: Path
     sdkconfig_defaults: Path | None
-    partition_table: Path
+    partition_layout: str
+    storage_size: int | None
 
 
 @dataclass(frozen=True)
 class ProjectConfig:
-    board: str
-    board_file: Path
-    board_label: str
+    mcu: str
+    mcu_file: Path
+    mcu_label: str
     app: str
     app_file: Path
     app_profile_dir: Path
@@ -297,10 +304,15 @@ class ProjectConfig:
     flash_data_override: Path | None
     build_dir: Path
     generated_sdkconfig: Path
-    board_sdkconfig_defaults: Path | None
+    mcu_sdkconfig_defaults: Path | None
     app_sdkconfig_defaults: Path | None
     sdkconfig_defaults: tuple[Path, ...]
     partition_table: Path
+    hardware_sdkconfig_defaults: Path
+    flash_size_mb: int
+    psram_mode: str
+    psram_size_bytes: int
+    wiring_config: Path | None
     idf_target: str
     idf_path: str
     target: str
@@ -343,22 +355,22 @@ def load_dotenv(path: Path) -> dict[str, str]:
 
 def merged_value(
     repo_env: dict[str, str],
-    board_env: dict[str, str],
+    mcu_env: dict[str, str],
     key: str,
     default: str,
 ) -> str:
-    """Resolve a config value from process env, then `/.env`, then board profile."""
-    return os.environ.get(key, repo_env.get(key, board_env.get(key, default)))
+    """Resolve a config value from process env, then `/.env`, then mcu profile."""
+    return os.environ.get(key, repo_env.get(key, mcu_env.get(key, default)))
 
 
 def merged_int(
     repo_env: dict[str, str],
-    board_env: dict[str, str],
+    mcu_env: dict[str, str],
     key: str,
     default: int,
 ) -> int:
     """Resolve and validate an integer config value."""
-    raw_value = os.environ.get(key, repo_env.get(key, board_env.get(key)))
+    raw_value = os.environ.get(key, repo_env.get(key, mcu_env.get(key)))
     if raw_value is None:
         return default
 
@@ -370,7 +382,7 @@ def merged_int(
 
 def merged_optional_value(
     repo_env: dict[str, str],
-    board_env: dict[str, str],
+    mcu_env: dict[str, str],
     key: str,
 ) -> str | None:
     """Resolve an optional config value, treating blank values as unset."""
@@ -378,8 +390,8 @@ def merged_optional_value(
         value = os.environ[key]
     elif key in repo_env:
         value = repo_env[key]
-    elif key in board_env:
-        value = board_env[key]
+    elif key in mcu_env:
+        value = mcu_env[key]
     else:
         return None
 
@@ -389,11 +401,11 @@ def merged_optional_value(
 
 def merged_optional_int(
     repo_env: dict[str, str],
-    board_env: dict[str, str],
+    mcu_env: dict[str, str],
     key: str,
 ) -> int | None:
     """Resolve an optional integer config value."""
-    raw_value = merged_optional_value(repo_env, board_env, key)
+    raw_value = merged_optional_value(repo_env, mcu_env, key)
     if raw_value is None:
         return None
 
@@ -403,12 +415,14 @@ def merged_optional_int(
         raise SystemExit(f"Invalid integer for {key}: {raw_value!r}") from exc
 
 
-def resolve_repo_path(raw_path: str) -> Path:
-    """Resolve a project-relative path against the repository root."""
+def resolve_build_path(raw_path: str) -> Path:
+    """Resolve relative build outputs under the repository build directory."""
     path = Path(raw_path).expanduser()
     if path.is_absolute():
-        return path
-    return ROOT_DIR / path
+        return path.resolve()
+    if path.parts[:1] == ("build",):
+        return (ROOT_DIR / path).resolve()
+    return (BUILD_ROOT / path).resolve()
 
 
 def format_path(path: Path | None) -> str:
@@ -421,61 +435,61 @@ def format_path(path: Path | None) -> str:
         return str(path)
 
 
-def board_reference_from_env(repo_env: dict[str, str], override: str | None) -> str:
-    """Choose the board profile reference from CLI or local environment."""
+def mcu_reference_from_env(repo_env: dict[str, str], override: str | None) -> str:
+    """Choose the mcu profile reference from CLI or local environment."""
     if override:
         return override
-    if os.environ.get("BOARD_FILE"):
-        return os.environ["BOARD_FILE"]
-    if repo_env.get("BOARD_FILE"):
-        return repo_env["BOARD_FILE"]
-    if os.environ.get("BOARD"):
-        return os.environ["BOARD"]
-    if repo_env.get("BOARD"):
-        return repo_env["BOARD"]
-    return "xiao_esp32s3"
+    if os.environ.get("MCU_FILE"):
+        return os.environ["MCU_FILE"]
+    if repo_env.get("MCU_FILE"):
+        return repo_env["MCU_FILE"]
+    if os.environ.get("MCU"):
+        return os.environ["MCU"]
+    if repo_env.get("MCU"):
+        return repo_env["MCU"]
+    return "esp32s3"
 
 
-def board_env_file(board_dir: Path) -> Path:
-    """Return the profile `.env` file for a board directory."""
-    return board_dir / ".env"
+def mcu_env_file(mcu_dir: Path) -> Path:
+    """Return the profile `.env` file for a mcu directory."""
+    return mcu_dir / ".env"
 
 
-def board_sdkconfig_defaults_file(board_dir: Path) -> Path:
-    """Return the default sdkconfig defaults file for a board directory."""
-    return board_dir / "sdkconfig.defaults"
+def mcu_sdkconfig_defaults_file(mcu_dir: Path) -> Path:
+    """Return the default sdkconfig defaults file for a mcu directory."""
+    return mcu_dir / "sdkconfig.defaults"
 
 
-def resolve_profile_path(raw_path: str, board_dir: Path) -> Path:
-    """Resolve a board-relative or repo-relative path."""
+def resolve_profile_path(raw_path: str, mcu_dir: Path) -> Path:
+    """Resolve a mcu-relative or repo-relative path."""
     path = Path(raw_path).expanduser()
     if path.is_absolute():
         return path
     if raw_path.startswith("./") or raw_path.startswith("../") or raw_path.startswith("configs/"):
         return ROOT_DIR / path
-    return board_dir / path
+    return mcu_dir / path
 
 
-def resolve_board_file(reference: str) -> Path:
-    """Resolve a board profile reference to an on-disk `.env` file."""
+def resolve_mcu_file(reference: str) -> Path:
+    """Resolve a mcu profile reference to an on-disk `.env` file."""
     ref_path = Path(reference).expanduser()
     if ref_path.is_absolute() or "/" in reference or "\\" in reference or reference.endswith(".env"):
         candidate = ref_path if ref_path.is_absolute() else ROOT_DIR / ref_path
     else:
-        candidate = BOARD_DIR / reference
+        candidate = MCU_DIR / reference
 
     if candidate.is_dir():
-        board_file = board_env_file(candidate)
+        mcu_file = mcu_env_file(candidate)
     else:
-        board_file = candidate
+        mcu_file = candidate
 
-    if not board_file.exists():
+    if not mcu_file.exists():
         raise SystemExit(
-            f"Board profile {reference!r} not found. Add {board_file} or run "
-            "`python scripts/remote.py boards` to list available profiles."
+            f"MCU profile {reference!r} not found. Add {mcu_file} or run "
+            "`python scripts/remote.py mcus` to list available profiles."
         )
 
-    return board_file.resolve()
+    return mcu_file.resolve()
 
 
 def app_reference_from_env(repo_env: dict[str, str], override: str | None) -> str:
@@ -513,16 +527,16 @@ def resolve_app_file(reference: str) -> Path:
 def resolve_app_profile_path(
     raw_path: str,
     app_dir: Path,
-    board_name: str,
+    mcu_name: str,
     idf_target: str,
 ) -> Path:
-    """Resolve an app path after expanding the selected board placeholders."""
+    """Resolve an app path after expanding the selected mcu placeholders."""
     try:
-        expanded = raw_path.format(board=board_name, idf_target=idf_target)
+        expanded = raw_path.format(mcu=mcu_name, idf_target=idf_target)
     except KeyError as exc:
         raise SystemExit(
             f"Unsupported application path placeholder {exc.args[0]!r} in {raw_path!r}; "
-            "only {board} and {idf_target} are available."
+            "only {mcu} and {idf_target} are available."
         ) from exc
 
     path = Path(expanded).expanduser()
@@ -533,12 +547,23 @@ def resolve_app_profile_path(
     return (app_dir / path).resolve()
 
 
+def parse_size(value: str, label: str) -> int:
+    """Parse a positive decimal or 0x-prefixed byte count."""
+    try:
+        result = int(value, 0)
+    except ValueError as exc:
+        raise SystemExit(f"Invalid {label}: {value!r}") from exc
+    if result <= 0:
+        raise SystemExit(f"{label} must be positive")
+    return result
+
+
 def load_app_profile(
     app_override: str | None,
-    board_name: str,
+    mcu_name: str,
     idf_target: str,
 ) -> AppProfile:
-    """Load an application profile for one board and validate all app inputs."""
+    """Load an application profile for one mcu and validate all app inputs."""
     repo_env = load_dotenv(ENV_PATH)
     reference = app_reference_from_env(repo_env, app_override)
     app_file = resolve_app_file(reference)
@@ -552,7 +577,7 @@ def load_app_profile(
 
     flash_data_raw = app_env.get("FLASH_DATA_DIR", "flash_data")
     flash_data_dir = resolve_app_profile_path(
-        flash_data_raw, app_dir, board_name, idf_target
+        flash_data_raw, app_dir, mcu_name, idf_target
     )
     if not flash_data_dir.is_dir():
         raise SystemExit(f"Application flash data directory does not exist: {flash_data_dir}")
@@ -566,30 +591,23 @@ def load_app_profile(
     if not app_defaults_raw and (app_dir / "sdkconfig.defaults").is_file():
         app_defaults_raw = "sdkconfig.defaults"
     app_defaults = (
-        resolve_app_profile_path(app_defaults_raw, app_dir, board_name, idf_target)
+        resolve_app_profile_path(app_defaults_raw, app_dir, mcu_name, idf_target)
         if app_defaults_raw
         else None
     )
     if app_defaults is not None and not app_defaults.is_file():
         raise SystemExit(f"Application sdkconfig defaults file does not exist: {app_defaults}")
 
-    partition_raw = os.environ.get(
-        "PARTITION_TABLE",
-        repo_env.get(
-            "PARTITION_TABLE",
-            app_env.get("PARTITION_TABLE", "partitions/{board}.csv"),
-        ),
-    ).strip()
-    if not partition_raw:
-        raise SystemExit(f"{app_file} must define PARTITION_TABLE.")
-    partition_table = resolve_app_profile_path(
-        partition_raw, app_dir, board_name, idf_target
-    )
-    if not partition_table.is_file():
+    partition_layout = app_env.get("PARTITION_LAYOUT", "storage").strip()
+    if partition_layout not in {"storage", "workspace"}:
         raise SystemExit(
-            f"Application partition table does not exist for board {board_name}: "
-            f"{partition_table}"
+            f"{app_file} PARTITION_LAYOUT must be storage or workspace; "
+            f"got {partition_layout!r}."
         )
+    storage_size_raw = app_env.get("STORAGE_SIZE", "").strip()
+    storage_size = parse_size(storage_size_raw, "STORAGE_SIZE") if storage_size_raw else None
+    if partition_layout == "workspace" and storage_size is None:
+        raise SystemExit(f"{app_file} must define STORAGE_SIZE for a workspace layout.")
 
     return AppProfile(
         reference=reference,
@@ -599,7 +617,8 @@ def load_app_profile(
         label=app_env.get("APP_LABEL", app_name),
         flash_data_dir=flash_data_dir,
         sdkconfig_defaults=app_defaults,
-        partition_table=partition_table,
+        partition_layout=partition_layout,
+        storage_size=storage_size,
     )
 
 
@@ -610,90 +629,98 @@ def available_app_profiles() -> list[Path]:
     return sorted(path for path in APP_DIR.glob("*/app.env") if path.is_file())
 
 
-def legacy_target(repo_env: dict[str, str], board_env: dict[str, str]) -> tuple[str, int]:
+def legacy_target(repo_env: dict[str, str], mcu_env: dict[str, str]) -> tuple[str, int]:
     """Resolve compatibility target settings from older env keys."""
-    explicit_target = merged_optional_value(repo_env, board_env, "TARGET")
+    explicit_target = merged_optional_value(repo_env, mcu_env, "TARGET")
     if explicit_target:
-        return explicit_target, merged_optional_int(repo_env, board_env, "LISTEN_PORT") or 2217
+        return explicit_target, merged_optional_int(repo_env, mcu_env, "LISTEN_PORT") or 2217
 
-    legacy_espport = merged_optional_value(repo_env, board_env, "ESPPORT")
+    legacy_espport = merged_optional_value(repo_env, mcu_env, "ESPPORT")
     if legacy_espport:
-        return legacy_espport, merged_optional_int(repo_env, board_env, "LISTEN_PORT") or 2217
+        return legacy_espport, merged_optional_int(repo_env, mcu_env, "LISTEN_PORT") or 2217
 
-    remote_url_override = merged_optional_value(repo_env, board_env, "REMOTE_URL")
+    remote_url_override = merged_optional_value(repo_env, mcu_env, "REMOTE_URL")
     if remote_url_override:
-        return remote_url_override, merged_optional_int(repo_env, board_env, "LISTEN_PORT") or 2217
+        return remote_url_override, merged_optional_int(repo_env, mcu_env, "LISTEN_PORT") or 2217
 
-    remote_host = merged_optional_value(repo_env, board_env, "REMOTE_HOST")
-    remote_port = merged_optional_int(repo_env, board_env, "REMOTE_PORT")
+    remote_host = merged_optional_value(repo_env, mcu_env, "REMOTE_HOST")
+    remote_port = merged_optional_int(repo_env, mcu_env, "REMOTE_PORT")
     if remote_host is not None or remote_port is not None:
-        return default_remote_url(remote_host or "127.0.0.1", remote_port or 2217), merged_optional_int(repo_env, board_env, "LISTEN_PORT") or (remote_port or 2217)
+        return default_remote_url(remote_host or "127.0.0.1", remote_port or 2217), merged_optional_int(repo_env, mcu_env, "LISTEN_PORT") or (remote_port or 2217)
 
-    com_port = merged_optional_value(repo_env, board_env, "COM_PORT")
+    com_port = merged_optional_value(repo_env, mcu_env, "COM_PORT")
     if com_port:
-        return com_port, merged_optional_int(repo_env, board_env, "LISTEN_PORT") or 2217
+        return com_port, merged_optional_int(repo_env, mcu_env, "LISTEN_PORT") or 2217
 
-    return "", merged_optional_int(repo_env, board_env, "LISTEN_PORT") or 2217
+    return "", merged_optional_int(repo_env, mcu_env, "LISTEN_PORT") or 2217
 
 
-def load_profile(board_override: str | None = None) -> BoardProfile:
-    """Build the effective board profile from `/.env` and `configs/boards/*/.env`."""
+def load_profile(mcu_override: str | None = None) -> MCUProfile:
+    """Build the effective mcu profile from `/.env` and `configs/mcus/*/.env`."""
     repo_env = load_dotenv(ENV_PATH)
-    board_reference = board_reference_from_env(repo_env, board_override)
-    board_file = resolve_board_file(board_reference)
-    board_dir = board_file.parent
-    board_env = load_dotenv(board_file)
-    target, listen_port = legacy_target(repo_env, board_env)
+    mcu_reference = mcu_reference_from_env(repo_env, mcu_override)
+    mcu_file = resolve_mcu_file(mcu_reference)
+    mcu_dir = mcu_file.parent
+    mcu_env = load_dotenv(mcu_file)
+    target, listen_port = legacy_target(repo_env, mcu_env)
 
     idf_path = merged_value(
         repo_env,
-        board_env,
+        mcu_env,
         "IDF_PATH",
-        merged_value(repo_env, board_env, "IDF_PATH", str(Path.home() / "esp" / "esp-idf")),
+        merged_value(repo_env, mcu_env, "IDF_PATH", str(Path.home() / "esp" / "esp-idf")),
     )
-    sdkconfig_defaults_raw = merged_value(repo_env, board_env, "SDKCONFIG_DEFAULTS", "")
+    sdkconfig_defaults_raw = merged_value(repo_env, mcu_env, "SDKCONFIG_DEFAULTS", "")
     if not sdkconfig_defaults_raw:
-        sdkconfig_defaults_raw = merged_value(repo_env, board_env, "SDKCONFIG", "")
+        sdkconfig_defaults_raw = merged_value(repo_env, mcu_env, "SDKCONFIG", "")
 
-    idf_target = merged_value(repo_env, board_env, "IDF_TARGET", "")
+    idf_target = merged_value(repo_env, mcu_env, "IDF_TARGET", "")
     if not idf_target:
-        raise SystemExit(f"{board_file} must define IDF_TARGET.")
+        raise SystemExit(f"{mcu_file} must define IDF_TARGET.")
+    if idf_target not in SUPPORTED_MCU_TARGETS:
+        raise SystemExit(f"Unsupported MCU target {idf_target!r}; supported: esp32c3, esp32s3.")
+    default_flash_size_mb = merged_int(repo_env, mcu_env, "DEFAULT_FLASH_SIZE_MB", 4)
+    if default_flash_size_mb not in SUPPORTED_FLASH_SIZE_MB:
+        raise SystemExit("DEFAULT_FLASH_SIZE_MB must be one of 4, 8, 16, 32.")
 
-    return BoardProfile(
-        reference=board_reference,
-        name=board_dir.name,
-        file=board_file,
-        label=merged_value(repo_env, board_env, "BOARD_LABEL", board_dir.name),
+    return MCUProfile(
+        reference=mcu_reference,
+        name=mcu_dir.name,
+        file=mcu_file,
+        label=merged_value(repo_env, mcu_env, "MCU_LABEL", mcu_dir.name),
         idf_target=idf_target,
-        build_dir=resolve_repo_path(merged_value(repo_env, board_env, "BUILD_DIR", "build")),
+        default_flash_size_mb=default_flash_size_mb,
+        build_dir=resolve_build_path(
+            merged_value(repo_env, mcu_env, "BUILD_DIR", mcu_dir.name)
+        ),
         sdkconfig_defaults=(
-            resolve_profile_path(sdkconfig_defaults_raw, board_dir)
+            resolve_profile_path(sdkconfig_defaults_raw, mcu_dir)
             if sdkconfig_defaults_raw
-            else (board_sdkconfig_defaults_file(board_dir) if board_sdkconfig_defaults_file(board_dir).exists() else None)
+            else (mcu_sdkconfig_defaults_file(mcu_dir) if mcu_sdkconfig_defaults_file(mcu_dir).exists() else None)
         ),
         idf_path=str(Path(idf_path).expanduser()),
         target=normalize_target(target),
         monitor_baud=merged_int(
             repo_env,
-            board_env,
+            mcu_env,
             "MONITOR_BAUD",
-            merged_int(repo_env, board_env, "ESPBAUD", 115200),
+            merged_int(repo_env, mcu_env, "ESPBAUD", 115200),
         ),
         listen_port=listen_port,
-        server_python_exe=merged_value(repo_env, board_env, "SERVER_PYTHON_EXE", "auto"),
-        esptool_bin=merged_value(repo_env, board_env, "ESPTOOL_BIN", "auto"),
-        test_wifi_ssid=merged_value(repo_env, board_env, "TEST_WIFI_SSID", ""),
-        test_wifi_password=merged_value(repo_env, board_env, "TEST_WIFI_PASSWORD", ""),
-        test_http_url=merged_value(repo_env, board_env, "TEST_HTTP_URL", ""),
-        test_js_config=merged_value(repo_env, board_env, "TEST_JS_CONFIG", ""),
+        server_python_exe=merged_value(repo_env, mcu_env, "SERVER_PYTHON_EXE", "auto"),
+        esptool_bin=merged_value(repo_env, mcu_env, "ESPTOOL_BIN", "auto"),
+        test_wifi_ssid=merged_value(repo_env, mcu_env, "TEST_WIFI_SSID", ""),
+        test_wifi_password=merged_value(repo_env, mcu_env, "TEST_WIFI_PASSWORD", ""),
+        test_http_url=merged_value(repo_env, mcu_env, "TEST_HTTP_URL", ""),
+        test_js_config=merged_value(repo_env, mcu_env, "TEST_JS_CONFIG", ""),
     )
 
 
-def available_board_profiles() -> list[Path]:
-    """Return the board profiles shipped in the repository."""
-    if not BOARD_DIR.exists():
+def available_mcu_profiles() -> list[Path]:
+    """Return the mcu profiles shipped in the repository."""
+    if not MCU_DIR.exists():
         return []
-    return sorted(path for path in BOARD_DIR.glob("*/.env") if path.is_file())
+    return sorted(path for path in MCU_DIR.glob("*/.env") if path.is_file())
 
 
 def run(
@@ -913,7 +940,7 @@ def start_server(config: ProjectConfig, force_restart: bool) -> int:
 
 
 def idf_py_cmd(project_args: list[str], config: ProjectConfig) -> list[str]:
-    """Return a command that can run `idf.py` for the selected board profile."""
+    """Return a command that can run `idf.py` for the selected mcu profile."""
     esp_idf_root = Path(config.idf_path).expanduser()
     idf_py_script = esp_idf_root / "tools" / "idf.py"
     export_script_path = esp_idf_root / "export.sh"
@@ -1034,7 +1061,7 @@ def run_idf_action_with_stale_build_recovery(project_args: list[str], config: Pr
 
 
 def build(config: ProjectConfig) -> None:
-    """Build firmware for the selected board."""
+    """Build firmware for the selected mcu."""
     run_idf_action_with_stale_build_recovery(["build"], config)
 
 
@@ -1315,7 +1342,7 @@ def flash_workspace(config: ProjectConfig, build_first: bool) -> None:
 
 
 def monitor_cmd(config: ProjectConfig, *, no_reset: bool = False) -> list[str]:
-    """Build the monitor command for the selected board profile."""
+    """Build the monitor command for the selected mcu profile."""
     write_monitor_config()
     project_args = ["-p", command_port(config), "-b", str(config.monitor_baud), "monitor"]
     if no_reset:
@@ -1347,10 +1374,10 @@ def flash_monitor(
 
 
 def config_default_inputs(config: ProjectConfig) -> list[Path]:
-    """Return tracked inputs that define the selected board/app configuration."""
+    """Return tracked inputs that define the selected mcu/app configuration."""
     return [
         *config.sdkconfig_defaults,
-        config.board_file,
+        config.mcu_file,
         config.app_file,
         config.partition_table,
     ]
@@ -1375,7 +1402,7 @@ def refresh_generated_sdkconfig(config: ProjectConfig) -> None:
     if should_refresh:
         print(
             f"Refreshing {format_path(config.generated_sdkconfig)} because "
-            "board/application configuration inputs changed."
+            "mcu/application configuration inputs changed."
         )
         config.generated_sdkconfig.unlink(missing_ok=True)
         old_sdkconfig = config.generated_sdkconfig.with_name(
@@ -1388,27 +1415,27 @@ def refresh_generated_sdkconfig(config: ProjectConfig) -> None:
         stamp.write_text(identity, encoding="utf-8")
 
 
-def list_boards(selected_board: str) -> None:
-    """Print the board profiles bundled with the repository."""
-    profiles = available_board_profiles()
+def list_mcus(selected_mcu: str) -> None:
+    """Print the mcu profiles bundled with the repository."""
+    profiles = available_mcu_profiles()
     if not profiles:
-        print("No board profiles found.")
+        print("No mcu profiles found.")
         return
 
-    selected = resolve_board_file(selected_board)
-    for board_file in profiles:
-        board_env = load_dotenv(board_file)
-        marker = "*" if board_file.resolve() == selected else " "
-        label = board_env.get("BOARD_LABEL", board_file.parent.name)
-        target = board_env.get("IDF_TARGET", "?")
-        build_dir = board_env.get("BUILD_DIR", "build")
-        sdkconfig_defaults = board_env.get("SDKCONFIG_DEFAULTS", board_env.get("SDKCONFIG", ""))
+    selected = resolve_mcu_file(selected_mcu)
+    for mcu_file in profiles:
+        mcu_env = load_dotenv(mcu_file)
+        marker = "*" if mcu_file.resolve() == selected else " "
+        label = mcu_env.get("MCU_LABEL", mcu_file.parent.name)
+        target = mcu_env.get("IDF_TARGET", "?")
+        build_dir = mcu_env.get("BUILD_DIR", "build")
+        sdkconfig_defaults = mcu_env.get("SDKCONFIG_DEFAULTS", mcu_env.get("SDKCONFIG", ""))
         if not sdkconfig_defaults:
-            sdkconfig_defaults = format_path(board_sdkconfig_defaults_file(board_file.parent))
+            sdkconfig_defaults = format_path(mcu_sdkconfig_defaults_file(mcu_file.parent))
         detail = f"{target}, {build_dir}"
         if sdkconfig_defaults:
             detail = f"{detail}, {sdkconfig_defaults}"
-        print(f"{marker} {board_file.parent.name}: {label} [{detail}]")
+        print(f"{marker} {mcu_file.parent.name}: {label} [{detail}]")
 
 
 def list_apps(selected_app: str) -> None:
@@ -1426,12 +1453,10 @@ def list_apps(selected_app: str) -> None:
         label = app_env.get("APP_LABEL", app_name)
         flash_data = app_env.get("FLASH_DATA_DIR", "flash_data")
         app_defaults = app_env.get("APP_SDKCONFIG_DEFAULTS", "sdkconfig.defaults")
-        partition_table = app_env.get(
-            "PARTITION_TABLE", "partitions/{board}.csv"
-        )
+        partition_layout = app_env.get("PARTITION_LAYOUT", "storage")
         print(
             f"{marker} {app_name}: {label} "
-            f"[{flash_data}, {app_defaults}, {partition_table}]"
+            f"[{flash_data}, {app_defaults}, partition-layout={partition_layout}]"
         )
 
     if not selected_is_bundled:
@@ -1445,11 +1470,11 @@ def list_apps(selected_app: str) -> None:
 
 
 def show_config(config: ProjectConfig) -> None:
-    """Print the effective merged board, application, and tool configuration."""
+    """Print the effective merged mcu, application, and tool configuration."""
     normalized_target = normalize_target(config.target)
-    print(f"board={config.board}")
-    print(f"board_file={config.board_file}")
-    print(f"board_label={config.board_label}")
+    print(f"mcu={config.mcu}")
+    print(f"mcu_file={config.mcu_file}")
+    print(f"mcu_label={config.mcu_label}")
     print(f"app={config.app}")
     print(f"app_file={config.app_file}")
     print(f"app_profile_dir={config.app_profile_dir}")
@@ -1461,7 +1486,7 @@ def show_config(config: ProjectConfig) -> None:
     print(f"build_dir={format_path(config.build_dir)}")
     print(f"generated_sdkconfig={format_path(config.generated_sdkconfig)}")
     print(
-        f"board_sdkconfig_defaults={format_path(config.board_sdkconfig_defaults)}"
+        f"mcu_sdkconfig_defaults={format_path(config.mcu_sdkconfig_defaults)}"
     )
     print(f"app_sdkconfig_defaults={format_path(config.app_sdkconfig_defaults)}")
     print(
@@ -1832,7 +1857,7 @@ def send_js_command(session: MonitorSession, command: str) -> None:
 
 def js_test_build_config(config: ProjectConfig) -> ProjectConfig:
     """Return a build config that enables test instrumentation and test LittleFS."""
-    build_dir = config.build_dir.parent / f"{config.build_dir.name}-js-test"
+    build_dir = BUILD_ROOT / config.mcu / f"{config.app}-js-test"
     target_defaults = JS_TEST_DIR / f"sdkconfig.{config.idf_target}.defaults"
     test_defaults = (JS_TEST_SDKCONFIG_DEFAULTS,)
     if target_defaults.is_file():
@@ -1937,7 +1962,7 @@ def collect_js_runtime(session: MonitorSession) -> None:
 
 
 def reset_js_test_runtime(session: MonitorSession, config: ProjectConfig) -> None:
-    """Hard-reset the board and restore dynamic test configuration for an isolated case."""
+    """Hard-reset the mcu and restore dynamic test configuration for an isolated case."""
     os.write(session.master_fd, b"\x14\x12")
     read_monitor_until_line_prefix(
         session,
@@ -1966,7 +1991,7 @@ def validate_network_test_config(config: ProjectConfig, modules: tuple[JsTestMod
     if missing:
         joined = ", ".join(missing)
         raise SystemExit(
-            f"Network JS tests require {joined}. Set them in `/.env` or the active board profile."
+            f"Network JS tests require {joined}. Set them in `/.env` or the active mcu profile."
         )
 
 
@@ -1978,9 +2003,9 @@ def is_js_module_enabled(module: JsTestModule, runtime_features: dict[str, bool]
 def resolve_js_modules_for_runtime(modules: tuple[JsTestModule, ...],
                                    runtime_features: dict[str, bool],
                                    explicit_selection: bool) -> tuple[tuple[JsTestModule, ...], str]:
-    """Filter JS modules against the active board feature set."""
+    """Filter JS modules against the active mcu feature set."""
     if not runtime_features.get("fs", False):
-        message = "board-backed JS tests require the fs feature because the harness is loaded from LittleFS"
+        message = "mcu-backed JS tests require the fs feature because the harness is loaded from LittleFS"
         if explicit_selection:
             raise SystemExit(message)
         return (), message
@@ -1990,7 +2015,7 @@ def resolve_js_modules_for_runtime(modules: tuple[JsTestModule, ...],
     )
     if explicit_selection and disabled_modules:
         joined = ", ".join(disabled_modules)
-        raise SystemExit(f"Requested JS modules are disabled on this board: {joined}")
+        raise SystemExit(f"Requested JS modules are disabled on this mcu: {joined}")
 
     enabled_modules = tuple(
         module for module in modules if is_js_module_enabled(module, runtime_features)
@@ -2158,9 +2183,9 @@ def run_js_tests(config: ProjectConfig,
 
     if os.name == "nt":
         summary.status = "failed"
-        summary.note = "board-backed JS tests require a POSIX host"
+        summary.note = "mcu-backed JS tests require a POSIX host"
         print_test_stage_summary(summary)
-        raise TestStageError(summary, "Board-backed JS tests currently require a POSIX host because they run through a PTY monitor session.")
+        raise TestStageError(summary, "MCU-backed JS tests currently require a POSIX host because they run through a PTY monitor session.")
 
     session = start_monitor_session(js_config)
     try:
@@ -2298,7 +2323,7 @@ def run_js_syntax_check(app_flash_data_dir: Path | None = None) -> None:
 
 
 def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
-    """Run the selected host C and/or board JS automated tests."""
+    """Run the selected host C and/or mcu JS automated tests."""
     scopes = resolve_test_scopes(args.scope)
     report = TestRunReport(scopes=scopes, stages=[])
 
@@ -2349,9 +2374,155 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
         raise SystemExit("One or more test stages failed.")
 
 
+def write_if_changed(path: Path, text: str) -> None:
+    """Write a generated profile input only when its content changed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.read_text(encoding="utf-8") == text:
+        return
+    path.write_text(text, encoding="utf-8")
+
+
+def wiring_values(path: Path | None, idf_target: str) -> dict[str, object]:
+    """Load the bounded wiring overlay accepted by local and server builds."""
+    if path is None:
+        return {}
+    if path.stat().st_size > 16_384:
+        raise SystemExit("Wiring config exceeds 16 KiB.")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"Invalid wiring config {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise SystemExit("Wiring config must be a JSON object.")
+    allowed_fields = {
+        "led": {"pin", "activeLow"},
+        "i2c": {"sda", "scl"},
+        "spi": {"sclk", "mosi", "miso", "cs"},
+        "uart": {"tx", "rx"},
+    }
+    if set(value) - set(allowed_fields):
+        raise SystemExit("Wiring config contains unsupported groups.")
+    maximum = GPIO_MAX_BY_MCU[idf_target]
+    for group, fields in allowed_fields.items():
+        entry = value.get(group)
+        if entry is None:
+            continue
+        if not isinstance(entry, dict) or set(entry) - fields:
+            raise SystemExit(f"Wiring group {group} contains unsupported fields.")
+        for name, pin in entry.items():
+            if group == "led" and name == "activeLow":
+                if not isinstance(pin, bool):
+                    raise SystemExit("led.activeLow must be boolean.")
+                continue
+            if not isinstance(pin, int) or isinstance(pin, bool) or pin < -1 or pin > maximum:
+                raise SystemExit(f"{group}.{name} must be a GPIO between -1 and {maximum}.")
+    return value
+
+
+def generated_hardware_defaults(
+    idf_target: str,
+    flash_size_mb: int,
+    psram_mode: str,
+    psram_size_bytes: int,
+    wiring: dict[str, object],
+) -> str:
+    """Create the allowlisted sdkconfig overlay for detected hardware capabilities."""
+    lines = [
+        "# Generated by scripts/remote.py; do not edit.",
+        "CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE=y",
+        f"CONFIG_ESPTOOLPY_FLASHSIZE_{flash_size_mb}MB=y",
+        f'CONFIG_ESPTOOLPY_FLASHSIZE="{flash_size_mb}MB"',
+        f'CONFIG_ESP32_MQUICKJS_PSRAM_MODE="{psram_mode}"',
+    ]
+    if psram_mode == "none":
+        heap_size = 192_512 if idf_target == "esp32c3" else 262_144
+        if idf_target == "esp32s3":
+            lines.append("CONFIG_SPIRAM=n")
+        lines.extend((
+            f"CONFIG_ESP32QJS_JS_HEAP_SIZE={heap_size}",
+            "CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER=n",
+        ))
+    else:
+        if idf_target != "esp32s3":
+            raise SystemExit(f"{idf_target} does not support a {psram_mode} PSRAM profile.")
+        heap_size = min(psram_size_bytes // 2, 4 * 1024 * 1024)
+        if heap_size < 256 * 1024:
+            raise SystemExit("A PSRAM build requires at least 512 KiB of detected PSRAM.")
+        mode_config = "OCT" if psram_mode == "octal" else "QUAD"
+        lines.extend((
+            "CONFIG_SPIRAM=y",
+            f"CONFIG_SPIRAM_MODE_{mode_config}=y",
+            "CONFIG_SPIRAM_TYPE_AUTO=y",
+            "CONFIG_SPIRAM_SPEED_80M=y",
+            "CONFIG_SPIRAM_SPEED=80",
+            "CONFIG_SPIRAM_BOOT_HW_INIT=y",
+            "CONFIG_SPIRAM_BOOT_INIT=y",
+            "CONFIG_SPIRAM_PRE_CONFIGURE_MEMORY_PROTECTION=y",
+            "CONFIG_SPIRAM_USE_MALLOC=y",
+            "CONFIG_SPIRAM_MEMTEST=y",
+            "CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384",
+            "CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768",
+            f"CONFIG_ESP32QJS_JS_HEAP_SIZE={heap_size}",
+            "CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER=y",
+        ))
+
+    pin_configs = {
+        ("led", "pin"): "CONFIG_ESP32_MQUICKJS_USER_LED_PIN",
+        ("i2c", "sda"): "CONFIG_ESP32_MQUICKJS_I2C_DEFAULT_SDA_PIN",
+        ("i2c", "scl"): "CONFIG_ESP32_MQUICKJS_I2C_DEFAULT_SCL_PIN",
+        ("spi", "sclk"): "CONFIG_ESP32_MQUICKJS_SPI_DEFAULT_SCLK_PIN",
+        ("spi", "mosi"): "CONFIG_ESP32_MQUICKJS_SPI_DEFAULT_MOSI_PIN",
+        ("spi", "miso"): "CONFIG_ESP32_MQUICKJS_SPI_DEFAULT_MISO_PIN",
+        ("spi", "cs"): "CONFIG_ESP32_MQUICKJS_SPI_DEFAULT_CS_PIN",
+        ("uart", "tx"): "CONFIG_ESP32_MQUICKJS_UART_DEFAULT_TX_PIN",
+        ("uart", "rx"): "CONFIG_ESP32_MQUICKJS_UART_DEFAULT_RX_PIN",
+    }
+    for (group, field), config_name in pin_configs.items():
+        entry = wiring.get(group)
+        value = entry.get(field, -1) if isinstance(entry, dict) else -1
+        lines.append(f"{config_name}={value}")
+    led = wiring.get("led")
+    active_low = bool(led.get("activeLow", False)) if isinstance(led, dict) else False
+    lines.append(f"CONFIG_ESP32_MQUICKJS_USER_LED_ACTIVE_LOW={'y' if active_low else 'n'}")
+    return "\n".join(lines) + "\n"
+
+
+def generated_partition_table(
+    flash_size_mb: int,
+    layout: str,
+    storage_size: int | None,
+) -> str:
+    """Generate a partition table that consumes the detected flash safely."""
+    flash_bytes = flash_size_mb * 1024 * 1024
+    data_start = 0x210000
+    available = flash_bytes - data_start
+    if available <= 0:
+        raise SystemExit("Detected flash is too small for the 2 MiB application slot.")
+    if layout == "workspace":
+        assert storage_size is not None
+        workspace_size = available - storage_size
+        if workspace_size < 0x10000:
+            raise SystemExit("Detected flash leaves less than 64 KiB for the workspace partition.")
+        data_rows = [
+            f"storage,  data, littlefs,,        0x{storage_size:X},",
+            f"workspace,data, littlefs,,        0x{workspace_size:X},",
+        ]
+    else:
+        data_rows = [f"storage,  data, littlefs,,        0x{available:X},"]
+    return "\n".join((
+        "# Generated from detected flash size; do not edit.",
+        "# Name,   Type, SubType, Offset,  Size,      Flags",
+        "nvs,      data, nvs,     0x9000,  0x6000,",
+        "phy_init, data, phy,     0xf000,  0x1000,",
+        "factory,  app,  factory, 0x10000, 0x200000,",
+        *data_rows,
+        "",
+    ))
+
+
 def build_project_config(
     args: argparse.Namespace,
-    profile: BoardProfile,
+    profile: MCUProfile,
     app_profile: AppProfile,
 ) -> ProjectConfig:
     """Convert parsed CLI args and selected profiles to the effective project config."""
@@ -2361,30 +2532,61 @@ def build_project_config(
         path = Path(raw_path).expanduser()
         return (path if path.is_absolute() else ROOT_DIR / path).resolve()
 
-    board_defaults = cli_path(getattr(args, "sdkconfig_defaults", ""))
+    mcu_defaults = cli_path(getattr(args, "sdkconfig_defaults", ""))
     app_defaults = cli_path(getattr(args, "app_sdkconfig_defaults", ""))
     partition_table = cli_path(getattr(args, "partition_table", ""))
-    if partition_table is None:
-        partition_table = app_profile.partition_table
+    wiring_config = cli_path(getattr(args, "wiring_config", ""))
+    flash_size_mb = int(getattr(args, "flash_size_mb", profile.default_flash_size_mb))
+    psram_mode = str(getattr(args, "psram_mode", "none"))
+    psram_size_bytes = int(getattr(args, "psram_size", 0))
+    if flash_size_mb not in SUPPORTED_FLASH_SIZE_MB:
+        raise SystemExit("--flash-size-mb must be one of 4, 8, 16, 32.")
+    if psram_mode not in SUPPORTED_PSRAM_MODES:
+        raise SystemExit("--psram-mode must be none, quad, or octal.")
+    if psram_mode == "none" and psram_size_bytes != 0:
+        raise SystemExit("--psram-size must be zero when --psram-mode is none.")
+    if psram_mode != "none" and psram_size_bytes <= 0:
+        raise SystemExit("--psram-size is required for a PSRAM build.")
 
     for label, path in (
-        ("Board sdkconfig defaults", board_defaults),
+        ("MCU sdkconfig defaults", mcu_defaults),
         ("Application sdkconfig defaults", app_defaults),
         ("Partition table", partition_table),
+        ("Wiring config", wiring_config),
     ):
         if path is not None and not path.is_file():
             raise SystemExit(f"{label} file does not exist: {path}")
 
+    build_dir = resolve_build_path(args.build_dir)
+    generated_profile_dir = build_dir / "esp32qjs-profile"
+    hardware_defaults = generated_profile_dir / "hardware.defaults"
+    if partition_table is None:
+        partition_table = generated_profile_dir / "partitions.csv"
+    wiring = wiring_values(wiring_config, profile.idf_target)
+    write_if_changed(
+        hardware_defaults,
+        generated_hardware_defaults(
+            profile.idf_target,
+            flash_size_mb,
+            psram_mode,
+            psram_size_bytes,
+            wiring,
+        ),
+    )
+    if partition_table.parent == generated_profile_dir:
+        write_if_changed(
+            partition_table,
+            generated_partition_table(
+                flash_size_mb,
+                app_profile.partition_layout,
+                app_profile.storage_size,
+            ),
+        )
     sdkconfig_defaults = tuple(
         dict.fromkeys(
-            path for path in (board_defaults, app_defaults) if path is not None
+            path for path in (mcu_defaults, app_defaults, hardware_defaults) if path is not None
         )
     )
-
-    build_dir = Path(args.build_dir).expanduser()
-    if not build_dir.is_absolute():
-        build_dir = ROOT_DIR / build_dir
-    build_dir = build_dir.resolve()
 
     flash_data_override = cli_path(getattr(args, "flash_data_dir", ""))
     if flash_data_override is not None and not flash_data_override.is_dir():
@@ -2392,13 +2594,13 @@ def build_project_config(
 
     shared_flash_data_dir = SHARED_FLASH_DATA_DIR.resolve()
     cmake_entries = (
-        f"-DESP32QJS_BOARD={profile.name}",
+        f"-DESP32QJS_MCU={profile.name}",
         f"-DESP32QJS_APP={app_profile.name}",
         f"-DESP32QJS_APP_PROFILE_DIR={app_profile.directory}",
         f"-DESP32QJS_SHARED_FLASH_DATA_DIR={shared_flash_data_dir}",
         f"-DESP32QJS_APP_FLASH_DATA_DIR={app_profile.flash_data_dir}",
         f"-DESP32QJS_FLASH_DATA_DIR={flash_data_override or ''}",
-        f"-DESP32QJS_BOARD_SDKCONFIG_DEFAULTS={board_defaults or ''}",
+        f"-DESP32QJS_MCU_SDKCONFIG_DEFAULTS={mcu_defaults or ''}",
         f"-DESP32QJS_APP_SDKCONFIG_DEFAULTS={app_defaults or ''}",
         f"-DESP32QJS_PARTITION_TABLE={partition_table}",
     )
@@ -2406,11 +2608,11 @@ def build_project_config(
     config_slug = re.sub(
         r"[^A-Za-z0-9_.-]+", "_", f"{profile.name}.{app_profile.name}"
     )
-    board_file = Path(args.board_file)
+    mcu_file = Path(args.mcu_file)
     return ProjectConfig(
-        board=profile.name,
-        board_file=board_file,
-        board_label=profile.label,
+        mcu=profile.name,
+        mcu_file=mcu_file,
+        mcu_label=profile.label,
         app=app_profile.name,
         app_file=app_profile.file,
         app_profile_dir=app_profile.directory,
@@ -2420,10 +2622,15 @@ def build_project_config(
         flash_data_override=flash_data_override,
         build_dir=build_dir,
         generated_sdkconfig=build_dir / f"sdkconfig.{config_slug}",
-        board_sdkconfig_defaults=board_defaults,
+        mcu_sdkconfig_defaults=mcu_defaults,
         app_sdkconfig_defaults=app_defaults,
         sdkconfig_defaults=sdkconfig_defaults,
         partition_table=partition_table,
+        hardware_sdkconfig_defaults=hardware_defaults,
+        flash_size_mb=flash_size_mb,
+        psram_mode=psram_mode,
+        psram_size_bytes=psram_size_bytes,
+        wiring_config=wiring_config,
         idf_target=args.idf_target,
         idf_path=args.idf_path,
         target=normalize_target(getattr(args, "target", profile.target)),
@@ -2440,22 +2647,50 @@ def build_project_config(
     )
 
 
-def add_common_board_args(parser: argparse.ArgumentParser, profile: BoardProfile) -> None:
-    """Attach the shared board/build-selection options at the top-level parser."""
+def add_common_mcu_args(parser: argparse.ArgumentParser, profile: MCUProfile) -> None:
+    """Attach the shared mcu/build-selection options at the top-level parser."""
     parser.add_argument(
-        "--board",
+        "--mcu",
         default=profile.reference,
-        help="Board profile name from configs/boards/*/.env, or a direct path to a board directory/profile file.",
+        help="MCU profile name from configs/mcus/*/.env, or a direct path to a mcu directory/profile file.",
     )
-    parser.add_argument("--build-dir", default=format_path(profile.build_dir))
+    parser.add_argument(
+        "--build-dir",
+        default=format_path(profile.build_dir),
+        help="Build subdirectory under build/; absolute paths remain available for temporary test builds.",
+    )
     parser.add_argument("--idf-target", default=profile.idf_target)
     parser.add_argument(
         "--sdkconfig-defaults",
         default=format_path(profile.sdkconfig_defaults),
-        help="Board/base sdkconfig defaults file applied before application defaults.",
+        help="MCU/base sdkconfig defaults file applied before application defaults.",
     )
     parser.add_argument("--idf-path", default=profile.idf_path)
-    parser.set_defaults(board_file=str(profile.file))
+    parser.add_argument(
+        "--flash-size-mb",
+        type=int,
+        choices=sorted(SUPPORTED_FLASH_SIZE_MB),
+        default=profile.default_flash_size_mb,
+        help="Detected SPI flash capacity in MiB.",
+    )
+    parser.add_argument(
+        "--psram-mode",
+        choices=sorted(SUPPORTED_PSRAM_MODES),
+        default="none",
+        help="Detected PSRAM bus mode. Unknown hardware must use the safe none profile.",
+    )
+    parser.add_argument(
+        "--psram-size",
+        type=int,
+        default=0,
+        help="Detected PSRAM capacity in bytes; required for quad/octal profiles.",
+    )
+    parser.add_argument(
+        "--wiring-config",
+        default="",
+        help="Optional validated JSON file containing optional wiring defaults.",
+    )
+    parser.set_defaults(mcu_file=str(profile.file))
 
 
 def add_common_app_args(parser: argparse.ArgumentParser, profile: AppProfile) -> None:
@@ -2468,12 +2703,12 @@ def add_common_app_args(parser: argparse.ArgumentParser, profile: AppProfile) ->
     parser.add_argument(
         "--app-sdkconfig-defaults",
         default=format_path(profile.sdkconfig_defaults),
-        help="Application sdkconfig defaults applied after the selected board defaults.",
+        help="Application sdkconfig defaults applied after the selected mcu defaults.",
     )
     parser.add_argument(
         "--partition-table",
-        default=format_path(profile.partition_table),
-        help="Application partition CSV for the selected board.",
+        default="",
+        help="Optional explicit partition CSV; default is generated from flash capacity.",
     )
     parser.add_argument(
         "--flash-data-dir",
@@ -2483,12 +2718,12 @@ def add_common_app_args(parser: argparse.ArgumentParser, profile: AppProfile) ->
     parser.set_defaults(app_file=str(profile.file))
 
 
-def add_common_connection_args(parser: argparse.ArgumentParser, profile: BoardProfile) -> None:
+def add_common_connection_args(parser: argparse.ArgumentParser, profile: MCUProfile) -> None:
     """Attach the shared device-target and tool overrides once at the top level."""
     parser.add_argument(
         "--target",
         default=profile.target,
-        help="Device target for chip-id/flash/monitor/test/server. Use an rfc2217:// URL for remote boards, or a local serial device path such as /dev/ttyACM0 or COM3.",
+        help="Device target for chip-id/flash/monitor/test/server. Use an rfc2217:// URL for remote mcus, or a local serial device path such as /dev/ttyACM0 or COM3.",
     )
     parser.add_argument("--baud", type=int, default=profile.monitor_baud)
     parser.add_argument("--esptool-bin", default=profile.esptool_bin)
@@ -2498,22 +2733,22 @@ def add_common_connection_args(parser: argparse.ArgumentParser, profile: BoardPr
 
 def parse_args(
     argv: list[str] | None = None,
-) -> tuple[argparse.Namespace, BoardProfile, AppProfile]:
-    """Parse CLI arguments after resolving board and application profiles."""
+) -> tuple[argparse.Namespace, MCUProfile, AppProfile]:
+    """Parse CLI arguments after resolving mcu and application profiles."""
     raw_argv = sys.argv[1:] if argv is None else argv
     bootstrap = argparse.ArgumentParser(add_help=False)
-    bootstrap.add_argument("--board")
+    bootstrap.add_argument("--mcu")
     bootstrap.add_argument("--app")
     pre_args, _ = bootstrap.parse_known_args(raw_argv)
-    profile = load_profile(pre_args.board)
+    profile = load_profile(pre_args.mcu)
     app_profile = load_app_profile(
         pre_args.app,
-        board_name=profile.name,
+        mcu_name=profile.name,
         idf_target=profile.idf_target,
     )
 
     parser = argparse.ArgumentParser(description="Unified helper for ESP32QJS application development.")
-    add_common_board_args(parser, profile)
+    add_common_mcu_args(parser, profile)
     add_common_app_args(parser, app_profile)
     add_common_connection_args(parser, profile)
     parser.add_argument(
@@ -2525,19 +2760,19 @@ def parse_args(
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    boards_parser = sub.add_parser("boards", help="List bundled board profiles.")
-    boards_parser.set_defaults(_noop=True)
+    mcus_parser = sub.add_parser("mcus", help="List bundled mcu profiles.")
+    mcus_parser.set_defaults(_noop=True)
 
     apps_parser = sub.add_parser("apps", help="List bundled application profiles.")
     apps_parser.set_defaults(_noop=True)
 
-    show_parser = sub.add_parser("show-config", help="Print the merged board/app/tool configuration.")
+    show_parser = sub.add_parser("show-config", help="Print the merged mcu/app/tool configuration.")
     show_parser.set_defaults(_noop=True)
 
     server = sub.add_parser("server", help="Write config and start esp_rfc2217_server.")
     server.add_argument("--force-restart", action="store_true")
 
-    build_parser = sub.add_parser("build", help="Run idf.py build for the selected board.")
+    build_parser = sub.add_parser("build", help="Run idf.py build for the selected mcu.")
     build_parser.set_defaults(_noop=True)
 
     build_fs_parser = sub.add_parser("build-fs", help="Build only the LittleFS storage image.")
@@ -2578,7 +2813,7 @@ def parse_args(
         help="Also flash the generated empty workspace image. Default: preserve workspace.",
     )
 
-    test = sub.add_parser("test", help="Run host C tests and/or board-backed JS tests.")
+    test = sub.add_parser("test", help="Run host C tests and/or mcu-backed JS tests.")
     test.add_argument(
         "--scope",
         action="append",
@@ -2589,7 +2824,7 @@ def parse_args(
         "--module",
         action="append",
         choices=[module.name for module in JS_TEST_MODULES],
-        help="Limit JS tests to specific modules. Default: run board-enabled modules only.",
+        help="Limit JS tests to specific modules. Default: run mcu-enabled modules only.",
     )
     test.add_argument(
         "--network",
@@ -2619,8 +2854,8 @@ def main() -> int:
     args, profile, app_profile = parse_args()
     config = build_project_config(args, profile, app_profile)
 
-    if args.command == "boards":
-        list_boards(args.board)
+    if args.command == "mcus":
+        list_mcus(args.mcu)
         return 0
 
     if args.command == "apps":

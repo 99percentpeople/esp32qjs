@@ -26,6 +26,7 @@
 #define WIFI_FAILED_BIT BIT1
 #define WIFI_STARTED_BIT BIT2
 #define WIFI_SCAN_EVENT_QUEUE_LEN 1
+#define WIFI_SCAN_MAX_RESULTS 32
 #define WIFI_CONNECT_EVENT_QUEUE_LEN 1
 #define WIFI_SCAN_BSSID_STR_LEN 18
 #define WIFI_START_TIMEOUT_MS 5000
@@ -858,6 +859,9 @@ static JSValue wifi_make_scan_results_array(JSContext *ctx)
 
     if (count == 0) {
         return JS_PopGCRef(ctx, &results_ref);
+    }
+    if (count > WIFI_SCAN_MAX_RESULTS) {
+        count = WIFI_SCAN_MAX_RESULTS;
     }
 
     records = heap_caps_calloc(count, sizeof(*records), MALLOC_CAP_8BIT);

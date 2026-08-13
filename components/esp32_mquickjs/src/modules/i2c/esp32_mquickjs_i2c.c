@@ -428,6 +428,12 @@ static JSValue i2c_open(JSContext *ctx, int argc, JSValue *argv)
         JS_PopGCRef(ctx, &property_ref);
     }
 
+    if (!GPIO_IS_VALID_GPIO(sda_pin) || !GPIO_IS_VALID_GPIO(scl_pin)) {
+        return JS_ThrowTypeError(
+            ctx,
+            "i2c.open() requires configured default SDA/SCL GPIOs or explicit { sda, scl } overrides");
+    }
+
     slot = i2c_alloc_slot();
     if (slot == NULL) {
         return JS_ThrowInternalError(ctx, "i2c.open() failed: no available I2C bus slots");

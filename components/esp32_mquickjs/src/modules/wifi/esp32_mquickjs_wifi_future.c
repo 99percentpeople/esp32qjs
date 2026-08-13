@@ -138,6 +138,9 @@ static bool wifi_future_start(JSContext *ctx,
                               esp32_mquickjs_future_driver_state_t *state)
 {
     esp32_mquickjs_wifi_state_t *wifi = esp32_mquickjs_wifi_state();
+    wifi_scan_config_t scan_config = {
+        .show_hidden = true,
+    };
     esp_err_t err;
 
     if (state == NULL) {
@@ -185,7 +188,7 @@ static bool wifi_future_start(JSContext *ctx,
         if (wifi->scan_queue != NULL) {
             xQueueReset(wifi->scan_queue);
         }
-        err = esp_wifi_scan_start(NULL, false);
+        err = esp_wifi_scan_start(&scan_config, false);
         if (err != ESP_OK) {
             esp32_mquickjs_wifi_clear_scan_future();
             esp32_mquickjs_wifi_throw_scan_error(ctx, err);

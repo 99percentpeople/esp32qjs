@@ -1,7 +1,7 @@
 # ESP32QJS
 
 ESP32QJS is an ESP-IDF framework for running trusted JavaScript applications on
-ESP32 boards with mquickjs. It provides feature-gated native APIs for GPIO,
+ESP32 MCUs with mquickjs. It provides feature-gated native APIs for GPIO,
 I2C, SPI, UART, USB serial frames, TCP lines, Wi-Fi, HTTP, WebSocket, LittleFS, bounded NVS strings, timers, and display buffers, plus
 versioned JavaScript display and immediate-mode UI libraries.
 
@@ -13,19 +13,20 @@ Native Host API version: **1**
 
 ```text
 apps/                       application profiles, behavior, partitions, and files
-  minimal/                  board-neutral default application
+  minimal/                  hardware-neutral default application
   demo/                     display and immediate-mode UI demos
 shared/flash_data/_sys/     JavaScript libraries shared by applications
-configs/boards/             board targets, pins, features, and memory defaults
+configs/mcus/               MCU targets and intrinsic feature defaults
 components/esp32_mquickjs/  mquickjs adapter and native Host API
 components/esp32qjs_runtime reusable runtime lifecycle component
 components/esp32qjs_interactive optional serial REPL frontend
 main/                       minimal firmware entry point
-tests/                      host C and board-backed JavaScript tests
+tests/                      host C and device-backed JavaScript tests
 ```
 
-Configuration is layered as board defaults, then application defaults, then the
-application's board-specific partition table. The LittleFS image is built by
+Configuration is layered as MCU defaults, application defaults, then a generated
+hardware overlay for Flash, PSRAM, and optional wiring. Partition tables are generated
+from the selected Flash capacity and application layout. The LittleFS image is built by
 copying shared files first and the selected application's files second;
 applications may intentionally override shared paths.
 
@@ -44,7 +45,7 @@ uv sync
 cp .env.example .env
 ```
 
-Set `IDF_PATH`, `BOARD`, `APP`, and `TARGET` in `.env`. `TARGET` may be a local
+Set `IDF_PATH`, `MCU`, `APP`, and `TARGET` in `.env`. `TARGET` may be a local
 serial device such as `/dev/ttyACM0` or an RFC2217 URL.
 
 ## Build and Flash
@@ -53,14 +54,20 @@ The default application is `minimal`, which safely boots into the REPL without
 requiring display hardware.
 
 ```bash
-python scripts/remote.py boards
+python scripts/remote.py mcus
 python scripts/remote.py apps
 python scripts/remote.py show-config
 python scripts/remote.py --assume y build
 python scripts/remote.py flash
 ```
 
-Build or flash the display demo without changing the board profile:
+All generated output stays inside this standalone firmware repository's
+`build/` directory. Normal profiles use `build/<mcu>`; additional hardware and
+test profiles use subdirectories below that MCU. A relative `--build-dir` is
+treated as a subdirectory of `build/`; use an absolute path only for an
+intentional temporary build outside the repository.
+
+Build or flash the display demo without changing the MCU profile:
 
 ```bash
 python scripts/remote.py --app demo --assume y build
@@ -82,6 +89,8 @@ test scope runs the same check automatically.
 A complete LittleFS source directory can be supplied for compatibility or test
 workflows with `--flash-data-dir PATH`. One-off application inputs can be
 selected with `--app-sdkconfig-defaults PATH` and `--partition-table PATH`.
+Use `--flash-size-mb`, `--psram-mode`, `--psram-size`, and `--wiring-config`
+only with measured hardware values. Unknown PSRAM must use `--psram-mode none`.
 
 ## Create an Application
 
@@ -90,8 +99,6 @@ Copy the minimal profile and edit its entry point:
 ```text
 apps/my_app/app.env
 apps/my_app/sdkconfig.defaults
-apps/my_app/partitions/xiao_esp32s3.csv
-apps/my_app/partitions/esp32c3_supermini.csv
 apps/my_app/flash_data/index.js
 ```
 
@@ -102,12 +109,12 @@ APP_ID=my_app
 APP_LABEL=My application
 FLASH_DATA_DIR=flash_data
 APP_SDKCONFIG_DEFAULTS=sdkconfig.defaults
-PARTITION_TABLE=partitions/{board}.csv
+PARTITION_LAYOUT=storage
 ```
 
-`{board}` and `{idf_target}` are expanded from the selected board profile.
-Application defaults control behavior such as REPL/autorun policy, while board
-defaults retain target, pin, feature, and memory settings. `APP_ID` is the
+Application defaults control behavior such as REPL/autorun policy, while MCU
+defaults retain only target and intrinsic feature settings. Flash/PSRAM settings and
+optional pin defaults are generated per build. `APP_ID` is the
 stable build identifier and must contain only letters, digits, `.`, `_`, or
 `-`. Select a bundled app with `--app my_app` or `APP=my_app` in `.env`.
 
@@ -124,8 +131,8 @@ The destructive flag initializes an external profile's optional workspace
 partition. Subsequent `flash` and `flash-fs` calls preserve it; use
 `flash-workspace` only when an explicit workspace reset is intended.
 
-External profiles own the same `app.env`, `sdkconfig.defaults`, board-specific
-partition files, and `flash_data/` layout as bundled profiles. Set `APP_FILE`
+External profiles own the same `app.env`, `sdkconfig.defaults`, partition layout,
+and `flash_data/` structure as bundled profiles. Set `APP_FILE`
 in `.env` for a persistent direct path. Shared libraries remain available
 under `_sys/`, for example:
 
@@ -158,7 +165,7 @@ python scripts/remote.py test --scope c
 python scripts/remote.py test
 ```
 
-The default board-backed baseline builds and flashes the latest code with the
+The default device-backed baseline builds and flashes the latest code with the
 dedicated JS test sdkconfig defaults, then flashes a dedicated test LittleFS image. Network and physical loopback cases are opt-in:
 
 ```bash

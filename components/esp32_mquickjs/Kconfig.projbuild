@@ -1,11 +1,19 @@
 menu "ESP32 mquickjs"
 
-config ESP32_MQUICKJS_BOARD_NAME
-    string "Board name"
-    default "Generic ESP32 board"
+config ESP32_MQUICKJS_MCU_NAME
+    string "MCU model name"
+    default "ESP32-S3" if IDF_TARGET_ESP32S3
+    default "ESP32-C3" if IDF_TARGET_ESP32C3
+    default "ESP32"
     help
-        Human-readable board name returned by sys.info().board and shown by
+        Human-readable MCU model returned by sys.info().mcu and shown by
         the REPL banner when serial interaction is enabled.
+
+config ESP32_MQUICKJS_PSRAM_MODE
+    string "Compiled PSRAM bus mode"
+    default "none"
+    help
+        Hardware-profile PSRAM mode returned by sys.info().psramMode.
 
 menu "Host API features"
 
@@ -246,8 +254,8 @@ config ESP32_MQUICKJS_MAX_SCRIPT_PATH
 
 config ESP32_MQUICKJS_USER_LED_PIN
     int "User LED GPIO"
-    range 0 48
-    default 21
+    range -1 48
+    default -1
     depends on ESP32_MQUICKJS_FEATURE_GPIO
     help
         GPIO used for gpio.led() and gpio.LED_BUILTIN.
@@ -261,16 +269,16 @@ config ESP32_MQUICKJS_USER_LED_ACTIVE_LOW
 
 config ESP32_MQUICKJS_I2C_DEFAULT_SDA_PIN
     int "Default I2C SDA GPIO"
-    range 0 48
-    default 5
+    range -1 48
+    default -1
     depends on ESP32_MQUICKJS_FEATURE_I2C
     help
         Default SDA pin used by i2c.open() when no pin override is provided.
 
 config ESP32_MQUICKJS_I2C_DEFAULT_SCL_PIN
     int "Default I2C SCL GPIO"
-    range 0 48
-    default 6
+    range -1 48
+    default -1
     depends on ESP32_MQUICKJS_FEATURE_I2C
     help
         Default SCL pin used by i2c.open() when no pin override is provided.
@@ -301,10 +309,8 @@ config ESP32_MQUICKJS_I2C_ENABLE_INTERNAL_PULLUP
 
 config ESP32_MQUICKJS_SPI_DEFAULT_SCLK_PIN
     int "Default SPI SCLK GPIO"
-    range 0 48
-    default 7 if IDF_TARGET_ESP32S3
-    default 4 if IDF_TARGET_ESP32C3
-    default 18
+    range -1 48
+    default -1
     depends on ESP32_MQUICKJS_FEATURE_SPI
     help
         Default SCLK pin used by spi.openBus() when no pin override is provided.
@@ -312,9 +318,7 @@ config ESP32_MQUICKJS_SPI_DEFAULT_SCLK_PIN
 config ESP32_MQUICKJS_SPI_DEFAULT_MOSI_PIN
     int "Default SPI MOSI GPIO"
     range -1 48
-    default 9 if IDF_TARGET_ESP32S3
-    default 6 if IDF_TARGET_ESP32C3
-    default 23
+    default -1
     depends on ESP32_MQUICKJS_FEATURE_SPI
     help
         Default MOSI pin used by spi.openBus() when no pin override is provided.
@@ -323,9 +327,7 @@ config ESP32_MQUICKJS_SPI_DEFAULT_MOSI_PIN
 config ESP32_MQUICKJS_SPI_DEFAULT_MISO_PIN
     int "Default SPI MISO GPIO"
     range -1 48
-    default 8 if IDF_TARGET_ESP32S3
-    default 5 if IDF_TARGET_ESP32C3
-    default 19
+    default -1
     depends on ESP32_MQUICKJS_FEATURE_SPI
     help
         Default MISO pin used by spi.openBus() when no pin override is provided.
@@ -464,6 +466,18 @@ config ESP32_MQUICKJS_HTTP_TASK_STACK_SIZE
     depends on ESP32_MQUICKJS_FEATURE_HTTP
     help
         Stack size used by the async HTTP worker task.
+
+config ESP32_MQUICKJS_HTTP_TASK_STACK_IN_PSRAM
+    bool "Prefer PSRAM for HTTP async worker task stacks"
+    default y
+    depends on ESP32_MQUICKJS_FEATURE_HTTP
+    depends on SPIRAM
+    depends on FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+    help
+        Allocate each HTTP worker task stack from PSRAM when possible. This
+        preserves scarce internal RAM for Wi-Fi, TLS, and native driver state.
+        If PSRAM allocation fails at runtime, the worker falls back to the
+        normal internal-RAM task allocator.
 
 config ESP32_MQUICKJS_USB_SERIAL_MAX_FRAME_BYTES
     int "Maximum USB serial protocol frame size (bytes)"
