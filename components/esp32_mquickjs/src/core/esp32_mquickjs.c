@@ -1127,7 +1127,6 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
             continue;
         }
 
-        slot->pending = false;
         core_async_handled = true;
 
         if (JS_StackCheck(ctx, 2)) {
@@ -1146,6 +1145,15 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
         }
 
         ret = esp32_mquickjs_call(ctx, runtime, *callback, JS_NULL, 0, NULL);
+        if (slot->allocated && slot->generation == event.generation && slot->repeating) {
+            /*
+             * Keep a repeating timer pending for the entire callback. Native
+             * Future waits can poll the scheduler recursively; clearing this
+             * flag before the call lets the same periodic timer enqueue and
+             * enter itself again until the C stack overflows.
+             */
+            slot->pending = false;
+        }
         if (JS_IsException(ret)) {
             esp32_mquickjs_print_exception(ctx);
             if (slot->allocated && slot->generation == event.generation && slot->repeating) {

@@ -24,6 +24,10 @@ test("timers/runtime", function () {
   var capacityCaught = false;
   var intervalTicks = 0;
   var intervalId;
+  var reentrantTicks = 0;
+  var reentrantDepth = 0;
+  var maximumReentrantDepth = 0;
+  var reentrantIntervalId;
 
   test.ok(typeof Future === "function", "Future factory should exist");
   test.ok(typeof EventQueue === "function", "EventQueue class should exist");
@@ -134,6 +138,25 @@ test("timers/runtime", function () {
   }, 10);
   Future.sleep(80).wait(500);
   test.equal(intervalTicks, 3, "Future wait should keep timer callbacks progressing");
+
+  reentrantIntervalId = setInterval(function () {
+    reentrantTicks++;
+    reentrantDepth++;
+    if (reentrantDepth > maximumReentrantDepth) {
+      maximumReentrantDepth = reentrantDepth;
+    }
+    if (reentrantTicks >= 3) {
+      clearInterval(reentrantIntervalId);
+    } else {
+      Future.sleep(30).wait(500);
+    }
+    reentrantDepth--;
+  }, 10);
+  Future.sleep(120).wait(500);
+  test.equal(reentrantTicks, 3,
+    "repeating timer should continue after a callback pumps nested Future work");
+  test.equal(maximumReentrantDepth, 1,
+    "repeating timer callback should not re-enter itself during nested Future polling");
 
   test.equal(delay(5100), 5100, "long native delay should cooperate with the task watchdog");
 
