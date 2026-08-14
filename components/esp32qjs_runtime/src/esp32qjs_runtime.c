@@ -157,7 +157,6 @@ static bool runtime_startup_path_is_safe(const char *path)
 
 static void runtime_run_startup(esp32qjs_runtime_t *runtime)
 {
-    char command[ESP32QJS_RUNTIME_STARTUP_PATH_MAX + 16];
     JSValue result;
 
     if (runtime == NULL || runtime->ctx == NULL ||
@@ -170,12 +169,13 @@ static void runtime_run_startup(esp32qjs_runtime_t *runtime)
         return;
     }
 
-    snprintf(command, sizeof(command), "load('%s')", runtime->startup_script);
-    result = esp32_mquickjs_eval(runtime->ctx,
-                                 &runtime->engine,
-                                 command,
-                                 "<startup>",
-                                 0);
+#if CONFIG_ESP32_MQUICKJS_FEATURE_FS
+    result = esp32_mquickjs_load_startup_from_active_fs(runtime->ctx,
+                                                        &runtime->engine,
+                                                        runtime->startup_script);
+#else
+    return;
+#endif
     if (JS_IsException(result)) {
         esp32_mquickjs_print_exception(runtime->ctx);
     }

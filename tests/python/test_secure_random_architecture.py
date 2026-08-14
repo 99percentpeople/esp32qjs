@@ -1,6 +1,8 @@
 import unittest
 from pathlib import Path
 
+from source_contract_test_case import SourceContractTestCase
+
 
 ROOT = Path(__file__).resolve().parents[2]
 MQUICKJS = ROOT / "components" / "esp32_mquickjs"
@@ -8,8 +10,8 @@ SYS_SOURCE = MQUICKJS / "src" / "core" / "esp32_mquickjs_sys.c"
 CORE_SOURCE = MQUICKJS / "src" / "core" / "esp32_mquickjs.c"
 
 
-class SecureRandomArchitectureTests(unittest.TestCase):
-    def test_random_hex_uses_a_true_entropy_seeded_drbg(self):
+class SecureRandomArchitectureTests(SourceContractTestCase):
+    def test_random_hex_links_the_expected_entropy_and_drbg_dependencies(self):
         source = SYS_SOURCE.read_text(encoding="utf-8")
         cmake = (MQUICKJS / "CMakeLists.txt").read_text(encoding="utf-8")
 

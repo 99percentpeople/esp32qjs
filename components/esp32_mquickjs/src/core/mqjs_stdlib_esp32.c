@@ -437,6 +437,16 @@ static const JSPropDef js_sys[] = {
 static const JSClassDef js_sys_obj =
     JS_OBJECT_DEF("sys", js_sys);
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+static const JSPropDef js_runtime_logs[] = {
+    JS_CFUNC_DEF("read", 3, js_runtime_logs_read),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_runtime_logs_obj =
+    JS_OBJECT_DEF("runtimeLogs", js_runtime_logs);
+#endif
+
 #if CONFIG_ESP32_MQUICKJS_FEATURE_I2C
 static const JSPropDef js_i2c_bus_proto[] = {
     JS_CFUNC_DEF("close", 0, js_i2c_bus_close),
@@ -691,6 +701,9 @@ static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("dac", &js_dac_obj),
 #endif
     JS_PROP_CLASS_DEF("sys", &js_sys_obj),
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+    JS_PROP_CLASS_DEF("runtimeLogs", &js_runtime_logs_obj),
+#endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_I2C
     JS_PROP_CLASS_DEF("i2c", &js_i2c_obj),
     JS_PROP_CLASS_DEF("I2CBus", &js_i2c_bus_class),

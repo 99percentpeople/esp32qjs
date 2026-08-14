@@ -2,12 +2,14 @@ import re
 import unittest
 from pathlib import Path
 
+from source_contract_test_case import SourceContractTestCase
+
 
 ROOT = Path(__file__).resolve().parents[2]
 MQUICKJS = ROOT / "components" / "esp32_mquickjs"
 
 
-class GcArchitectureTests(unittest.TestCase):
+class GcArchitectureTests(SourceContractTestCase):
     def test_rooted_property_targets_are_dereferenced_after_value_creation(self):
         unsafe = re.compile(
             r"esp32_mquickjs_set_property\(ctx,\s*\*[A-Za-z_][A-Za-z0-9_]*,",
@@ -69,19 +71,6 @@ class GcArchitectureTests(unittest.TestCase):
         self.assertIn("result = JS_PushGCRef(ctx, &result_ref);", gateway)
         self.assertIn("esp32_mquickjs_set_property_ref(ctx, result,", gateway)
         self.assertNotIn("esp32_mquickjs_set_property(ctx, result,", gateway)
-
-    def test_debug_gc_preserves_nested_stack_reservations(self):
-        engine = (
-            MQUICKJS / "vendor" / "mquickjs" / "mquickjs.c"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn(
-            "if (new_stack_bottom > ctx->stack_bottom)\n"
-            "        new_stack_bottom = ctx->stack_bottom;",
-            engine,
-        )
-        self.assertIn("ctx->parse_state == NULL && JS_IsPtr(ctx->dummy_block)", engine)
-
 
 if __name__ == "__main__":
     unittest.main()

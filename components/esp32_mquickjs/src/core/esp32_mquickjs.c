@@ -11,7 +11,11 @@
 #include "esp32_mquickjs_http_server.h"
 #include "esp32_mquickjs_i2c.h"
 #include "esp32_mquickjs_ledc.h"
+#include "esp32_mquickjs_log_ring.h"
 #include "esp32_mquickjs_nvs.h"
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+#include "esp32_mquickjs_runtime_logs.h"
+#endif
 #include "esp32_mquickjs_spi.h"
 #include "esp32_mquickjs_stream.h"
 #include "esp32_mquickjs_socket.h"
@@ -405,12 +409,45 @@ static void prepare_console_output(void)
     }
 }
 
+static void console_output_begin(esp32_mquickjs_runtime_t *runtime,
+                                 esp32_mquickjs_log_source_t source)
+{
+    prepare_console_output();
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+    esp32_mquickjs_runtime_logs_console_begin(runtime, source);
+#else
+    (void)runtime;
+    (void)source;
+#endif
+}
+
+static void console_output_write(esp32_mquickjs_runtime_t *runtime,
+                                 const void *buf,
+                                 size_t buf_len)
+{
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+    esp32_mquickjs_runtime_logs_console_write(runtime, buf, buf_len);
+#else
+    (void)runtime;
+    fwrite(buf, 1, buf_len, stdout);
+#endif
+}
+
+static void console_output_end(esp32_mquickjs_runtime_t *runtime)
+{
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+    esp32_mquickjs_runtime_logs_console_end(runtime);
+#else
+    (void)runtime;
+    fputc('\n', stdout);
+    fflush(stdout);
+#endif
+    note_console_output();
+}
+
 static void js_log_write(void *opaque, const void *buf, size_t buf_len)
 {
-    (void)opaque;
-    fwrite(buf, 1, buf_len, stdout);
-    fflush(stdout);
-    note_console_output();
+    console_output_write(opaque, buf, buf_len);
 }
 
 static int js_interrupt_handler(JSContext *ctx, void *opaque)
@@ -819,11 +856,26 @@ JSContext *esp32_mquickjs_create(void *mem_start,
     runtime->timer_state = NULL;
     runtime->async_state = NULL;
     runtime->future_state = NULL;
+    runtime->startup_bytecode = NULL;
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+    runtime->runtime_log_state = NULL;
+    if (!esp32_mquickjs_init_runtime_logs(runtime)) {
+        return NULL;
+    }
+#else
+    runtime->runtime_log_state = NULL;
+#endif
     if (!esp32_mquickjs_init_async_state(runtime)) {
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+        esp32_mquickjs_deinit_runtime_logs(runtime);
+#endif
         return NULL;
     }
     if (!esp32_mquickjs_init_timer_state(runtime)) {
         esp32_mquickjs_deinit_async_state(runtime);
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+        esp32_mquickjs_deinit_runtime_logs(runtime);
+#endif
         return NULL;
     }
 
@@ -831,6 +883,9 @@ JSContext *esp32_mquickjs_create(void *mem_start,
     if (ctx == NULL) {
         esp32_mquickjs_deinit_timer_state(NULL, runtime);
         esp32_mquickjs_deinit_async_state(runtime);
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+        esp32_mquickjs_deinit_runtime_logs(runtime);
+#endif
         return NULL;
     }
 
@@ -844,6 +899,9 @@ JSContext *esp32_mquickjs_create(void *mem_start,
         JS_FreeContext(ctx);
         esp32_mquickjs_deinit_timer_state(NULL, runtime);
         esp32_mquickjs_deinit_async_state(runtime);
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+        esp32_mquickjs_deinit_runtime_logs(runtime);
+#endif
         return NULL;
     }
     if (!esp32_mquickjs_init_event_queue_runtime(ctx, runtime)) {
@@ -852,6 +910,9 @@ JSContext *esp32_mquickjs_create(void *mem_start,
         JS_FreeContext(ctx);
         esp32_mquickjs_deinit_timer_state(NULL, runtime);
         esp32_mquickjs_deinit_async_state(runtime);
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+        esp32_mquickjs_deinit_runtime_logs(runtime);
+#endif
         return NULL;
     }
     return ctx;
@@ -916,8 +977,13 @@ bool esp32_mquickjs_destroy(JSContext *ctx,
     if (ctx != NULL) {
         JS_FreeContext(ctx);
     }
+    heap_caps_free(runtime->startup_bytecode);
+    runtime->startup_bytecode = NULL;
     esp32_mquickjs_deinit_future_runtime(runtime);
     esp32_mquickjs_deinit_async_state(runtime);
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+    esp32_mquickjs_deinit_runtime_logs(runtime);
+#endif
     runtime->deadline_us = 0;
     runtime->scoped_deadline_us = 0;
     runtime->littlefs_mounted = false;
@@ -931,6 +997,7 @@ bool esp32_mquickjs_destroy(JSContext *ctx,
     runtime->prepare_output_opaque = NULL;
     runtime->cooperate = NULL;
     runtime->cooperate_opaque = NULL;
+    runtime->runtime_log_state = NULL;
     return true;
 }
 
@@ -969,15 +1036,38 @@ JSValue esp32_mquickjs_eval(JSContext *ctx,
     return result;
 }
 
+JSValue esp32_mquickjs_run(JSContext *ctx,
+                           esp32_mquickjs_runtime_t *runtime,
+                           JSValue compiled_code)
+{
+    uint64_t previous_deadline = runtime != NULL ? runtime->deadline_us : 0;
+    JSValue result;
+
+    if (runtime != NULL && runtime->eval_timeout_ms > 0) {
+        uint64_t eval_deadline = esp_timer_get_time() +
+                                 ((uint64_t)runtime->eval_timeout_ms * 1000ULL);
+
+        if (previous_deadline == 0 || eval_deadline < previous_deadline) {
+            runtime->deadline_us = eval_deadline;
+        }
+    }
+
+    result = JS_Run(ctx, compiled_code);
+
+    if (runtime != NULL) {
+        runtime->deadline_us = previous_deadline;
+    }
+    return result;
+}
+
 void esp32_mquickjs_print_exception(JSContext *ctx)
 {
     JSValue exception = JS_GetException(ctx);
+    esp32_mquickjs_runtime_t *runtime = JS_GetContextOpaque(ctx);
 
-    prepare_console_output();
+    console_output_begin(runtime, ESP32_MQUICKJS_LOG_SOURCE_EXCEPTION);
     JS_PrintValueF(ctx, exception, JS_DUMP_LONG);
-    fputc('\n', stdout);
-    fflush(stdout);
-    note_console_output();
+    console_output_end(runtime);
 }
 
 JSValue js_help(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -986,10 +1076,12 @@ JSValue js_help(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     (void)this_val;
     (void)argc;
     (void)argv;
-    prepare_console_output();
-    fputs("See docs/api.md, docs/c-api.md, or docs/js-api.md for the API reference.\n", stdout);
-    fflush(stdout);
-    note_console_output();
+    console_output_begin(esp32_mquickjs_get_active_runtime(),
+                         ESP32_MQUICKJS_LOG_SOURCE_RUNTIME);
+    console_output_write(esp32_mquickjs_get_active_runtime(),
+                         "See docs/api.md, docs/c-api.md, or docs/js-api.md for the API reference.",
+                         strlen("See docs/api.md, docs/c-api.md, or docs/js-api.md for the API reference."));
+    console_output_end(esp32_mquickjs_get_active_runtime());
     return JS_UNDEFINED;
 }
 
@@ -1130,10 +1222,11 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
         core_async_handled = true;
 
         if (JS_StackCheck(ctx, 2)) {
-            prepare_console_output();
-            fputs("Timer callback skipped: JS stack overflow\n", stdout);
-            fflush(stdout);
-            note_console_output();
+            console_output_begin(runtime, ESP32_MQUICKJS_LOG_SOURCE_RUNTIME);
+            console_output_write(runtime,
+                                 "Timer callback skipped: JS stack overflow",
+                                 strlen("Timer callback skipped: JS stack overflow"));
+            console_output_end(runtime);
             esp32_mquickjs_cancel_timer(ctx, slot);
             continue;
         }
@@ -1178,12 +1271,13 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
 JSValue js_print(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int i;
+    esp32_mquickjs_runtime_t *runtime = JS_GetContextOpaque(ctx);
 
     (void)this_val;
-    prepare_console_output();
+    console_output_begin(runtime, ESP32_MQUICKJS_LOG_SOURCE_JAVASCRIPT);
     for (i = 0; i < argc; i++) {
         if (i != 0) {
-            fputc(' ', stdout);
+            console_output_write(runtime, " ", 1U);
         }
 
         if (JS_IsString(ctx, argv[i])) {
@@ -1191,15 +1285,13 @@ JSValue js_print(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
             size_t len = 0;
             const char *str = JS_ToCStringLen(ctx, &len, argv[i], &buf);
 
-            fwrite(str, 1, len, stdout);
+            console_output_write(runtime, str, len);
         } else {
             JS_PrintValueF(ctx, argv[i], JS_DUMP_LONG);
         }
     }
 
-    fputc('\n', stdout);
-    fflush(stdout);
-    note_console_output();
+    console_output_end(runtime);
     return JS_UNDEFINED;
 }
 

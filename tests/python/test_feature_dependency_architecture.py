@@ -2,12 +2,14 @@ import re
 import unittest
 from pathlib import Path
 
+from source_contract_test_case import SourceContractTestCase
+
 
 ROOT = Path(__file__).resolve().parents[2]
 CMAKE = ROOT / "components" / "esp32_mquickjs" / "CMakeLists.txt"
 
 
-class FeatureDependencyArchitectureTests(unittest.TestCase):
+class FeatureDependencyArchitectureTests(SourceContractTestCase):
     def test_optional_feature_headers_are_available_during_early_expansion(self):
         source = CMAKE.read_text(encoding="utf-8")
         match = re.search(

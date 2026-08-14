@@ -1,12 +1,14 @@
 import unittest
 from pathlib import Path
 
+from source_contract_test_case import SourceContractTestCase
+
 
 ROOT = Path(__file__).resolve().parents[2]
 MQUICKJS = ROOT / "components" / "esp32_mquickjs"
 
 
-class IoConcurrencyArchitectureTests(unittest.TestCase):
+class IoConcurrencyArchitectureTests(SourceContractTestCase):
     def test_global_future_and_event_queue_are_native_classes(self):
         stdlib = (MQUICKJS / "src/core/mqjs_stdlib_esp32.c").read_text(
             encoding="utf-8"

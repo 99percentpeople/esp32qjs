@@ -1,5 +1,6 @@
 #include "esp32_mquickjs_sys.h"
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_version.h"
 
 #include <limits.h>
 #include <string.h>
@@ -152,6 +153,8 @@ static JSValue sys_make_features_object(JSContext *ctx)
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER)) ||
         !esp32_mquickjs_set_property_ref(ctx, features, "displayBuffer",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER)) ||
+        !esp32_mquickjs_set_property_ref(ctx, features, "runtimeLogs",
+                                     JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS)) ||
         !esp32_mquickjs_set_property_ref(ctx, features, "http",
                                      JS_NewBool(CONFIG_ESP32_MQUICKJS_FEATURE_HTTP))) {
         goto fail;
@@ -209,6 +212,8 @@ static JSValue sys_make_info_object(JSContext *ctx)
     }
     if (!esp32_mquickjs_set_property_ref(ctx, info, "runtimeVersion",
                                          JS_NewString(ctx, ESP32QJS_VERSION)) ||
+        !esp32_mquickjs_set_property_ref(ctx, info, "mquickjsVersion",
+                                         JS_NewString(ctx, ESP32_MQUICKJS_ENGINE_VERSION)) ||
         !esp32_mquickjs_set_property_ref(ctx, info, "hostApiVersion",
                                          JS_NewUint32(ctx, ESP32QJS_HOST_API_VERSION)) ||
         !esp32_mquickjs_set_property_ref(ctx, info, "mcu",

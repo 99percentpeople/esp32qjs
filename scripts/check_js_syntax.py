@@ -15,6 +15,7 @@ from typing import Iterable
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 VENDOR_DIR = ROOT_DIR / "components" / "esp32_mquickjs" / "vendor" / "mquickjs"
+COMPONENT_INCLUDE_DIR = ROOT_DIR / "components" / "esp32_mquickjs" / "include"
 CHECKER_SOURCE = ROOT_DIR / "scripts" / "mquickjs_syntax_check.c"
 DEFAULT_BUILD_DIR = ROOT_DIR / "build" / "js-syntax"
 DEFAULT_SOURCE_ROOTS = (
@@ -53,7 +54,11 @@ def source_dependencies() -> tuple[Path, ...]:
         "cutils.c",
         "cutils.h",
     )
-    return (CHECKER_SOURCE, *(VENDOR_DIR / name for name in names))
+    return (
+        CHECKER_SOURCE,
+        COMPONENT_INCLUDE_DIR / "esp32_mquickjs_version.h",
+        *(VENDOR_DIR / name for name in names),
+    )
 
 
 def checker_is_current(tool: Path, atom_header: Path, stdlib_header: Path) -> bool:
@@ -94,6 +99,7 @@ def build_checker(build_dir: Path, *, compiler: str | None = None, rebuild: bool
         "-fno-math-errno",
         "-fno-trapping-math",
         f"-I{VENDOR_DIR}",
+        f"-I{COMPONENT_INCLUDE_DIR}",
     ]
     print(f"Building MQuickJS syntax checker in {build_dir}")
 
@@ -157,6 +163,17 @@ def verify_checker_dialect(tool: Path, build_dir: Path) -> None:
         raise RuntimeError(
             "MQuickJS checker unexpectedly accepted const/arrow syntax."
         )
+    stdin_check = subprocess.run(
+        [str(tool), "--stdin", "<server-preflight>"],
+        input="var value = 1;\n",
+        capture_output=True,
+        text=True,
+    )
+    if stdin_check.returncode != 0:
+        raise RuntimeError(
+            "MQuickJS checker rejected server stdin validation:\n"
+            + stdin_check.stderr.strip()
+        )
 
 
 def iter_js_files(paths: Iterable[Path]) -> list[Path]:
@@ -176,14 +193,37 @@ def iter_js_files(paths: Iterable[Path]) -> list[Path]:
     return sorted(files)
 
 
-def extract_documented_js(build_dir: Path) -> list[Path]:
+def iter_documents(paths: Iterable[Path]) -> list[Path]:
+    documents: set[Path] = set()
+    for raw_path in paths:
+        path = raw_path.expanduser()
+        if not path.is_absolute():
+            path = (ROOT_DIR / path).resolve()
+        else:
+            path = path.resolve()
+        if path.is_dir():
+            documents.update(
+                candidate.resolve()
+                for candidate in path.rglob("*.md")
+                if candidate.is_file()
+            )
+        elif path.is_file() and path.suffix.lower() == ".md":
+            documents.add(path)
+        else:
+            raise ValueError(
+                f"Documentation path does not exist or is not Markdown: {path}"
+            )
+    return sorted(documents)
+
+
+def extract_documented_js(build_dir: Path, documents: Iterable[Path]) -> list[Path]:
     snippet_dir = build_dir / "doc-snippets"
     snippet_dir.mkdir(parents=True, exist_ok=True)
     for stale_file in snippet_dir.glob("*.js"):
         stale_file.unlink()
 
     snippets: list[Path] = []
-    for document in DEFAULT_DOCUMENTS:
+    for document in documents:
         lines = document.read_text(encoding="utf-8").splitlines()
         index = 0
         while index < len(lines):
@@ -200,11 +240,7 @@ def extract_documented_js(build_dir: Path) -> list[Path]:
             stripped = body.strip()
             if stripped.startswith("{") and stripped.endswith("}"):
                 body = "(" + body + ");"
-            name = (
-                str(document.relative_to(ROOT_DIR))
-                .replace("/", "__")
-                .replace("\\", "__")
-            )
+            name = display_path(document).replace("/", "__").replace("\\", "__")
             snippet_path = snippet_dir / f"{name}__line_{start_line}.js"
             snippet_path.write_text("\n" * (start_line - 1) + body + "\n", encoding="utf-8")
             snippets.append(snippet_path.resolve())
@@ -250,7 +286,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="Add a file or directory to the default or explicitly selected source roots. Repeatable.",
     )
+    parser.add_argument(
+        "--extra-doc",
+        action="append",
+        default=[],
+        type=Path,
+        help="Also validate JavaScript fences in a Markdown file or directory. Repeatable.",
+    )
+    parser.add_argument(
+        "--docs-only",
+        action="store_true",
+        help="Validate documented JavaScript without scanning JavaScript source roots.",
+    )
     parser.add_argument("--build-dir", type=Path, default=DEFAULT_BUILD_DIR)
+    parser.add_argument(
+        "--build-only",
+        action="store_true",
+        help="Build and smoke-test the host parser without scanning source files.",
+    )
     parser.add_argument("--cc", help="Host C compiler command. Defaults to CC, cc, gcc, or clang.")
     parser.add_argument("--rebuild", action="store_true", help="Rebuild the host parser even when cached.")
     parser.add_argument(
@@ -269,9 +322,23 @@ def main(argv: list[str] | None = None) -> int:
     try:
         tool = build_checker(build_dir, compiler=args.cc, rebuild=args.rebuild)
         verify_checker_dialect(tool, build_dir)
-        paths = [*(args.paths if args.paths else DEFAULT_SOURCE_ROOTS), *args.extra_path]
+        if args.build_only:
+            if args.paths or args.extra_path or args.extra_doc or args.docs_only:
+                raise ValueError("--build-only cannot be combined with source or document paths")
+            print(tool)
+            return 0
+        if args.docs_only and (args.paths or args.extra_path):
+            raise ValueError("--docs-only cannot be combined with source paths")
+        paths = [] if args.docs_only else [
+            *(args.paths if args.paths else DEFAULT_SOURCE_ROOTS),
+            *args.extra_path,
+        ]
         source_files = iter_js_files(paths)
-        snippets = [] if args.no_docs or args.paths else extract_documented_js(build_dir)
+        documents = [] if args.no_docs else iter_documents([
+            *([] if args.paths or args.docs_only else DEFAULT_DOCUMENTS),
+            *args.extra_doc,
+        ])
+        snippets = extract_documented_js(build_dir, documents)
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"MQuickJS syntax checker setup failed: {exc}", file=sys.stderr)
         return 2

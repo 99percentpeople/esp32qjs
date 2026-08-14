@@ -296,6 +296,62 @@ JSValue esp32_mquickjs_load_from_active_fs(JSContext *ctx,
                         script_path);
 }
 
+JSValue esp32_mquickjs_load_startup_from_active_fs(
+    JSContext *ctx,
+    esp32_mquickjs_runtime_t *runtime,
+    const char *script_path)
+{
+    char resolved_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+    size_t source_len = 0;
+    uint8_t *source;
+    JSValue compiled;
+
+    if (runtime == NULL || runtime->startup_bytecode != NULL) {
+        return JS_ThrowInternalError(ctx, "startup bytecode is already loaded");
+    }
+    if (!esp32_mquickjs_fs_resolve_path(active_fs_base_path(),
+                                        script_path,
+                                        resolved_path,
+                                        sizeof(resolved_path))) {
+        return JS_ThrowTypeError(ctx,
+                                 "startup script path must stay under %s",
+                                 active_fs_base_path());
+    }
+
+    source = load_script_file(resolved_path, &source_len);
+    if (source == NULL) {
+        return JS_ThrowReferenceError(ctx, "failed to read startup script: %s", resolved_path);
+    }
+    if (!JS_IsBytecode(source, source_len)) {
+        JSValue result = esp32_mquickjs_eval(ctx,
+                                             runtime,
+                                             (const char *)source,
+                                             resolved_path,
+                                             0);
+
+        heap_caps_free(source);
+        return result;
+    }
+
+    if (JS_RelocateBytecode(ctx, source, (uint32_t)source_len) != 0) {
+        heap_caps_free(source);
+        return JS_ThrowInternalError(ctx, "failed to relocate startup bytecode");
+    }
+    compiled = JS_LoadBytecode(ctx, source);
+    if (JS_IsException(compiled)) {
+        heap_caps_free(source);
+        return compiled;
+    }
+
+    /* MQuickJS executes directly from this buffer and its atom table. */
+    runtime->startup_bytecode = source;
+    ESP_LOGI(TAG,
+             "Loaded precompiled startup bytecode: path=%s bytes=%u",
+             resolved_path,
+             (unsigned)source_len);
+    return esp32_mquickjs_run(ctx, runtime, compiled);
+}
+
 JSValue esp32_mquickjs_load_from_root(JSContext *ctx,
                                       esp32_mquickjs_runtime_t *runtime,
                                       const char *base_path,

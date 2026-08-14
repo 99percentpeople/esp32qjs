@@ -1,12 +1,14 @@
 import unittest
 from pathlib import Path
 
+from source_contract_test_case import SourceContractTestCase
+
 
 ROOT = Path(__file__).resolve().parents[2]
 DISPLAY_DIR = ROOT / "shared" / "flash_data" / "_sys" / "display"
 
 
-class DisplayArchitectureTests(unittest.TestCase):
+class DisplayArchitectureTests(SourceContractTestCase):
     def test_panel_drivers_do_not_own_rendering_or_native_buses(self):
         forbidden = (
             "display.Surface.call",

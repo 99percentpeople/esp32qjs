@@ -51,6 +51,8 @@ struct esp32_mquickjs_runtime {
     void *timer_state;
     void *async_state;
     void *future_state;
+    void *runtime_log_state;
+    void *startup_bytecode;
     uint64_t scoped_deadline_us;
     uint16_t load_root_depth;
     char fs_root[ESP32_MQUICKJS_FS_ROOT_MAX];
@@ -92,6 +94,15 @@ JSValue esp32_mquickjs_eval(JSContext *ctx,
                             const char *source,
                             const char *filename,
                             int eval_flags);
+
+JSValue esp32_mquickjs_run(JSContext *ctx,
+                           esp32_mquickjs_runtime_t *runtime,
+                           JSValue compiled_code);
+
+JSValue esp32_mquickjs_load_startup_from_active_fs(
+    JSContext *ctx,
+    esp32_mquickjs_runtime_t *runtime,
+    const char *script_path);
 
 JSValue esp32_mquickjs_call(JSContext *ctx,
                             esp32_mquickjs_runtime_t *runtime,

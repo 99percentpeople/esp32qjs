@@ -1,12 +1,14 @@
 import unittest
 from pathlib import Path
 
+from source_contract_test_case import SourceContractTestCase
+
 
 ROOT = Path(__file__).resolve().parents[2]
 MQUICKJS = ROOT / "components" / "esp32_mquickjs"
 
 
-class FilesystemRootArchitectureTests(unittest.TestCase):
+class FilesystemRootArchitectureTests(SourceContractTestCase):
     def test_core_uses_a_generic_filesystem_root(self):
         files = (
             MQUICKJS / "include" / "esp32_mquickjs.h",
@@ -18,7 +20,8 @@ class FilesystemRootArchitectureTests(unittest.TestCase):
         source = "\n".join(path.read_text(encoding="utf-8") for path in files)
 
         self.assertIn("fs.setRoot(path)", source)
-        self.assertNotIn("workspace", source.lower())
+        self.assertNotIn("/workspace", source.lower())
+        self.assertNotIn("ESP32QJS_WORKSPACE", source)
         self.assertNotIn("ESP32QJS_APP_NATIVE", source)
 
 

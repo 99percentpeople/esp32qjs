@@ -1,11 +1,13 @@
 import unittest
 from pathlib import Path
 
+from source_contract_test_case import SourceContractTestCase
+
 ROOT = Path(__file__).resolve().parents[2]
 MQUICKJS = ROOT / "components" / "esp32_mquickjs"
 
 
-class TransportArchitectureTests(unittest.TestCase):
+class TransportArchitectureTests(SourceContractTestCase):
     def test_usb_serial_and_repl_are_mutually_exclusive(self):
         kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
         interactive_cmake = (
@@ -70,17 +72,19 @@ class TransportArchitectureTests(unittest.TestCase):
         source = (
             MQUICKJS / "src" / "modules" / "websocket" / "esp32_mquickjs_websocket.c"
         ).read_text(encoding="utf-8")
-
-        control_check = """if (data->op_code == WEBSOCKET_OPCODE_CLOSE ||
-        data->op_code == WEBSOCKET_OPCODE_PING ||
-        data->op_code == WEBSOCKET_OPCODE_PONG) {
-        return;
-    }"""
-        self.assertIn(control_check, source)
-        self.assertLess(
-            source.index(control_check),
-            source.index('websocket_enqueue_error("only complete WebSocket text'),
+        function_start = source.index("static void websocket_handle_data(")
+        function_end = source.index("\nstatic void websocket_event_handler(", function_start)
+        handler = source[function_start:function_end]
+        error_position = handler.index(
+            'websocket_enqueue_error("only complete WebSocket text'
         )
+
+        for opcode in (
+            "WEBSOCKET_OPCODE_CLOSE",
+            "WEBSOCKET_OPCODE_PING",
+            "WEBSOCKET_OPCODE_PONG",
+        ):
+            self.assertLess(handler.index(opcode), error_position)
 
     def test_repeated_input_transports_use_event_queues_without_callbacks(self):
         sources = (

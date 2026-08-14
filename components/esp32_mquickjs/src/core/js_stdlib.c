@@ -13,6 +13,9 @@
 #include "esp32_mquickjs_i2c.h"
 #include "esp32_mquickjs_ledc.h"
 #include "esp32_mquickjs_nvs.h"
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+#include "esp32_mquickjs_runtime_logs.h"
+#endif
 #include "esp32_mquickjs_spi.h"
 #include "esp32_mquickjs_socket.h"
 #include "esp32_mquickjs_uart.h"

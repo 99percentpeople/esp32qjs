@@ -139,6 +139,19 @@ config ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
         Enable the native displayBuffer module for C-backed mono1 and rgb565
         pixel buffers, drawing primitives, dirty bounds, and byte-view exports.
 
+config ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+    bool "Capture Agent standard output for host diagnostics"
+    default n
+    help
+        Capture JavaScript print output, uncaught exceptions, runtime
+        diagnostics, and ESP-IDF component output in a bounded native ring.
+        The ring records raw text and its origin, not log levels; protocol
+        classification remains an Agent application responsibility.
+        The internal runtimeLogs.read() bridge exists only for the headless
+        Agent profile; this does not add a JavaScript logger, configurable log
+        levels, filtering, or persistence. Captured output is not mirrored to
+        the protocol serial transport.
+
 endmenu
 
 config ESP32_MQUICKJS_DEBUG_GC

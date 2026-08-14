@@ -1,4 +1,5 @@
 import importlib.util
+import re
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,31 @@ SPEC.loader.exec_module(CHECKER)
 
 
 class JavaScriptSyntaxToolTests(unittest.TestCase):
+    def test_engine_version_matches_vendored_changelog(self):
+        version_header = (
+            ROOT
+            / "components"
+            / "esp32_mquickjs"
+            / "include"
+            / "esp32_mquickjs_version.h"
+        ).read_text(encoding="utf-8")
+        changelog_version = (
+            ROOT
+            / "components"
+            / "esp32_mquickjs"
+            / "vendor"
+            / "mquickjs"
+            / "Changelog"
+        ).read_text(encoding="utf-8").split(":", 1)[0]
+        match = re.search(
+            r'^#define ESP32_MQUICKJS_ENGINE_VERSION "([^"]+)"$',
+            version_header,
+            re.MULTILINE,
+        )
+
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1), changelog_version)
+
     def test_default_roots_cover_first_party_javascript(self):
         files = CHECKER.iter_js_files(CHECKER.DEFAULT_SOURCE_ROOTS)
         relative = {path.relative_to(ROOT).as_posix() for path in files}
@@ -40,7 +66,10 @@ class JavaScriptSyntaxToolTests(unittest.TestCase):
 
     def test_document_snippets_keep_source_line_numbers(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            snippets = CHECKER.extract_documented_js(Path(temp_dir))
+            snippets = CHECKER.extract_documented_js(
+                Path(temp_dir),
+                CHECKER.DEFAULT_DOCUMENTS,
+            )
 
             self.assertGreater(len(snippets), 0)
             c_api_snippets = [path for path in snippets if "c-api.md" in path.name]
@@ -48,6 +77,23 @@ class JavaScriptSyntaxToolTests(unittest.TestCase):
             content = c_api_snippets[0].read_text(encoding="utf-8")
             marker = int(c_api_snippets[0].stem.rsplit("_", 1)[-1])
             self.assertTrue(content.startswith("\n" * (marker - 1)))
+
+    def test_extra_document_directory_is_discovered(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            nested = root / "skill" / "references"
+            nested.mkdir(parents=True)
+            document = nested / "api.md"
+            document.write_text("```js\nvar value = 1;\n```\n", encoding="utf-8")
+
+            self.assertEqual(CHECKER.iter_documents([root]), [document.resolve()])
+            args = CHECKER.parse_args([
+                "--docs-only",
+                "--extra-doc",
+                str(root),
+            ])
+            self.assertTrue(args.docs_only)
+            self.assertEqual(args.extra_doc, [root])
 
     def test_non_javascript_path_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:

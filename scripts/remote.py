@@ -2435,7 +2435,7 @@ def generated_hardware_defaults(
         f'CONFIG_ESP32_MQUICKJS_PSRAM_MODE="{psram_mode}"',
     ]
     if psram_mode == "none":
-        heap_size = 192_512 if idf_target == "esp32c3" else 262_144
+        heap_size = 200_704 if idf_target == "esp32c3" else 262_144
         if idf_target == "esp32s3":
             lines.append("CONFIG_SPIRAM=n")
         lines.extend((

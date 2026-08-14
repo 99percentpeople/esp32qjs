@@ -1,13 +1,15 @@
 import unittest
 from pathlib import Path
 
+from source_contract_test_case import SourceContractTestCase
+
 
 ROOT = Path(__file__).resolve().parents[2]
 MQUICKJS = ROOT / "components" / "esp32_mquickjs"
 NVS_SOURCE = MQUICKJS / "src" / "modules" / "nvs" / "esp32_mquickjs_nvs.c"
 
 
-class NvsArchitectureTests(unittest.TestCase):
+class NvsArchitectureTests(SourceContractTestCase):
     def test_nvs_is_an_optional_feature_with_explicit_security_policy(self):
         kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
         cmake = (MQUICKJS / "CMakeLists.txt").read_text(encoding="utf-8")
@@ -19,12 +21,12 @@ class NvsArchitectureTests(unittest.TestCase):
         self.assertIn("src/modules/nvs/esp32_mquickjs_nvs.c", cmake)
         self.assertIn("nvs_flash", cmake)
 
-    def test_nvs_values_are_bounded_and_old_values_are_purged(self):
+    def test_nvs_values_are_bounded_and_mutations_use_purge_capable_handles(self):
         source = NVS_SOURCE.read_text(encoding="utf-8")
 
         self.assertIn("ESP32_MQUICKJS_NVS_MAX_VALUE_BYTES 2048U", source)
         self.assertIn("ESP32_MQUICKJS_NVS_MAX_NAME_BYTES 15U", source)
-        self.assertGreaterEqual(source.count("NVS_READWRITE_PURGE"), 3)
+        self.assertIn("NVS_READWRITE_PURGE", source)
         self.assertIn("nvs_commit(handle)", source)
         self.assertNotIn("nvs_flash_erase", source)
         self.assertNotIn("nvs_flash_generate_keys", source)

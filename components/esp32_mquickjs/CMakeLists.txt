@@ -23,6 +23,7 @@ set(ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS
     CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
     CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
     CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
+    CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
 )
 
 macro(esp32_mquickjs_load_feature_config)
@@ -411,6 +412,12 @@ esp32_mquickjs_append_feature_component(
     "src/modules/display_buffer/esp32_mquickjs_display_buffer_draw.c"
     "src/modules/display_buffer/esp32_mquickjs_display_buffer_font.c"
     "src/modules/display_buffer/esp32_mquickjs_display_buffer_text.c"
+)
+
+esp32_mquickjs_append_feature_component(
+    CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+    "src/core/esp32_mquickjs_log_ring.c"
+    "src/core/esp32_mquickjs_runtime_logs.c"
 )
 
 list(REMOVE_DUPLICATES ESP32_MQUICKJS_PRIV_REQUIRES)

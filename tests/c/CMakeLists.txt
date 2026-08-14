@@ -38,3 +38,10 @@ add_executable(test_line_framer
 )
 target_include_directories(test_line_framer PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_line_framer COMMAND test_line_framer)
+
+add_executable(test_log_ring
+    test_log_ring.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_log_ring.c
+)
+target_include_directories(test_log_ring PRIVATE ../../components/esp32_mquickjs/internal)
+add_test(NAME test_log_ring COMMAND test_log_ring)
