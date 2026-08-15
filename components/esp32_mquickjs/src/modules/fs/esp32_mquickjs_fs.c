@@ -25,8 +25,90 @@
 
 static const char *TAG = "esp32qjs";
 
+#define ESP32_MQUICKJS_MAX_LITTLEFS_MOUNTS 4U
+#define ESP32_MQUICKJS_PARTITION_LABEL_MAX 17U
+
+typedef struct {
+    bool active;
+    char partition_label[ESP32_MQUICKJS_PARTITION_LABEL_MAX];
+    char base_path[ESP32_MQUICKJS_FS_ROOT_MAX];
+} esp32_mquickjs_littlefs_mount_t;
+
 static bool s_littlefs_mounted;
 static SemaphoreHandle_t s_fs_worker_lock;
+static esp32_mquickjs_littlefs_mount_t
+    s_littlefs_mounts[ESP32_MQUICKJS_MAX_LITTLEFS_MOUNTS];
+
+static esp32_mquickjs_littlefs_mount_t *find_littlefs_mount_by_root(
+    const char *base_path)
+{
+    esp32_mquickjs_littlefs_mount_t *matched = NULL;
+    size_t matched_length = 0;
+    size_t mount_length;
+    size_t i;
+
+    if (base_path == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < ESP32_MQUICKJS_MAX_LITTLEFS_MOUNTS; i++) {
+        if (!s_littlefs_mounts[i].active) {
+            continue;
+        }
+        mount_length = strlen(s_littlefs_mounts[i].base_path);
+        if (mount_length > matched_length &&
+            strncmp(s_littlefs_mounts[i].base_path, base_path, mount_length) == 0 &&
+            (base_path[mount_length] == '\0' || base_path[mount_length] == '/')) {
+            matched = &s_littlefs_mounts[i];
+            matched_length = mount_length;
+        }
+    }
+    return matched;
+}
+
+static bool remember_littlefs_mount(const char *partition_label,
+                                    const char *base_path)
+{
+    esp32_mquickjs_littlefs_mount_t *available = NULL;
+    size_t i;
+
+    for (i = 0; i < ESP32_MQUICKJS_MAX_LITTLEFS_MOUNTS; i++) {
+        if (s_littlefs_mounts[i].active &&
+            strcmp(s_littlefs_mounts[i].partition_label, partition_label) == 0) {
+            available = &s_littlefs_mounts[i];
+            break;
+        }
+        if (!s_littlefs_mounts[i].active && available == NULL) {
+            available = &s_littlefs_mounts[i];
+        }
+    }
+    if (available == NULL) {
+        return false;
+    }
+    snprintf(available->partition_label,
+             sizeof(available->partition_label),
+             "%s",
+             partition_label);
+    snprintf(available->base_path,
+             sizeof(available->base_path),
+             "%s",
+             base_path);
+    available->active = true;
+    return true;
+}
+
+static void forget_littlefs_mount(const char *partition_label)
+{
+    size_t i;
+
+    for (i = 0; i < ESP32_MQUICKJS_MAX_LITTLEFS_MOUNTS; i++) {
+        if (!s_littlefs_mounts[i].active ||
+            strcmp(s_littlefs_mounts[i].partition_label, partition_label) != 0) {
+            continue;
+        }
+        memset(&s_littlefs_mounts[i], 0, sizeof(s_littlefs_mounts[i]));
+        return;
+    }
+}
 
 static const char *active_fs_base_path(void)
 {
@@ -232,6 +314,11 @@ bool esp32_mquickjs_mount_littlefs_partition(const char *partition_label,
                  partition_label,
                  esp_err_to_name(ret));
     }
+    if (!remember_littlefs_mount(partition_label, base_path)) {
+        ESP_LOGW(TAG,
+                 "LittleFS '%s' mounted but filesystem info registry is full",
+                 partition_label);
+    }
     return true;
 }
 
@@ -241,6 +328,7 @@ void esp32_mquickjs_unmount_littlefs_partition(const char *partition_label)
         return;
     }
     esp_vfs_littlefs_unregister(partition_label);
+    forget_littlefs_mount(partition_label);
 }
 
 void esp32_mquickjs_unmount_littlefs(void)
@@ -390,6 +478,63 @@ JSValue js_fs_set_root(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
     }
     snprintf(runtime->fs_root, sizeof(runtime->fs_root), "%s", path);
     return JS_NewString(ctx, runtime->fs_root);
+}
+
+JSValue js_fs_info(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    const char *root = active_fs_base_path();
+    esp32_mquickjs_littlefs_mount_t *mount;
+    size_t total = 0;
+    size_t used = 0;
+    JSGCRef result_ref;
+    JSValue *result;
+    esp_err_t ret;
+
+    (void)this_val;
+    (void)argv;
+    if (argc != 0) {
+        return JS_ThrowTypeError(ctx, "fs.info() expects no arguments");
+    }
+    mount = find_littlefs_mount_by_root(root);
+    if (mount == NULL) {
+        return JS_ThrowInternalError(ctx,
+                                     "filesystem information is unavailable for %s",
+                                     root);
+    }
+    ret = esp_littlefs_info(mount->partition_label, &total, &used);
+    if (ret != ESP_OK) {
+        return JS_ThrowInternalError(ctx,
+                                     "filesystem information query failed for %s (%s)",
+                                     root,
+                                     esp_err_to_name(ret));
+    }
+
+    result = JS_PushGCRef(ctx, &result_ref);
+    *result = JS_NewObject(ctx);
+    if (JS_IsException(*result) ||
+        !esp32_mquickjs_set_property_ref(ctx,
+                                         result,
+                                         "root",
+                                         JS_NewString(ctx, root)) ||
+        !esp32_mquickjs_set_property_ref(ctx,
+                                         result,
+                                         "totalBytes",
+                                         JS_NewInt64(ctx, (int64_t)total)) ||
+        !esp32_mquickjs_set_property_ref(ctx,
+                                         result,
+                                         "usedBytes",
+                                         JS_NewInt64(ctx, (int64_t)used)) ||
+        !esp32_mquickjs_set_property_ref(ctx,
+                                         result,
+                                         "freeBytes",
+                                         JS_NewInt64(ctx,
+                                                     (int64_t)(total >= used
+                                                                   ? total - used
+                                                                   : 0U)))) {
+        JS_PopGCRef(ctx, &result_ref);
+        return JS_EXCEPTION;
+    }
+    return JS_PopGCRef(ctx, &result_ref);
 }
 
 JSValue js_framework_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

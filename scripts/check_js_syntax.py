@@ -31,13 +31,15 @@ DEFAULT_DOCUMENTS = (
 
 
 def compiler_command(explicit: str | None = None) -> list[str]:
-    raw = explicit or os.environ.get("CC", "")
+    # This executable is run during configure, so it must always be built for
+    # the host. ESP-IDF exports CC as the target cross-compiler inside CMake.
+    raw = explicit or os.environ.get("HOSTCC", "")
     candidates = [shlex.split(raw)] if raw else []
     candidates.extend([[name] for name in ("cc", "gcc", "clang")])
     for candidate in candidates:
         if candidate and shutil.which(candidate[0]):
             return candidate
-    raise RuntimeError("No host C compiler found; set CC or install cc/gcc/clang.")
+    raise RuntimeError("No host C compiler found; set HOSTCC or install cc/gcc/clang.")
 
 
 def source_dependencies() -> tuple[Path, ...]:

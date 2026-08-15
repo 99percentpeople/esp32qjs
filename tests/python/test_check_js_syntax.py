@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -16,6 +17,21 @@ SPEC.loader.exec_module(CHECKER)
 
 
 class JavaScriptSyntaxToolTests(unittest.TestCase):
+    def test_host_checker_ignores_esp_idf_target_compiler(self):
+        with (
+            patch.dict(
+                CHECKER.os.environ,
+                {"CC": "xtensa-esp32s3-elf-gcc", "HOSTCC": ""},
+                clear=True,
+            ),
+            patch.object(
+                CHECKER.shutil,
+                "which",
+                side_effect=lambda name: "/usr/bin/cc" if name == "cc" else None,
+            ),
+        ):
+            self.assertEqual(CHECKER.compiler_command(), ["cc"])
+
     def test_engine_version_matches_vendored_changelog(self):
         version_header = (
             ROOT

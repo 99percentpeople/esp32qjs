@@ -6,6 +6,8 @@ set(MQUICKJS_RUN_TOOL_TO_FILE_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/cmake/run_tool_t
 set(MQUICKJS_PATCH_BUILD_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/cmake/patch_mquickjs_build.cmake")
 set(MQUICKJS_STDLIB_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/core/mqjs_stdlib_esp32.c")
 set(MQUICKJS_HOST_BUILD_SOURCE "${MQUICKJS_HOST_BUILD_DIR}/mquickjs_build.host.c")
+set(MQUICKJS_PROFILE_CONSTANTS_INCLUDE
+    "${MQUICKJS_GENERATED_BINARY_DIR}/esp32qjs_profile_constants.inc")
 set(ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS
     CONFIG_ESP32_MQUICKJS_FEATURE_FS
     CONFIG_ESP32_MQUICKJS_FEATURE_NVS
@@ -141,6 +143,25 @@ set(MQUICKJS_STDLIB_HEADER "${MQUICKJS_GENERATED_BINARY_DIR}/mqjs_stdlib.h")
 
 file(MAKE_DIRECTORY "${MQUICKJS_GENERATED_BINARY_DIR}")
 
+if(DEFINED ESP32QJS_PROFILE_CONSTANTS_FILE AND
+   NOT "${ESP32QJS_PROFILE_CONSTANTS_FILE}" STREQUAL "")
+    get_filename_component(_esp32qjs_profile_constants_file
+        "${ESP32QJS_PROFILE_CONSTANTS_FILE}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+    if(NOT EXISTS "${_esp32qjs_profile_constants_file}")
+        message(FATAL_ERROR
+            "ESP32QJS profile constants file does not exist: ${_esp32qjs_profile_constants_file}")
+    endif()
+    configure_file(
+        "${_esp32qjs_profile_constants_file}"
+        "${MQUICKJS_PROFILE_CONSTANTS_INCLUDE}"
+        COPYONLY)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${_esp32qjs_profile_constants_file}")
+else()
+    file(WRITE "${MQUICKJS_PROFILE_CONSTANTS_INCLUDE}"
+        "/* No hardware-profile constants configured. */\n")
+endif()
+
 if(NOT CMAKE_SCRIPT_MODE_FILE)
     add_custom_command(
         OUTPUT "${MQUICKJS_HOST_TOOL}"
@@ -213,6 +234,7 @@ set(ESP32_MQUICKJS_SRCS
     "src/core/esp32_mquickjs_event_queue.c"
     "src/core/esp32_mquickjs_byte_span.c"
     "src/core/esp32_mquickjs_byte_source.c"
+    "src/core/esp32_mquickjs_profile.c"
     "src/core/esp32_mquickjs_sys.c"
     "src/core/esp32_mquickjs_stream.c"
     "src/core/esp32_mquickjs_request_response.c"

@@ -112,6 +112,37 @@ static bool esp32_hardware_id(char output[16])
     return true;
 }
 
+JSValue js_sys_config(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    esp32_mquickjs_profile_value_t value;
+    JSCStringBuf key_buf;
+    const char *key;
+    JSValue result;
+
+    (void)this_val;
+    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "sys.config(key) expects a string key");
+    }
+    key = JS_ToCString(ctx, argv[0], &key_buf);
+    if (key == NULL) {
+        return JS_EXCEPTION;
+    }
+    if (!esp32_mquickjs_profile_get(key, &value)) {
+        return JS_UNDEFINED;
+    }
+    switch (value.type) {
+    case ESP32_MQUICKJS_PROFILE_VALUE_INTEGER:
+        return JS_NewInt32(ctx, value.value.integer);
+    case ESP32_MQUICKJS_PROFILE_VALUE_BOOLEAN:
+        return JS_NewBool(value.value.boolean);
+    case ESP32_MQUICKJS_PROFILE_VALUE_STRING:
+        result = JS_NewString(ctx, value.value.string != NULL ? value.value.string : "");
+        return result;
+    default:
+        return JS_ThrowInternalError(ctx, "hardware profile contains an unsupported value type");
+    }
+}
+
 static JSValue sys_make_features_object(JSContext *ctx)
 {
     JSGCRef features_ref;

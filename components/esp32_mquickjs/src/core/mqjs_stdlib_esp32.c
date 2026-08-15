@@ -251,6 +251,7 @@ static const JSClassDef js_display_buffer_obj =
 static const JSPropDef js_fs[] = {
     JS_CGETSET_DEF("ROOT", js_fs_get_root, NULL),
     JS_CFUNC_DEF("setRoot", 1, js_fs_set_root),
+    JS_CFUNC_DEF("info", 0, js_fs_info),
     JS_CFUNC_DEF("open", 2, js_fs_open),
     JS_CFUNC_DEF("list", 1, js_fs_list),
     JS_CFUNC_DEF("stat", 1, js_fs_stat),
@@ -425,6 +426,7 @@ static const JSClassDef js_dac_obj =
 #endif
 
 static const JSPropDef js_sys[] = {
+    JS_CFUNC_DEF("config", 1, js_sys_config),
     JS_CFUNC_DEF("info", 0, js_sys_info),
     JS_CFUNC_DEF("millis", 0, js_sys_millis),
     JS_CFUNC_DEF("micros", 0, js_sys_micros),

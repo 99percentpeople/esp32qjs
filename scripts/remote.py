@@ -26,6 +26,13 @@ from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from profile_constants import render_c_include, validate_constants
+
+
 ROOT_DIR = Path(__file__).resolve().parent.parent
 BUILD_ROOT = ROOT_DIR / "build"
 ENV_PATH = ROOT_DIR / ".env"
@@ -309,10 +316,11 @@ class ProjectConfig:
     sdkconfig_defaults: tuple[Path, ...]
     partition_table: Path
     hardware_sdkconfig_defaults: Path
+    profile_constants_file: Path
     flash_size_mb: int
     psram_mode: str
     psram_size_bytes: int
-    wiring_config: Path | None
+    hardware_constants: Path | None
     idf_target: str
     idf_path: str
     target: str
@@ -1494,6 +1502,8 @@ def show_config(config: ProjectConfig) -> None:
         + ";".join(format_path(path) for path in config.sdkconfig_defaults)
     )
     print(f"partition_table={format_path(config.partition_table)}")
+    print(f"profile_constants_file={format_path(config.profile_constants_file)}")
+    print(f"hardware_constants={format_path(config.hardware_constants)}")
     print(f"idf_path={config.idf_path}")
     print(f"target={config.target}")
     print(f"normalized_target={normalized_target}")
@@ -2382,41 +2392,21 @@ def write_if_changed(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def wiring_values(path: Path | None, idf_target: str) -> dict[str, object]:
-    """Load the bounded wiring overlay accepted by local and server builds."""
+def hardware_constant_values(path: Path | None, idf_target: str) -> dict[str, object]:
+    """Load and validate immutable hardware-profile constants for local builds."""
     if path is None:
         return {}
     if path.stat().st_size > 16_384:
-        raise SystemExit("Wiring config exceeds 16 KiB.")
+        raise SystemExit("Hardware constants exceed 16 KiB.")
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise SystemExit(f"Invalid wiring config {path}: {exc}") from exc
-    if not isinstance(value, dict):
-        raise SystemExit("Wiring config must be a JSON object.")
-    allowed_fields = {
-        "led": {"pin", "activeLow"},
-        "i2c": {"sda", "scl"},
-        "spi": {"sclk", "mosi", "miso", "cs"},
-        "uart": {"tx", "rx"},
-    }
-    if set(value) - set(allowed_fields):
-        raise SystemExit("Wiring config contains unsupported groups.")
-    maximum = GPIO_MAX_BY_MCU[idf_target]
-    for group, fields in allowed_fields.items():
-        entry = value.get(group)
-        if entry is None:
-            continue
-        if not isinstance(entry, dict) or set(entry) - fields:
-            raise SystemExit(f"Wiring group {group} contains unsupported fields.")
-        for name, pin in entry.items():
-            if group == "led" and name == "activeLow":
-                if not isinstance(pin, bool):
-                    raise SystemExit("led.activeLow must be boolean.")
-                continue
-            if not isinstance(pin, int) or isinstance(pin, bool) or pin < -1 or pin > maximum:
-                raise SystemExit(f"{group}.{name} must be a GPIO between -1 and {maximum}.")
-    return value
+    try:
+        constants, _warnings = validate_constants(value, idf_target)
+    except ValueError as exc:
+        raise SystemExit(f"Invalid hardware constants {path}: {exc}") from exc
+    return constants
 
 
 def generated_hardware_defaults(
@@ -2424,7 +2414,6 @@ def generated_hardware_defaults(
     flash_size_mb: int,
     psram_mode: str,
     psram_size_bytes: int,
-    wiring: dict[str, object],
 ) -> str:
     """Create the allowlisted sdkconfig overlay for detected hardware capabilities."""
     lines = [
@@ -2466,24 +2455,6 @@ def generated_hardware_defaults(
             "CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER=y",
         ))
 
-    pin_configs = {
-        ("led", "pin"): "CONFIG_ESP32_MQUICKJS_USER_LED_PIN",
-        ("i2c", "sda"): "CONFIG_ESP32_MQUICKJS_I2C_DEFAULT_SDA_PIN",
-        ("i2c", "scl"): "CONFIG_ESP32_MQUICKJS_I2C_DEFAULT_SCL_PIN",
-        ("spi", "sclk"): "CONFIG_ESP32_MQUICKJS_SPI_DEFAULT_SCLK_PIN",
-        ("spi", "mosi"): "CONFIG_ESP32_MQUICKJS_SPI_DEFAULT_MOSI_PIN",
-        ("spi", "miso"): "CONFIG_ESP32_MQUICKJS_SPI_DEFAULT_MISO_PIN",
-        ("spi", "cs"): "CONFIG_ESP32_MQUICKJS_SPI_DEFAULT_CS_PIN",
-        ("uart", "tx"): "CONFIG_ESP32_MQUICKJS_UART_DEFAULT_TX_PIN",
-        ("uart", "rx"): "CONFIG_ESP32_MQUICKJS_UART_DEFAULT_RX_PIN",
-    }
-    for (group, field), config_name in pin_configs.items():
-        entry = wiring.get(group)
-        value = entry.get(field, -1) if isinstance(entry, dict) else -1
-        lines.append(f"{config_name}={value}")
-    led = wiring.get("led")
-    active_low = bool(led.get("activeLow", False)) if isinstance(led, dict) else False
-    lines.append(f"CONFIG_ESP32_MQUICKJS_USER_LED_ACTIVE_LOW={'y' if active_low else 'n'}")
     return "\n".join(lines) + "\n"
 
 
@@ -2535,7 +2506,7 @@ def build_project_config(
     mcu_defaults = cli_path(getattr(args, "sdkconfig_defaults", ""))
     app_defaults = cli_path(getattr(args, "app_sdkconfig_defaults", ""))
     partition_table = cli_path(getattr(args, "partition_table", ""))
-    wiring_config = cli_path(getattr(args, "wiring_config", ""))
+    hardware_constants = cli_path(getattr(args, "hardware_constants", ""))
     flash_size_mb = int(getattr(args, "flash_size_mb", profile.default_flash_size_mb))
     psram_mode = str(getattr(args, "psram_mode", "none"))
     psram_size_bytes = int(getattr(args, "psram_size", 0))
@@ -2552,7 +2523,7 @@ def build_project_config(
         ("MCU sdkconfig defaults", mcu_defaults),
         ("Application sdkconfig defaults", app_defaults),
         ("Partition table", partition_table),
-        ("Wiring config", wiring_config),
+        ("Hardware constants", hardware_constants),
     ):
         if path is not None and not path.is_file():
             raise SystemExit(f"{label} file does not exist: {path}")
@@ -2560,9 +2531,11 @@ def build_project_config(
     build_dir = resolve_build_path(args.build_dir)
     generated_profile_dir = build_dir / "esp32qjs-profile"
     hardware_defaults = generated_profile_dir / "hardware.defaults"
+    profile_constants_file = generated_profile_dir / "profile-constants.inc"
     if partition_table is None:
         partition_table = generated_profile_dir / "partitions.csv"
-    wiring = wiring_values(wiring_config, profile.idf_target)
+    constants = hardware_constant_values(hardware_constants, profile.idf_target)
+    write_if_changed(profile_constants_file, render_c_include(constants))
     write_if_changed(
         hardware_defaults,
         generated_hardware_defaults(
@@ -2570,7 +2543,6 @@ def build_project_config(
             flash_size_mb,
             psram_mode,
             psram_size_bytes,
-            wiring,
         ),
     )
     if partition_table.parent == generated_profile_dir:
@@ -2603,6 +2575,7 @@ def build_project_config(
         f"-DESP32QJS_MCU_SDKCONFIG_DEFAULTS={mcu_defaults or ''}",
         f"-DESP32QJS_APP_SDKCONFIG_DEFAULTS={app_defaults or ''}",
         f"-DESP32QJS_PARTITION_TABLE={partition_table}",
+        f"-DESP32QJS_PROFILE_CONSTANTS_FILE={profile_constants_file}",
     )
 
     config_slug = re.sub(
@@ -2627,10 +2600,11 @@ def build_project_config(
         sdkconfig_defaults=sdkconfig_defaults,
         partition_table=partition_table,
         hardware_sdkconfig_defaults=hardware_defaults,
+        profile_constants_file=profile_constants_file,
         flash_size_mb=flash_size_mb,
         psram_mode=psram_mode,
         psram_size_bytes=psram_size_bytes,
-        wiring_config=wiring_config,
+        hardware_constants=hardware_constants,
         idf_target=args.idf_target,
         idf_path=args.idf_path,
         target=normalize_target(getattr(args, "target", profile.target)),
@@ -2686,9 +2660,11 @@ def add_common_mcu_args(parser: argparse.ArgumentParser, profile: MCUProfile) ->
         help="Detected PSRAM capacity in bytes; required for quad/octal profiles.",
     )
     parser.add_argument(
+        "--hardware-constants",
         "--wiring-config",
+        dest="hardware_constants",
         default="",
-        help="Optional validated JSON file containing optional wiring defaults.",
+        help="Optional validated JSON file containing immutable hardware-profile constants; --wiring-config is a legacy alias.",
     )
     parser.set_defaults(mcu_file=str(profile.file))
 

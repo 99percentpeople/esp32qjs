@@ -382,8 +382,15 @@ namespace ESP32QJS {
     size: number;
   }
 
+  interface FsInfo {
+    root: string;
+    totalBytes: number;
+    usedBytes: number;
+    freeBytes: number;
+  }
+
   /**
-   * LittleFS helpers restricted to `/littlefs`.
+   * LittleFS helpers restricted to the active mounted root.
    *
    * @example
    * ```js
@@ -396,6 +403,7 @@ namespace ESP32QJS {
   interface FsModule {
     readonly ROOT: string;
     setRoot(path: string): string;
+    info(): FsInfo;
     open(path: string, mode?: FsOpenMode): Stream;
     list(path?: string): FsEntry[];
     stat(path: string): FsEntry;
@@ -978,6 +986,8 @@ namespace ESP32QJS {
    */
   interface SysInfo {
     runtimeVersion: string;
+    /** Version of the vendored MQuickJS engine. */
+    mquickjsVersion: string;
     /** Stable `hw-xxxxxxxxxxxx` identity derived from the factory eFuse Base MAC. */
     hardwareId: string | null;
     hostApiVersion: number;
@@ -1015,6 +1025,11 @@ namespace ESP32QJS {
    */
   interface SysModule {
     info(): SysInfo;
+    /**
+     * Read an immutable value from the selected hardware profile. Returns
+     * `undefined` when the key is not present.
+     */
+    config(key: string): string | number | boolean | undefined;
     millis(): number;
     micros(): number;
     freeHeap(): number;

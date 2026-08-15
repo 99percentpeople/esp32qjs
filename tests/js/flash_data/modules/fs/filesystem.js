@@ -6,8 +6,14 @@ test("fs/filesystem", function () {
   var appended;
   var stat;
   var entries;
+  var info;
 
   test.equal(fs.ROOT, "/littlefs", "fs root");
+  info = fs.info();
+  test.equal(info.root, fs.ROOT, "fs info root");
+  test.ok(info.totalBytes > 0, "fs info total bytes");
+  test.ok(info.usedBytes >= 0, "fs info used bytes");
+  test.equal(info.freeBytes, info.totalBytes - info.usedBytes, "fs info free bytes");
   fs.mkdir(dirPath);
   test.ok(fs.stat(dirPath).isDir, "mkdir should create a directory");
 

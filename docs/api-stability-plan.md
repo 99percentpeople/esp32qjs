@@ -142,14 +142,15 @@ Each concrete build combines:
 
 - detected MCU and Flash capacity;
 - detected PSRAM mode/capacity, or the safe no-PSRAM profile when it is unknown;
-- an optional server-stored named wiring template;
+- an optional server-stored named hardware-constant profile;
 - the application behavior and partition layout.
 
-Peripheral modules remain compiled when the MCU supports them. If a wiring template
-does not define a default pin, convenience calls must reject the missing default while
-explicit-pin APIs remain available. Future MCU presets may enable `FEATURE_DAC=y` only
-when the SoC supports it; board routing remains user wiring data, not a compile-time
-MCU assumption.
+Peripheral modules remain compiled when the MCU supports them. API defaults resolve
+from an explicit option, then an immutable hardware-profile constant, then a safe
+Kconfig default. If no pin exists, convenience calls must reject the missing default
+while explicit-pin APIs remain available. Future MCU presets may enable
+`FEATURE_DAC=y` only when the SoC supports it; board routing remains deployment
+configuration, not an MCU-family assumption.
 
 ## Module Inventory
 

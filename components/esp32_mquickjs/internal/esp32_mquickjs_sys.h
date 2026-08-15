@@ -3,6 +3,7 @@
 #include "esp32_mquickjs_types.h"
 
 bool esp32_mquickjs_init_secure_random(JSContext *ctx);
+JSValue js_sys_config(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_sys_info(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_sys_millis(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_sys_micros(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

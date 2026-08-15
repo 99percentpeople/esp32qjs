@@ -116,6 +116,9 @@ All `fs` operations are restricted to the active filesystem root.
   Select an existing mounted directory as the root for relative `fs` operations
   and `load()`. The framework validates the mount/path only; the application
   owns policy about which root to select.
+- `fs.info()`
+  Return live LittleFS capacity for the active root as
+  `{ root, totalBytes, usedBytes, freeBytes }`.
 - `fs.list(path = ".")`
   Return an array of entries for a directory.
 - `fs.stat(path)`
@@ -141,6 +144,7 @@ Example:
 
 ```js
 fs.writeText("notes.txt", "hello\n");
+print(JSON.stringify(fs.info()));
 print(fs.readText("notes.txt"));
 print(fs.stat("notes.txt"));
 print(JSON.stringify(fs.list(".")));
@@ -1034,6 +1038,11 @@ if (ref) {
 - `sys.info()`
   Return MCU/chip identity plus memory/runtime fields:
   `{ runtimeVersion, mquickjsVersion, hostApiVersion, mcu, chip, hardwareId, features, userLedPin, userLedActiveLow, scriptsDir, flashSize, psramEnabled, psramMode, psramSize, freePsram, totalInternalHeap, freeInternalHeap, jsHeapSize, jsHeapRegion, littlefsMounted, replEnabled, autoRunIndexJs, formatLittlefsOnMountFail, freeHeap, jsTimeMs }`. `hardwareId` is `hw-` plus the lowercase factory eFuse Base MAC and remains stable across erase/flash/reset operations. `runtimeVersion` follows framework SemVer; `mquickjsVersion` identifies the vendored MQuickJS release; `hostApiVersion` is the integer native compatibility level. `psramMode` is `none`, `quad`, or `octal`.
+- `sys.config(key)` reads one immutable hardware-profile constant. Registered
+  `ESP32QJS_*` values supply defaults to their matching framework driver;
+  application-owned keys should use an `APP_*` prefix. Missing keys return
+  `undefined`. Explicit driver options still take precedence over profile
+  constants, which in turn take precedence over safe Kconfig defaults.
   `features` is `{ fs, nvs, gpio, ledc, adc, dac, i2c, spi, uart, usbSerial, socket, websocket, displayBuffer, wifi, http, httpServer }` and is the stable way to discover which optional host modules were compiled into the firmware for the current MCU profile.
 - `sys.millis()`
   Return monotonic milliseconds from `esp_timer`.

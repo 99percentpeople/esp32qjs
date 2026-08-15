@@ -74,6 +74,8 @@ test("sys/runtime", function () {
   test.equal(info.runtimeVersion, "0.1.0", "runtime version should match the framework release");
   test.equal(info.mquickjsVersion, "2025-12-22",
     "MQuickJS version should match the vendored engine release");
+  test.equal(sys.config("APP_TEST_MISSING"), undefined,
+    "sys.config() should return undefined for an unconfigured constant");
   test.ok(/^hw-[0-9a-f]{12}$/.test(info.hardwareId), "hardware ID should derive from the factory Base MAC");
   test.equal(info.hostApiVersion, 1, "Host API version should match the native compatibility level");
   test.ok(typeof info.mcu === "string" && info.mcu.length > 0, "MCU name should be present");

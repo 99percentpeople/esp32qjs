@@ -14,6 +14,7 @@ bool esp32_mquickjs_mount_littlefs_partition(const char *partition_label,
 void esp32_mquickjs_unmount_littlefs_partition(const char *partition_label);
 
 JSValue js_fs_open(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_fs_info(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_fs_list(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_fs_stat(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_fs_exists(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

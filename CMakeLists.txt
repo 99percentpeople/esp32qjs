@@ -28,6 +28,8 @@ set(ESP32QJS_APP_SDKCONFIG_DEFAULTS "" CACHE FILEPATH
     "Optional application sdkconfig defaults override")
 set(ESP32QJS_PARTITION_TABLE "" CACHE FILEPATH
     "Optional application partition table override")
+set(ESP32QJS_PROFILE_CONSTANTS_FILE "" CACHE FILEPATH
+    "Generated immutable hardware-profile constants include")
 set(ESP32QJS_SHARED_FLASH_DATA_DIR "${CMAKE_SOURCE_DIR}/shared/flash_data" CACHE PATH
     "Shared files copied into every application LittleFS image")
 set(ESP32QJS_APP_FLASH_DATA_DIR "${ESP32QJS_APP_PROFILE_DIR}/flash_data" CACHE PATH

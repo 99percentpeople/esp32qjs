@@ -89,8 +89,10 @@ test scope runs the same check automatically.
 A complete LittleFS source directory can be supplied for compatibility or test
 workflows with `--flash-data-dir PATH`. One-off application inputs can be
 selected with `--app-sdkconfig-defaults PATH` and `--partition-table PATH`.
-Use `--flash-size-mb`, `--psram-mode`, `--psram-size`, and `--wiring-config`
-only with measured hardware values. Unknown PSRAM must use `--psram-mode none`.
+Use `--flash-size-mb`, `--psram-mode`, `--psram-size`, and
+`--hardware-constants` only with measured hardware values. The constants file
+may contain registered `ESP32QJS_*` driver defaults and application-owned
+`APP_*` values. Unknown PSRAM must use `--psram-mode none`.
 
 ## Create an Application
 

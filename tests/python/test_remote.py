@@ -411,7 +411,7 @@ class RemoteConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "flash-size-mb"):
             REMOTE.build_project_config(args, mcu, app)
 
-    def test_generated_hardware_profile_uses_detected_memory_and_optional_wiring(self):
+    def test_generated_hardware_profile_uses_memory_and_profile_constants(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             wiring = Path(temp_dir) / "wiring.json"
             wiring.write_text(
@@ -424,7 +424,7 @@ class RemoteConfigTests(unittest.TestCase):
                 "--flash-size-mb", "16",
                 "--psram-mode", "octal",
                 "--psram-size", str(8 * 1024 * 1024),
-                "--wiring-config", str(wiring),
+                "--hardware-constants", str(wiring),
                 "--build-dir", str(build_dir),
                 "show-config",
             ])
@@ -436,8 +436,10 @@ class RemoteConfigTests(unittest.TestCase):
             self.assertIn('CONFIG_ESP32_MQUICKJS_PSRAM_MODE="octal"', defaults)
             self.assertIn("CONFIG_SPIRAM_MODE_OCT=y", defaults)
             self.assertIn("CONFIG_ESP32QJS_JS_HEAP_SIZE=4194304", defaults)
-            self.assertIn("CONFIG_ESP32_MQUICKJS_USER_LED_PIN=21", defaults)
-            self.assertIn("CONFIG_ESP32_MQUICKJS_I2C_DEFAULT_SDA_PIN=4", defaults)
+            constants = config.profile_constants_file.read_text(encoding="utf-8")
+            self.assertNotIn("CONFIG_ESP32_MQUICKJS_USER_LED_PIN", defaults)
+            self.assertIn('ESP32_MQUICKJS_PROFILE_INT("ESP32QJS_LED_PIN", 21)', constants)
+            self.assertIn('ESP32_MQUICKJS_PROFILE_INT("ESP32QJS_I2C_SDA", 4)', constants)
             self.assertIn("0xDF0000", partitions)
 
     def test_generated_profile_leaves_unconfigured_pins_unset(self):
@@ -451,8 +453,11 @@ class RemoteConfigTests(unittest.TestCase):
             config = REMOTE.build_project_config(args, mcu, app)
             defaults = config.hardware_sdkconfig_defaults.read_text(encoding="utf-8")
             self.assertNotIn("CONFIG_SPIRAM", defaults)
-            self.assertIn("CONFIG_ESP32_MQUICKJS_USER_LED_PIN=-1", defaults)
-            self.assertIn("CONFIG_ESP32_MQUICKJS_SPI_DEFAULT_CS_PIN=-1", defaults)
+            self.assertNotIn("CONFIG_ESP32_MQUICKJS_USER_LED_PIN", defaults)
+            self.assertEqual(
+                config.profile_constants_file.read_text(encoding="utf-8"),
+                "/* Generated hardware-profile constants; do not edit. */\n",
+            )
 
     def test_psram_profiles_are_rejected_for_unsupported_mcus(self):
         args, mcu, app = REMOTE.parse_args([
