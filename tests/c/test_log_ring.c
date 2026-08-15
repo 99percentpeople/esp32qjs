@@ -13,7 +13,7 @@ static void test_append_and_read_in_sequence_order(void)
     esp32_mquickjs_log_ring_init(&ring);
     assert(esp32_mquickjs_log_ring_append(
                &ring, 10, ESP32_MQUICKJS_LOG_SOURCE_JAVASCRIPT,
-               "one", 3) == 1);
+               "one\n", 4) == 1);
     assert(esp32_mquickjs_log_ring_append(
                &ring, 20, ESP32_MQUICKJS_LOG_SOURCE_EXCEPTION,
                "two", 3) == 2);
@@ -21,7 +21,8 @@ static void test_append_and_read_in_sequence_order(void)
     count = esp32_mquickjs_log_ring_read(&ring, 0, 4, 32, output, 4);
     assert(count == 2);
     assert(output[0].sequence == 1);
-    assert(strcmp(output[0].text, "one") == 0);
+    assert(output[0].text_length == 4);
+    assert(strcmp(output[0].text, "one\n") == 0);
     assert(output[1].sequence == 2);
     assert(output[1].source == ESP32_MQUICKJS_LOG_SOURCE_EXCEPTION);
 

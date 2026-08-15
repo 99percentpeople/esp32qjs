@@ -12,7 +12,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 
-#define ESP32_MQUICKJS_LOG_RAW_LINE_MAX_BYTES 1024U
+#define ESP32_MQUICKJS_LOG_CAPTURE_MAX_BYTES 1024U
 #define ESP32_MQUICKJS_LOG_READ_MAX_ENTRIES 16U
 #define ESP32_MQUICKJS_LOG_READ_MAX_BYTES 2048U
 
@@ -20,8 +20,8 @@ typedef struct {
     esp32_mquickjs_log_ring_t ring;
     portMUX_TYPE lock;
     char boot_id[17];
-    char console_line[ESP32_MQUICKJS_LOG_RAW_LINE_MAX_BYTES];
-    size_t console_line_length;
+    char console_chunk[ESP32_MQUICKJS_LOG_TEXT_MAX_BYTES];
+    size_t console_chunk_length;
     esp32_mquickjs_log_source_t console_source;
     bool console_open;
     bool active;
@@ -85,104 +85,98 @@ static size_t utf8_sequence_length(const unsigned char *data, size_t remaining)
     return length;
 }
 
-static size_t normalize_log_line(const char *input,
-                                 size_t input_length,
-                                 char output[ESP32_MQUICKJS_LOG_TEXT_MAX_BYTES + 1U])
+static size_t raw_chunk_length(const char *input, size_t input_length)
 {
     const unsigned char *bytes = (const unsigned char *)input;
-    size_t input_index = 0U;
-    size_t output_length = 0U;
+    size_t limit = input_length > ESP32_MQUICKJS_LOG_TEXT_MAX_BYTES
+                       ? ESP32_MQUICKJS_LOG_TEXT_MAX_BYTES
+                       : input_length;
+    size_t index = 0U;
 
-    while (input_index < input_length &&
-           output_length < ESP32_MQUICKJS_LOG_TEXT_MAX_BYTES) {
-        unsigned char byte = bytes[input_index];
+    while (index < limit) {
         size_t sequence_length;
 
-        if (byte == 0x1bU && input_index + 1U < input_length &&
-            bytes[input_index + 1U] == '[') {
-            input_index += 2U;
-            while (input_index < input_length) {
-                byte = bytes[input_index++];
-                if (byte >= 0x40U && byte <= 0x7eU) {
-                    break;
-                }
-            }
-            continue;
-        }
-        if (byte == '\t') {
-            output[output_length++] = ' ';
-            input_index++;
-            continue;
-        }
-        if (byte < 0x20U || byte == 0x7fU) {
-            input_index++;
-            continue;
-        }
-        sequence_length = utf8_sequence_length(bytes + input_index,
-                                               input_length - input_index);
+        sequence_length = utf8_sequence_length(bytes + index,
+                                               input_length - index);
         if (sequence_length == 0U) {
-            output[output_length++] = '?';
-            input_index++;
-            continue;
+            sequence_length = 1U;
         }
-        if (output_length + sequence_length > ESP32_MQUICKJS_LOG_TEXT_MAX_BYTES) {
+        if (index + sequence_length > limit) {
             break;
         }
-        memcpy(output + output_length, bytes + input_index, sequence_length);
-        output_length += sequence_length;
-        input_index += sequence_length;
+        index += sequence_length;
     }
-    while (output_length > 0U && output[output_length - 1U] == ' ') {
-        output_length--;
-    }
-    output[output_length] = '\0';
-    return output_length;
+    return index == 0U ? limit : index;
 }
 
-static void append_line_locked(esp32_mquickjs_runtime_logs_state_t *state,
-                               esp32_mquickjs_log_source_t source,
-                               const char *line,
-                               size_t line_length)
+static void append_raw_locked(esp32_mquickjs_runtime_logs_state_t *state,
+                              esp32_mquickjs_log_source_t source,
+                              const char *text,
+                              size_t text_length)
 {
-    char normalized[ESP32_MQUICKJS_LOG_TEXT_MAX_BYTES + 1U];
-    size_t normalized_length = normalize_log_line(line, line_length, normalized);
+    size_t offset = 0U;
 
-    if (normalized_length == 0U) {
+    while (offset < text_length) {
+        size_t chunk_length = raw_chunk_length(text + offset,
+                                               text_length - offset);
+
+        if (chunk_length == 0U) {
+            break;
+        }
+        (void)esp32_mquickjs_log_ring_append(
+            &state->ring,
+            (uint32_t)(esp_timer_get_time() / 1000),
+            source,
+            text + offset,
+            chunk_length);
+        offset += chunk_length;
+    }
+}
+
+static void flush_console_chunk_locked(esp32_mquickjs_runtime_logs_state_t *state)
+{
+    if (state->console_chunk_length == 0U) {
         return;
     }
-    (void)esp32_mquickjs_log_ring_append(&state->ring,
-                                         (uint32_t)(esp_timer_get_time() / 1000),
-                                         source,
-                                         normalized,
-                                         normalized_length);
+    append_raw_locked(state,
+                      state->console_source,
+                      state->console_chunk,
+                      state->console_chunk_length);
+    state->console_chunk_length = 0U;
 }
 
-static void append_text_locked(esp32_mquickjs_runtime_logs_state_t *state,
-                               esp32_mquickjs_log_source_t source,
-                               const char *text,
-                               size_t text_length)
+static void buffer_console_output_locked(esp32_mquickjs_runtime_logs_state_t *state,
+                                         const char *text,
+                                         size_t text_length)
 {
-    size_t line_start = 0U;
-    size_t i;
+    const unsigned char *bytes = (const unsigned char *)text;
+    size_t offset = 0U;
 
-    for (i = 0U; i <= text_length; ++i) {
-        if (i != text_length && text[i] != '\n') {
-            continue;
+    while (offset < text_length) {
+        size_t sequence_length = utf8_sequence_length(bytes + offset,
+                                                      text_length - offset);
+
+        if (sequence_length == 0U) {
+            sequence_length = 1U;
         }
-        if (i > line_start && text[i - 1U] == '\r') {
-            append_line_locked(state, source, text + line_start,
-                               i - line_start - 1U);
-        } else {
-            append_line_locked(state, source, text + line_start,
-                               i - line_start);
+        if (state->console_chunk_length + sequence_length >
+            sizeof(state->console_chunk)) {
+            flush_console_chunk_locked(state);
         }
-        line_start = i + 1U;
+        memcpy(state->console_chunk + state->console_chunk_length,
+               text + offset,
+               sequence_length);
+        state->console_chunk_length += sequence_length;
+        offset += sequence_length;
+        if (state->console_chunk_length == sizeof(state->console_chunk)) {
+            flush_console_chunk_locked(state);
+        }
     }
 }
 
 static int runtime_logs_vprintf(const char *format, va_list arguments)
 {
-    char buffer[ESP32_MQUICKJS_LOG_RAW_LINE_MAX_BYTES];
+    char buffer[ESP32_MQUICKJS_LOG_CAPTURE_MAX_BYTES];
     va_list copy;
     int formatted_length;
     size_t captured_length;
@@ -199,10 +193,10 @@ static int runtime_logs_vprintf(const char *format, va_list arguments)
         captured_length = sizeof(buffer) - 1U;
     }
     portENTER_CRITICAL(&state->lock);
-    append_text_locked(state,
-                       ESP32_MQUICKJS_LOG_SOURCE_ESP_IDF,
-                       buffer,
-                       captured_length);
+    append_raw_locked(state,
+                      ESP32_MQUICKJS_LOG_SOURCE_ESP_IDF,
+                      buffer,
+                      captured_length);
     portEXIT_CRITICAL(&state->lock);
     return formatted_length;
 }
@@ -257,8 +251,11 @@ void esp32_mquickjs_runtime_logs_console_begin(esp32_mquickjs_runtime_t *runtime
     }
     state = runtime->runtime_log_state;
     portENTER_CRITICAL(&state->lock);
+    if (state->console_open) {
+        flush_console_chunk_locked(state);
+    }
     state->console_open = true;
-    state->console_line_length = 0U;
+    state->console_chunk_length = 0U;
     state->console_source = source;
     portEXIT_CRITICAL(&state->lock);
 }
@@ -268,8 +265,6 @@ void esp32_mquickjs_runtime_logs_console_write(esp32_mquickjs_runtime_t *runtime
                                                size_t data_length)
 {
     esp32_mquickjs_runtime_logs_state_t *state;
-    const char *bytes = data;
-    size_t i;
 
     if (runtime == NULL || runtime->runtime_log_state == NULL ||
         data == NULL || data_length == 0U) {
@@ -281,19 +276,7 @@ void esp32_mquickjs_runtime_logs_console_write(esp32_mquickjs_runtime_t *runtime
         state->console_open = true;
         state->console_source = ESP32_MQUICKJS_LOG_SOURCE_RUNTIME;
     }
-    for (i = 0U; i < data_length; ++i) {
-        if (bytes[i] == '\n') {
-            append_line_locked(state,
-                               state->console_source,
-                               state->console_line,
-                               state->console_line_length);
-            state->console_line_length = 0U;
-            continue;
-        }
-        if (state->console_line_length < sizeof(state->console_line)) {
-            state->console_line[state->console_line_length++] = bytes[i];
-        }
-    }
+    buffer_console_output_locked(state, data, data_length);
     portEXIT_CRITICAL(&state->lock);
 }
 
@@ -306,14 +289,12 @@ void esp32_mquickjs_runtime_logs_console_end(esp32_mquickjs_runtime_t *runtime)
     }
     state = runtime->runtime_log_state;
     portENTER_CRITICAL(&state->lock);
-    if (state->console_open && state->console_line_length > 0U) {
-        append_line_locked(state,
-                           state->console_source,
-                           state->console_line,
-                           state->console_line_length);
+    if (state->console_open) {
+        buffer_console_output_locked(state, "\n", 1U);
+        flush_console_chunk_locked(state);
     }
     state->console_open = false;
-    state->console_line_length = 0U;
+    state->console_chunk_length = 0U;
     portEXIT_CRITICAL(&state->lock);
 }
 

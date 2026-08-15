@@ -105,6 +105,7 @@ void esp32_mquickjs_wifi_clear_connect_future(void)
 {
     wifi_stop_connect_timeout_timer();
     wifi_lock();
+    s_wifi_state.connect_in_progress = false;
     s_wifi_state.connect_future_registered = false;
     memset(&s_wifi_state.connect_future_token, 0, sizeof(s_wifi_state.connect_future_token));
     wifi_unlock();
@@ -225,9 +226,9 @@ static void wifi_event_handler(void *arg,
         wifi_clear_ip_info_locked();
         wifi_unlock();
 
-        wifi_stop_connect_timeout_timer();
         xEventGroupClearBits(s_wifi_state.event_group, WIFI_CONNECTED_BIT);
         if (!ignore_disconnect) {
+            wifi_stop_connect_timeout_timer();
             xEventGroupSetBits(s_wifi_state.event_group, WIFI_FAILED_BIT);
             if (should_queue_connect_failure) {
                 wifi_queue_connect_event(connect_generation,
@@ -770,24 +771,45 @@ esp_err_t esp32_mquickjs_wifi_start_connect(const char *ssid,
         xQueueReset(s_wifi_state.connect_queue);
     }
 
-    ESP_RETURN_ON_ERROR(esp_wifi_connect(), TAG, "esp_wifi_connect() failed");
+    err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        wifi_lock();
+        s_wifi_state.connect_in_progress = false;
+        wifi_unlock();
+        ESP_LOGE(TAG, "esp_wifi_connect() failed: %s", esp_err_to_name(err));
+        return err;
+    }
     if (timeout_ms == 0) {
         timeout_ms = 1;
     }
-    return esp_timer_start_once(s_wifi_state.connect_timeout_timer, (uint64_t)timeout_ms * 1000ULL);
+    err = esp_timer_start_once(s_wifi_state.connect_timeout_timer,
+                               (uint64_t)timeout_ms * 1000ULL);
+    if (err != ESP_OK) {
+        wifi_lock();
+        s_wifi_state.connect_in_progress = false;
+        s_wifi_state.ignore_disconnect_once = true;
+        wifi_unlock();
+        (void)esp_wifi_disconnect();
+        ESP_LOGE(TAG, "esp_timer_start_once(connect_timeout_timer) failed: %s",
+                 esp_err_to_name(err));
+    }
+    return err;
 }
 
 static esp_err_t wifi_disconnect(void)
 {
     esp_err_t err;
+    bool was_active;
 
     if (!s_wifi_state.initialized || !s_wifi_state.started) {
         return ESP_OK;
     }
 
+    wifi_stop_connect_timeout_timer();
     wifi_lock();
+    was_active = s_wifi_state.status.connected || s_wifi_state.connect_in_progress;
     s_wifi_state.connect_in_progress = false;
-    s_wifi_state.ignore_disconnect_once = true;
+    s_wifi_state.ignore_disconnect_once = was_active;
     s_wifi_state.status.connected = false;
     wifi_clear_ip_info_locked();
     wifi_unlock();
