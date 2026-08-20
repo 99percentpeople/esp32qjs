@@ -238,7 +238,7 @@ Stream instance shape:
 Example:
 
 ```js
-var stream = fs.open("_sys/ui/core.js", "r");
+var stream = fs.open("_sys/display.js", "r");
 print(stream.tell());
 print(JSON.stringify(stream.read(32)));
 stream.seek(0, Stream.SEEK_SET);
@@ -1134,11 +1134,14 @@ wifi.disconnect();
 ## `socket` Module
 
 `socket` is exposed when `sys.info.features.socket` is enabled. It provides
-bounded, handle-based raw sockets. The framework does not add line framing,
+bounded, handle-based TCP/UDP sockets and verified outbound TLS streams. The framework does not add line framing,
 reconnect policy, authentication, or an application protocol.
 
-- `socket.open(protocol, local_port = 0)`
-  Open and bind a `"tcp"` or `"udp"` socket and return its numeric handle.
+- `socket.open(protocol, options = {})`
+  Open a `"tcp"` or `"udp"` socket and return its numeric handle.
+  `options.localPort` binds the local port. For an outbound verified TLS client,
+  use `socket.open("tcp", { tls: true })`; TLS uses the system CA certificate
+  bundle and does not support listening or a fixed local port.
 - `socket.close(socket_id)`
   Close a handle. Closing an already closed handle returns `false`.
 - `socket.status(socket_id)`
@@ -1167,13 +1170,18 @@ optional `timeout` is bounded to 60000 ms and remains subordinate to an outer
 `sys.withTimeout()` deadline.
 
 ```js
-var client = socket.open("tcp", 0);
+var client = socket.open("tcp", { localPort: 0 });
 socket.tcp.connect(client, "192.0.2.10", 9000, 5000);
 socket.tcp.send(client, "hello", 1000);
 print(socket.tcp.recv(client, 1024, 100));
 socket.close(client);
 
-var udp = socket.open("udp", 0);
+var secureClient = socket.open("tcp", { tls: true });
+socket.tcp.connect(secureClient, "example.com", 443, 5000);
+socket.tcp.send(secureClient, "hello", 1000);
+socket.close(secureClient);
+
+var udp = socket.open("udp", { localPort: 0 });
 socket.udp.sendto(udp, "192.0.2.10", 9001, "hello");
 print(JSON.stringify(socket.udp.recvfrom(udp, 1024, 100)));
 socket.close(udp);

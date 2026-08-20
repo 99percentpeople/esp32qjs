@@ -4,12 +4,15 @@ This document covers APIs implemented in JavaScript on top of the built-in C hos
 
 ## Loading
 
-Load the entry point for the panel in use, then load optional UI helpers:
+Load the entry point for the panel in use, then load any application-owned UI:
 
 ```js
 framework.load("display/wlk1501spi8p.js");
-framework.load("ui.js");
+load("ui.js");
 ```
+
+`ui.js` in this example belongs to the selected app. The framework does not
+ship `_sys/ui`; layout, controls, and rendering policy are application code.
 
 `_sys/display.js` loads only the display facade, surface, fonts, and registries.
 Use `_sys/display/ssd1306.js`, `_sys/display/st7789.js`, or
@@ -209,187 +212,5 @@ var cjk16 = display.loadMappedFont("_sys/fonts/droid-cjk.json", "16");
 screen.drawText(8, 40, "中文显示", {
   color: display.rgb565(255, 255, 255),
   font: cjk16
-});
-```
-
-## `ui` Helpers
-
-These helpers are implemented in JavaScript on top of the layered `display.Display` facade and live under `/littlefs/_sys/ui/`.
-
-- `ui.VERSION`
-  Current JS UI layer version, `"0.3.1"`.
-- `ui.begin(screen, options?)`
-  Start an immediate-mode frame on an open `display.Display`. Displays advertising the `batch` capability use native command-buffer replay by default; pass `{ batch: false }` to force direct drawing.
-- `ui.endFrame()`
-  Finish the frame, validate that all layout scopes are closed, and flush the dirty region.
-- `ui.frame(screen, render, options?)`
-  Convenience wrapper around `begin(...)`, a render callback, and `endFrame()`.
-- `ui.input(input?)`
-  Set or read the pending normalized input snapshot used by the next frame.
-- `ui.row(render?, options?)` / `ui.column(render?, options?)` / `ui.group(render?, options?)` / `ui.panel(render?, options?)`
-  Open a layout scope. When `render` is provided, the layout is closed automatically after the callback returns. `panel(...)` also draws a decorated container. For compatibility, the older `ui.row(options, render)` form is still accepted.
-- `ui.end()`
-  Close the current layout scope.
-- `ui.spacer(size | options)` / `ui.separator(options?)`
-  Add fixed spacing or a one-pixel separator.
-- `ui.text(value, options?)` / `ui.value(label, value, options?)` / `ui.badge(text, options?)`
-  Draw simple non-interactive content.
-- `ui.statusBar(options?)`
-  Draw a compact left/title/right status row.
-- `ui.progress(id, value, options?)` / `ui.gauge(id, value, options?)`
-  Draw bounded numeric indicators and return the allocated rect.
-- `ui.button(id, label, options?)` / `ui.iconButton(id, icon, options?)`
-  Draw a focusable command and return `true` when activated.
-- `ui.toggle(id, label, value, options?)` / `ui.checkbox(id, label, value, options?)`
-  Draw a focusable boolean control and return the updated value.
-- `ui.slider(id, value, options?)` / `ui.stepper(id, value, options?)`
-  Draw a focusable numeric control and return the updated value.
-- `ui.list(id, items, selectedIndex, options?)` / `ui.menu(id, items, selectedIndex, options?)`
-  Draw a compact selectable list and return the updated selected index.
-- `ui.tabs(id, tabs, selectedIndex, options?)`
-  Draw a tab strip and return the updated selected index.
-- `ui.softkeys(left, center, right, options?)`
-  Draw a three-zone softkey bar and return `"left"`, `"center"`, `"right"`, or `null`.
-
-Frame options:
-
-- `x`, `y`, `width`, `height`
-  Root frame bounds. Defaults to the whole surface.
-- `clear`
-  Clear the root frame before drawing. Defaults to `true` for the first frame on a surface and `false` afterwards.
-- `clearColor`
-  Packed display color used when clearing.
-- `flush`
-  Set `false` to draw without flushing.
-- `partial`
-  Set `false` to force full `screen.flush()`. By default `endFrame()` calls `screen.present(...)` with tracked dirty regions when `partialPresent` is supported.
-- `gcBeforeFlush`
-  Set `false` to skip the automatic `gc()` before first-frame or large dirty-region flushes.
-- `focusVisible`
-  Controls whether the focused control draws its outline. By default the runtime keeps a logical focus target for button/encoder input but only shows the outline after keyboard, encoder, or touch input.
-- `input`
-  Normalized input snapshot for this frame.
-- `theme`
-  Packed display colors overriding the default mono or RGB565 theme.
-
-Normalized input fields:
-
-- `up`, `down`
-  Move focus between focusable controls.
-- `left`, `right`
-  Adjust focused value controls such as sliders, steppers, lists, and tabs.
-- `ok`
-  Activate the focused button/toggle/checkbox or softkey center.
-- `back`
-  Activate the softkey left action.
-- `encoderDelta`
-  Adjust focused value controls.
-- `touch`
-  Optional `{ x, y, pressed }` touch point. A press inside a focusable control focuses and activates it.
-
-Common control/layout options:
-
-- `x`, `y`, `width`, `height`
-  Pixel bounds or fixed outer size.
-- `padding`
-  Number or `{ top, right, bottom, left }`; `{ x, y }` sets horizontal and vertical padding.
-- `gap`
-  Space between children in a row or column layout.
-- `align`
-  Cross-axis alignment: `"start"`, `"center"`, `"end"`, or `"stretch"`.
-- `background`
-  Packed fill color.
-- `border`
-  Draw a 1-pixel border.
-- `borderColor`
-  Packed border color.
-- `radius`, `borderRadius`
-  Rounded-corner radius in pixels when the display surface supports round rectangles.
-- `outline`
-  Focus-visible controls draw a 2-pixel outline by default. Set to `false` to disable it for a specific control.
-- `outlineColor`, `outlineWidth`
-  Packed focus outline color and pixel width. Defaults to the theme focus color and `2`.
-- `color`
-  Packed text/control foreground color.
-- `font`, `spacing`
-  Text style forwarded to `surface.drawText(...)` and `surface.measureText(...)`.
-
-Common declaration/config options:
-
-- `id`
-  Optional stable ID for non-interactive/decorative controls that need persistent dirty tracking. Interactive controls use the explicit `id` argument.
-- `min`, `max`, `step`
-  Numeric bounds for progress, gauges, sliders, and steppers.
-- `visibleCount`, `rowHeight`
-  List/menu sizing controls.
-- `left`, `title`, `center`, `right`
-  Status-bar labels.
-
-Example:
-
-```js
-var screen = display.profiles.open("wlk1501spi8p");
-var wifiEnabled = true;
-var brightness = 40;
-var selectedTab = 0;
-
-ui.begin(screen, { clear: true, partial: true });
-ui.column(function () {
-  ui.statusBar({ left: "ESP32", title: "Control", right: "74%" });
-  selectedTab = ui.tabs("mode", ["Main", "Net", "Info"], selectedTab);
-
-  ui.panel(function () {
-    ui.text("Immediate UI");
-    wifiEnabled = ui.toggle("wifi", "WiFi", wifiEnabled);
-    brightness = ui.slider("brightness", brightness, { min: 0, max: 100, step: 5 });
-  }, { height: 78, padding: 4, gap: 4 });
-
-  if (ui.button("apply", "Apply", { width: 48 })) {
-    print("apply");
-  }
-}, { padding: 6, gap: 4 });
-ui.endFrame();
-```
-
-Optional UI helpers are loaded separately when needed:
-
-- `load("_sys/ui/control.js")`
-  Adds `ui.control`, a thin command/input helper for REPL, programmatic control, and optional GPIO buttons. It does not change the core UI input model; call `ui.control.read()` and pass the returned snapshot to `ui.begin(..., { input })`.
-- `load("_sys/ui/fps.js")`
-  Adds `ui.fps(id, options?)`, a small frame-rate meter implemented by composing core UI primitives. It keeps sampling state by `id`, returns the sampled FPS value, and accepts `enabled: false` to clear its reserved area without showing text. `sampleMs` controls the sample window and `precision` controls decimal places.
-
-Example:
-
-```js
-load("_sys/ui/control.js");
-load("_sys/ui/fps.js");
-
-var showFps = true;
-
-ui.begin(screen, {
-  clear: true,
-  partial: true,
-  input: ui.control.read()
-});
-ui.column(function () {
-  showFps = ui.toggle("showFps", "FPS", showFps);
-  ui.control.indicator({ label: "IN", width: 74 });
-  ui.fps("fps", { enabled: showFps, sampleMs: 1000, precision: 1 });
-}, { padding: 6, gap: 4 });
-ui.endFrame();
-
-// From the REPL or another script:
-ui.control.press("down");
-ui.control.press("ok");
-ui.control.encoder(1);
-```
-
-GPIO buttons can be composed directly through the same helper:
-
-```js
-ui.control.bindButtons({
-  up: 1,
-  down: 2,
-  ok: { pin: 3, activeLow: true }
 });
 ```

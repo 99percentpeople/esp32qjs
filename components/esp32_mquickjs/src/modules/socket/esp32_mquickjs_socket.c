@@ -16,6 +16,8 @@
 
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#include "esp_crt_bundle.h"
+#include "esp_tls.h"
 #include "lwip/inet.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
@@ -40,12 +42,14 @@ typedef struct {
     bool listening;
     bool peer_closed;
     bool busy;
+    bool secure;
     int local_port;
     int remote_port;
     char local_ip[INET6_ADDRSTRLEN];
     char remote_host[SOCKET_HOST_MAX_BYTES + 1U];
     uint32_t sent_bytes;
     uint32_t received_bytes;
+    esp_tls_t *tls;
 } socket_entry_t;
 
 typedef struct {
@@ -110,12 +114,27 @@ static socket_entry_t *socket_allocate_entry(void)
     return NULL;
 }
 
+static void socket_close_tls_connection(socket_entry_t *entry)
+{
+    if (entry == NULL) {
+        return;
+    }
+    if (entry->tls != NULL) {
+        (void)esp_tls_conn_destroy(entry->tls);
+        entry->tls = NULL;
+    }
+    entry->fd = -1;
+    entry->connected = false;
+}
+
 static void socket_close_entry(socket_entry_t *entry)
 {
     if (entry == NULL || entry->id == 0) {
         return;
     }
-    if (entry->fd >= 0) {
+    if (entry->tls != NULL) {
+        socket_close_tls_connection(entry);
+    } else if (entry->fd >= 0) {
         shutdown(entry->fd, SHUT_RDWR);
         close(entry->fd);
     }
@@ -152,6 +171,45 @@ static bool socket_optional_int(JSContext *ctx,
         return true;
     }
     return socket_to_int(ctx, argv[index], min_value, max_value, out_value);
+}
+
+static bool socket_open_options(JSContext *ctx,
+                                int argc,
+                                JSValue *argv,
+                                int *out_local_port,
+                                bool *out_secure)
+{
+    JSGCRef option_ref;
+    JSValue *option;
+    bool valid = true;
+
+    *out_local_port = 0;
+    *out_secure = false;
+    if (argc < 2 || JS_IsUndefined(argv[1])) {
+        return true;
+    }
+    if (!JS_IsObject(argv[1]) || JS_IsArray(ctx, argv[1])) {
+        return false;
+    }
+
+    option = JS_PushGCRef(ctx, &option_ref);
+    *option = JS_GetPropertyStr(ctx, argv[1], "localPort");
+    if (JS_IsException(*option) ||
+        (!JS_IsUndefined(*option) &&
+         !socket_to_int(ctx, *option, 0, 65535, out_local_port))) {
+        valid = false;
+    }
+    if (valid) {
+        *option = JS_GetPropertyStr(ctx, argv[1], "tls");
+        if (JS_IsException(*option) ||
+            (!JS_IsUndefined(*option) && !JS_IsBool(*option))) {
+            valid = false;
+        } else if (!JS_IsUndefined(*option)) {
+            *out_secure = *option == JS_TRUE;
+        }
+    }
+    JS_PopGCRef(ctx, &option_ref);
+    return valid;
 }
 
 static socket_entry_t *socket_require_entry(JSContext *ctx,
@@ -322,12 +380,13 @@ JSValue js_socket_open(JSContext *ctx,
     struct sockaddr_in local_address = {0};
     int local_port;
     int fd;
+    bool secure;
 
     (void)this_val;
     if (argc < 1 || !JS_IsString(ctx, argv[0]) ||
-        !socket_optional_int(ctx, argc, argv, 1, 0, 0, 65535, &local_port)) {
+        !socket_open_options(ctx, argc, argv, &local_port, &secure)) {
         return JS_ThrowTypeError(ctx,
-                                 "socket.open(protocol, local_port) expects tcp or udp and a valid port");
+                                 "socket.open(protocol, options) expects tcp or udp and an options object");
     }
     protocol_name = JS_ToCString(ctx, argv[0], &protocol_buf);
     if (protocol_name == NULL) {
@@ -340,9 +399,27 @@ JSValue js_socket_open(JSContext *ctx,
     } else {
         return JS_ThrowRangeError(ctx, "socket protocol must be tcp or udp");
     }
+    if (secure && protocol != SOCKET_PROTOCOL_TCP) {
+        return JS_ThrowTypeError(ctx, "TLS is only supported for TCP client sockets");
+    }
+    if (secure && local_port != 0) {
+        return JS_ThrowRangeError(ctx, "TLS client sockets do not support a fixed localPort");
+    }
+#if !defined(CONFIG_MBEDTLS_CERTIFICATE_BUNDLE) || !CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+    if (secure) {
+        return JS_ThrowInternalError(ctx,
+                                     "TLS socket support requires the certificate bundle");
+    }
+#endif
     entry = socket_allocate_entry();
     if (entry == NULL) {
         return JS_ThrowInternalError(ctx, "socket handle limit reached");
+    }
+    if (secure) {
+        entry->protocol = SOCKET_PROTOCOL_TCP;
+        entry->secure = true;
+        snprintf(entry->local_ip, sizeof(entry->local_ip), "0.0.0.0");
+        return JS_NewInt32(ctx, entry->id);
     }
     fd = socket(AF_INET,
                 protocol == SOCKET_PROTOCOL_TCP ? SOCK_STREAM : SOCK_DGRAM,
@@ -416,6 +493,10 @@ JSValue js_socket_status(JSContext *ctx,
                                          status,
                                          "protocol",
                                          JS_NewString(ctx, socket_protocol_name(entry->protocol))) ||
+        !esp32_mquickjs_set_property_ref(ctx,
+                                         status,
+                                         "secure",
+                                         JS_NewBool(entry->secure)) ||
         !esp32_mquickjs_set_property_ref(ctx,
                                          status,
                                          "connected",
@@ -543,6 +624,7 @@ struct esp32_mquickjs_future_driver_state {
     socklen_t address_len;
     char host[SOCKET_HOST_MAX_BYTES + 1U];
     char error_text[96];
+    esp_tls_cfg_t tls_config;
     bool started;
     bool issued;
     bool empty_result;
@@ -679,6 +761,13 @@ static bool socket_tcp_connect_future_prepare(
     }
     if (argc < 4 || JS_IsUndefined(argv[3].val)) {
         state->timeout_ms = SOCKET_DEFAULT_CONNECT_TIMEOUT_MS;
+    }
+    if (entry->secure) {
+        state->tls_config.non_block = true;
+        state->tls_config.timeout_ms = state->timeout_ms;
+#if defined(CONFIG_MBEDTLS_CERTIFICATE_BUNDLE) && CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+        state->tls_config.crt_bundle_attach = esp_crt_bundle_attach;
+#endif
     }
     *out_state = state;
     return true;
@@ -923,6 +1012,37 @@ static void socket_future_step_connect(esp32_mquickjs_future_driver_state_t *sta
     int connect_error = 0;
     socklen_t error_len = sizeof(connect_error);
 
+    if (entry->secure) {
+        int result;
+        int fd = -1;
+
+        if (entry->tls == NULL) {
+            entry->tls = esp_tls_init();
+            if (entry->tls == NULL) {
+                socket_future_fail(state, ENOMEM, "could not allocate TLS context");
+                return;
+            }
+        }
+        state->issued = true;
+        result = esp_tls_conn_new_async(state->host,
+                                        (int)strlen(state->host),
+                                        state->port,
+                                        &state->tls_config,
+                                        entry->tls);
+        if (result < 0) {
+            socket_future_fail(state, EIO, "TLS handshake failed");
+        } else if (result > 0) {
+            if (esp_tls_get_conn_sockfd(entry->tls, &fd) != ESP_OK || fd < 0) {
+                socket_future_fail(state, EIO, "TLS socket descriptor unavailable");
+                return;
+            }
+            entry->fd = fd;
+            state->fd = fd;
+            state->completed = true;
+        }
+        return;
+    }
+
     if (!state->issued) {
         int result;
 
@@ -992,26 +1112,43 @@ static void socket_future_step_send(esp32_mquickjs_future_driver_state_t *state,
         state->completed = true;
         return;
     }
-    ready = socket_poll_fd(entry->fd, true);
-    if (ready < 0 && errno != EINTR) {
-        socket_future_fail(state, errno, NULL);
-        return;
-    }
-    if (ready <= 0) {
-        return;
-    }
-    sent = send(entry->fd,
-                state->data + state->offset,
-                state->length - state->offset,
-                0);
-    if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
-        return;
+    if (entry->secure) {
+        if (entry->tls == NULL) {
+            socket_future_fail(state, EBADF, "TLS connection is unavailable");
+            return;
+        }
+        sent = esp_tls_conn_write(entry->tls,
+                                  state->data + state->offset,
+                                  state->length - state->offset);
+        if (sent == ESP_TLS_ERR_SSL_WANT_READ ||
+            sent == ESP_TLS_ERR_SSL_WANT_WRITE) {
+            return;
+        }
+    } else {
+        ready = socket_poll_fd(entry->fd, true);
+        if (ready < 0 && errno != EINTR) {
+            socket_future_fail(state, errno, NULL);
+            return;
+        }
+        if (ready <= 0) {
+            return;
+        }
+        sent = send(entry->fd,
+                    state->data + state->offset,
+                    state->length - state->offset,
+                    0);
+        if (sent < 0 &&
+            (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            return;
+        }
     }
     if (sent <= 0) {
         entry->connected = false;
         entry->peer_closed = true;
         if (state->offset == 0) {
-            socket_future_fail(state, errno, NULL);
+            socket_future_fail(state,
+                               entry->secure ? EIO : errno,
+                               entry->secure ? "TLS write failed" : NULL);
         } else {
             state->completed = true;
         }
@@ -1034,13 +1171,28 @@ static void socket_future_step_receive(esp32_mquickjs_future_driver_state_t *sta
         state->completed = true;
         return;
     }
-    ready = socket_poll_fd(entry->fd, false);
-    if (ready < 0 && errno != EINTR) {
-        socket_future_fail(state, errno, NULL);
-        return;
-    }
-    if (ready <= 0) {
-        return;
+    if (!udp && entry->secure) {
+        if (entry->tls == NULL) {
+            socket_future_fail(state, EBADF, "TLS connection is unavailable");
+            return;
+        }
+        state->received = esp_tls_conn_read(entry->tls,
+                                            state->data,
+                                            state->length);
+        if (state->received == ESP_TLS_ERR_SSL_WANT_READ ||
+            state->received == ESP_TLS_ERR_SSL_WANT_WRITE) {
+            state->received = -1;
+            return;
+        }
+    } else {
+        ready = socket_poll_fd(entry->fd, false);
+        if (ready < 0 && errno != EINTR) {
+            socket_future_fail(state, errno, NULL);
+            return;
+        }
+        if (ready <= 0) {
+            return;
+        }
     }
     if (udp) {
         state->address_len = sizeof(state->address);
@@ -1050,7 +1202,7 @@ static void socket_future_step_receive(esp32_mquickjs_future_driver_state_t *sta
                                    0,
                                    (struct sockaddr *)&state->address,
                                    &state->address_len);
-    } else {
+    } else if (!entry->secure) {
         state->received = recv(entry->fd, state->data, state->length, 0);
     }
     if (state->received == 0 && !udp) {
@@ -1058,14 +1210,16 @@ static void socket_future_step_receive(esp32_mquickjs_future_driver_state_t *sta
         entry->peer_closed = true;
         state->empty_result = true;
         state->completed = true;
-    } else if (state->received < 0 &&
+    } else if (!entry->secure && state->received < 0 &&
                (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
         state->received = -1;
     } else if (state->received < 0) {
         if (!udp) {
             entry->connected = false;
         }
-        socket_future_fail(state, errno, NULL);
+        socket_future_fail(state,
+                           entry->secure ? EIO : errno,
+                           entry->secure ? "TLS read failed" : NULL);
     } else {
         state->completed = true;
     }
@@ -1368,6 +1522,10 @@ static void socket_future_destroy(esp32_mquickjs_future_driver_state_t *state)
     entry = socket_future_entry(state);
     if (entry != NULL) {
         entry->busy = false;
+        if (state->kind == SOCKET_FUTURE_TCP_CONNECT &&
+            entry->secure && !entry->connected) {
+            socket_close_tls_connection(entry);
+        }
     }
     if (state->client_fd >= 0) {
         close(state->client_fd);
@@ -1502,6 +1660,9 @@ JSValue js_socket_tcp_listen(JSContext *ctx,
     }
     if (entry->connected || entry->busy) {
         return JS_ThrowInternalError(ctx, "TCP socket is already active");
+    }
+    if (entry->secure) {
+        return JS_ThrowTypeError(ctx, "TLS socket handles are client-only and cannot listen");
     }
     if (!socket_optional_int(ctx,
                              argc,

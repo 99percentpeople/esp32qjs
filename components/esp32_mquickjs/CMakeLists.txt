@@ -285,6 +285,7 @@ set(ESP32_MQUICKJS_PRIV_REQUIRES
     esp_http_server
     esp_event
     esp_netif
+    esp-tls
     esp_wifi
     esp_driver_usb_serial_jtag
     esp_websocket_client
@@ -399,7 +400,9 @@ esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
     "src/modules/socket/esp32_mquickjs_socket.c"
     PRIV_REQUIRES
+        esp-tls
         lwip
+        mbedtls
 )
 
 esp32_mquickjs_append_feature_component(

@@ -97,8 +97,9 @@ config ESP32_MQUICKJS_FEATURE_SOCKET
     default n
     help
         Enable generic handle-based socket APIs for TCP streams/listeners and
-        UDP datagrams. Framing, reconnect policy, authentication, and all
-        application protocols remain application responsibilities.
+        UDP datagrams. Outbound TCP handles may use TLS with system certificate
+        bundle verification. Framing, reconnect policy, authentication, and
+        all application protocols remain application responsibilities.
 
 config ESP32_MQUICKJS_FEATURE_HTTP
     bool "Enable http module"

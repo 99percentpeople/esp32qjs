@@ -343,7 +343,7 @@ namespace ESP32QJS {
    *
    * @example
    * ```js
-   * var stream = fs.open("_sys/ui/core.js", "r");
+   * var stream = fs.open("_sys/display.js", "r");
    * print(stream.tell());
    * print(JSON.stringify(stream.read(32)));
    * stream.close();
@@ -1572,9 +1572,16 @@ namespace ESP32QJS {
 
   type SocketProtocol = "tcp" | "udp";
 
+  interface SocketOpenOptions {
+    localPort?: number;
+    /** Secure outbound TCP using the system CA certificate bundle. */
+    tls?: boolean;
+  }
+
   interface SocketStatus {
     id: number;
     protocol: SocketProtocol;
+    secure: boolean;
     connected: boolean;
     listening: boolean;
     peerClosed: boolean;
@@ -1623,7 +1630,7 @@ namespace ESP32QJS {
   }
 
   interface SocketModule {
-    open(protocol: SocketProtocol, localPort?: number): number;
+    open(protocol: SocketProtocol, options?: SocketOpenOptions): number;
     close(socketId: number): boolean;
     status(socketId: number): SocketStatus;
     readonly MAX_TRANSFER_BYTES: number;

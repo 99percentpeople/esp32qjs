@@ -140,8 +140,11 @@ under `_sys/`, for example:
 
 ```js
 load("_sys/display/wlk1501spi8p.js");
-load("_sys/ui.js");
 ```
+
+The framework intentionally ships display primitives rather than a shared UI
+framework. Application layout, controls, and rendering policy belong under
+`apps/<app>/flash_data/`.
 
 ## Native Runtime Integration
 
