@@ -43,7 +43,8 @@ class NvsArchitectureTests(SourceContractTestCase):
         self.assertIn("CONFIG_NVS_ENCRYPTION", source)
         self.assertIn('"encrypted"', source)
         self.assertIn('JS_OBJECT_DEF("nvs"', stdlib)
-        self.assertIn('"nvs"', info)
+        self.assertIn('JS_CGETSET_MAGIC_DEF("nvs", js_sys_feature_get', stdlib)
+        self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_NVS", info)
 
 
 if __name__ == "__main__":

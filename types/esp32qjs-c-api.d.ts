@@ -950,7 +950,7 @@ namespace ESP32QJS {
 
   /**
    * Native display-buffer module. Exposed only when
-   * `sys.info().features.displayBuffer` is enabled.
+   * `sys.info.features.displayBuffer` is enabled.
    */
   interface DisplayBufferModule {
     readonly MONO1: "mono1";
@@ -959,77 +959,329 @@ namespace ESP32QJS {
     loadFont(path: string): DisplayFont;
   }
 
-  /**
-   * Runtime information returned by `sys.info()`.
-   */
+  type SysPsramMode = "none" | "quad" | "octal";
+  type SysSchedulerState = "not-started" | "running" | "suspended";
+  type SysTaskState =
+    | "running"
+    | "ready"
+    | "blocked"
+    | "suspended"
+    | "deleted"
+    | "invalid";
+  type SysRuntimeState =
+    | "created"
+    | "starting"
+    | "running"
+    | "quiescing"
+    | "restarting"
+    | "stopping"
+    | "stopped"
+    | "failed";
+  type SysControlAction = "restart-runtime" | "reboot";
+  type SysRestartFailureAction = "reboot" | "stop";
+
+  interface SysVersionInfo {
+    readonly framework: string;
+    readonly hostApi: 1;
+    readonly mquickjs: string;
+    readonly espIdf: string;
+  }
+
   interface SysFeatures {
-    fs: boolean;
-    nvs: boolean;
-    gpio: boolean;
-    ledc: boolean;
-    adc: boolean;
-    dac: boolean;
-    i2c: boolean;
-    spi: boolean;
-    uart: boolean;
-    usbSerial: boolean;
-    socket: boolean;
-    websocket: boolean;
-    displayBuffer: boolean;
+    readonly fs: boolean;
+    readonly nvs: boolean;
+    readonly gpio: boolean;
+    readonly ledc: boolean;
+    readonly adc: boolean;
+    readonly dac: boolean;
+    readonly i2c: boolean;
+    readonly spi: boolean;
+    readonly uart: boolean;
+    readonly usbSerial: boolean;
+    readonly socket: boolean;
+    readonly websocket: boolean;
+    readonly displayBuffer: boolean;
+    readonly wifi: boolean;
+    readonly http: boolean;
+    readonly httpServer: boolean;
+    readonly runtimeLogs: boolean;
+  }
+
+  interface SysChipRevision {
+    raw: number;
+    major: number;
+    minor: number;
+  }
+
+  interface SysChipCapabilities {
+    embeddedFlash: boolean;
     wifi: boolean;
-    http: boolean;
-    httpServer: boolean;
+    ble: boolean;
+    bluetoothClassic: boolean;
+    ieee802154: boolean;
+    embeddedPsram: boolean;
   }
 
-  /**
-   * Runtime information returned by `sys.info()`.
-   */
+  interface SysChipInfo {
+    model: string;
+    revision: SysChipRevision;
+    cores: number;
+    capabilities: SysChipCapabilities;
+  }
+
+  interface SysCpuInfo {
+    configuredFrequencyHz: number;
+  }
+
+  interface SysFlashInfo {
+    sizeBytes: number;
+  }
+
+  interface SysPsramInfo {
+    enabled: boolean;
+    sizeBytes: number;
+    mode: SysPsramMode;
+  }
+
+  interface SysHardwareInfo {
+    readonly hardwareId: string | null;
+    readonly target: string;
+    readonly chip: SysChipInfo;
+    readonly cpu: SysCpuInfo;
+    readonly flash: SysFlashInfo;
+    readonly psram: SysPsramInfo;
+  }
+
+  interface SysRuntimeHeapInfo {
+    sizeBytes: number;
+    region: "internal" | "psram";
+  }
+
+  interface SysRuntimeTaskInfo {
+    name: string;
+    stackSizeBytes: number;
+    priority: number;
+    watchdogEnabled: boolean;
+  }
+
+  interface SysRuntimeStartupInfo {
+    script: string;
+    autorun: boolean;
+    repl: boolean;
+  }
+
+  interface SysRuntimeSecondaryFilesystemInfo {
+    partition: string;
+    root: string;
+    required: boolean;
+  }
+
+  interface SysRuntimeFilesystemInfo {
+    root: string;
+    mount: boolean;
+    required: boolean;
+    formatOnMountFail: boolean;
+    secondary: SysRuntimeSecondaryFilesystemInfo | null;
+  }
+
+  interface SysRuntimeControlInfo {
+    restartRuntime: boolean;
+    reboot: boolean;
+    restartTimeoutMs: number | null;
+    restartFailureAction: SysRestartFailureAction | null;
+  }
+
+  interface SysRuntimeInfo {
+    readonly heap: SysRuntimeHeapInfo;
+    readonly task: SysRuntimeTaskInfo | null;
+    readonly evalTimeoutMs: number;
+    readonly startup: SysRuntimeStartupInfo | null;
+    readonly filesystem: SysRuntimeFilesystemInfo | null;
+    readonly control: SysRuntimeControlInfo;
+  }
+
   interface SysInfo {
-    runtimeVersion: string;
-    /** Version of the vendored MQuickJS engine. */
-    mquickjsVersion: string;
-    /** Stable `hw-xxxxxxxxxxxx` identity derived from the factory eFuse Base MAC. */
-    hardwareId: string | null;
-    hostApiVersion: number;
-    mcu: string;
-    chip: string;
-    features: SysFeatures;
-    userLedPin: number;
-    userLedActiveLow: boolean;
-    scriptsDir: string;
-    flashSize: number;
-    psramEnabled: boolean;
-    psramMode: "none" | "quad" | "octal";
-    psramSize: number;
-    freePsram: number;
-    totalInternalHeap: number;
-    freeInternalHeap: number;
-    jsHeapSize: number;
-    jsHeapRegion: string;
-    littlefsMounted: boolean;
-    replEnabled: boolean;
-    autoRunIndexJs: boolean;
-    formatLittlefsOnMountFail: boolean;
-    freeHeap: number;
-    jsTimeMs: number;
+    readonly version: SysVersionInfo;
+    readonly hardware: SysHardwareInfo;
+    readonly features: SysFeatures;
+    readonly runtime: SysRuntimeInfo;
+  }
+
+  interface SysResetStatus {
+    code: number;
+    name: string;
+  }
+
+  interface SysWakeupStatus {
+    mask: number;
+    names: string[];
+  }
+
+  interface SysBootStatus {
+    readonly bootId: string;
+    readonly uptimeMs: number;
+    readonly reset: SysResetStatus;
+    readonly wakeup: SysWakeupStatus;
+    readonly softwareReason: string | null;
+  }
+
+  interface SysCpuStatus {
+    readonly frequencyHz: number | null;
+  }
+
+  interface SysHeapStatus {
+    totalBytes: number;
+    freeBytes: number;
+    allocatedBytes: number;
+    minimumFreeBytes: number;
+    largestFreeBlockBytes: number;
+    allocatedBlocks: number;
+    freeBlocks: number;
+    totalBlocks: number;
+  }
+
+  interface SysMemoryStatus {
+    readonly default: SysHeapStatus;
+    readonly internal: SysHeapStatus;
+    readonly dma: SysHeapStatus;
+    readonly psram: SysHeapStatus | null;
+  }
+
+  interface SysRuntimeTaskStatus {
+    name: string;
+    priority: number;
+    currentCore: number;
+    stackSizeBytes: number | null;
+    stackHighWaterMarkBytes: number;
+    watchdogEnabled: boolean;
+    watchdogRegistered: boolean;
+  }
+
+  interface SysRtosStatus {
+    readonly name: "FreeRTOS";
+    readonly schedulerState: SysSchedulerState;
+    readonly tickRateHz: number;
+    readonly taskCount: number;
+    readonly runtimeTask: SysRuntimeTaskStatus;
+    readonly taskSnapshotSupported: boolean;
+    readonly taskSnapshotLimit: number;
+  }
+
+  interface SysTimerResourceStatus {
+    active: number;
+    capacity: number;
+  }
+
+  interface SysFutureResourceStatus {
+    queued: number;
+    pending: number;
+    capacity: number;
+    userCapacity: number;
+    internalReserve: number;
+  }
+
+  interface SysEventQueueResourceStatus {
+    open: number;
+    dropped: number;
+  }
+
+  interface SysAsyncPollerResourceStatus {
+    registered: number;
+    capacity: number;
+  }
+
+  interface SysRuntimeResourcesStatus {
+    timers: SysTimerResourceStatus;
+    futures: SysFutureResourceStatus;
+    eventQueues: SysEventQueueResourceStatus;
+    asyncPollers: SysAsyncPollerResourceStatus;
+  }
+
+  interface SysRuntimeFilesystemStatus {
+    root: string;
+    mounted: boolean;
+    secondaryMounted: boolean;
+  }
+
+  interface SysPendingControl {
+    action: SysControlAction;
+    reason: string;
+    requestedAtMs: number;
+    dueAtMs: number;
+  }
+
+  interface SysRuntimeStatus {
+    readonly state: SysRuntimeState;
+    readonly generation: number;
+    readonly uptimeMs: number;
+    readonly restartCount: number;
+    readonly lastRestartReason: string | null;
+    readonly pendingControl: SysPendingControl | null;
+    readonly filesystem: SysRuntimeFilesystemStatus;
+    readonly resources: SysRuntimeResourcesStatus;
+  }
+
+  interface SysStatus {
+    readonly boot: SysBootStatus;
+    readonly cpu: SysCpuStatus;
+    readonly memory: SysMemoryStatus;
+    readonly rtos: SysRtosStatus;
+    readonly runtime: SysRuntimeStatus;
+  }
+
+  interface SysTaskOptions {
+    limit?: number;
+  }
+
+  interface SysTaskInfo {
+    id: number;
+    name: string;
+    state: SysTaskState;
+    priority: number;
+    basePriority: number;
+    core: number | null;
+    stackHighWaterMarkBytes: number;
+  }
+
+  interface SysTaskSnapshot {
+    total: number;
+    truncated: boolean;
+    tasks: SysTaskInfo[];
+  }
+
+  interface SysControlOptions {
+    reason?: string;
+    delayMs?: number;
+  }
+
+  interface SysControlReceipt {
+    action: SysControlAction;
+    reason: string;
+    generation: number;
+    requestedAtMs: number;
+    dueAtMs: number;
   }
 
   /**
-   * System runtime helpers.
+   * Lazy system information, live status, diagnostics, and lifecycle controls.
    *
    * @example
    * ```js
-   * print(JSON.stringify(sys.info()));
-   * print(sys.millis());
+   * print(sys.info.hardware.chip.model);
+   * print(sys.status.memory.internal.freeBytes);
    * ```
    */
   interface SysModule {
-    info(): SysInfo;
+    readonly info: SysInfo;
+    readonly status: SysStatus;
     /**
      * Read an immutable value from the selected hardware profile. Returns
      * `undefined` when the key is not present.
      */
     config(key: string): string | number | boolean | undefined;
+    tasks(options?: SysTaskOptions): SysTaskSnapshot;
+    restartRuntime(options?: SysControlOptions): SysControlReceipt;
+    reboot(options?: SysControlOptions): SysControlReceipt;
     millis(): number;
     micros(): number;
     freeHeap(): number;
@@ -1691,7 +1943,7 @@ namespace ESP32QJS {
   var ledc: ESP32QJS.LedcModule;
   /** ADC oneshot helpers. */
   var adc: ESP32QJS.AdcModule;
-  /** DAC oneshot helpers. Exposed only when `sys.info().features.dac` is enabled. */
+  /** DAC oneshot helpers. Exposed only when `sys.info.features.dac` is enabled. */
   var dac: ESP32QJS.DacModule;
   /** System runtime information and deadline helpers. */
   var sys: ESP32QJS.SysModule;
@@ -1707,11 +1959,11 @@ namespace ESP32QJS {
   var socket: ESP32QJS.SocketModule;
   /** Outbound WebSocket text client. */
   var websocketClient: ESP32QJS.WebSocketClientModule;
-  /** Native display-buffer helpers. Exposed only when `sys.info().features.displayBuffer` is enabled. */
+  /** Native display-buffer helpers. Exposed only when `sys.info.features.displayBuffer` is enabled. */
   var displayBuffer: ESP32QJS.DisplayBufferModule;
   /** Wi-Fi station helpers. */
   var wifi: ESP32QJS.WiFiModule;
-  /** HTTP client/server namespace. Exposed when either `sys.info().features.http` or `.httpServer` is enabled. */
+  /** HTTP client/server namespace. Exposed when either `sys.info.features.http` or `.httpServer` is enabled. */
   var http: ESP32QJS.HttpModule;
 
 }

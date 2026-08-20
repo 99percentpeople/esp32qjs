@@ -32,11 +32,15 @@ typedef struct {
     uint32_t timeout_ms;
     bool internal_pullup;
     bool busy;
+    bool release_pending;
     i2c_master_bus_handle_t bus_handle;
+    i2c_master_dev_handle_t cleanup_device_handle;
 } esp32_mquickjs_i2c_slot_t;
 
 static esp32_mquickjs_i2c_slot_t s_i2c_slots[SOC_I2C_NUM];
 static uint32_t s_i2c_next_generation = 1;
+
+static esp_err_t i2c_cleanup_slot(esp32_mquickjs_i2c_slot_t *slot);
 
 static bool js_value_to_gpio_num(JSContext *ctx, JSValue value, gpio_num_t *out_pin)
 {
@@ -97,9 +101,10 @@ static void i2c_reset_slots(void)
     int32_t i;
 
     for (i = 0; i < (int32_t)SOC_I2C_NUM; ++i) {
-        i2c_init_slot(&s_i2c_slots[i], i);
+        if (!s_i2c_slots[i].allocated) {
+            i2c_init_slot(&s_i2c_slots[i], i);
+        }
     }
-    s_i2c_next_generation = 1;
 }
 
 static uint32_t i2c_take_generation(void)
@@ -119,6 +124,9 @@ static esp32_mquickjs_i2c_slot_t *i2c_alloc_slot(void)
     for (i = 0; i < (int32_t)SOC_I2C_NUM; ++i) {
         esp32_mquickjs_i2c_slot_t *slot = &s_i2c_slots[i];
 
+        if (slot->allocated && slot->release_pending && !slot->busy) {
+            (void)i2c_cleanup_slot(slot);
+        }
         if (slot->allocated) {
             continue;
         }
@@ -130,19 +138,34 @@ static esp32_mquickjs_i2c_slot_t *i2c_alloc_slot(void)
     return NULL;
 }
 
-static void i2c_cleanup_slot(esp32_mquickjs_i2c_slot_t *slot)
+static esp_err_t i2c_cleanup_slot(esp32_mquickjs_i2c_slot_t *slot)
 {
     int32_t bus_id;
+    esp_err_t err;
 
     if (slot == NULL || !slot->allocated) {
-        return;
+        return ESP_OK;
+    }
+    if (slot->busy) {
+        return ESP_ERR_INVALID_STATE;
     }
 
     bus_id = slot->bus_id;
+    if (slot->cleanup_device_handle != NULL) {
+        err = i2c_master_bus_rm_device(slot->cleanup_device_handle);
+        if (err != ESP_OK) {
+            return err;
+        }
+        slot->cleanup_device_handle = NULL;
+    }
     if (slot->bus_handle != NULL) {
-        i2c_del_master_bus(slot->bus_handle);
+        err = i2c_del_master_bus(slot->bus_handle);
+        if (err != ESP_OK) {
+            return err;
+        }
     }
     i2c_init_slot(slot, bus_id);
+    return ESP_OK;
 }
 
 static esp32_mquickjs_i2c_slot_t *i2c_get_slot(const esp32_mquickjs_i2c_bus_ref_t *ref)
@@ -460,7 +483,8 @@ static JSValue i2c_open(JSContext *ctx, int argc, JSValue *argv)
 
     result = i2c_make_bus_object(ctx, slot);
     if (JS_IsException(result)) {
-        i2c_cleanup_slot(slot);
+        slot->release_pending = true;
+        (void)i2c_cleanup_slot(slot);
     }
     return result;
 }
@@ -471,7 +495,8 @@ void esp32_mquickjs_deinit_i2c_runtime(void)
 
     for (i = 0; i < (int32_t)SOC_I2C_NUM; ++i) {
         if (s_i2c_slots[i].allocated) {
-            i2c_cleanup_slot(&s_i2c_slots[i]);
+            s_i2c_slots[i].release_pending = true;
+            (void)i2c_cleanup_slot(&s_i2c_slots[i]);
         }
     }
     i2c_reset_slots();
@@ -508,7 +533,8 @@ void js_i2c_bus_finalizer(JSContext *ctx, void *opaque)
 
     slot = i2c_get_slot(bus_ref);
     if (slot != NULL) {
-        i2c_cleanup_slot(slot);
+        slot->release_pending = true;
+        (void)i2c_cleanup_slot(slot);
     }
     heap_caps_free(bus_ref);
 }
@@ -518,6 +544,7 @@ JSValue js_i2c_bus_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
     esp32_mquickjs_i2c_bus_ref_t bus_ref;
     esp32_mquickjs_i2c_bus_ref_t *bus_ref_ptr;
     esp32_mquickjs_i2c_slot_t *slot;
+    esp_err_t err;
 
     (void)argc;
     (void)argv;
@@ -531,7 +558,10 @@ JSValue js_i2c_bus_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
             return JS_ThrowInternalError(ctx,
                                          "I2CBus.close() refused while an operation is pending");
         }
-        i2c_cleanup_slot(slot);
+        err = i2c_cleanup_slot(slot);
+        if (err != ESP_OK) {
+            return i2c_throw_error(ctx, err, "I2CBus.close() failed");
+        }
     }
     bus_ref_ptr = JS_GetOpaque(ctx, *this_val);
     if (bus_ref_ptr != NULL) {
@@ -589,15 +619,38 @@ struct esp32_mquickjs_future_driver_state {
     bool cancelled;
 };
 
+static void i2c_future_release_owner(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state != NULL && state->owner_retained) {
+        JS_DeleteGCRef(state->ctx, &state->owner_ref);
+        state->owner_retained = false;
+    }
+}
+
+static void i2c_future_release_bus(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    esp32_mquickjs_i2c_slot_t *slot;
+
+    if (state == NULL) {
+        return;
+    }
+    slot = i2c_get_slot(&state->bus_ref);
+    if (slot != NULL && state->started) {
+        slot->busy = false;
+    }
+    state->started = false;
+    i2c_future_release_owner(state);
+}
+
 static void i2c_future_release_prepare_state(
     esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL) {
         return;
     }
-    if (state->owner_retained) {
-        JS_DeleteGCRef(state->ctx, &state->owner_ref);
-    }
+    i2c_future_release_owner(state);
     heap_caps_free(state->chunk_lengths);
     heap_caps_free(state->write_data);
     heap_caps_free(state->read_data);
@@ -629,6 +682,12 @@ static esp32_mquickjs_future_driver_state_t *i2c_future_allocate(
     if (slot->busy) {
         heap_caps_free(state);
         JS_ThrowInternalError(ctx, "I2C bus is busy");
+        return NULL;
+    }
+    if (slot->cleanup_device_handle != NULL) {
+        heap_caps_free(state);
+        JS_ThrowInternalError(ctx,
+                              "I2C bus device cleanup failed; close the bus before reuse");
         return NULL;
     }
     state->kind = kind;
@@ -956,7 +1015,14 @@ static void i2c_future_worker(void *opaque)
                                                  state->read_length,
                                                  (int)state->timeout_ms);
     }
-    (void)i2c_master_bus_rm_device(device);
+    {
+        esp_err_t remove_err = i2c_master_bus_rm_device(device);
+
+        if (remove_err != ESP_OK) {
+            slot->cleanup_device_handle = device;
+            state->err = remove_err;
+        }
+    }
     state->total_us = (uint64_t)(esp_timer_get_time() - started_us);
     state->completed = true;
 }
@@ -1000,6 +1066,7 @@ static esp32_mquickjs_future_poll_t i2c_future_poll(
 static JSValue i2c_future_finish(JSContext *ctx,
                                  esp32_mquickjs_future_driver_state_t *state)
 {
+    i2c_future_release_bus(state);
     if (state == NULL || state->cancelled) {
         return JS_ThrowInternalError(ctx, "I2C operation cancelled");
     }
@@ -1044,15 +1111,10 @@ static bool i2c_future_cancel(esp32_mquickjs_future_driver_state_t *state)
 
 static void i2c_future_destroy(esp32_mquickjs_future_driver_state_t *state)
 {
-    esp32_mquickjs_i2c_slot_t *slot;
-
     if (state == NULL) {
         return;
     }
-    slot = i2c_get_slot(&state->bus_ref);
-    if (slot != NULL && state->started) {
-        slot->busy = false;
-    }
+    i2c_future_release_bus(state);
     i2c_future_release_prepare_state(state);
 }
 

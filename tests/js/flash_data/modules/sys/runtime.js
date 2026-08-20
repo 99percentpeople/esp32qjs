@@ -1,6 +1,16 @@
 test("sys/runtime", function () {
-  var info = sys.info();
+  var info = sys.info;
+  var status = sys.status;
   var features = info.features;
+  var chip = info.hardware.chip;
+  var runtimeInfo = info.runtime;
+  var boot = status.boot;
+  var internalHeap = status.memory.internal;
+  var internalHeapAgain = status.memory.internal;
+  var runtimeStatus = status.runtime;
+  var resources = runtimeStatus.resources;
+  var rtos = status.rtos;
+  var taskSnapshot = sys.tasks({ limit: 2 });
   var millisBefore = sys.millis();
   var microsBefore = sys.micros();
   var heap = sys.freeHeap();
@@ -10,6 +20,12 @@ test("sys/runtime", function () {
   var randomLimitError = "";
   var timeoutError = "";
   var timeoutLimitError = "";
+  var taskLimitError = "";
+  var taskShapeError = "";
+  var taskUnknownOptionError = "";
+  var controlReasonError = "";
+  var controlShapeError = "";
+  var controlUnknownOptionError = "";
   var timeoutStarted;
   var timeoutElapsed;
   var waitTimeoutError = "";
@@ -32,6 +48,36 @@ test("sys/runtime", function () {
   } catch (randomError) {
     randomLimitError = String(randomError);
   }
+  try {
+    sys.tasks({ limit: 0 });
+  } catch (limitError) {
+    taskLimitError = String(limitError);
+  }
+  try {
+    sys.tasks({ limt: 1 });
+  } catch (optionError) {
+    taskUnknownOptionError = String(optionError);
+  }
+  try {
+    sys.tasks([]);
+  } catch (shapeError) {
+    taskShapeError = String(shapeError);
+  }
+  try {
+    sys.restartRuntime({ reason: "" });
+  } catch (reasonError) {
+    controlReasonError = String(reasonError);
+  }
+  try {
+    sys.reboot({ delay: 1 });
+  } catch (controlOptionError) {
+    controlUnknownOptionError = String(controlOptionError);
+  }
+  try {
+    sys.reboot([]);
+  } catch (controlArrayError) {
+    controlShapeError = String(controlArrayError);
+  }
 
   scopedResult = sys.withTimeout(100, function () {
     return 42;
@@ -40,8 +86,8 @@ test("sys/runtime", function () {
     "sys.withTimeout() should accept the 60 second upper bound");
   try {
     sys.withTimeout(60001, function () { return 0; });
-  } catch (limitError) {
-    timeoutLimitError = String(limitError);
+  } catch (timeoutLimit) {
+    timeoutLimitError = String(timeoutLimit);
   }
   timeoutStarted = sys.millis();
   try {
@@ -69,19 +115,71 @@ test("sys/runtime", function () {
   millisAfter = sys.millis();
   microsAfter = sys.micros();
 
-  test.ok(info && typeof info === "object", "sys.info() should return an object");
-  test.ok(features && typeof features === "object", "sys.info().features should return an object");
-  test.equal(info.runtimeVersion, "0.1.0", "runtime version should match the framework release");
-  test.equal(info.mquickjsVersion, "2025-12-22",
+  test.equal(typeof sys.info, "object", "sys.info should be a namespace object");
+  test.equal(typeof sys.status, "object", "sys.status should be a namespace object");
+  test.ok(typeof sys.info !== "function", "the removed sys.info() function should stay absent");
+  test.equal(info.version.framework, "0.1.0", "framework version should match the release");
+  test.equal(info.version.mquickjs, "2025-12-22",
     "MQuickJS version should match the vendored engine release");
+  test.equal(info.version.hostApi, 1, "Host API should remain v1");
+  test.ok(typeof info.version.espIdf === "string" && info.version.espIdf.length > 0,
+    "ESP-IDF version should be present");
   test.equal(sys.config("APP_TEST_MISSING"), undefined,
     "sys.config() should return undefined for an unconfigured constant");
-  test.ok(/^hw-[0-9a-f]{12}$/.test(info.hardwareId), "hardware ID should derive from the factory Base MAC");
-  test.equal(info.hostApiVersion, 1, "Host API version should match the native compatibility level");
-  test.ok(typeof info.mcu === "string" && info.mcu.length > 0, "MCU name should be present");
-  test.ok(typeof info.chip === "string" && info.chip.length > 0, "chip name should be present");
-  test.ok(typeof info.freeHeap === "number" && info.freeHeap >= 0, "info.freeHeap should be numeric");
+  test.ok(/^hw-[0-9a-f]{12}$/.test(info.hardware.hardwareId),
+    "hardware ID should derive from the factory Base MAC");
+  test.ok(typeof info.hardware.target === "string" && info.hardware.target.length > 0,
+    "build target should be present");
+  test.ok(typeof chip.model === "string" && chip.model.length > 0, "chip model should be present");
+  test.ok(chip.revision.raw >= 0 && chip.cores >= 1, "chip snapshot should contain revision and cores");
+  test.ok(info.hardware.cpu.configuredFrequencyHz > 0, "configured CPU frequency should be present");
+  test.ok(info.hardware.flash.sizeBytes > 0, "Flash size should be present");
+  test.ok(typeof info.hardware.psram.enabled === "boolean", "PSRAM availability should be explicit");
+
+  test.ok(/^([0-9a-f]{16})$/.test(boot.bootId), "boot ID should be a 64-bit lowercase hex value");
+  test.ok(boot.uptimeMs >= 0, "boot uptime should be non-negative");
+  test.ok(typeof boot.reset.code === "number" && typeof boot.reset.name === "string",
+    "reset status should contain raw and normalized values");
+  test.ok(boot.wakeup.names instanceof Array, "wakeup names should be an array");
+  test.ok(status.cpu.frequencyHz === null || status.cpu.frequencyHz > 0,
+    "live CPU frequency should be positive or unsupported");
+  test.ok(internalHeap !== internalHeapAgain, "structured getters should return detached fresh objects");
+  test.ok(internalHeap.totalBytes >= internalHeap.freeBytes,
+    "heap totals should be internally coherent");
   test.ok(typeof heap === "number" && heap >= 0, "sys.freeHeap() should be numeric");
+  test.equal(rtos.name, "FreeRTOS", "RTOS name should be stable");
+  test.equal(rtos.schedulerState, "running", "scheduler should be running in a JS test");
+  test.ok(rtos.tickRateHz > 0 && rtos.taskCount > 0, "RTOS counters should be present");
+  test.equal(rtos.taskSnapshotSupported, true, "test firmware should enable task snapshots");
+  test.ok(taskSnapshot.total >= taskSnapshot.tasks.length, "task snapshot totals should be coherent");
+  test.ok(taskSnapshot.tasks.length <= 2, "task snapshot should honor its limit");
+  test.ok(taskSnapshot.tasks.length === 0 || typeof taskSnapshot.tasks[0].id === "number",
+    "task snapshots should expose stable numeric IDs without handles");
+  test.ok(taskLimitError.indexOf("1 through") >= 0, "task limit should be range checked");
+  test.ok(taskUnknownOptionError.indexOf("unknown key") >= 0,
+    "unknown task options should be rejected");
+  test.ok(taskShapeError.indexOf("expects an object") >= 0,
+    "task options should reject arrays");
+
+  test.equal(runtimeStatus.generation, 1, "the first runtime generation should be one");
+  test.equal(runtimeStatus.restartCount, 0, "a fresh boot should have no runtime restarts");
+  test.ok(runtimeStatus.uptimeMs >= 0, "runtime generation uptime should be non-negative");
+  test.ok(resources.timers.capacity >= resources.timers.active,
+    "timer resource counts should be bounded");
+  test.ok(resources.futures.capacity >= resources.futures.pending,
+    "Future resource counts should be bounded");
+  test.ok(resources.asyncPollers.capacity >= resources.asyncPollers.registered,
+    "async poller resource counts should be bounded");
+  test.equal(runtimeInfo.control.restartRuntime, true, "managed runtime restart should be available");
+  test.equal(runtimeInfo.control.reboot, true, "managed reboot should be available");
+  test.ok(runtimeInfo.control.restartTimeoutMs > 0, "restart timeout should be configured");
+  test.ok(controlReasonError.indexOf("1..64") >= 0,
+    "empty lifecycle-control reasons should be rejected before scheduling");
+  test.ok(controlUnknownOptionError.indexOf("unknown key") >= 0,
+    "unknown lifecycle-control options should be rejected");
+  test.ok(controlShapeError.indexOf("expects an object") >= 0,
+    "lifecycle-control options should reject arrays");
+
   test.equal(scopedResult, 42, "sys.withTimeout() should return the callback result");
   test.ok(timeoutLimitError.indexOf("1 and 60000") >= 0,
     "sys.withTimeout() should reject a budget above 60 seconds");
@@ -119,19 +217,22 @@ test("sys/runtime", function () {
   expectFeature("wifi", hasObject("wifi"));
   expectFeature("http", hasObject("http") && typeof globalThis.fetch === "function");
   expectFeature("httpServer", hasObject("http") && typeof globalThis.http.server === "function");
+  expectFeature("runtimeLogs", hasObject("runtimeLogs"));
   test.equal(hasObject("http"), features.http || features.httpServer,
     "http namespace should exist when either client or server support is enabled");
 
   if (features.fs) {
-    test.equal(info.scriptsDir, fs.ROOT, "info should report the filesystem root");
+    test.equal(runtimeInfo.filesystem.root, fs.ROOT,
+      "runtime filesystem configuration should report the active root");
   } else {
     test.equal(typeof globalThis.fs, "undefined", "fs should be hidden when disabled");
   }
 
   return {
-    mcu: info.mcu,
-    chip: info.chip,
+    target: info.hardware.target,
+    chip: chip.model,
+    bootId: boot.bootId,
+    generation: runtimeStatus.generation,
     freeHeap: heap,
-    features: features,
   };
 });

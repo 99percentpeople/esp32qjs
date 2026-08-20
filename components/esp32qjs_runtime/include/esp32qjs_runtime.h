@@ -19,6 +19,8 @@ typedef struct {
     uint32_t task_stack_size;
     uint32_t task_priority;
     uint32_t stop_timeout_ms;
+    uint32_t restart_timeout_ms;
+    esp32_mquickjs_restart_failure_action_t restart_failure_action;
     bool prefer_psram;
     bool mount_littlefs;
     bool require_littlefs;
@@ -43,6 +45,12 @@ esp_err_t esp32qjs_runtime_create(const esp32qjs_runtime_config_t *config,
 
 esp_err_t esp32qjs_runtime_start(esp32qjs_runtime_t *runtime);
 void esp32qjs_runtime_request_stop(esp32qjs_runtime_t *runtime);
+esp_err_t esp32qjs_runtime_request_control(
+    esp32qjs_runtime_t *runtime,
+    esp32_mquickjs_control_action_t action,
+    const char *reason,
+    uint32_t delay_ms,
+    esp32_mquickjs_control_receipt_t *receipt);
 esp_err_t esp32qjs_runtime_stop(esp32qjs_runtime_t *runtime,
                                 uint32_t timeout_ms);
 esp_err_t esp32qjs_runtime_destroy(esp32qjs_runtime_t *runtime);

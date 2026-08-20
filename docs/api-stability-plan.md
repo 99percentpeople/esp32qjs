@@ -25,7 +25,7 @@ The stable API should satisfy these rules:
 - Built-in host APIs stay low-level. Board-independent drivers, widgets, protocol stacks, debounce logic, animation helpers, and other policy belong in JavaScript.
 - Additive change is preferred. Once a module shape is frozen, new fields and methods may be added, but existing names and semantics should not be renamed or weakened.
 - Host modules should be MCU-selectable features. Each optional module should be enabled or disabled by a `CONFIG_...` feature macro and chosen from SoC capability under `configs/mcus/<mcu>/sdkconfig.defaults`.
-- Compiled feature sets should be discoverable from JS in one stable place such as `sys.info().features`, instead of forcing user scripts to probe globals with `typeof`.
+- Compiled feature sets should be discoverable from JS in one stable place such as `sys.info.features`, instead of forcing user scripts to probe globals with `typeof`.
 - Mutating peripheral calls should return state objects when that improves observability, but status objects must reflect real or intentionally tracked state, not guessed state.
 - ISR and background-task events must always be bridged back onto the single JS runtime task.
 - I/O modules expose one synchronous method shape without callback overloads or `.async` namespaces. Concurrent native I/O is started only through the global `Future` facility.
@@ -102,10 +102,10 @@ Recommended dependency rules:
 
 Recommended runtime discovery:
 
-- Add a stable `features` object to `sys.info()`:
+- Add stable lazy feature getters under `sys.info.features`:
 
 ```js
-print(JSON.stringify(sys.info().features));
+print(JSON.stringify(sys.info.features));
 // Example:
 // {
 //   fs: true,
@@ -118,19 +118,20 @@ print(JSON.stringify(sys.info().features));
 //   spi: true,
 //   uart: true,
 //   usbSerial: false,
+//   socket: true,
 //   websocket: false,
 //   displayBuffer: true,
 //   wifi: true,
 //   http: true,
 //   httpServer: true,
-//   staticFileHandler: true
+//   runtimeLogs: true
 // }
 ```
 
 Behavior rule:
 
 - If a feature is disabled at compile time, that module is not registered into the JS global object.
-- Cross-MCU scripts should prefer `sys.info().features.<name>` over probing module globals directly.
+- Cross-MCU scripts should prefer `sys.info.features.<name>` over probing module globals directly.
 
 ## MCU and Hardware Profiles
 
@@ -260,20 +261,24 @@ Freeze recommendations:
 
 ### `sys`
 
-Status: `Stable now`
+Status: `Implemented; release soak pending`
 
-Why:
+The unreleased Host API remains version `1`; the former flat `sys.info()`
+shape has been replaced by the
+[System Management API v1](sys-management-api.md). There is no
+compatibility alias or v2 transition.
 
-- `sys.info()`, `millis()`, `micros()`, `freeHeap()`, and bounded `randomHex()` are generic runtime/platform helpers.
-- `sys.withTimeout()` provides a scoped wall-clock budget without extending an outer native deadline.
-- The module is not overloaded with peripheral control.
+Implemented shape:
 
-Freeze recommendations:
-
-- Keep this module focused on platform/runtime introspection.
-- Do not move unrelated peripheral helpers into `sys`.
-- If later adding power-management or reboot helpers, do so carefully and explicitly.
-- Extend `sys.info()` with a stable `features` object so scripts can discover compiled host modules safely.
+- replace the aggregate `sys.info()` function with lazy, getter-only `sys.info`
+  and `sys.status` namespace trees;
+- keep `sys.info.features` as the authoritative compiled-module discovery path;
+- expose bounded FreeRTOS diagnostics without task mutation or multi-task
+  JavaScript;
+- add distinct supervised `restartRuntime()` and whole-device `reboot()`
+  controls;
+- keep peripheral, power, OTA, and recovery policy out of `sys`;
+- freeze after repeated board-backed restart and reboot validation passes.
 
 ## Peripheral Modules
 
@@ -499,7 +504,7 @@ The old display buffer plan has been implemented and the remaining active surfac
 
 What is already good:
 
-- `displayBuffer` is feature-gated and reported through `sys.info().features.displayBuffer`.
+- `displayBuffer` is feature-gated and reported through `sys.info.features.displayBuffer`.
 - The module exposes native `mono1` and `rgb565` buffers, dirty bounds, drawing primitives, EQF1 fixed bitmap font loading, and byte-view rectangle export.
 - `readRect(...)` and `readRectChunks(...)` return generic native byte sources; `createSpanSource(...)` returns a retained `DisplayBufferSpanSource` whose display-only `setRect(...)` control is separate from the generic `ByteSpanSource` consumed by SPI.
 - The layered JavaScript display library separates framebuffer rendering, panel command sequencing, presentation policy, and SPI/I2C transport ownership.
@@ -532,7 +537,7 @@ For cross-board stability, the proposed API is:
 
 - gate `dac` behind `FEATURE_DAC`
 - make `FEATURE_DAC` depend on `SOC_DAC_SUPPORTED`
-- expose compile-time availability through `sys.info().features.dac`
+- expose compile-time availability through `sys.info.features.dac`
 - do not register the module at all on boards where the feature is disabled
 
 Recommended first stable scope: oneshot DAC only.
@@ -678,11 +683,11 @@ Before calling the built-in host API stable, adopt these rules:
 Recommended order for stabilization:
 
 1. Freeze now:
-   `help/load/timers`, `fs`, `Stream`, `Headers`, `Request`, `Response`, `sys`, `adc`
+   `help/load/timers`, `fs`, `Stream`, `Headers`, `Request`, `Response`, `adc`
 2. Candidate for freeze after focused validation:
    `nvs`, `i2c`, `spi`, `uart`, `displayBuffer`
 3. Adjust before freeze:
-   `Future`, `EventQueue`, `gpio`, `wifi`, `http`, `ledc`, `dac`
+   `sys`, `Future`, `EventQueue`, `gpio`, `wifi`, `http`, `ledc`, `dac`
 
 ## Immediate Next Steps
 

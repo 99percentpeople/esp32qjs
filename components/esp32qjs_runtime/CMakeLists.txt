@@ -4,6 +4,7 @@ idf_component_register(
     REQUIRES
         esp32_mquickjs
         esp_system
+        esp_timer
 )
 
 if(CONFIG_ESP32QJS_ENABLE_REPL)

@@ -26,7 +26,6 @@ typedef struct {
 typedef struct {
     bool initialized;
     bool opened;
-    bool owns_driver;
     bool polling;
     bool release_buffer;
     esp32_mquickjs_runtime_t *runtime;
@@ -44,6 +43,16 @@ typedef struct {
 } esp32_mquickjs_usb_serial_emit_context_t;
 
 static esp32_mquickjs_usb_serial_state_t s_usb_serial_state;
+
+/*
+ * The USB Serial/JTAG VFS console and interrupt-driven driver are physical
+ * boot resources. A JavaScript runtime restart must close only the JS-owned
+ * stream and event queue; uninstalling and reinstalling the driver here can
+ * make the host re-enumerate the USB device and, on ESP32-S3, turn a
+ * restartRuntime() into a USB_UART_CHIP_RESET. Keep the driver installed for
+ * the lifetime of the firmware boot.
+ */
+static bool s_usb_serial_driver_ready;
 
 static bool usb_serial_poller(JSContext *ctx,
                               esp32_mquickjs_runtime_t *runtime,
@@ -229,29 +238,30 @@ bool esp32_mquickjs_init_usb_serial_runtime(JSContext *ctx,
 
     memset(&s_usb_serial_state, 0, sizeof(s_usb_serial_state));
     s_usb_serial_state.runtime = runtime;
-    if (!usb_serial_jtag_is_driver_installed()) {
-        config.rx_buffer_size = CONFIG_ESP32_MQUICKJS_USB_SERIAL_RX_BUFFER_SIZE;
-        config.tx_buffer_size = CONFIG_ESP32_MQUICKJS_USB_SERIAL_TX_BUFFER_SIZE;
-        err = usb_serial_jtag_driver_install(&config);
-        if (err != ESP_OK) {
-            JS_ThrowInternalError(ctx,
-                                  "failed to install USB serial driver: %s",
-                                  esp_err_to_name(err));
-            return false;
+    if (!s_usb_serial_driver_ready || !usb_serial_jtag_is_driver_installed()) {
+        if (!usb_serial_jtag_is_driver_installed()) {
+            config.rx_buffer_size = CONFIG_ESP32_MQUICKJS_USB_SERIAL_RX_BUFFER_SIZE;
+            config.tx_buffer_size = CONFIG_ESP32_MQUICKJS_USB_SERIAL_TX_BUFFER_SIZE;
+            err = usb_serial_jtag_driver_install(&config);
+            if (err != ESP_OK) {
+                JS_ThrowInternalError(ctx,
+                                      "failed to install USB serial driver: %s",
+                                      esp_err_to_name(err));
+                return false;
+            }
         }
-        s_usb_serial_state.owns_driver = true;
+        usb_serial_jtag_vfs_use_driver();
+        setvbuf(stdin, NULL, _IONBF, 0);
+        setvbuf(stdout, NULL, _IONBF, 0);
+        s_usb_serial_driver_ready = true;
+    } else {
+        /* Reattach the retained physical console to the new generation. */
+        usb_serial_jtag_vfs_use_driver();
     }
 
-    usb_serial_jtag_vfs_use_driver();
     usb_serial_jtag_set_select_notif_callback(usb_serial_notify_from_isr);
-    setvbuf(stdin, NULL, _IONBF, 0);
-    setvbuf(stdout, NULL, _IONBF, 0);
     if (!esp32_mquickjs_register_async_poller(runtime, usb_serial_poller, NULL)) {
         usb_serial_jtag_set_select_notif_callback(NULL);
-        usb_serial_jtag_vfs_use_nonblocking();
-        if (s_usb_serial_state.owns_driver) {
-            usb_serial_jtag_driver_uninstall();
-        }
         memset(&s_usb_serial_state, 0, sizeof(s_usb_serial_state));
         JS_ThrowInternalError(ctx, "failed to register USB serial poller");
         return false;
@@ -268,12 +278,10 @@ void esp32_mquickjs_deinit_usb_serial_runtime(JSContext *ctx)
         return;
     }
 
+    /* Close generation-owned JS state only. The physical driver, VFS mode,
+     * and USB connection stay up across restartRuntime(). */
     usb_serial_close_internal();
     usb_serial_jtag_set_select_notif_callback(NULL);
-    usb_serial_jtag_vfs_use_nonblocking();
-    if (s_usb_serial_state.owns_driver && usb_serial_jtag_is_driver_installed()) {
-        usb_serial_jtag_driver_uninstall();
-    }
     memset(&s_usb_serial_state, 0, sizeof(s_usb_serial_state));
 }
 

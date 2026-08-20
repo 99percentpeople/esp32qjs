@@ -23,7 +23,12 @@ struct esp32_mquickjs_event_queue {
     uint32_t dropped;
     bool receiver_registered;
     volatile bool closed;
+    struct esp32_mquickjs_event_queue *next;
 };
+
+typedef struct {
+    esp32_mquickjs_event_queue_t *head;
+} esp32_mquickjs_event_queue_runtime_t;
 
 struct esp32_mquickjs_future_driver_state {
     esp32_mquickjs_event_queue_t *queue;
@@ -55,6 +60,42 @@ static esp32_mquickjs_event_queue_t *event_queue_from_value(JSContext *ctx,
         }
     }
     return NULL;
+}
+
+static esp32_mquickjs_event_queue_runtime_t *event_queue_runtime(
+    esp32_mquickjs_runtime_t *runtime)
+{
+    return runtime != NULL ? runtime->event_queue_state : NULL;
+}
+
+static void event_queue_register(esp32_mquickjs_event_queue_t *queue)
+{
+    esp32_mquickjs_event_queue_runtime_t *state;
+
+    if (queue == NULL || (state = event_queue_runtime(queue->runtime)) == NULL) {
+        return;
+    }
+    queue->next = state->head;
+    state->head = queue;
+}
+
+static void event_queue_unregister(esp32_mquickjs_event_queue_t *queue)
+{
+    esp32_mquickjs_event_queue_runtime_t *state;
+    esp32_mquickjs_event_queue_t **cursor;
+
+    if (queue == NULL || (state = event_queue_runtime(queue->runtime)) == NULL) {
+        return;
+    }
+    cursor = &state->head;
+    while (*cursor != NULL) {
+        if (*cursor == queue) {
+            *cursor = queue->next;
+            queue->next = NULL;
+            return;
+        }
+        cursor = &(*cursor)->next;
+    }
 }
 
 esp32_mquickjs_event_queue_t *esp32_mquickjs_event_queue_from_value(
@@ -375,11 +416,24 @@ static const esp32_mquickjs_future_driver_t s_event_queue_future_driver = {
 bool esp32_mquickjs_init_event_queue_runtime(JSContext *ctx,
                                               esp32_mquickjs_runtime_t *runtime)
 {
+    esp32_mquickjs_event_queue_runtime_t *state;
     JSGCRef object_ref;
     JSGCRef receive_ref;
-    JSValue *object = JS_PushGCRef(ctx, &object_ref);
-    JSValue *receive = JS_PushGCRef(ctx, &receive_ref);
+    JSValue *object;
+    JSValue *receive;
     bool result;
+
+    if (runtime == NULL || runtime->event_queue_state != NULL) {
+        return false;
+    }
+    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    if (state == NULL) {
+        return false;
+    }
+    runtime->event_queue_state = state;
+
+    object = JS_PushGCRef(ctx, &object_ref);
+    receive = JS_PushGCRef(ctx, &receive_ref);
 
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_EVENT_QUEUE);
     *receive = JS_IsException(*object)
@@ -395,7 +449,51 @@ bool esp32_mquickjs_init_event_queue_runtime(JSContext *ctx,
     }
     JS_PopGCRef(ctx, &receive_ref);
     JS_PopGCRef(ctx, &object_ref);
+    if (!result) {
+        esp32_mquickjs_deinit_event_queue_runtime(runtime);
+    }
     return result;
+}
+
+void esp32_mquickjs_deinit_event_queue_runtime(esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_event_queue_runtime_t *state = event_queue_runtime(runtime);
+
+    if (state == NULL) {
+        return;
+    }
+    heap_caps_free(state);
+    runtime->event_queue_state = NULL;
+}
+
+bool esp32_mquickjs_get_event_queue_status(
+    esp32_mquickjs_runtime_t *runtime,
+    esp32_mquickjs_event_queue_status_t *status)
+{
+    esp32_mquickjs_event_queue_runtime_t *state = event_queue_runtime(runtime);
+    esp32_mquickjs_event_queue_t *queue;
+
+    if (status == NULL) {
+        return false;
+    }
+    memset(status, 0, sizeof(*status));
+    if (state == NULL) {
+        return true;
+    }
+    for (queue = state->head; queue != NULL; queue = queue->next) {
+        uint32_t dropped;
+        bool closed;
+
+        portENTER_CRITICAL(&queue->lock);
+        dropped = queue->dropped;
+        closed = queue->closed;
+        portEXIT_CRITICAL(&queue->lock);
+        status->dropped += dropped;
+        if (!closed) {
+            status->open++;
+        }
+    }
+    return true;
 }
 
 JSValue esp32_mquickjs_event_queue_new(JSContext *ctx,
@@ -438,6 +536,7 @@ JSValue esp32_mquickjs_event_queue_new(JSContext *ctx,
         return object;
     }
     JS_SetOpaque(ctx, object, queue);
+    event_queue_register(queue);
     return object;
 }
 
@@ -458,6 +557,7 @@ void js_event_queue_finalizer(JSContext *ctx, void *opaque)
     if (queue == NULL) {
         return;
     }
+    event_queue_unregister(queue);
     (void)esp32_mquickjs_event_queue_close(queue);
     event = heap_caps_malloc(queue->event_size, MALLOC_CAP_8BIT);
     if (event != NULL) {

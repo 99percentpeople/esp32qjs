@@ -505,7 +505,7 @@ python scripts/remote.py test --scope js --module uart --loopback
 ## `usbSerial` Module
 
 `usbSerial` is a bounded USB Serial/JTAG text-frame transport for headless
-applications. It is compiled only when `sys.info().features.usbSerial` is
+applications. It is compiled only when `sys.info.features.usbSerial` is
 true and is mutually exclusive with `CONFIG_ESP32QJS_ENABLE_REPL`, because both
 consume the same USB input stream.
 
@@ -533,7 +533,7 @@ line is JSON.
 
 ## `displayBuffer` Module
 
-This module exposes native display buffers for heavy pixel work. It is registered only when `sys.info().features.displayBuffer` is enabled. The JS `Surface` owns rendering, `PanelDriver` owns controller sequencing, and `DisplayTransport` owns SPI/I2C/GPIO operations; `displayBuffer` only owns pixels and export bytes.
+This module exposes native display buffers for heavy pixel work. It is registered only when `sys.info.features.displayBuffer` is enabled. The JS `Surface` owns rendering, `PanelDriver` owns controller sequencing, and `DisplayTransport` owns SPI/I2C/GPIO operations; `displayBuffer` only owns pixels and export bytes.
 
 - `displayBuffer.MONO1`
   Pixel format string `"mono1"`.
@@ -1035,15 +1035,32 @@ if (ref) {
 
 ## `sys` Module
 
-- `sys.info()`
-  Return MCU/chip identity plus memory/runtime fields:
-  `{ runtimeVersion, mquickjsVersion, hostApiVersion, mcu, chip, hardwareId, features, userLedPin, userLedActiveLow, scriptsDir, flashSize, psramEnabled, psramMode, psramSize, freePsram, totalInternalHeap, freeInternalHeap, jsHeapSize, jsHeapRegion, littlefsMounted, replEnabled, autoRunIndexJs, formatLittlefsOnMountFail, freeHeap, jsTimeMs }`. `hardwareId` is `hw-` plus the lowercase factory eFuse Base MAC and remains stable across erase/flash/reset operations. `runtimeVersion` follows framework SemVer; `mquickjsVersion` identifies the vendored MQuickJS release; `hostApiVersion` is the integer native compatibility level. `psramMode` is `none`, `quad`, or `octal`.
+- `sys.info`
+  Read-only lazy namespace for stable facts. Its branches are `version`,
+  `hardware`, `features`, and `runtime`. Each scalar is a getter; structured
+  leaves such as `hardware.chip`, `hardware.flash`, and `runtime.heap` return a
+  fresh detached snapshot only when read. `hardware.hardwareId` is `hw-` plus
+  the lowercase factory eFuse Base MAC. `version.hostApi` remains `1`.
+- `sys.status`
+  Read-only lazy namespace for live `boot`, `cpu`, `memory`, `rtos`, and
+  `runtime` state. Re-reading a leaf takes a new measurement. Heap capability
+  views overlap and must not be added together.
+- `sys.tasks(options?)`
+  Return a bounded, task-ID-sorted FreeRTOS snapshot. `options.limit` is
+  `1..CONFIG_ESP32_MQUICKJS_SYS_TASK_SNAPSHOT_MAX`. The call throws when task
+  snapshots are not compiled in or when the native snapshot capacity would be
+  exceeded. No task handles or stack addresses are exposed.
+- `sys.restartRuntime(options?)` / `sys.reboot(options?)`
+  Schedule runtime-generation replacement or a full software reboot at the
+  next safe runtime-loop point. Options are `{ reason?, delayMs? }`, with a
+  1–64-byte reason and `delayMs` from 0 through 60000. The returned
+  `{ action, reason, generation, requestedAtMs, dueAtMs }` value is an
+  acceptance receipt, not completion proof. Only one request may be pending.
 - `sys.config(key)` reads one immutable hardware-profile constant. Registered
   `ESP32QJS_*` values supply defaults to their matching framework driver;
   application-owned keys should use an `APP_*` prefix. Missing keys return
   `undefined`. Explicit driver options still take precedence over profile
   constants, which in turn take precedence over safe Kconfig defaults.
-  `features` is `{ fs, nvs, gpio, ledc, adc, dac, i2c, spi, uart, usbSerial, socket, websocket, displayBuffer, wifi, http, httpServer }` and is the stable way to discover which optional host modules were compiled into the firmware for the current MCU profile.
 - `sys.millis()`
   Return monotonic milliseconds from `esp_timer`.
 - `sys.micros()`
@@ -1068,8 +1085,10 @@ if (ref) {
 Example:
 
 ```js
-print(JSON.stringify(sys.info().features));
-if (sys.info().features.fs) {
+print(sys.info.version.framework);
+print(JSON.stringify(sys.info.hardware.chip));
+print(JSON.stringify(sys.status.memory.internal));
+if (sys.info.features.fs) {
   print(fs.ROOT);
 }
 print(sys.millis());
@@ -1079,6 +1098,10 @@ var answer = sys.withTimeout(100, function () {
   return 42;
 });
 ```
+
+See [System Management API v1](sys-management-api.md) for exact getter shapes,
+nullability, lifecycle semantics, and the migration map from the removed flat
+`sys.info()` call.
 
 ## `wifi` Module
 
@@ -1110,7 +1133,7 @@ wifi.disconnect();
 
 ## `socket` Module
 
-`socket` is exposed when `sys.info().features.socket` is enabled. It provides
+`socket` is exposed when `sys.info.features.socket` is enabled. It provides
 bounded, handle-based raw sockets. The framework does not add line framing,
 reconnect policy, authentication, or an application protocol.
 
@@ -1158,7 +1181,7 @@ socket.close(udp);
 
 ## `websocketClient` Module
 
-`websocketClient` is exposed when `sys.info().features.websocket` is enabled.
+`websocketClient` is exposed when `sys.info.features.websocket` is enabled.
 It uses a bounded `EventQueue` handle and does not invoke application callbacks.
 
 - `websocketClient.open(options)`
@@ -1191,14 +1214,14 @@ are handled natively and are not reported as application errors.
 The namespace is present when the HTTP client or server feature is enabled.
 
 - `http.DEFAULT_TIMEOUT_MS` / `http.MAX_BODY_BYTES`
-  HTTP-client limits when `sys.info().features.http` is enabled.
+  HTTP-client limits when `sys.info.features.http` is enabled.
 - `fetch(input, options?)` / `http.fetch(input, options?)`
   Run one request through the native HTTP Future driver. Options include
   `method`, `headers`, UTF-8 string or `Stream` `body`, `timeoutMs`, and
   `maxBodyBytes`.
 - `http.server(options?)`
   Create a low-level declarative server when
-  `sys.info().features.httpServer` is enabled.
+  `sys.info.features.httpServer` is enabled.
 
 ```js
 var left = Future.call(fetch, globalThis, ["https://example.com/a"]);

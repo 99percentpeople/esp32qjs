@@ -225,7 +225,7 @@ test("display_buffer/basic", function () {
   test.equal(reusedAgain[0], reusedFirst, "readRectChunks reuse should keep ByteView wrappers stable");
   test.equal(reusedAgain[0].toArray()[1], 0x01, "reused ByteView should point at updated pixel data");
 
-  if (sys.info().features.spi && typeof spi === "object") {
+  if (sys.info.features.spi && typeof spi === "object") {
     var bus = spi.openBus();
     var device = bus.openDevice();
 

@@ -15,6 +15,11 @@
 #define ESP32_MQUICKJS_LITTLEFS_BASE_PATH "/littlefs"
 #define ESP32_MQUICKJS_LITTLEFS_PARTITION_LABEL "storage"
 #define ESP32_MQUICKJS_FS_ROOT_MAX 64U
+#define ESP32_MQUICKJS_BOOT_ID_LENGTH 16U
+#define ESP32_MQUICKJS_CONTROL_REASON_MAX 64U
+#define ESP32_MQUICKJS_HOST_TASK_NAME_MAX 24U
+#define ESP32_MQUICKJS_HOST_STARTUP_PATH_MAX 256U
+#define ESP32_MQUICKJS_HOST_PARTITION_LABEL_MAX 17U
 
 typedef struct esp32_mquickjs_runtime esp32_mquickjs_runtime_t;
 typedef uint32_t esp32_mquickjs_poll_result_t;
@@ -23,6 +28,107 @@ typedef bool (*esp32_mquickjs_async_poller_t)(JSContext *ctx,
                                               esp32_mquickjs_runtime_t *runtime,
                                               void *opaque);
 typedef bool (*esp32_mquickjs_cooperate_fn)(void *opaque);
+
+typedef enum {
+    ESP32_MQUICKJS_RUNTIME_CREATED,
+    ESP32_MQUICKJS_RUNTIME_STARTING,
+    ESP32_MQUICKJS_RUNTIME_RUNNING,
+    ESP32_MQUICKJS_RUNTIME_QUIESCING,
+    ESP32_MQUICKJS_RUNTIME_RESTARTING,
+    ESP32_MQUICKJS_RUNTIME_STOPPING,
+    ESP32_MQUICKJS_RUNTIME_STOPPED,
+    ESP32_MQUICKJS_RUNTIME_FAILED,
+} esp32_mquickjs_runtime_state_t;
+
+typedef enum {
+    ESP32_MQUICKJS_CONTROL_RESTART_RUNTIME,
+    ESP32_MQUICKJS_CONTROL_REBOOT,
+} esp32_mquickjs_control_action_t;
+
+typedef enum {
+    ESP32_MQUICKJS_RESTART_FAILURE_REBOOT,
+    ESP32_MQUICKJS_RESTART_FAILURE_STOP,
+} esp32_mquickjs_restart_failure_action_t;
+
+typedef enum {
+    ESP32_MQUICKJS_CONTROL_ACCEPTED,
+    ESP32_MQUICKJS_CONTROL_UNAVAILABLE,
+    ESP32_MQUICKJS_CONTROL_ALREADY_PENDING,
+    ESP32_MQUICKJS_CONTROL_INVALID_STATE,
+} esp32_mquickjs_control_result_t;
+
+typedef struct {
+    esp32_mquickjs_control_action_t action;
+    uint32_t generation;
+    uint64_t requested_at_ms;
+    uint64_t due_at_ms;
+} esp32_mquickjs_control_receipt_t;
+
+typedef struct {
+    bool managed;
+    esp32_mquickjs_runtime_state_t state;
+    uint32_t generation;
+    uint32_t restart_count;
+    uint64_t generation_started_us;
+    char last_restart_reason[ESP32_MQUICKJS_CONTROL_REASON_MAX + 1U];
+    bool pending_control;
+    esp32_mquickjs_control_action_t pending_action;
+    char pending_reason[ESP32_MQUICKJS_CONTROL_REASON_MAX + 1U];
+    uint64_t pending_requested_at_ms;
+    uint64_t pending_due_at_ms;
+
+    char task_name[ESP32_MQUICKJS_HOST_TASK_NAME_MAX];
+    uint32_t task_stack_size;
+    uint32_t task_priority;
+    bool task_watchdog_enabled;
+    bool task_watchdog_registered;
+
+    char startup_script[ESP32_MQUICKJS_HOST_STARTUP_PATH_MAX];
+    bool autorun_startup_script;
+    bool repl_enabled;
+
+    bool mount_littlefs;
+    bool require_littlefs;
+    bool format_littlefs_on_mount_fail;
+    bool littlefs_mounted;
+    char fs_root[ESP32_MQUICKJS_FS_ROOT_MAX];
+    bool mount_secondary_littlefs;
+    bool require_secondary_littlefs;
+    bool secondary_littlefs_mounted;
+    char secondary_partition[ESP32_MQUICKJS_HOST_PARTITION_LABEL_MAX];
+    char secondary_root[ESP32_MQUICKJS_FS_ROOT_MAX];
+
+    bool restart_runtime_available;
+    bool reboot_available;
+    uint32_t restart_timeout_ms;
+    esp32_mquickjs_restart_failure_action_t restart_failure_action;
+
+    bool software_reason_available;
+    char software_reason[ESP32_MQUICKJS_CONTROL_REASON_MAX + 1U];
+} esp32_mquickjs_host_status_t;
+
+typedef bool (*esp32_mquickjs_host_status_fn)(void *opaque,
+                                              esp32_mquickjs_host_status_t *status);
+typedef esp32_mquickjs_control_result_t (*esp32_mquickjs_system_control_fn)(
+    void *opaque,
+    esp32_mquickjs_control_action_t action,
+    const char *reason,
+    uint32_t delay_ms,
+    esp32_mquickjs_control_receipt_t *receipt);
+
+typedef struct {
+    uint32_t timers_active;
+    uint32_t timers_capacity;
+    uint32_t futures_queued;
+    uint32_t futures_pending;
+    uint32_t futures_capacity;
+    uint32_t futures_user_capacity;
+    uint32_t futures_internal_reserve;
+    uint32_t event_queues_open;
+    uint32_t event_queues_dropped;
+    uint32_t async_pollers_registered;
+    uint32_t async_pollers_capacity;
+} esp32_mquickjs_resource_status_t;
 
 typedef struct {
     uint64_t saved_deadline_us;
@@ -51,12 +157,19 @@ struct esp32_mquickjs_runtime {
     void *timer_state;
     void *async_state;
     void *future_state;
+    void *event_queue_state;
     void *runtime_log_state;
     void *startup_bytecode;
     uint64_t scoped_deadline_us;
     uint16_t load_root_depth;
     char fs_root[ESP32_MQUICKJS_FS_ROOT_MAX];
+    char startup_fs_root[ESP32_MQUICKJS_FS_ROOT_MAX];
     char load_root[ESP32_MQUICKJS_FS_ROOT_MAX];
+    char boot_id[ESP32_MQUICKJS_BOOT_ID_LENGTH + 1U];
+    uint64_t context_started_us;
+    esp32_mquickjs_host_status_fn host_status;
+    esp32_mquickjs_system_control_fn system_control;
+    void *system_opaque;
 };
 
 JSContext *esp32_mquickjs_create(void *mem_start,
@@ -67,6 +180,33 @@ JSContext *esp32_mquickjs_create(void *mem_start,
 /* Returns false while an asynchronous native worker still owns JS state. */
 bool esp32_mquickjs_destroy(JSContext *ctx,
                             esp32_mquickjs_runtime_t *runtime);
+
+/* Destroy one JS generation while retaining boot-scoped runtime logs/hooks. */
+bool esp32_mquickjs_destroy_generation(JSContext *ctx,
+                                       esp32_mquickjs_runtime_t *runtime);
+
+/* Release boot-scoped native state after the last generation is gone. */
+void esp32_mquickjs_release_persistent_state(esp32_mquickjs_runtime_t *runtime);
+
+void esp32_mquickjs_set_system_hooks(esp32_mquickjs_runtime_t *runtime,
+                                     esp32_mquickjs_host_status_fn status,
+                                     esp32_mquickjs_system_control_fn control,
+                                     void *opaque);
+
+bool esp32_mquickjs_get_host_status(esp32_mquickjs_runtime_t *runtime,
+                                    esp32_mquickjs_host_status_t *status);
+
+bool esp32_mquickjs_request_system_control(
+    esp32_mquickjs_runtime_t *runtime,
+    esp32_mquickjs_control_action_t action,
+    const char *reason,
+    uint32_t delay_ms,
+    esp32_mquickjs_control_receipt_t *receipt,
+    esp32_mquickjs_control_result_t *result);
+
+bool esp32_mquickjs_get_resource_status(
+    esp32_mquickjs_runtime_t *runtime,
+    esp32_mquickjs_resource_status_t *status);
 
 bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed);
 void esp32_mquickjs_unmount_littlefs(void);

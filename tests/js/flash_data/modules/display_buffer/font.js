@@ -1,5 +1,5 @@
 test("display_buffer/font", function () {
-  var info = sys.info();
+  var info = sys.info;
   var path = "display-font-test.eqf";
   var fontData;
   var font;

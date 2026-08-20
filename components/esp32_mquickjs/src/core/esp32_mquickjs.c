@@ -32,6 +32,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -39,6 +40,23 @@
 #include "freertos/task.h"
 
 static esp32_mquickjs_runtime_t *s_active_runtime;
+
+static void esp32_mquickjs_ensure_boot_id(esp32_mquickjs_runtime_t *runtime)
+{
+    static const char hex[] = "0123456789abcdef";
+    uint8_t bytes[ESP32_MQUICKJS_BOOT_ID_LENGTH / 2U];
+    size_t i;
+
+    if (runtime == NULL || runtime->boot_id[0] != '\0') {
+        return;
+    }
+    esp_fill_random(bytes, sizeof(bytes));
+    for (i = 0; i < sizeof(bytes); ++i) {
+        runtime->boot_id[i * 2U] = hex[bytes[i] >> 4U];
+        runtime->boot_id[(i * 2U) + 1U] = hex[bytes[i] & 0x0fU];
+    }
+    runtime->boot_id[ESP32_MQUICKJS_BOOT_ID_LENGTH] = '\0';
+}
 
 typedef struct esp32_mquickjs_timer_slot esp32_mquickjs_timer_slot_t;
 
@@ -62,6 +80,9 @@ typedef struct {
     size_t poller_count;
     esp32_mquickjs_async_poller_entry_t *pollers;
 } esp32_mquickjs_async_state_t;
+
+static esp32_mquickjs_timer_state_t *esp32_mquickjs_timer_state(
+    esp32_mquickjs_runtime_t *runtime);
 
 struct esp32_mquickjs_timer_slot {
     esp32_mquickjs_runtime_t *runtime;
@@ -455,13 +476,13 @@ static int js_interrupt_handler(JSContext *ctx, void *opaque)
     esp32_mquickjs_runtime_t *runtime = opaque;
 
     (void)ctx;
-    if (runtime == NULL || runtime->deadline_us == 0) {
+    if (runtime == NULL) {
         return 0;
     }
     if (!esp32_mquickjs_cooperate(runtime)) {
         return 1;
     }
-    return esp_timer_get_time() > runtime->deadline_us;
+    return runtime->deadline_us != 0 && esp_timer_get_time() > runtime->deadline_us;
 }
 
 JSValue esp32_mquickjs_call(JSContext *ctx,
@@ -555,6 +576,112 @@ bool esp32_mquickjs_set_property_ref(JSContext *ctx,
 esp32_mquickjs_runtime_t *esp32_mquickjs_get_active_runtime(void)
 {
     return s_active_runtime;
+}
+
+void esp32_mquickjs_set_system_hooks(esp32_mquickjs_runtime_t *runtime,
+                                     esp32_mquickjs_host_status_fn status,
+                                     esp32_mquickjs_system_control_fn control,
+                                     void *opaque)
+{
+    if (runtime == NULL) {
+        return;
+    }
+    runtime->host_status = status;
+    runtime->system_control = control;
+    runtime->system_opaque = opaque;
+}
+
+bool esp32_mquickjs_get_host_status(esp32_mquickjs_runtime_t *runtime,
+                                    esp32_mquickjs_host_status_t *status)
+{
+    if (runtime == NULL || status == NULL) {
+        return false;
+    }
+    memset(status, 0, sizeof(*status));
+    if (runtime->host_status != NULL) {
+        return runtime->host_status(runtime->system_opaque, status);
+    }
+    status->state = ESP32_MQUICKJS_RUNTIME_RUNNING;
+    status->generation = 1U;
+    status->generation_started_us = runtime->context_started_us;
+    status->littlefs_mounted = runtime->littlefs_mounted;
+    snprintf(status->fs_root,
+             sizeof(status->fs_root),
+             "%s",
+             runtime->fs_root[0] != '\0'
+                 ? runtime->fs_root
+                 : ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
+    return true;
+}
+
+bool esp32_mquickjs_request_system_control(
+    esp32_mquickjs_runtime_t *runtime,
+    esp32_mquickjs_control_action_t action,
+    const char *reason,
+    uint32_t delay_ms,
+    esp32_mquickjs_control_receipt_t *receipt,
+    esp32_mquickjs_control_result_t *result)
+{
+    esp32_mquickjs_control_result_t control_result;
+
+    if (result != NULL) {
+        *result = ESP32_MQUICKJS_CONTROL_UNAVAILABLE;
+    }
+    if (runtime == NULL || reason == NULL || receipt == NULL ||
+        runtime->system_control == NULL) {
+        return false;
+    }
+    control_result = runtime->system_control(runtime->system_opaque,
+                                             action,
+                                             reason,
+                                             delay_ms,
+                                             receipt);
+    if (result != NULL) {
+        *result = control_result;
+    }
+    return control_result == ESP32_MQUICKJS_CONTROL_ACCEPTED;
+}
+
+bool esp32_mquickjs_get_resource_status(
+    esp32_mquickjs_runtime_t *runtime,
+    esp32_mquickjs_resource_status_t *status)
+{
+    esp32_mquickjs_timer_state_t *timer_state;
+    esp32_mquickjs_async_state_t *async_state;
+    esp32_mquickjs_future_status_t future_status;
+    esp32_mquickjs_event_queue_status_t event_status;
+    int i;
+
+    if (runtime == NULL || status == NULL) {
+        return false;
+    }
+    memset(status, 0, sizeof(*status));
+    status->timers_capacity = ESP32_MQUICKJS_MAX_TIMERS;
+    status->async_pollers_capacity = ESP32_MQUICKJS_MAX_ASYNC_POLLERS;
+    timer_state = esp32_mquickjs_timer_state(runtime);
+    if (timer_state != NULL && timer_state->slots != NULL) {
+        for (i = 0; i < ESP32_MQUICKJS_MAX_TIMERS; ++i) {
+            if (timer_state->slots[i].allocated) {
+                status->timers_active++;
+            }
+        }
+    }
+    async_state = esp32_mquickjs_async_state(runtime);
+    if (async_state != NULL) {
+        status->async_pollers_registered = (uint32_t)async_state->poller_count;
+    }
+    if (!esp32_mquickjs_get_future_status(runtime, &future_status) ||
+        !esp32_mquickjs_get_event_queue_status(runtime, &event_status)) {
+        return false;
+    }
+    status->futures_queued = future_status.queued;
+    status->futures_pending = future_status.pending;
+    status->futures_capacity = future_status.capacity;
+    status->futures_user_capacity = future_status.user_capacity;
+    status->futures_internal_reserve = future_status.internal_reserve;
+    status->event_queues_open = event_status.open;
+    status->event_queues_dropped = event_status.dropped;
+    return true;
 }
 
 static esp32_mquickjs_timer_state_t *esp32_mquickjs_timer_state(esp32_mquickjs_runtime_t *runtime)
@@ -820,6 +947,9 @@ JSContext *esp32_mquickjs_create(void *mem_start,
                                  uint32_t eval_timeout_ms)
 {
     JSContext *ctx;
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+    bool initialized_runtime_logs = false;
+#endif
 
     if (runtime == NULL || s_active_runtime != NULL) {
         return NULL;
@@ -834,6 +964,10 @@ JSContext *esp32_mquickjs_create(void *mem_start,
     runtime->load_root_depth = 0;
     snprintf(runtime->fs_root,
              sizeof(runtime->fs_root),
+             "%s",
+             ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
+    snprintf(runtime->startup_fs_root,
+             sizeof(runtime->startup_fs_root),
              "%s",
              ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
     runtime->load_root[0] = '\0';
@@ -856,25 +990,34 @@ JSContext *esp32_mquickjs_create(void *mem_start,
     runtime->timer_state = NULL;
     runtime->async_state = NULL;
     runtime->future_state = NULL;
+    runtime->event_queue_state = NULL;
     runtime->startup_bytecode = NULL;
+    runtime->context_started_us = (uint64_t)esp_timer_get_time();
+    esp32_mquickjs_ensure_boot_id(runtime);
 #if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
-    runtime->runtime_log_state = NULL;
-    if (!esp32_mquickjs_init_runtime_logs(runtime)) {
-        return NULL;
+    if (runtime->runtime_log_state == NULL) {
+        if (!esp32_mquickjs_init_runtime_logs(runtime)) {
+            return NULL;
+        }
+        initialized_runtime_logs = true;
     }
 #else
     runtime->runtime_log_state = NULL;
 #endif
     if (!esp32_mquickjs_init_async_state(runtime)) {
 #if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
-        esp32_mquickjs_deinit_runtime_logs(runtime);
+        if (initialized_runtime_logs) {
+            esp32_mquickjs_deinit_runtime_logs(runtime);
+        }
 #endif
         return NULL;
     }
     if (!esp32_mquickjs_init_timer_state(runtime)) {
         esp32_mquickjs_deinit_async_state(runtime);
 #if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
-        esp32_mquickjs_deinit_runtime_logs(runtime);
+        if (initialized_runtime_logs) {
+            esp32_mquickjs_deinit_runtime_logs(runtime);
+        }
 #endif
         return NULL;
     }
@@ -884,7 +1027,9 @@ JSContext *esp32_mquickjs_create(void *mem_start,
         esp32_mquickjs_deinit_timer_state(NULL, runtime);
         esp32_mquickjs_deinit_async_state(runtime);
 #if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
-        esp32_mquickjs_deinit_runtime_logs(runtime);
+        if (initialized_runtime_logs) {
+            esp32_mquickjs_deinit_runtime_logs(runtime);
+        }
 #endif
         return NULL;
     }
@@ -900,7 +1045,9 @@ JSContext *esp32_mquickjs_create(void *mem_start,
         esp32_mquickjs_deinit_timer_state(NULL, runtime);
         esp32_mquickjs_deinit_async_state(runtime);
 #if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
-        esp32_mquickjs_deinit_runtime_logs(runtime);
+        if (initialized_runtime_logs) {
+            esp32_mquickjs_deinit_runtime_logs(runtime);
+        }
 #endif
         return NULL;
     }
@@ -911,15 +1058,18 @@ JSContext *esp32_mquickjs_create(void *mem_start,
         esp32_mquickjs_deinit_timer_state(NULL, runtime);
         esp32_mquickjs_deinit_async_state(runtime);
 #if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
-        esp32_mquickjs_deinit_runtime_logs(runtime);
+        if (initialized_runtime_logs) {
+            esp32_mquickjs_deinit_runtime_logs(runtime);
+        }
 #endif
         return NULL;
     }
     return ctx;
 }
 
-bool esp32_mquickjs_destroy(JSContext *ctx,
-                            esp32_mquickjs_runtime_t *runtime)
+static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
+                                            esp32_mquickjs_runtime_t *runtime,
+                                            bool preserve_persistent_state)
 {
     if (runtime == NULL) {
         return false;
@@ -977,18 +1127,22 @@ bool esp32_mquickjs_destroy(JSContext *ctx,
     if (ctx != NULL) {
         JS_FreeContext(ctx);
     }
+    esp32_mquickjs_deinit_event_queue_runtime(runtime);
     heap_caps_free(runtime->startup_bytecode);
     runtime->startup_bytecode = NULL;
     esp32_mquickjs_deinit_future_runtime(runtime);
     esp32_mquickjs_deinit_async_state(runtime);
 #if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
-    esp32_mquickjs_deinit_runtime_logs(runtime);
+    if (!preserve_persistent_state) {
+        esp32_mquickjs_deinit_runtime_logs(runtime);
+    }
 #endif
     runtime->deadline_us = 0;
     runtime->scoped_deadline_us = 0;
     runtime->littlefs_mounted = false;
     runtime->load_root_depth = 0;
     runtime->fs_root[0] = '\0';
+    runtime->startup_fs_root[0] = '\0';
     runtime->load_root[0] = '\0';
     runtime->repl_enabled = false;
     runtime->auto_run_startup_script = false;
@@ -997,8 +1151,40 @@ bool esp32_mquickjs_destroy(JSContext *ctx,
     runtime->prepare_output_opaque = NULL;
     runtime->cooperate = NULL;
     runtime->cooperate_opaque = NULL;
-    runtime->runtime_log_state = NULL;
+    runtime->context_started_us = 0;
     return true;
+}
+
+bool esp32_mquickjs_destroy(JSContext *ctx,
+                            esp32_mquickjs_runtime_t *runtime)
+{
+    bool destroyed = esp32_mquickjs_destroy_internal(ctx, runtime, false);
+
+    if (destroyed && runtime != NULL) {
+        runtime->host_status = NULL;
+        runtime->system_control = NULL;
+        runtime->system_opaque = NULL;
+    }
+    return destroyed;
+}
+
+bool esp32_mquickjs_destroy_generation(JSContext *ctx,
+                                       esp32_mquickjs_runtime_t *runtime)
+{
+    return esp32_mquickjs_destroy_internal(ctx, runtime, true);
+}
+
+void esp32_mquickjs_release_persistent_state(esp32_mquickjs_runtime_t *runtime)
+{
+    if (runtime == NULL) {
+        return;
+    }
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+    esp32_mquickjs_deinit_runtime_logs(runtime);
+#endif
+    runtime->host_status = NULL;
+    runtime->system_control = NULL;
+    runtime->system_opaque = NULL;
 }
 
 void esp32_mquickjs_set_eval_timeout(esp32_mquickjs_runtime_t *runtime,

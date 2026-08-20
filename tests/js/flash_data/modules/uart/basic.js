@@ -1,5 +1,5 @@
 test("uart/basic", function () {
-  var info = sys.info();
+  var info = sys.info;
   var port;
   var status;
   var overridePort;

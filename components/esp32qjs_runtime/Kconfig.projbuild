@@ -65,6 +65,26 @@ config ESP32QJS_RUNTIME_STOP_TIMEOUT_MS
     range 100 30000
     default 5000
 
+config ESP32QJS_RUNTIME_RESTART_TIMEOUT_MS
+    int "JavaScript runtime restart drain timeout (ms)"
+    range 100 30000
+    default 5000
+    help
+        Bound cancellation and native-driver draining before a JavaScript
+        generation is replaced.
+
+choice ESP32QJS_RUNTIME_RESTART_FAILURE_ACTION
+    prompt "Runtime restart failure action"
+    default ESP32QJS_RUNTIME_RESTART_FAILURE_REBOOT
+
+config ESP32QJS_RUNTIME_RESTART_FAILURE_REBOOT
+    bool "Reboot the device"
+
+config ESP32QJS_RUNTIME_RESTART_FAILURE_STOP
+    bool "Stop the JavaScript runtime"
+
+endchoice
+
 config ESP32QJS_RUNTIME_TASK_WATCHDOG
     bool "Subscribe the JavaScript runtime task to the task watchdog"
     default y if ESP_TASK_WDT_EN

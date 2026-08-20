@@ -8,7 +8,6 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_log_write.h"
-#include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 
@@ -203,22 +202,16 @@ static int runtime_logs_vprintf(const char *format, va_list arguments)
 
 bool esp32_mquickjs_init_runtime_logs(esp32_mquickjs_runtime_t *runtime)
 {
-    uint8_t boot_id_bytes[8];
-    static const char hex[] = "0123456789abcdef";
-    size_t i;
-
     if (runtime == NULL || s_runtime_logs_owner != NULL) {
         return false;
     }
     memset(&s_runtime_logs, 0, sizeof(s_runtime_logs));
     s_runtime_logs.lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
     esp32_mquickjs_log_ring_init(&s_runtime_logs.ring);
-    esp_fill_random(boot_id_bytes, sizeof(boot_id_bytes));
-    for (i = 0U; i < sizeof(boot_id_bytes); ++i) {
-        s_runtime_logs.boot_id[i * 2U] = hex[boot_id_bytes[i] >> 4U];
-        s_runtime_logs.boot_id[i * 2U + 1U] = hex[boot_id_bytes[i] & 0x0fU];
-    }
-    s_runtime_logs.boot_id[16] = '\0';
+    snprintf(s_runtime_logs.boot_id,
+             sizeof(s_runtime_logs.boot_id),
+             "%s",
+             runtime->boot_id);
     s_runtime_logs.active = true;
     s_runtime_logs_owner = runtime;
     runtime->runtime_log_state = &s_runtime_logs;

@@ -6,14 +6,15 @@ config ESP32_MQUICKJS_MCU_NAME
     default "ESP32-C3" if IDF_TARGET_ESP32C3
     default "ESP32"
     help
-        Human-readable MCU model returned by sys.info().mcu and shown by
-        the REPL banner when serial interaction is enabled.
+        Human-readable MCU model shown by the REPL banner when serial
+        interaction is enabled. sys.info.hardware.target reports the ESP-IDF
+        target identifier instead.
 
 config ESP32_MQUICKJS_PSRAM_MODE
     string "Compiled PSRAM bus mode"
     default "none"
     help
-        Hardware-profile PSRAM mode returned by sys.info().psramMode.
+        Hardware-profile PSRAM mode returned by sys.info.hardware.psram.mode.
 
 menu "Host API features"
 
@@ -153,6 +154,23 @@ config ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
         the protocol serial transport.
 
 endmenu
+
+config ESP32_MQUICKJS_SYS_TASK_SNAPSHOT
+    bool "Enable bounded sys.tasks() FreeRTOS snapshots"
+    default n
+    select FREERTOS_USE_TRACE_FACILITY
+    help
+        Enable explicit, bounded task metadata snapshots through sys.tasks().
+        This exposes no task handles or mutation operations and does not enable
+        formatted or run-time CPU statistics.
+
+config ESP32_MQUICKJS_SYS_TASK_SNAPSHOT_MAX
+    int "Maximum tasks in one sys.tasks() native snapshot"
+    range 1 64
+    default 32
+    depends on ESP32_MQUICKJS_SYS_TASK_SNAPSHOT
+    help
+        Bound the temporary native TaskStatus_t allocation used by sys.tasks().
 
 config ESP32_MQUICKJS_DEBUG_GC
     bool "Force garbage collection before every allocation"

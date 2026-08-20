@@ -425,9 +425,157 @@ static const JSClassDef js_dac_obj =
     JS_OBJECT_DEF("dac", js_dac);
 #endif
 
+static const JSPropDef js_sys_info_version[] = {
+    JS_CGETSET_MAGIC_DEF("framework", js_sys_version_get, NULL, 0),
+    JS_CGETSET_MAGIC_DEF("hostApi", js_sys_version_get, NULL, 1),
+    JS_CGETSET_MAGIC_DEF("mquickjs", js_sys_version_get, NULL, 2),
+    JS_CGETSET_MAGIC_DEF("espIdf", js_sys_version_get, NULL, 3),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_sys_info_version_obj =
+    JS_OBJECT_DEF("version", js_sys_info_version);
+
+static const JSPropDef js_sys_info_features[] = {
+    JS_CGETSET_MAGIC_DEF("fs", js_sys_feature_get, NULL, 0),
+    JS_CGETSET_MAGIC_DEF("nvs", js_sys_feature_get, NULL, 1),
+    JS_CGETSET_MAGIC_DEF("gpio", js_sys_feature_get, NULL, 2),
+    JS_CGETSET_MAGIC_DEF("ledc", js_sys_feature_get, NULL, 3),
+    JS_CGETSET_MAGIC_DEF("adc", js_sys_feature_get, NULL, 4),
+    JS_CGETSET_MAGIC_DEF("dac", js_sys_feature_get, NULL, 5),
+    JS_CGETSET_MAGIC_DEF("i2c", js_sys_feature_get, NULL, 6),
+    JS_CGETSET_MAGIC_DEF("spi", js_sys_feature_get, NULL, 7),
+    JS_CGETSET_MAGIC_DEF("uart", js_sys_feature_get, NULL, 8),
+    JS_CGETSET_MAGIC_DEF("usbSerial", js_sys_feature_get, NULL, 9),
+    JS_CGETSET_MAGIC_DEF("socket", js_sys_feature_get, NULL, 10),
+    JS_CGETSET_MAGIC_DEF("websocket", js_sys_feature_get, NULL, 11),
+    JS_CGETSET_MAGIC_DEF("displayBuffer", js_sys_feature_get, NULL, 12),
+    JS_CGETSET_MAGIC_DEF("wifi", js_sys_feature_get, NULL, 13),
+    JS_CGETSET_MAGIC_DEF("http", js_sys_feature_get, NULL, 14),
+    JS_CGETSET_MAGIC_DEF("httpServer", js_sys_feature_get, NULL, 15),
+    JS_CGETSET_MAGIC_DEF("runtimeLogs", js_sys_feature_get, NULL, 16),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_sys_info_features_obj =
+    JS_OBJECT_DEF("features", js_sys_info_features);
+
+static const JSPropDef js_sys_info_hardware[] = {
+    JS_CGETSET_MAGIC_DEF("hardwareId", js_sys_hardware_get, NULL, 0),
+    JS_CGETSET_MAGIC_DEF("target", js_sys_hardware_get, NULL, 1),
+    JS_CGETSET_DEF("chip", js_sys_hardware_chip, NULL),
+    JS_CGETSET_DEF("cpu", js_sys_hardware_cpu, NULL),
+    JS_CGETSET_DEF("flash", js_sys_hardware_flash, NULL),
+    JS_CGETSET_DEF("psram", js_sys_hardware_psram, NULL),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_sys_info_hardware_obj =
+    JS_OBJECT_DEF("hardware", js_sys_info_hardware);
+
+static const JSPropDef js_sys_info_runtime[] = {
+    JS_CGETSET_DEF("heap", js_sys_runtime_info_heap, NULL),
+    JS_CGETSET_DEF("task", js_sys_runtime_info_task, NULL),
+    JS_CGETSET_MAGIC_DEF("evalTimeoutMs", js_sys_runtime_info_get, NULL, 0),
+    JS_CGETSET_DEF("startup", js_sys_runtime_info_startup, NULL),
+    JS_CGETSET_DEF("filesystem", js_sys_runtime_info_filesystem, NULL),
+    JS_CGETSET_DEF("control", js_sys_runtime_info_control, NULL),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_sys_info_runtime_obj =
+    JS_OBJECT_DEF("runtime", js_sys_info_runtime);
+
+static const JSPropDef js_sys_info[] = {
+    JS_PROP_CLASS_DEF("version", &js_sys_info_version_obj),
+    JS_PROP_CLASS_DEF("hardware", &js_sys_info_hardware_obj),
+    JS_PROP_CLASS_DEF("features", &js_sys_info_features_obj),
+    JS_PROP_CLASS_DEF("runtime", &js_sys_info_runtime_obj),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_sys_info_obj =
+    JS_OBJECT_DEF("info", js_sys_info);
+
+static const JSPropDef js_sys_status_boot[] = {
+    JS_CGETSET_MAGIC_DEF("bootId", js_sys_boot_get, NULL, 0),
+    JS_CGETSET_MAGIC_DEF("uptimeMs", js_sys_boot_get, NULL, 1),
+    JS_CGETSET_DEF("reset", js_sys_boot_reset, NULL),
+    JS_CGETSET_DEF("wakeup", js_sys_boot_wakeup, NULL),
+    JS_CGETSET_MAGIC_DEF("softwareReason", js_sys_boot_get, NULL, 2),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_sys_status_boot_obj =
+    JS_OBJECT_DEF("boot", js_sys_status_boot);
+
+static const JSPropDef js_sys_status_cpu[] = {
+    JS_CGETSET_DEF("frequencyHz", js_sys_cpu_frequency, NULL),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_sys_status_cpu_obj =
+    JS_OBJECT_DEF("cpu", js_sys_status_cpu);
+
+static const JSPropDef js_sys_status_memory[] = {
+    JS_CGETSET_MAGIC_DEF("default", js_sys_memory_get, NULL, 0),
+    JS_CGETSET_MAGIC_DEF("internal", js_sys_memory_get, NULL, 1),
+    JS_CGETSET_MAGIC_DEF("dma", js_sys_memory_get, NULL, 2),
+    JS_CGETSET_MAGIC_DEF("psram", js_sys_memory_get, NULL, 3),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_sys_status_memory_obj =
+    JS_OBJECT_DEF("memory", js_sys_status_memory);
+
+static const JSPropDef js_sys_status_rtos[] = {
+    JS_CGETSET_MAGIC_DEF("name", js_sys_rtos_get, NULL, 0),
+    JS_CGETSET_MAGIC_DEF("schedulerState", js_sys_rtos_get, NULL, 1),
+    JS_CGETSET_MAGIC_DEF("tickRateHz", js_sys_rtos_get, NULL, 2),
+    JS_CGETSET_MAGIC_DEF("taskCount", js_sys_rtos_get, NULL, 3),
+    JS_CGETSET_DEF("runtimeTask", js_sys_rtos_runtime_task, NULL),
+    JS_CGETSET_MAGIC_DEF("taskSnapshotSupported", js_sys_rtos_get, NULL, 4),
+    JS_CGETSET_MAGIC_DEF("taskSnapshotLimit", js_sys_rtos_get, NULL, 5),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_sys_status_rtos_obj =
+    JS_OBJECT_DEF("rtos", js_sys_status_rtos);
+
+static const JSPropDef js_sys_status_runtime[] = {
+    JS_CGETSET_MAGIC_DEF("state", js_sys_runtime_status_get, NULL, 0),
+    JS_CGETSET_MAGIC_DEF("generation", js_sys_runtime_status_get, NULL, 1),
+    JS_CGETSET_MAGIC_DEF("uptimeMs", js_sys_runtime_status_get, NULL, 2),
+    JS_CGETSET_MAGIC_DEF("restartCount", js_sys_runtime_status_get, NULL, 3),
+    JS_CGETSET_MAGIC_DEF("lastRestartReason", js_sys_runtime_status_get, NULL, 4),
+    JS_CGETSET_MAGIC_DEF("pendingControl", js_sys_runtime_status_get, NULL, 5),
+    JS_CGETSET_DEF("filesystem", js_sys_runtime_status_filesystem, NULL),
+    JS_CGETSET_DEF("resources", js_sys_runtime_status_resources, NULL),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_sys_status_runtime_obj =
+    JS_OBJECT_DEF("runtime", js_sys_status_runtime);
+
+static const JSPropDef js_sys_status[] = {
+    JS_PROP_CLASS_DEF("boot", &js_sys_status_boot_obj),
+    JS_PROP_CLASS_DEF("cpu", &js_sys_status_cpu_obj),
+    JS_PROP_CLASS_DEF("memory", &js_sys_status_memory_obj),
+    JS_PROP_CLASS_DEF("rtos", &js_sys_status_rtos_obj),
+    JS_PROP_CLASS_DEF("runtime", &js_sys_status_runtime_obj),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_sys_status_obj =
+    JS_OBJECT_DEF("status", js_sys_status);
+
 static const JSPropDef js_sys[] = {
+    JS_PROP_CLASS_DEF("info", &js_sys_info_obj),
+    JS_PROP_CLASS_DEF("status", &js_sys_status_obj),
     JS_CFUNC_DEF("config", 1, js_sys_config),
-    JS_CFUNC_DEF("info", 0, js_sys_info),
+    JS_CFUNC_DEF("tasks", 1, js_sys_tasks),
+    JS_CFUNC_DEF("restartRuntime", 1, js_sys_restart_runtime),
+    JS_CFUNC_DEF("reboot", 1, js_sys_reboot),
     JS_CFUNC_DEF("millis", 0, js_sys_millis),
     JS_CFUNC_DEF("micros", 0, js_sys_micros),
     JS_CFUNC_DEF("freeHeap", 0, js_sys_freeHeap),

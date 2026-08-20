@@ -33,11 +33,21 @@ typedef struct {
 
 typedef void (*esp32_mquickjs_future_worker_fn_t)(void *opaque);
 
+typedef struct {
+    uint32_t queued;
+    uint32_t pending;
+    uint32_t capacity;
+    uint32_t user_capacity;
+    uint32_t internal_reserve;
+} esp32_mquickjs_future_status_t;
+
 bool esp32_mquickjs_init_future_runtime(JSContext *ctx,
                                         esp32_mquickjs_runtime_t *runtime);
 bool esp32_mquickjs_prepare_future_runtime_destroy(JSContext *ctx,
                                                    esp32_mquickjs_runtime_t *runtime);
 void esp32_mquickjs_deinit_future_runtime(esp32_mquickjs_runtime_t *runtime);
+bool esp32_mquickjs_get_future_status(esp32_mquickjs_runtime_t *runtime,
+                                      esp32_mquickjs_future_status_t *status);
 
 bool esp32_mquickjs_future_register_driver(JSContext *ctx,
                                            esp32_mquickjs_runtime_t *runtime,

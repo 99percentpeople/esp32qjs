@@ -1239,6 +1239,37 @@ void esp32_mquickjs_deinit_future_runtime(esp32_mquickjs_runtime_t *runtime)
     runtime->future_state = NULL;
 }
 
+bool esp32_mquickjs_get_future_status(esp32_mquickjs_runtime_t *runtime,
+                                      esp32_mquickjs_future_status_t *status)
+{
+    future_runtime_t *state = future_runtime(runtime);
+    size_t i;
+
+    if (status == NULL) {
+        return false;
+    }
+    memset(status, 0, sizeof(*status));
+    status->capacity = ESP32_MQUICKJS_FUTURE_SLOT_COUNT;
+    status->user_capacity = CONFIG_ESP32_MQUICKJS_MAX_FUTURES;
+    status->internal_reserve = CONFIG_ESP32_MQUICKJS_INTERNAL_FUTURE_RESERVE;
+    if (state == NULL || state->slots == NULL) {
+        return true;
+    }
+    for (i = 0; i < ESP32_MQUICKJS_FUTURE_SLOT_COUNT; ++i) {
+        future_slot_t *slot = &state->slots[i];
+
+        if (!slot->allocated) {
+            continue;
+        }
+        if (slot->state == FUTURE_STATE_QUEUED) {
+            status->queued++;
+        } else if (slot->state == FUTURE_STATE_PENDING) {
+            status->pending++;
+        }
+    }
+    return true;
+}
+
 bool esp32_mquickjs_future_register_driver(JSContext *ctx,
                                            esp32_mquickjs_runtime_t *runtime,
                                            JSValue function,

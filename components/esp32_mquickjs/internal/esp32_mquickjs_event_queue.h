@@ -16,8 +16,17 @@ typedef JSValue (*esp32_mquickjs_event_queue_to_js_fn)(JSContext *ctx,
 typedef void (*esp32_mquickjs_event_queue_drop_fn)(void *event, void *opaque);
 typedef void (*esp32_mquickjs_event_queue_close_fn)(void *opaque);
 
+typedef struct {
+    uint32_t open;
+    uint32_t dropped;
+} esp32_mquickjs_event_queue_status_t;
+
 bool esp32_mquickjs_init_event_queue_runtime(JSContext *ctx,
                                               esp32_mquickjs_runtime_t *runtime);
+void esp32_mquickjs_deinit_event_queue_runtime(esp32_mquickjs_runtime_t *runtime);
+bool esp32_mquickjs_get_event_queue_status(
+    esp32_mquickjs_runtime_t *runtime,
+    esp32_mquickjs_event_queue_status_t *status);
 JSValue esp32_mquickjs_event_queue_new(JSContext *ctx,
                                        esp32_mquickjs_runtime_t *runtime,
                                        size_t event_size,

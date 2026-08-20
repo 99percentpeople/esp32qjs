@@ -125,6 +125,14 @@ static const char *active_fs_base_path(void)
     return ESP32_MQUICKJS_LITTLEFS_BASE_PATH;
 }
 
+static const char *startup_fs_base_path(const esp32_mquickjs_runtime_t *runtime)
+{
+    if (runtime != NULL && runtime->startup_fs_root[0] != '\0') {
+        return runtime->startup_fs_root;
+    }
+    return ESP32_MQUICKJS_LITTLEFS_BASE_PATH;
+}
+
 static bool fs_root_is_available(const char *base_path)
 {
     struct stat st;
@@ -393,17 +401,19 @@ JSValue esp32_mquickjs_load_startup_from_active_fs(
     size_t source_len = 0;
     uint8_t *source;
     JSValue compiled;
+    const char *startup_root = startup_fs_base_path(runtime);
 
     if (runtime == NULL || runtime->startup_bytecode != NULL) {
         return JS_ThrowInternalError(ctx, "startup bytecode is already loaded");
     }
-    if (!esp32_mquickjs_fs_resolve_path(active_fs_base_path(),
+
+    if (!esp32_mquickjs_fs_resolve_path(startup_root,
                                         script_path,
                                         resolved_path,
                                         sizeof(resolved_path))) {
         return JS_ThrowTypeError(ctx,
                                  "startup script path must stay under %s",
-                                 active_fs_base_path());
+                                 startup_root);
     }
 
     source = load_script_file(resolved_path, &source_len);
