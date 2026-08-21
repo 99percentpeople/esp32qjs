@@ -603,7 +603,10 @@ explicitly pairs two framebuffers with `latest`.
 
 - `cam.capture(timeoutMs?)`
   Return one `CameraFrame` or `null`. Only one capture Future may be pending and
-  only one framebuffer may be leased.
+  only one framebuffer may be leased. The native acquisition observes the
+  timeout and returns `null` without closing the camera. Cancelling or
+  interrupting an in-flight capture closes that camera instance after its
+  worker exits, so the stale handle must not be reused.
 - `cam.status()`
   Return configuration and ownership state. `status().sensor.model` reports
   the detected `ov2640` or `ov3660`.
@@ -611,7 +614,15 @@ explicitly pairs two framebuffers with `latest`.
   Read or update `frameSize`, `jpegQuality`, `brightness`, `contrast`,
   `saturation`, `horizontalMirror`, or `verticalFlip`.
 - `cam.close()`
-  Release the driver. It rejects while capture or a frame lease is active.
+  Start an irreversible close, cancel active capture, and immediately revoke
+  derived `CameraFrame` and unopened frame-source handles. Revoked frame data
+  operations throw a closed-frame `ReferenceError`; `frame.close()` remains
+  idempotent. The close waits only for active native bitmap/source readers,
+  then releases the driver in a worker. Caller cancellation stops waiting but
+  does not cancel cleanup. Only the current call stack is suspended; timers,
+  transports, and other Futures continue to run. Use
+  `Future.call(cam.close, cam, [])` when the caller does not need to wait.
+  Repeated calls are safe.
 
 `CameraFrame` exposes read-only `width`, `height`, `format`, `byteLength`,
 `timestampUs`, and `sequence` fields:
