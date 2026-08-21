@@ -240,8 +240,8 @@
     var font;
     var fontName = name === undefined || name === null ? basename(path) : String(name);
 
-    if (global.displayBuffer && typeof global.displayBuffer.loadFont === "function") {
-      nativeFont = global.displayBuffer.loadFont(path);
+    if (global.bitmap && typeof global.bitmap.loadFont === "function") {
+      nativeFont = global.bitmap.loadFont(path);
       font = wrapNativeFont(nativeFont, fontName);
       return display.registerFont(fontName, font);
     }

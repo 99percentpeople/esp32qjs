@@ -208,12 +208,14 @@ test("sys/runtime", function () {
   expectFeature("i2c", hasObject("i2c"));
   expectFeature("spi", hasObject("spi"));
   expectFeature("uart", hasObject("uart"));
+  expectFeature("i2s", hasObject("i2s"));
+  expectFeature("camera", hasObject("camera"));
   expectFeature("usbSerial", hasObject("usbSerial"));
   expectFeature("socket", hasObject("socket") &&
     typeof globalThis.socket.tcp === "object" &&
     typeof globalThis.socket.udp === "object");
   expectFeature("websocket", hasObject("websocketClient"));
-  expectFeature("displayBuffer", hasObject("displayBuffer"));
+  expectFeature("bitmap", hasObject("bitmap"));
   expectFeature("wifi", hasObject("wifi"));
   expectFeature("http", hasObject("http") && typeof globalThis.fetch === "function");
   expectFeature("httpServer", hasObject("http") && typeof globalThis.http.server === "function");

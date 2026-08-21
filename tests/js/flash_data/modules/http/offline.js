@@ -22,6 +22,14 @@ test("http/offline", function () {
   var globalFetchError = "";
   var moduleFetchError = "";
   var maxBodyError = "";
+  var embeddedRequest;
+  var embeddedBytes;
+  var binaryResponse;
+  var binaryBytes;
+  var binaryConstructor;
+  var binaryConstructorBytes;
+  var boundedBytesError = "";
+  var contentLengthError = "";
 
   test.equal(headers.get("foo"), "Bar", "headers should normalize names");
   test.ok(headers.has("foo"), "headers.has should find normalized key");
@@ -47,6 +55,47 @@ test("http/offline", function () {
   test.equal(response.text(), "ok", "response body text");
   test.equal(jsonResponse.json().value, 7, "response json body");
   test.equal(jsonResponse.headers.get("content-type"), "application/json; charset=utf-8", "response json content type");
+
+  embeddedRequest = new Request("https://example.com/binary", {
+    method: "POST",
+    body: "A\x00B"
+  });
+  embeddedBytes = embeddedRequest.bytes(3);
+  test.equal(embeddedBytes.byteLength, 3,
+    "Request.bytes should preserve embedded NUL length");
+  test.equal(embeddedBytes.toArray()[1], 0,
+    "Request.bytes should preserve embedded NUL value");
+  binaryResponse = Response.bytes(embeddedBytes, { status: 206 });
+  test.equal(binaryResponse.headers.get("content-type"), null,
+    "binary response should not infer Content-Type");
+  binaryBytes = binaryResponse.bytes(3);
+  test.equal(binaryBytes.toArray()[2], 0x42,
+    "Response.bytes should return an owned exact binary body");
+  binaryConstructor = new Response(embeddedBytes);
+  binaryConstructorBytes = binaryConstructor.bytes();
+  test.equal(binaryConstructorBytes.byteLength, 3,
+    "Response constructor should accept ByteView");
+
+  try {
+    Response.text("four").bytes(3);
+  } catch (boundedFailure) {
+    boundedBytesError = String(boundedFailure);
+  }
+  test.ok(boundedBytesError.indexOf("exceeds") >= 0,
+    "bytes(maxBytes) should reject an oversized body");
+
+  try {
+    fetch("http://127.0.0.1:9/binary", {
+      method: "POST",
+      headers: { "content-length": "2" },
+      body: embeddedBytes,
+      timeoutMs: 1
+    });
+  } catch (lengthFailure) {
+    contentLengthError = String(lengthFailure);
+  }
+  test.ok(contentLengthError.indexOf("Content-Length") >= 0,
+    "fetch should reject a mismatched binary Content-Length before dispatch");
 
   fs.writeText(streamPath, "stream-body");
   streamResponse = Response.stream(fs.open(streamPath, "r"), { status: 202 });
@@ -84,6 +133,15 @@ test("http/offline", function () {
   }
   test.ok(maxBodyError.indexOf("maxBodyBytes") >= 0,
     "fetch should reject a non-positive response body limit before starting a worker");
+
+  test.equal(binaryConstructorBytes.close(), true,
+    "Response constructor ByteView should close explicitly");
+  test.equal(binaryBytes.close(), true,
+    "Response.bytes ByteView should close explicitly");
+  test.equal(embeddedBytes.close(), true,
+    "Request.bytes ByteView should close explicitly");
+  test.equal(embeddedBytes.close(), true,
+    "ByteView close should be idempotent");
 
   return { method: request.method, status: response.status };
 });

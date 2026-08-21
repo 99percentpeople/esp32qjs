@@ -105,3 +105,8 @@ list(APPEND SDKCONFIG_DEFAULTS "${_esp32qjs_partition_defaults}")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 idf_build_set_property(DEPENDENCIES_LOCK "dependencies.lock.${IDF_TARGET}")
 project(esp32qjs)
+
+# esp32-camera 2.1.7 can miss the OV3660 JPEG EOI marker when PSRAM DMA is
+# enabled because it only inspects the last DMA node. Apply the narrowly scoped,
+# version-checked workaround after Component Manager has materialized sources.
+include("${CMAKE_SOURCE_DIR}/scripts/patch_esp32_camera_2_1_7.cmake")

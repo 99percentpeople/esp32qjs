@@ -8,7 +8,7 @@ namespace ESP32QJS {
 
   type HeaderRecord = Record<string, string>;
   type HeadersInit = Headers | HeaderRecord;
-  type RequestBody = string | Stream | null | undefined;
+  type RequestBody = string | Stream | ByteView | ByteSpanSource | null | undefined;
 
   /** Opaque generation-checked token returned by the timer globals. */
   type TimerHandle = number & { readonly __timerHandleBrand: never };
@@ -43,7 +43,7 @@ namespace ESP32QJS {
    * Byte payload accepted by low-level transports.
    *
    * Plain array-like values are copied by the transport. Native `ByteView`
-   * values returned by modules such as `displayBuffer.readRect(...)` can be
+   * values returned by modules such as `bitmap.readRect(...)` can be
    * passed directly without first converting them to JavaScript arrays.
    */
   type ByteSource = ArrayLike<number> | ByteView;
@@ -55,12 +55,14 @@ namespace ESP32QJS {
    * it. Some producers reuse their backing storage on later exports, so keep a
    * view only for immediate synchronous use unless the producer documents a
    * snapshot. Use `toArray()` for inspection, compatibility code, or when a
-   * stable JavaScript copy is required.
+   * stable JavaScript copy is required. Call `close()` after the last consumer
+   * or conversion so owned native storage is released deterministically.
    */
   interface ByteView {
     readonly length: number;
     readonly byteLength: number;
     toArray(): number[];
+    close(): boolean;
   }
 
   /**
@@ -68,23 +70,28 @@ namespace ESP32QJS {
    *
    * Transports open byte spans on demand from this opaque capability.
    * Producer-specific controls live on subtypes such as
-   * `DisplayBufferSpanSource`.
+   * `BitmapSpanSource`.
    */
   interface ByteSpanSource {
     readonly __byteSpanSourceBrand: never;
+    /** Close the source and release its producer-owned resources. Idempotent. */
+    close(): boolean;
   }
 
-  /**
-   * Retained display-buffer byte span source.
-   */
-  interface DisplayBufferSpanSource extends ByteSpanSource {
+  /** Retained Bitmap byte span source. */
+  interface BitmapSpanSource extends ByteSpanSource {
     setRect(x: number, y: number, width: number, height: number): this;
   }
 
-  type DisplayBufferFormat = "mono1" | "rgb565";
-  type DisplayBufferLayout = "linear" | "page-y8";
-  type DisplayBufferStorage = "auto" | "internal" | "psram" | "dma";
-  type DisplayByteOrder = "be" | "le" | "rgb565be" | "rgb565le";
+  type BitmapFormat = "mono1" | "gray8" | "rgb565" | "rgb888";
+  type BitmapLayout = "linear" | "page-y8";
+  type BitmapStorage = "auto" | "internal" | "psram" | "dma";
+  type BitmapByteOrder = "be" | "le";
+  type BitmapBitOrder = "lsb" | "msb";
+  type BitmapRotation = 0 | 90 | 180 | 270;
+  type BitmapFilter = "nearest" | "bilinear";
+  type BitmapDither = "none" | "bayer4x4";
+  type DisplayByteOrder = "be" | "le";
   type DisplayColor = number;
   type DisplayPoint = { x: number; y: number } | readonly [number, number];
   type DisplayPointList = ArrayLike<number> | ArrayLike<DisplayPoint>;
@@ -102,12 +109,12 @@ namespace ESP32QJS {
     lines: number;
   }
 
-  interface DisplayBufferCreateOptions {
+  interface BitmapCreateOptions {
     width: number;
     height: number;
-    format: DisplayBufferFormat;
-    layout?: DisplayBufferLayout;
-    storage?: DisplayBufferStorage;
+    format: BitmapFormat;
+    layout?: BitmapLayout;
+    storage?: BitmapStorage;
     stride?: number;
     pageHeight?: number;
     chunkBytes?: number;
@@ -115,12 +122,69 @@ namespace ESP32QJS {
     background?: DisplayColor;
   }
 
-  interface DisplayBufferReadRectOptions {
+  interface BitmapRect {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }
+
+  interface BitmapDescriptor {
+    width: number;
+    height: number;
+    format: BitmapFormat;
+    pixels: ByteSource;
+    stride?: number;
+    /** `page-y8` is accepted only for `mono1`; other formats are linear. */
+    layout?: BitmapLayout;
+    /** Accepted only for `rgb565`. */
+    byteOrder?: BitmapByteOrder;
+    /** Accepted only for `mono1`. Defaults to `lsb`. */
+    bitOrder?: BitmapBitOrder;
+  }
+
+  type BitmapSource = Bitmap | CameraFrame | BitmapDescriptor;
+
+  interface BitmapTransformOptions {
+    /** Crop first. Defaults to the complete source. */
+    sourceRect?: BitmapRect;
+    /** Clockwise rotation, applied after cropping. */
+    rotation?: BitmapRotation;
+    /** Applied in the rotated coordinate system. */
+    flipX?: boolean;
+    /** Applied in the rotated coordinate system. */
+    flipY?: boolean;
+    filter?: BitmapFilter;
+    /** Available only for `gray8` and `mono1` outputs. */
+    normalize?: boolean;
+    /** Available only for `mono1` outputs. Defaults to 128. */
+    threshold?: number;
+    /** Available only for `mono1` outputs. */
+    dither?: BitmapDither;
+  }
+
+  interface BitmapConvertOptions extends BitmapTransformOptions {
+    format: BitmapFormat;
+    /** Defaults to the rotated natural width. */
+    width?: number;
+    /** Defaults to the rotated natural height. */
+    height?: number;
+    layout?: BitmapLayout;
+    storage?: BitmapStorage;
+    stride?: number;
+  }
+
+  interface BitmapBlitOptions extends BitmapTransformOptions {
+    /** Defaults to `(0, 0)` with the rotated natural dimensions. */
+    destinationRect?: BitmapRect;
+  }
+
+  interface BitmapReadRectOptions {
     byteOrder?: DisplayByteOrder;
   }
 
-  interface DisplayBufferReadRectChunksOptions
-    extends DisplayBufferReadRectOptions {
+  interface BitmapReadRectChunksOptions
+    extends BitmapReadRectOptions {
     chunkBytes?: number;
     /**
      * Let direct full-row exports reuse the internal chunk array and ByteView
@@ -130,7 +194,7 @@ namespace ESP32QJS {
     reuse?: boolean;
   }
 
-  interface DisplaySpanSourceOptions extends DisplayBufferReadRectOptions {
+  interface DisplaySpanSourceOptions extends BitmapReadRectOptions {
     chunkBytes?: number;
   }
 
@@ -162,20 +226,20 @@ namespace ESP32QJS {
     segments?: number;
   }
 
-  interface DisplayBitmap {
+  interface DisplayMask {
     width: number;
     height: number;
     pixels: ArrayLike<number>;
   }
 
-  interface DisplayBitmapOptions {
+  interface DisplayMaskOptions {
     color?: DisplayColor;
     /** Omit or pass `null` to keep off pixels transparent. */
     background?: DisplayColor | null;
   }
 
   interface DisplayTextOptions {
-    /** Native font returned by `displayBuffer.loadFont(path)`. */
+    /** Native font returned by `bitmap.loadFont(path)`. */
     font: DisplayFont;
     color?: DisplayColor;
     /** Omit or pass `null` to keep glyph backgrounds transparent. */
@@ -185,7 +249,7 @@ namespace ESP32QJS {
 
   /**
    * Retained native draw-command list that can be replayed into a
-   * `DisplayBuffer` once per frame.
+   * `Bitmap` once per frame.
    */
   class DisplayCommandBuffer {
     private constructor();
@@ -237,7 +301,7 @@ namespace ESP32QJS {
       options: DisplayTextOptions,
     ): this;
     appendPacked(bytes: ByteSource, options?: DisplayCommandBufferPackedOptions): this;
-    replay(target: DisplayBuffer): this;
+    replay(target: Bitmap): this;
     stats(): DisplayCommandBufferStats;
   }
 
@@ -300,6 +364,7 @@ namespace ESP32QJS {
     headers: Headers;
     body: Stream;
     text(): string;
+    bytes(maxBytes?: number): ByteView;
     json<T = unknown>(): T;
   }
 
@@ -332,10 +397,12 @@ namespace ESP32QJS {
     headers: Headers;
     body: Stream;
     text(): string;
+    bytes(maxBytes?: number): ByteView;
     json<T = unknown>(): T;
     static text(text: string, init?: ResponseInit): Response;
     static json(value: JsonValue, init?: ResponseInit): Response;
     static stream(stream: Stream, init?: ResponseInit): Response;
+    static bytes(body: ByteView | ByteSpanSource, init?: ResponseInit): Response;
   }
 
   /**
@@ -768,7 +835,7 @@ namespace ESP32QJS {
   }
 
   /**
-   * Native EQF1 fixed bitmap font loaded by `displayBuffer.loadFont(...)`.
+   * Native EQF1 fixed bitmap font loaded by `bitmap.loadFont(...)`.
    */
   interface DisplayFont {
     name: string;
@@ -780,25 +847,25 @@ namespace ESP32QJS {
 
   /**
    * Runtime class value for native fonts. Direct construction throws; use
-   * `displayBuffer.loadFont(path)`.
+   * `bitmap.loadFont(path)`.
    */
   interface DisplayFontConstructor {
     readonly prototype: DisplayFont;
   }
 
   /**
-   * Native pixel buffer for low-level display drivers.
+   * Native pixel buffer for raw image transforms and low-level display drivers.
    *
-   * Pixel colors are packed numeric values: `mono1` uses `0` or `1`, while
-   * `rgb565` uses 16-bit RGB565 values. Drawing methods mutate the buffer, mark
-   * the affected dirty rectangle, and return the same buffer for chaining.
+   * Pixel colors are packed numeric values: mono1 uses 0/1, gray8 uses 8-bit
+   * intensity, rgb565 uses 16-bit RGB565, and rgb888 uses 0xRRGGBB. Drawing
+   * methods mutate the buffer, mark dirty bounds, and return the same Bitmap.
    */
-  class DisplayBuffer {
+  class Bitmap {
     private constructor();
     readonly width: number;
     readonly height: number;
-    readonly format: DisplayBufferFormat;
-    readonly layout: DisplayBufferLayout;
+    readonly format: BitmapFormat;
+    readonly layout: BitmapLayout;
     readonly stride: number;
     readonly pageHeight: number;
     readonly byteLength: number;
@@ -914,12 +981,13 @@ namespace ESP32QJS {
       color?: DisplayColor,
       options?: DisplayBezierOptions,
     ): this;
-    drawBitmap(
+    drawMask(
       x: number,
       y: number,
-      bitmap: DisplayBitmap,
-      options?: DisplayBitmapOptions,
+      mask: DisplayMask,
+      options?: DisplayMaskOptions,
     ): this;
+    blit(source: BitmapSource, options?: BitmapBlitOptions): this;
     drawText(
       x: number,
       y: number,
@@ -935,27 +1003,30 @@ namespace ESP32QJS {
       y: number,
       width: number,
       height: number,
-      options?: DisplayBufferReadRectOptions,
+      options?: BitmapReadRectOptions,
     ): ByteView;
     readRectChunks(
       x: number,
       y: number,
       width: number,
       height: number,
-      options?: DisplayBufferReadRectChunksOptions,
+      options?: BitmapReadRectChunksOptions,
     ): ByteView[];
-    createSpanSource(options?: DisplaySpanSourceOptions): DisplayBufferSpanSource;
+    createSpanSource(options?: DisplaySpanSourceOptions): BitmapSpanSource;
     createCommandBuffer(options?: DisplayCommandBufferOptions): DisplayCommandBuffer;
   }
 
   /**
-   * Native display-buffer module. Exposed only when
-   * `sys.info.features.displayBuffer` is enabled.
+   * Native bitmap module. Exposed only when
+   * `sys.info.features.bitmap` is enabled.
    */
-  interface DisplayBufferModule {
+  interface BitmapModule {
     readonly MONO1: "mono1";
+    readonly GRAY8: "gray8";
     readonly RGB565: "rgb565";
-    create(options: DisplayBufferCreateOptions): DisplayBuffer;
+    readonly RGB888: "rgb888";
+    create(options: BitmapCreateOptions): Bitmap;
+    convert(source: BitmapSource, options: BitmapConvertOptions): Bitmap;
     loadFont(path: string): DisplayFont;
   }
 
@@ -997,10 +1068,12 @@ namespace ESP32QJS {
     readonly i2c: boolean;
     readonly spi: boolean;
     readonly uart: boolean;
+    readonly i2s: boolean;
+    readonly camera: boolean;
     readonly usbSerial: boolean;
     readonly socket: boolean;
     readonly websocket: boolean;
-    readonly displayBuffer: boolean;
+    readonly bitmap: boolean;
     readonly wifi: boolean;
     readonly http: boolean;
     readonly httpServer: boolean;
@@ -1341,7 +1414,7 @@ namespace ESP32QJS {
     /**
      * Write byte-source chunks with one temporary device handle.
      *
-     * This is useful for chunks returned by `DisplayBuffer.readRectChunks(...)`
+     * This is useful for chunks returned by `Bitmap.readRectChunks(...)`
      * and for other producers that already split payloads.
      */
     writeChunks(
@@ -1570,6 +1643,232 @@ namespace ESP32QJS {
     open(options?: UARTOpenOptions): UARTPort;
   }
 
+  type I2SMode = "standard" | "pdm";
+  type I2SDataBits = 8 | 16 | 24 | 32;
+  type I2SSlotMode = "mono" | "stereo";
+  type I2SSlotMask = "left" | "right" | "both";
+  type I2SStandardFormat = "philips" | "msb" | "pcmShort" | "pcmLong";
+
+  interface I2SDmaOptions {
+    /** Number of DMA descriptors. */
+    descriptorCount?: number;
+    /** PCM frames held by one descriptor. The descriptor must fit in 4092 bytes. */
+    framesPerDescriptor?: number;
+  }
+
+  interface I2SStandardPins {
+    bclk: number;
+    ws: number;
+    din: number;
+    mclk?: number;
+  }
+
+  interface I2SPdmPins {
+    clk?: number;
+    din?: number;
+  }
+
+  interface I2SOpenOptionsBase {
+    direction: "rx";
+    port?: "auto" | number;
+    sampleRateHz?: number;
+    dma?: I2SDmaOptions;
+    timeoutMs?: number;
+  }
+
+  interface I2SStandardOpenOptions extends I2SOpenOptionsBase {
+    mode: "standard";
+    pins: I2SStandardPins;
+    dataBits?: I2SDataBits;
+    slotBits?: I2SDataBits;
+    slotMode?: I2SSlotMode;
+    slotMask?: I2SSlotMask;
+    format?: I2SStandardFormat;
+  }
+
+  interface I2SPdmOpenOptions extends I2SOpenOptionsBase {
+    mode: "pdm";
+    /** May be omitted when the selected hardware constants provide both pins. */
+    pins?: I2SPdmPins;
+  }
+
+  type I2SOpenOptions = I2SStandardOpenOptions | I2SPdmOpenOptions;
+
+  interface I2SReadResult {
+    /** Owned signed PCM bytes. PDM output is always 16-bit little-endian mono. */
+    data: ByteView;
+    frames: number;
+    byteLength: number;
+    timestampUs: number;
+    sequence: number;
+    overruns: number;
+  }
+
+  interface I2SStatus {
+    port: number;
+    running: boolean;
+    mode: I2SMode;
+    overruns: number;
+    pcm: {
+      sampleRateHz: number;
+      dataBits: I2SDataBits;
+      slotBits: I2SDataBits;
+      channels: 1 | 2;
+      signed: true;
+      endianness: "little";
+    };
+    dma: {
+      descriptorCount: number;
+      framesPerDescriptor: number;
+    };
+  }
+
+  interface I2SCapabilities {
+    ports: number[];
+    standard: true;
+    pdm: boolean;
+    dataBits: I2SDataBits[];
+    limits: {
+      maxDescriptorBytes: 4092;
+      maxReadBytes: 65536;
+    };
+  }
+
+  /** Explicitly started I2S receive channel. */
+  class I2SInput {
+    private constructor();
+    start(): boolean;
+    stop(): boolean;
+    read(frameCount: number, timeoutMs?: number): I2SReadResult | null;
+    status(): I2SStatus;
+    close(): boolean;
+  }
+
+  interface I2SModule {
+    capabilities(): I2SCapabilities;
+    open(options: I2SOpenOptions): I2SInput;
+  }
+
+  type CameraPixelFormat = "jpeg" | "grayscale" | "rgb565";
+  type CameraFrameSize =
+    | "96x96"
+    | "qqvga"
+    | "qcif"
+    | "hqvga"
+    | "qvga"
+    | "cif"
+    | "vga"
+    | "svga"
+    | "xga"
+    | "sxga"
+    | "uxga";
+  type CameraGrabMode = "whenEmpty" | "latest";
+  type CameraBufferLocation = "psram" | "dram";
+  type CameraSensorModel = "ov2640" | "ov3660";
+
+  interface CameraPins {
+    pwdn?: number;
+    reset?: number;
+    xclk?: number;
+    sccbSda?: number;
+    sccbScl?: number;
+    d0?: number;
+    d1?: number;
+    d2?: number;
+    d3?: number;
+    d4?: number;
+    d5?: number;
+    d6?: number;
+    d7?: number;
+    vsync?: number;
+    href?: number;
+    pclk?: number;
+  }
+
+  interface CameraOpenOptions {
+    pixelFormat?: CameraPixelFormat;
+    frameSize?: CameraFrameSize;
+    jpegQuality?: number;
+    frameBuffers?: 1 | 2;
+    grabMode?: CameraGrabMode;
+    bufferLocation?: CameraBufferLocation;
+    xclkFreqHz?: number;
+    timeoutMs?: number;
+    /** Overrides selected hardware constants; the resolved map must be complete. */
+    pins?: CameraPins;
+  }
+
+  interface CameraCapabilities {
+    target: string;
+    psram: boolean;
+    psramBytes: number;
+    sensorDrivers: CameraSensorModel[];
+    pixelFormats: CameraPixelFormat[];
+    frameSizes: CameraFrameSize[];
+  }
+
+  interface CameraStatus {
+    opened: true;
+    capturePending: boolean;
+    frameLeased: boolean;
+    pixelFormat: CameraPixelFormat;
+    frameSize: CameraFrameSize;
+    jpegQuality: number;
+    frameBuffers: 1 | 2;
+    grabMode: CameraGrabMode;
+    bufferLocation: CameraBufferLocation;
+    sensor: {
+      model: CameraSensorModel;
+      pid: number;
+    };
+  }
+
+  interface CameraControls {
+    frameSize: CameraFrameSize;
+    jpegQuality: number;
+    brightness: number;
+    contrast: number;
+    saturation: number;
+    horizontalMirror: boolean;
+    verticalFlip: boolean;
+  }
+
+  interface CameraFrameSourceOptions {
+    /** Span size in bytes, from 1 through 32768. */
+    chunkBytes?: number;
+  }
+
+  /** One leased camera framebuffer. Close it explicitly unless its source consumes it. */
+  class CameraFrame {
+    private constructor();
+    readonly width: number;
+    readonly height: number;
+    readonly format: CameraPixelFormat;
+    readonly byteLength: number;
+    readonly timestampUs: number;
+    readonly sequence: number;
+    source(options?: CameraFrameSourceOptions): ByteSpanSource;
+    read(offset?: number, limit?: number): ByteView;
+    close(): boolean;
+  }
+
+  /** Singleton camera driver handle. */
+  class Camera {
+    private constructor();
+    capture(timeoutMs?: number): CameraFrame | null;
+    status(): CameraStatus;
+    controls(): CameraControls;
+    setControl(name: "frameSize", value: CameraFrameSize): CameraControls;
+    setControl(name: "jpegQuality" | "brightness" | "contrast" | "saturation", value: number): CameraControls;
+    setControl(name: "horizontalMirror" | "verticalFlip", value: boolean): CameraControls;
+    close(): boolean;
+  }
+
+  interface CameraModule {
+    capabilities(): CameraCapabilities;
+    open(options?: CameraOpenOptions): Camera;
+  }
+
   type SocketProtocol = "tcp" | "udp";
 
   interface SocketOpenOptions {
@@ -1603,7 +1902,7 @@ namespace ESP32QJS {
     ): boolean;
     listen(socketId: number, backlog?: number): boolean;
     accept(socketId: number, timeout?: number): number | null;
-    send(socketId: number, data: ByteSource, timeout?: number): number;
+    send(socketId: number, data: ByteSource | ByteSpanSource, timeout?: number): number;
     /** Receive one currently available TCP stream chunk, not a framed message. */
     recv(socketId: number, maxBytes?: number, timeout?: number): ByteView | null;
   }
@@ -1873,8 +2172,11 @@ namespace ESP32QJS {
   const Stream: typeof ESP32QJS.Stream;
   const HttpServer: typeof ESP32QJS.HttpServer;
   const DisplayFont: ESP32QJS.DisplayFontConstructor;
-  const DisplayBuffer: typeof ESP32QJS.DisplayBuffer;
+  const Bitmap: typeof ESP32QJS.Bitmap;
   const DisplayCommandBuffer: typeof ESP32QJS.DisplayCommandBuffer;
+  const I2SInput: typeof ESP32QJS.I2SInput;
+  const Camera: typeof ESP32QJS.Camera;
+  const CameraFrame: typeof ESP32QJS.CameraFrame;
   const Future: ESP32QJS.FutureFactory;
   const EventQueue: {
     readonly prototype: ESP32QJS.EventQueue<unknown>;
@@ -1960,14 +2262,18 @@ namespace ESP32QJS {
   var spi: ESP32QJS.SPIModule;
   /** Synchronous UART port helpers. */
   var uart: ESP32QJS.UARTModule;
+  /** Standard-I2S and PDM receive channels. */
+  var i2s: ESP32QJS.I2SModule;
+  /** Explicit single-frame camera capture. Available only on supported targets. */
+  var camera: ESP32QJS.CameraModule;
   /** Headless USB Serial/JTAG framed transport; unavailable when the REPL is compiled in. */
   var usbSerial: ESP32QJS.USBSerialModule;
   /** Generic TCP and UDP socket namespace. */
   var socket: ESP32QJS.SocketModule;
   /** Outbound WebSocket text client. */
   var websocketClient: ESP32QJS.WebSocketClientModule;
-  /** Native display-buffer helpers. Exposed only when `sys.info.features.displayBuffer` is enabled. */
-  var displayBuffer: ESP32QJS.DisplayBufferModule;
+  /** Native Bitmap helpers. Exposed only when `sys.info.features.bitmap` is enabled. */
+  var bitmap: ESP32QJS.BitmapModule;
   /** Wi-Fi station helpers. */
   var wifi: ESP32QJS.WiFiModule;
   /** HTTP client/server namespace. Exposed when either `sys.info.features.http` or `.httpServer` is enabled. */

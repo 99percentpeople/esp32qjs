@@ -205,7 +205,13 @@ must configure ESP-IDF encrypted NVS and their device key lifecycle explicitly.
 
 ## `Stream` Type
 
-`fs.open()` returns a `Stream`. `Response.body`, `Request.body`, and `Response.stream(...)` also use the same stream interface.
+`fs.open()` returns a `Stream`. `Response.body`, `Request.body`, and
+`Response.stream(...)` also use the same stream interface. A `ByteView` is a
+read-only native byte view; `toArray()` makes an explicit JavaScript copy. A
+`ByteSpanSource` is a retained, one-shot producer of native spans. Its
+`close()` method is idempotent and releases producer-owned resources. Owned
+`ByteView` values also have an idempotent `close()`; call it after the last
+consumer or `toArray()` conversion to release native storage deterministically.
 
 - `Stream.SEEK_SET`
 - `Stream.SEEK_CUR`
@@ -252,10 +258,14 @@ stream.close();
 - `new Request(input, init?)`
   Create a request from a URL string or another `Request`.
 - `new Response(body?, init?)`
-  Create a response from a string, `Stream`, or omitted body.
+  Create a response from a string, `Stream`, `ByteView`, `ByteSpanSource`, or
+  omitted body.
 - `Response.text(text, init?)`
 - `Response.json(value, init?)`
 - `Response.stream(stream, init?)`
+- `Response.bytes(body, init?)`
+  Create a response from a `ByteView` or `ByteSpanSource` without UTF-8
+  conversion.
 
 `Headers` methods:
 
@@ -284,6 +294,7 @@ stream.close();
 - `body`
   A `Stream`.
 - `text()`
+- `bytes(maxBytes?)`
 - `json()`
 
 `Response` shape:
@@ -297,12 +308,16 @@ stream.close();
 - `body`
   A `Stream`.
 - `text()`
+- `bytes(maxBytes?)`
 - `json()`
 
 Body consumption notes:
 
-- `Request.text()` / `Request.json()` read the full request body and consume the underlying stream.
-- `Response.text()` / `Response.json()` read the full response body and consume the underlying stream.
+- `Request.text()` / `Request.bytes()` / `Request.json()` read the full request
+  body and consume the underlying stream. `bytes()` returns an owned
+  `ByteView` and enforces its optional bound.
+- `Response.text()` / `Response.bytes()` / `Response.json()` do the same for a
+  response body.
 - If you read directly from `request.body` or `response.body`, close the stream manually when you are done.
 
 Examples:
@@ -346,7 +361,7 @@ print(headers.get("content-type"));
 - `bus.write(addr, data)`
   Write an array-like sequence of bytes or native byte view and return the number of bytes written.
 - `bus.writeChunks(addr, chunks)`
-  Write an array-like list of byte-source chunks to one I2C device while reusing the same device handle. This is intended for data already split by producers such as `displayBuffer.readRectChunks(...)`. It returns `{ chunks, bytes, totalUs }`.
+  Write an array-like list of byte-source chunks to one I2C device while reusing the same device handle. This is intended for data already split by producers such as `bitmap.readRectChunks(...)`. It returns `{ chunks, bytes, totalUs }`.
 - `bus.read(addr, length)`
   Read `length` bytes and return them as a JavaScript array.
 - `bus.writeRead(addr, writeData, readLength)`
@@ -409,7 +424,7 @@ bus.close();
 - `device.writeChunks(chunks, options?)`
   Queue an array-like list of byte-source chunks for write-only SPI transfers. `options.queueDepth` defaults to `2` and is capped by the device queue size. DMA-capable chunks are queued directly; other chunks are copied into DMA-capable staging buffers. The method returns `{ chunks, bytes, prepUs, queueUs, waitUs, transferUs, totalUs, queueDepth, direct }`.
 - `device.writeSource(source, options?)`
-  Queue spans from a retained native `ByteSpanSource`, such as `DisplayBuffer.createSpanSource(...)`, without materializing a JavaScript chunk array. SPI treats the source as a generic transport capability; it does not inspect display-buffer internals. `options.queueDepth` and the returned stats object match `writeChunks(...)`.
+  Queue spans from a retained native `ByteSpanSource`, such as `Bitmap.createSpanSource(...)`, without materializing a JavaScript chunk array. SPI treats the source as a generic transport capability; it does not inspect Bitmap internals. `options.queueDepth` and the returned stats object match `writeChunks(...)`.
 - `device.read(length, fillByte = 0)`
   Clock `length` bytes and return the bytes read from MISO. `fillByte` controls the dummy value shifted out on MOSI while reading.
 
@@ -469,7 +484,7 @@ This module exposes synchronous TTL UART ports. It is intended for bounded perip
 - `port.writeChunks(chunks)`
   Write an array-like list of byte-source chunks and return `{ chunks, bytes, totalUs }`.
 - `port.writeSource(source)`
-  Write spans from a generic `ByteSpanSource`, such as `DisplayBuffer.createSpanSource(...)`, and return `{ chunks, bytes, totalUs }`.
+  Write spans from a generic `ByteSpanSource`, such as `Bitmap.createSpanSource(...)`, and return `{ chunks, bytes, totalUs }`.
 - `port.read(length, timeoutMs = uart.DEFAULT_TIMEOUT_MS)`
   Read up to `length` bytes and return the bytes actually received as a JavaScript array.
 - `port.available()`
@@ -502,6 +517,146 @@ TEST_JS_CONFIG='{"uartLoopback":{"port":1,"tx":43,"rx":44}}' \
 python scripts/remote.py test --scope js --module uart --loopback
 ```
 
+## `i2s` Module
+
+`i2s` is exposed when `sys.info.features.i2s` is true. Version 1 implements
+receive channels only; it does not reserve API shapes for TX or duplex audio.
+
+- `i2s.capabilities()`
+  Return `{ ports, standard, pdm, dataBits, limits }`. Limits include the ESP-IDF
+  4092-byte maximum for one DMA descriptor and the 65536-byte maximum for one
+  JavaScript read result.
+- `i2s.open(options)`
+  Open one generation-checked channel without starting DMA. Required options
+  are `direction: "rx"` and `mode: "standard" | "pdm"`; `port` is a number or
+  `"auto"`. Common options include `sampleRateHz`, `timeoutMs`, and
+  `dma: { descriptorCount, framesPerDescriptor }`.
+
+Standard mode accepts `dataBits`, `slotBits`, `slotMode`, `slotMask`, `format`,
+and `pins: { bclk, ws, din, mclk? }`. Formats are `philips`, `msb`, `pcmShort`,
+and `pcmLong`. PDM accepts `pins: { clk, din }`, or uses the explicitly selected
+hardware constants. PDM output is always signed 16-bit little-endian mono PCM;
+raw PDM is not exposed.
+
+`I2SInput` methods:
+
+- `input.start()` / `input.stop()`
+  Explicit, idempotent DMA lifecycle operations.
+- `input.read(frameCount, timeoutMs?)`
+  Return `null` at timeout or
+  `{ data, frames, byteLength, timestampUs, sequence, overruns }`, where `data`
+  is an owned `ByteView`. Only one read may be pending per input.
+- `input.status()`
+  Return the actual port, running state, mode, PCM layout, DMA configuration,
+  and cumulative overrun count.
+- `input.close()`
+  Release the channel. Close is idempotent after success and rejects while a
+  read Future is pending. Runtime teardown cancels pending work first.
+
+```js
+var input = i2s.open({
+  direction: "rx",
+  mode: "pdm",
+  port: "auto",
+  sampleRateHz: 16000,
+  pins: { clk: 42, din: 41 },
+  dma: { descriptorCount: 6, framesPerDescriptor: 240 },
+  timeoutMs: 1000
+});
+try {
+  input.start();
+  var chunk = input.read(320, 1000);
+  if (chunk !== null) {
+    try {
+      print(chunk.frames, chunk.byteLength, chunk.overruns);
+    } finally {
+      chunk.data.close();
+    }
+  }
+} finally {
+  input.stop();
+  input.close();
+}
+```
+
+## `camera` Module
+
+`camera` is registered only when `sys.info.features.camera` is true on a
+supported ESP32-S3 build. It is independent of I2S and provides explicit still
+capture only: no background video, codecs, MJPEG, RTSP, or upload policy.
+
+- `camera.capabilities()`
+  Return target, PSRAM status/size, compiled sensor drivers, pixel formats, and
+  frame sizes. Version 1 probes OV2640 or OV3660 after initialization; callers
+  do not select a sensor model.
+- `camera.open(options?)`
+  Open the singleton camera. Options include `pixelFormat`, `frameSize`,
+  `jpegQuality`, `frameBuffers`, `grabMode`, `bufferLocation`, `xclkFreqHz`,
+  `timeoutMs`, and `pins`. Explicit pins override selected hardware constants;
+  the resolved XCLK, SCCB, D0-D7, VSYNC, HREF, and PCLK map must be complete.
+
+The safe defaults are JPEG, QVGA, quality 12, one PSRAM framebuffer, and
+`whenEmpty`. Continuous acquisition is enabled only when the application
+explicitly pairs two framebuffers with `latest`.
+
+`Camera` methods:
+
+- `cam.capture(timeoutMs?)`
+  Return one `CameraFrame` or `null`. Only one capture Future may be pending and
+  only one framebuffer may be leased.
+- `cam.status()`
+  Return configuration and ownership state. `status().sensor.model` reports
+  the detected `ov2640` or `ov3660`.
+- `cam.controls()` / `cam.setControl(name, value)`
+  Read or update `frameSize`, `jpegQuality`, `brightness`, `contrast`,
+  `saturation`, `horizontalMirror`, or `verticalFlip`.
+- `cam.close()`
+  Release the driver. It rejects while capture or a frame lease is active.
+
+`CameraFrame` exposes read-only `width`, `height`, `format`, `byteLength`,
+`timestampUs`, and `sequence` fields:
+
+- `frame.source({ chunkBytes? })`
+  Return one active, one-shot `ByteSpanSource`. Chunks are limited to 32768
+  bytes. A consuming transport closes the source and returns the framebuffer on
+  success, failure, cancellation, or timeout.
+- `frame.read(offset?, limit?)`
+  Copy at most 32768 bytes into an owned `ByteView` for diagnostics. Close the
+  view after inspection.
+- `frame.close()`
+  Return the framebuffer. It rejects while a source is active and is idempotent
+  after the source has released the frame.
+
+```js
+var cam = camera.open({
+  pixelFormat: "jpeg",
+  frameSize: "qvga",
+  jpegQuality: 12,
+  frameBuffers: 1,
+  grabMode: "whenEmpty",
+  bufferLocation: "psram"
+});
+var frame = null;
+var source = null;
+try {
+  frame = cam.capture(5000);
+  if (frame !== null) {
+    source = frame.source({ chunkBytes: 8192 });
+    var response = fetch("https://example.com/frame", {
+      method: "POST",
+      headers: { "content-type": "image/jpeg" },
+      body: source,
+      timeoutMs: 10000
+    });
+    print(response.status, cam.status().sensor.model);
+  }
+} finally {
+  if (source !== null) source.close();
+  if (frame !== null) frame.close();
+  cam.close();
+}
+```
+
 ## `usbSerial` Module
 
 `usbSerial` is a bounded USB Serial/JTAG text-frame transport for headless
@@ -531,17 +686,23 @@ Boot and framework logs can precede protocol traffic. Host clients should wait
 for an application-level ready envelope rather than assuming the first serial
 line is JSON.
 
-## `displayBuffer` Module
+## `bitmap` Module
 
-This module exposes native display buffers for heavy pixel work. It is registered only when `sys.info.features.displayBuffer` is enabled. The JS `Surface` owns rendering, `PanelDriver` owns controller sequencing, and `DisplayTransport` owns SPI/I2C/GPIO operations; `displayBuffer` only owns pixels and export bytes.
+This module exposes native Bitmaps for heavy pixel work. It is registered only when `sys.info.features.bitmap` is enabled. The JS `Surface` owns rendering, `PanelDriver` owns controller sequencing, and `DisplayTransport` owns SPI/I2C/GPIO operations; `bitmap` only owns pixels, transforms, and exported bytes.
 
-- `displayBuffer.MONO1`
+- `bitmap.MONO1`
   Pixel format string `"mono1"`.
-- `displayBuffer.RGB565`
+- `bitmap.GRAY8`
+  Pixel format string `"gray8"`.
+- `bitmap.RGB565`
   Pixel format string `"rgb565"`.
-- `displayBuffer.create(options)`
-  Create a native `DisplayBuffer`. Required options are `{ width, height, format }`. Optional fields are `{ layout, storage, stride, pageHeight, chunkBytes, foreground, background }`.
-- `displayBuffer.loadFont(path)`
+- `bitmap.RGB888`
+  Pixel format string `"rgb888"`.
+- `bitmap.create(options)`
+  Create a native `Bitmap`. Required options are `{ width, height, format }`. Optional fields are `{ layout, storage, stride, pageHeight, chunkBytes, foreground, background }`.
+- `bitmap.convert(source, options?)`
+  Create a new Bitmap and run one fused crop, rotate, flip, resize, color-convert, and dither pass on the Future worker queue. The new Bitmap is published only after the operation succeeds.
+- `bitmap.loadFont(path)`
   Load an EQF1 fixed bitmap font from LittleFS and return a native `DisplayFont`.
 
 Formats and layouts:
@@ -549,18 +710,22 @@ Formats and layouts:
 - `format: "mono1"`
   One bit per pixel. Default layout is `"page-y8"` for SSD1306-style vertical pages. `"linear"` is also supported. Colors are packed numeric values `0` or `1`; booleans are not accepted.
 - `format: "rgb565"`
-  16-bit RGB565 pixels. Layout must be `"linear"`.
+  16-bit big-endian RGB565 pixels. Layout must be `"linear"`.
+- `format: "gray8"`
+  One luminance byte per pixel. Layout must be `"linear"`.
+- `format: "rgb888"`
+  Three bytes per pixel in RGB order with no alpha channel. Layout must be `"linear"`.
 - `storage`
   `"auto"`, `"internal"`, `"psram"`, or `"dma"`. `"auto"` uses internal RAM for small buffers and PSRAM for larger buffers when available. `"dma"` is required for zero-copy RGB565 SPI flushes.
 
-`DisplayBuffer` properties:
+`Bitmap` properties:
 
 - `width`, `height`
 - `format`, `layout`
 - `stride`, `pageHeight`
 - `byteLength`
 
-`DisplayBuffer` methods:
+`Bitmap` methods:
 
 - `close()`
   Release native memory. Other methods throw after close.
@@ -586,10 +751,30 @@ Formats and layouts:
 - `drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color?, options?)`
 - `drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color?, options?)`
   Draw native Bezier curves. `options.segments` is clamped to `2..128`.
-- `drawBitmap(x, y, { width, height, pixels }, options?)`
+- `drawMask(x, y, { width, height, pixels }, options?)`
   Draw a mask bitmap with `options.color`. `options.background` is transparent by default; pass a packed color to fill off pixels.
+- `blit(source, options?)`
+  Transform into this Bitmap. `source` may be a Bitmap, an open raw
+  `CameraFrame`, or `{ width, height, format, pixels, stride?, layout?,
+  byteOrder?, bitOrder? }`. Raw formats are `"mono1"`, `"gray8"`, `"rgb565"`,
+  and `"rgb888"`. RGB565 descriptors accept `byteOrder: "be" | "le"`; mono1
+  descriptors accept `layout: "linear" | "page-y8"` and
+  `bitOrder: "lsb" | "msb"`.
+
+  Options are `{ sourceRect?, destinationRect?, rotation?, flipX?, flipY?,
+  filter?, normalize?, threshold?, dither? }`. Rotation is clockwise
+  `0`, `90`, `180`, or `270`. Processing order is crop, rotate, flip, resize,
+  and encode. `normalize` applies only to gray8/mono1 output; `threshold` and
+  `dither: "bayer4x4"` apply only to mono1. The Bayer matrix is anchored to
+  absolute destination coordinates so tiled blits have no seams.
+
+  Bitmap, CameraFrame, and ByteView inputs are read-leased while the worker is
+  active and the target is write-leased. Busy close or mutation attempts fail
+  clearly. Array-like pixels are copied to native staging memory before work.
+  In-place or aliased blits are rejected. Cancellation may preserve completed
+  rows and conservatively marks the full clipped destination dirty.
 - `drawText(x, y, text, options?)`
-  Draw text with `options.color` and `options.font`, a `DisplayFont` returned by `displayBuffer.loadFont(...)`. `options.spacing` controls extra inter-character pixels. Text background is transparent by default; pass `options.background` to fill each glyph cell before drawing, or `null` to keep it transparent explicitly.
+  Draw text with `options.color` and `options.font`, a `DisplayFont` returned by `bitmap.loadFont(...)`. `options.spacing` controls extra inter-character pixels. Text background is transparent by default; pass `options.background` to fill each glyph cell before drawing, or `null` to keep it transparent explicitly.
 - `measureText(text, options?)`
   Return `{ width, height, lines }`.
 - `getDirty()`
@@ -601,14 +786,14 @@ Formats and layouts:
 - `readRectChunks(x, y, width, height, options?)`
   Return an array of native byte views split by `options.chunkBytes` or the buffer's `chunkBytes`. Passing `options.reuse: true` lets direct full-row exports reuse an internal chunk array and ByteView wrappers, which avoids per-frame wrapper allocation in display flush loops.
 - `createSpanSource(options?)`
-  Return a retained native `DisplayBufferSpanSource` bound to the buffer. Pass it to `SPIDevice.writeSource(source, options?)` to flush without allocating JS chunk arrays or ByteView wrappers in the loop.
+  Return a retained native `BitmapSpanSource` bound to the buffer. Pass it to `SPIDevice.writeSource(source, options?)` to flush without allocating JS chunk arrays or ByteView wrappers in the loop.
 - `createCommandBuffer(options?)`
-  Return a retained native `DisplayCommandBuffer` for recording drawing commands and replaying them into a `DisplayBuffer`. Options are `{ commandCapacity, textBytes }`.
+  Return a retained native `DisplayCommandBuffer` for recording drawing commands and replaying them into a `Bitmap`. Options are `{ commandCapacity, textBytes }`.
 
-`DisplayBufferSpanSource` methods:
+`BitmapSpanSource` methods:
 
 - `source.setRect(x, y, width, height)`
-  Update the clamped export rectangle and return the same source for reuse in display flush loops. This method belongs to display-buffer-created sources, not to the generic `ByteSpanSource` transport capability.
+  Update the clamped export rectangle and return the same source for reuse in display flush loops. This method belongs to Bitmap-created sources, not to the generic `ByteSpanSource` transport capability.
 
 `DisplayCommandBuffer` methods:
 
@@ -623,9 +808,14 @@ Formats and layouts:
 - `drawRoundRect(x, y, width, height, radius, color?)`
 - `fillRoundRect(x, y, width, height, radius, color?)`
 - `drawText(x, y, text, options?)`
-  Record the same packed-color and native-font text options as `DisplayBuffer.drawText(...)`.
+  Record the same packed-color and native-font text options as `Bitmap.drawText(...)`.
 - `appendPacked(bytes, options?)`
-  Append a compact command byte stream in one native call. This is intended for display drivers that batch many JavaScript drawing primitives per frame before a single `replay(...)`. `options.text` carries the concatenated encoded text payload, and `options.font` is required when the packet contains text commands.
+  Append a compact command byte stream in one native call. Packed colors are
+  unsigned 32-bit little-endian values so all Bitmap formats share one command
+  protocol. This is intended for display drivers that batch many JavaScript
+  drawing primitives per frame before a single `replay(...)`. `options.text`
+  carries the concatenated encoded text payload, and `options.font` is required
+  when the packet contains text commands.
 - `replay(target)`
   Execute all recorded commands into `target` once. The target must use the same pixel format as the buffer that created the command buffer.
 - `stats()`
@@ -690,26 +880,26 @@ The JSON input is useful for tiny hand-written fonts:
 Export options:
 
 - `byteOrder`
-  `"be"` or `"rgb565be"` for high byte first, `"le"` or `"rgb565le"` for low byte first. This affects `rgb565` exports.
+  `"be"` for high byte first or `"le"` for low byte first. This affects `rgb565` exports.
 - `chunkBytes`
   Positive preferred chunk size for `readRectChunks(...)` and `createSpanSource(...)`.
 - `reuse`
-  Boolean hint for `readRectChunks(...)`. When true and the rectangle can be exported as direct full rows, the returned chunk array and ByteView wrappers may be reused by the same `DisplayBuffer` on later calls. Use this only for immediate synchronous writes; do not keep old reused chunk arrays as snapshots.
+  Boolean hint for `readRectChunks(...)`. When true and the rectangle can be exported as direct full rows, the returned chunk array and ByteView wrappers may be reused by the same `Bitmap` on later calls. Use this only for immediate synchronous writes; do not keep old reused chunk arrays as snapshots.
 
 Native byte views expose `length`, `byteLength`, and `toArray()`. They can be passed directly to `spi`, `i2c`, and `uart` writes without converting to a JavaScript array.
-For high-frequency SPI display flushes, prefer `DisplayBuffer.createSpanSource(...)` with `SPIDevice.writeSource(...)`. `readRect(...)` and `readRectChunks(...)` remain useful for inspection, diagnostics, compatibility, and I2C chunk writes. Transport modules consume generic byte sources or span sources and do not inspect display buffer objects.
+For high-frequency SPI display flushes, prefer `Bitmap.createSpanSource(...)` with `SPIDevice.writeSource(...)`. `readRect(...)` and `readRectChunks(...)` remain useful for inspection, diagnostics, compatibility, and I2C chunk writes. Transport modules consume generic byte sources or span sources and do not inspect Bitmap objects.
 
 Example:
 
 ```js
-var fb = displayBuffer.create({
+var fb = bitmap.create({
   width: 240,
   height: 240,
-  format: displayBuffer.RGB565,
+  format: bitmap.RGB565,
   storage: "auto",
   chunkBytes: 4092,
 });
-var font = displayBuffer.loadFont("_sys/display/fonts/mono5x7.eqf");
+var font = bitmap.loadFont("_sys/display/fonts/mono5x7.eqf");
 
 fb.clear(0x0000);
 fb.drawText(8, 8, "ESP32QJS", { color: 0xffff, font: font });
@@ -718,6 +908,40 @@ var chunk = fb.readRect(0, 0, 240, 16, { byteOrder: "be" });
 device.write(chunk);
 fb.clearDirty();
 fb.close();
+```
+
+Grayscale camera preview should pass the leased frame directly instead of
+calling `frame.read().toArray()` or scaling pixels in JavaScript:
+
+```js
+var preview = bitmap.create({
+  width: 128,
+  height: 64,
+  format: "mono1"
+});
+var cam = camera.open({
+  pixelFormat: "grayscale",
+  frameSize: "qqvga",
+  frameBuffers: 1
+});
+var frame = null;
+
+try {
+  frame = cam.capture(1000);
+  if (frame !== null) {
+    preview.blit(frame, {
+      destinationRect: { x: 0, y: 0, width: preview.width, height: preview.height },
+      rotation: 90,
+      filter: "nearest",
+      dither: "bayer4x4",
+      normalize: true
+    });
+  }
+} finally {
+  if (frame !== null) frame.close();
+  cam.close();
+  preview.close();
+}
 ```
 
 ## `gpio` Module
@@ -1157,7 +1381,11 @@ reconnect policy, authentication, or an application protocol.
 - `socket.tcp.accept(socket_id, timeout = 0)`
   Return a connected client handle or `null` when no connection is ready.
 - `socket.tcp.send(socket_id, data, timeout = 0)`
-  Send a raw string and return the number of bytes written.
+  Send a `ByteView`, array-like byte source, or `ByteSpanSource` and return the
+  number of bytes written. A source is consumed one span at a time across
+  partial plain/TLS writes, then closed on every terminal path. Source bodies
+  are bounded by `CONFIG_ESP32_MQUICKJS_SOCKET_MAX_SOURCE_BYTES` (1 MiB by
+  default) without requiring a single contiguous copy.
 - `socket.tcp.recv(socket_id, max_bytes, timeout = 0)`
   Return one raw stream chunk or `null`. TCP has no message boundaries.
 - `socket.udp.sendto(socket_id, remote_ip, remote_port, data)`
@@ -1172,13 +1400,16 @@ optional `timeout` is bounded to 60000 ms and remains subordinate to an outer
 ```js
 var client = socket.open("tcp", { localPort: 0 });
 socket.tcp.connect(client, "192.0.2.10", 9000, 5000);
-socket.tcp.send(client, "hello", 1000);
+var payload = fs.open("payload.bin", "rb");
+var payloadBytes = payload.read(1024);
+payload.close();
+socket.tcp.send(client, payloadBytes, 1000);
 print(socket.tcp.recv(client, 1024, 100));
 socket.close(client);
 
 var secureClient = socket.open("tcp", { tls: true });
 socket.tcp.connect(secureClient, "example.com", 443, 5000);
-socket.tcp.send(secureClient, "hello", 1000);
+socket.tcp.send(secureClient, payloadBytes, 1000);
 socket.close(secureClient);
 
 var udp = socket.open("udp", { localPort: 0 });
@@ -1225,8 +1456,11 @@ The namespace is present when the HTTP client or server feature is enabled.
   HTTP-client limits when `sys.info.features.http` is enabled.
 - `fetch(input, options?)` / `http.fetch(input, options?)`
   Run one request through the native HTTP Future driver. Options include
-  `method`, `headers`, UTF-8 string or `Stream` `body`, `timeoutMs`, and
-  `maxBodyBytes`.
+  `method`, `headers`, UTF-8 string, `Stream`, `ByteView`, or `ByteSpanSource`
+  `body`, `timeoutMs`, and `maxBodyBytes`. Before the HTTP worker starts,
+  binary input is materialized into a length-exact native PSRAM-first buffer,
+  preserving embedded NUL bytes and enforcing a 1 MiB request-body default
+  limit. A source is closed on all terminal paths.
 - `http.server(options?)`
   Create a low-level declarative server when
   `sys.info.features.httpServer` is enabled.
@@ -1259,8 +1493,12 @@ print(responses[0].status, responses[1].status);
   the native slot. Repeated close is safe.
 
 Request bodies larger than 8192 bytes are rejected with HTTP 413 before they
-enter the queue. `Response.stream(...)` writes in chunks and closes the stream
-after the response is sent.
+enter the queue. `request.bytes(maxBytes?)` preserves binary input as an owned
+`ByteView`. `Response.stream(...)` and `Response.bytes(...)` write in chunks
+and close the stream/source after the response is sent, including failure and
+cancellation paths. Known-length bodies set `Content-Length`; an explicitly
+mismatched length is rejected before dispatch. Binary bodies do not receive an
+implicit `Content-Type`, while existing string-body defaults remain unchanged.
 
 ```js
 var server = http.server({ port: 8080, host: "0.0.0.0" });

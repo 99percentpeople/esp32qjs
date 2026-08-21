@@ -21,7 +21,8 @@
     "fillTriangle",
     "drawQuadraticBezier",
     "drawCubicBezier",
-    "drawBitmap",
+    "drawMask",
+    "blit",
     "drawChar",
     "drawText"
   ];
@@ -84,8 +85,8 @@
       }
     }
     combined.batch = surface.commandBufferEnabled &&
-      !!surface.nativeBuffer &&
-      typeof surface.nativeBuffer.createCommandBuffer === "function";
+      !!surface.bitmap &&
+      typeof surface.bitmap.createCommandBuffer === "function";
     combined.directSource = !!(
       driver.transport &&
       driver.transport.capabilities &&

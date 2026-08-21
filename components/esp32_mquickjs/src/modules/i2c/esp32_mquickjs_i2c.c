@@ -5,6 +5,7 @@
 #include "utils/esp32_mquickjs_byte_source.h"
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_peripheral_lease.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -35,6 +36,7 @@ typedef struct {
     bool release_pending;
     i2c_master_bus_handle_t bus_handle;
     i2c_master_dev_handle_t cleanup_device_handle;
+    esp32_mquickjs_peripheral_lease_t lease;
 } esp32_mquickjs_i2c_slot_t;
 
 static esp32_mquickjs_i2c_slot_t s_i2c_slots[SOC_I2C_NUM];
@@ -131,6 +133,11 @@ static esp32_mquickjs_i2c_slot_t *i2c_alloc_slot(void)
             continue;
         }
         i2c_init_slot(slot, i);
+        if (!esp32_mquickjs_peripheral_lease_acquire(
+                ESP32_MQUICKJS_PERIPHERAL_I2C_PORT, i,
+                ESP32_MQUICKJS_PERIPHERAL_OWNER_I2C, &slot->lease)) {
+            continue;
+        }
         slot->allocated = true;
         slot->generation = i2c_take_generation();
         return slot;
@@ -164,6 +171,7 @@ static esp_err_t i2c_cleanup_slot(esp32_mquickjs_i2c_slot_t *slot)
             return err;
         }
     }
+    esp32_mquickjs_peripheral_lease_release(&slot->lease);
     i2c_init_slot(slot, bus_id);
     return ESP_OK;
 }
@@ -462,7 +470,7 @@ static JSValue i2c_open(JSContext *ctx, int argc, JSValue *argv)
         return JS_ThrowInternalError(ctx, "i2c.open() failed: no available I2C bus slots");
     }
 
-    bus_config.i2c_port = (i2c_port_num_t)-1;
+    bus_config.i2c_port = (i2c_port_num_t)slot->bus_id;
     bus_config.sda_io_num = sda_pin;
     bus_config.scl_io_num = scl_pin;
     bus_config.clk_source = I2C_CLK_SRC_DEFAULT;

@@ -15,13 +15,16 @@
 #define JS_CLASS_UART_PORT (JS_CLASS_USER + 10)
 #define JS_CLASS_BYTE_VIEW (JS_CLASS_USER + 11)
 #define JS_CLASS_BYTE_SPAN_SOURCE (JS_CLASS_USER + 12)
-#define JS_CLASS_DISPLAY_BUFFER_SPAN_SOURCE (JS_CLASS_USER + 13)
-#define JS_CLASS_DISPLAY_BUFFER (JS_CLASS_USER + 14)
+#define JS_CLASS_BITMAP_SPAN_SOURCE (JS_CLASS_USER + 13)
+#define JS_CLASS_BITMAP (JS_CLASS_USER + 14)
 #define JS_CLASS_DISPLAY_FONT (JS_CLASS_USER + 15)
 #define JS_CLASS_DISPLAY_COMMAND_BUFFER (JS_CLASS_USER + 16)
 #define JS_CLASS_FUTURE (JS_CLASS_USER + 17)
 #define JS_CLASS_EVENT_QUEUE (JS_CLASS_USER + 18)
-#define JS_CLASS_COUNT (JS_CLASS_USER + 19)
+#define JS_CLASS_I2S_INPUT (JS_CLASS_USER + 19)
+#define JS_CLASS_CAMERA (JS_CLASS_USER + 20)
+#define JS_CLASS_CAMERA_FRAME (JS_CLASS_USER + 21)
+#define JS_CLASS_COUNT (JS_CLASS_USER + 22)
 
 #define js_global_object js_global_object_base
 #define js_c_function_decl js_c_function_decl_base
@@ -47,6 +50,7 @@ static const JSClassDef js_headers_class =
 static const JSPropDef js_request_proto[] = {
     JS_CFUNC_DEF("text", 0, js_request_text),
     JS_CFUNC_DEF("json", 0, js_request_json),
+    JS_CFUNC_DEF("bytes", 1, js_request_bytes),
     JS_PROP_END,
 };
 
@@ -57,12 +61,14 @@ static const JSPropDef js_response[] = {
     JS_CFUNC_DEF("text", 2, js_response_make_text),
     JS_CFUNC_DEF("json", 2, js_response_make_json),
     JS_CFUNC_DEF("stream", 2, js_response_make_stream),
+    JS_CFUNC_DEF("bytes", 2, js_response_make_bytes),
     JS_PROP_END,
 };
 
 static const JSPropDef js_response_proto[] = {
     JS_CFUNC_DEF("text", 0, js_response_text),
     JS_CFUNC_DEF("json", 0, js_response_json),
+    JS_CFUNC_DEF("bytes", 1, js_response_bytes),
     JS_PROP_END,
 };
 
@@ -122,6 +128,7 @@ static const JSPropDef js_byte_view_proto[] = {
     JS_CGETSET_DEF("length", js_byte_view_get_length, NULL),
     JS_CGETSET_DEF("byteLength", js_byte_view_get_length, NULL),
     JS_CFUNC_DEF("toArray", 0, js_byte_view_to_array),
+    JS_CFUNC_DEF("close", 0, js_byte_view_close),
     JS_PROP_END,
 };
 
@@ -129,25 +136,26 @@ static const JSClassDef js_byte_view_class =
     JS_CLASS_DEF("ByteView", 0, js_byte_view_constructor, JS_CLASS_BYTE_VIEW, NULL, js_byte_view_proto, NULL, js_byte_view_finalizer);
 
 static const JSPropDef js_byte_span_source_proto[] = {
+    JS_CFUNC_DEF("close", 0, js_byte_span_source_close),
     JS_PROP_END,
 };
 
 static const JSClassDef js_byte_span_source_class =
     JS_CLASS_DEF("ByteSpanSource", 0, js_byte_span_source_constructor, JS_CLASS_BYTE_SPAN_SOURCE, NULL, js_byte_span_source_proto, NULL, js_byte_span_source_finalizer);
 
-#if CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
-static const JSPropDef js_display_buffer_span_source_proto[] = {
-    JS_CFUNC_DEF("setRect", 4, js_display_buffer_span_source_set_rect),
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
+static const JSPropDef js_bitmap_span_source_proto[] = {
+    JS_CFUNC_DEF("setRect", 4, js_bitmap_span_source_set_rect),
     JS_PROP_END,
 };
 
-static const JSClassDef js_display_buffer_span_source_class =
-    JS_CLASS_DEF("DisplayBufferSpanSource",
+static const JSClassDef js_bitmap_span_source_class =
+    JS_CLASS_DEF("BitmapSpanSource",
                  0,
-                 js_display_buffer_span_source_constructor,
-                 JS_CLASS_DISPLAY_BUFFER_SPAN_SOURCE,
+                 js_bitmap_span_source_constructor,
+                 JS_CLASS_BITMAP_SPAN_SOURCE,
                  NULL,
-                 js_display_buffer_span_source_proto,
+                 js_bitmap_span_source_proto,
                  &js_byte_span_source_class,
                  js_byte_span_source_finalizer);
 
@@ -190,61 +198,65 @@ static const JSClassDef js_display_command_buffer_class =
                  NULL,
                  js_display_command_buffer_finalizer);
 
-static const JSPropDef js_display_buffer_proto[] = {
-    JS_CGETSET_DEF("width", js_display_buffer_get_width, NULL),
-    JS_CGETSET_DEF("height", js_display_buffer_get_height, NULL),
-    JS_CGETSET_DEF("format", js_display_buffer_get_format, NULL),
-    JS_CGETSET_DEF("layout", js_display_buffer_get_layout, NULL),
-    JS_CGETSET_DEF("stride", js_display_buffer_get_stride, NULL),
-    JS_CGETSET_DEF("pageHeight", js_display_buffer_get_page_height, NULL),
-    JS_CGETSET_DEF("byteLength", js_display_buffer_get_byte_length, NULL),
-    JS_CFUNC_DEF("close", 0, js_display_buffer_close),
-    JS_CFUNC_DEF("clear", 1, js_display_buffer_clear),
-    JS_CFUNC_DEF("fill", 1, js_display_buffer_clear),
-    JS_CFUNC_DEF("setPixel", 3, js_display_buffer_set_pixel),
-    JS_CFUNC_DEF("getPixel", 2, js_display_buffer_get_pixel),
-    JS_CFUNC_DEF("fillRect", 5, js_display_buffer_fill_rect),
-    JS_CFUNC_DEF("drawCircle", 4, js_display_buffer_draw_circle),
-    JS_CFUNC_DEF("fillCircle", 4, js_display_buffer_fill_circle),
-    JS_CFUNC_DEF("drawEllipse", 5, js_display_buffer_draw_ellipse),
-    JS_CFUNC_DEF("fillEllipse", 5, js_display_buffer_fill_ellipse),
-    JS_CFUNC_DEF("drawRect", 5, js_display_buffer_draw_rect),
-    JS_CFUNC_DEF("drawRoundRect", 6, js_display_buffer_draw_round_rect),
-    JS_CFUNC_DEF("fillRoundRect", 6, js_display_buffer_fill_round_rect),
-    JS_CFUNC_DEF("drawLine", 5, js_display_buffer_draw_line),
-    JS_CFUNC_DEF("drawPolyline", 2, js_display_buffer_draw_polyline),
-    JS_CFUNC_DEF("drawPolygon", 2, js_display_buffer_draw_polygon),
-    JS_CFUNC_DEF("fillPolygon", 2, js_display_buffer_fill_polygon),
-    JS_CFUNC_DEF("drawTriangle", 7, js_display_buffer_draw_triangle),
-    JS_CFUNC_DEF("fillTriangle", 7, js_display_buffer_fill_triangle),
-    JS_CFUNC_DEF("drawQuadraticBezier", 8, js_display_buffer_draw_quadratic_bezier),
-    JS_CFUNC_DEF("drawCubicBezier", 10, js_display_buffer_draw_cubic_bezier),
-    JS_CFUNC_DEF("drawBitmap", 4, js_display_buffer_draw_bitmap),
-    JS_CFUNC_DEF("drawText", 5, js_display_buffer_draw_text),
-    JS_CFUNC_DEF("measureText", 2, js_display_buffer_measure_text),
-    JS_CFUNC_DEF("getDirty", 0, js_display_buffer_get_dirty),
-    JS_CFUNC_DEF("clearDirty", 0, js_display_buffer_clear_dirty),
-    JS_CFUNC_DEF("markDirty", 4, js_display_buffer_mark_dirty),
-    JS_CFUNC_DEF("readRect", 5, js_display_buffer_read_rect),
-    JS_CFUNC_DEF("readRectChunks", 5, js_display_buffer_read_rect_chunks),
-    JS_CFUNC_DEF("createSpanSource", 1, js_display_buffer_create_span_source),
-    JS_CFUNC_DEF("createCommandBuffer", 1, js_display_buffer_create_command_buffer),
+static const JSPropDef js_bitmap_proto[] = {
+    JS_CGETSET_DEF("width", js_bitmap_get_width, NULL),
+    JS_CGETSET_DEF("height", js_bitmap_get_height, NULL),
+    JS_CGETSET_DEF("format", js_bitmap_get_format, NULL),
+    JS_CGETSET_DEF("layout", js_bitmap_get_layout, NULL),
+    JS_CGETSET_DEF("stride", js_bitmap_get_stride, NULL),
+    JS_CGETSET_DEF("pageHeight", js_bitmap_get_page_height, NULL),
+    JS_CGETSET_DEF("byteLength", js_bitmap_get_byte_length, NULL),
+    JS_CFUNC_DEF("close", 0, js_bitmap_close),
+    JS_CFUNC_DEF("clear", 1, js_bitmap_clear),
+    JS_CFUNC_DEF("fill", 1, js_bitmap_clear),
+    JS_CFUNC_DEF("setPixel", 3, js_bitmap_set_pixel),
+    JS_CFUNC_DEF("getPixel", 2, js_bitmap_get_pixel),
+    JS_CFUNC_DEF("fillRect", 5, js_bitmap_fill_rect),
+    JS_CFUNC_DEF("drawCircle", 4, js_bitmap_draw_circle),
+    JS_CFUNC_DEF("fillCircle", 4, js_bitmap_fill_circle),
+    JS_CFUNC_DEF("drawEllipse", 5, js_bitmap_draw_ellipse),
+    JS_CFUNC_DEF("fillEllipse", 5, js_bitmap_fill_ellipse),
+    JS_CFUNC_DEF("drawRect", 5, js_bitmap_draw_rect),
+    JS_CFUNC_DEF("drawRoundRect", 6, js_bitmap_draw_round_rect),
+    JS_CFUNC_DEF("fillRoundRect", 6, js_bitmap_fill_round_rect),
+    JS_CFUNC_DEF("drawLine", 5, js_bitmap_draw_line),
+    JS_CFUNC_DEF("drawPolyline", 2, js_bitmap_draw_polyline),
+    JS_CFUNC_DEF("drawPolygon", 2, js_bitmap_draw_polygon),
+    JS_CFUNC_DEF("fillPolygon", 2, js_bitmap_fill_polygon),
+    JS_CFUNC_DEF("drawTriangle", 7, js_bitmap_draw_triangle),
+    JS_CFUNC_DEF("fillTriangle", 7, js_bitmap_fill_triangle),
+    JS_CFUNC_DEF("drawQuadraticBezier", 8, js_bitmap_draw_quadratic_bezier),
+    JS_CFUNC_DEF("drawCubicBezier", 10, js_bitmap_draw_cubic_bezier),
+    JS_CFUNC_DEF("drawMask", 4, js_bitmap_draw_mask),
+    JS_CFUNC_DEF("blit", 2, js_bitmap_blit),
+    JS_CFUNC_DEF("drawText", 5, js_bitmap_draw_text),
+    JS_CFUNC_DEF("measureText", 2, js_bitmap_measure_text),
+    JS_CFUNC_DEF("getDirty", 0, js_bitmap_get_dirty),
+    JS_CFUNC_DEF("clearDirty", 0, js_bitmap_clear_dirty),
+    JS_CFUNC_DEF("markDirty", 4, js_bitmap_mark_dirty),
+    JS_CFUNC_DEF("readRect", 5, js_bitmap_read_rect),
+    JS_CFUNC_DEF("readRectChunks", 5, js_bitmap_read_rect_chunks),
+    JS_CFUNC_DEF("createSpanSource", 1, js_bitmap_create_span_source),
+    JS_CFUNC_DEF("createCommandBuffer", 1, js_bitmap_create_command_buffer),
     JS_PROP_END,
 };
 
-static const JSClassDef js_display_buffer_class =
-    JS_CLASS_DEF("DisplayBuffer", 0, js_display_buffer_constructor, JS_CLASS_DISPLAY_BUFFER, NULL, js_display_buffer_proto, NULL, js_display_buffer_finalizer);
+static const JSClassDef js_bitmap_class =
+    JS_CLASS_DEF("Bitmap", 0, js_bitmap_constructor, JS_CLASS_BITMAP, NULL, js_bitmap_proto, NULL, js_bitmap_finalizer);
 
-static const JSPropDef js_display_buffer[] = {
+static const JSPropDef js_bitmap[] = {
     JS_PROP_STRING_DEF("MONO1", "mono1", 0),
+    JS_PROP_STRING_DEF("GRAY8", "gray8", 0),
     JS_PROP_STRING_DEF("RGB565", "rgb565", 0),
-    JS_CFUNC_DEF("create", 1, js_display_buffer_create),
-    JS_CFUNC_DEF("loadFont", 1, js_display_buffer_load_font),
+    JS_PROP_STRING_DEF("RGB888", "rgb888", 0),
+    JS_CFUNC_DEF("create", 1, js_bitmap_create),
+    JS_CFUNC_DEF("convert", 2, js_bitmap_convert),
+    JS_CFUNC_DEF("loadFont", 1, js_bitmap_load_font),
     JS_PROP_END,
 };
 
-static const JSClassDef js_display_buffer_obj =
-    JS_OBJECT_DEF("displayBuffer", js_display_buffer);
+static const JSClassDef js_bitmap_obj =
+    JS_OBJECT_DEF("bitmap", js_bitmap);
 #endif
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
@@ -449,11 +461,13 @@ static const JSPropDef js_sys_info_features[] = {
     JS_CGETSET_MAGIC_DEF("usbSerial", js_sys_feature_get, NULL, 9),
     JS_CGETSET_MAGIC_DEF("socket", js_sys_feature_get, NULL, 10),
     JS_CGETSET_MAGIC_DEF("websocket", js_sys_feature_get, NULL, 11),
-    JS_CGETSET_MAGIC_DEF("displayBuffer", js_sys_feature_get, NULL, 12),
+    JS_CGETSET_MAGIC_DEF("bitmap", js_sys_feature_get, NULL, 12),
     JS_CGETSET_MAGIC_DEF("wifi", js_sys_feature_get, NULL, 13),
     JS_CGETSET_MAGIC_DEF("http", js_sys_feature_get, NULL, 14),
     JS_CGETSET_MAGIC_DEF("httpServer", js_sys_feature_get, NULL, 15),
     JS_CGETSET_MAGIC_DEF("runtimeLogs", js_sys_feature_get, NULL, 16),
+    JS_CGETSET_MAGIC_DEF("i2s", js_sys_feature_get, NULL, 17),
+    JS_CGETSET_MAGIC_DEF("camera", js_sys_feature_get, NULL, 18),
     JS_PROP_END,
 };
 
@@ -704,6 +718,66 @@ static const JSClassDef js_uart_obj =
     JS_OBJECT_DEF("uart", js_uart);
 #endif
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_I2S
+static const JSPropDef js_i2s_input_proto[] = {
+    JS_CFUNC_DEF("start", 0, js_i2s_input_start),
+    JS_CFUNC_DEF("stop", 0, js_i2s_input_stop),
+    JS_CFUNC_DEF("read", 2, js_i2s_input_read),
+    JS_CFUNC_DEF("status", 0, js_i2s_input_status),
+    JS_CFUNC_DEF("close", 0, js_i2s_input_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_i2s_input_class =
+    JS_CLASS_DEF("I2SInput", 0, js_i2s_input_constructor,
+                 JS_CLASS_I2S_INPUT, NULL, js_i2s_input_proto, NULL,
+                 js_i2s_input_finalizer);
+
+static const JSPropDef js_i2s[] = {
+    JS_CFUNC_DEF("capabilities", 0, js_i2s_capabilities),
+    JS_CFUNC_DEF("open", 1, js_i2s_open),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_i2s_obj = JS_OBJECT_DEF("i2s", js_i2s);
+#endif
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA
+static const JSPropDef js_camera_proto[] = {
+    JS_CFUNC_DEF("capture", 1, js_camera_capture),
+    JS_CFUNC_DEF("status", 0, js_camera_status),
+    JS_CFUNC_DEF("controls", 0, js_camera_controls),
+    JS_CFUNC_DEF("setControl", 2, js_camera_set_control),
+    JS_CFUNC_DEF("close", 0, js_camera_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_camera_class =
+    JS_CLASS_DEF("Camera", 0, js_camera_constructor, JS_CLASS_CAMERA,
+                 NULL, js_camera_proto, NULL, js_camera_finalizer);
+
+static const JSPropDef js_camera_frame_proto[] = {
+    JS_CFUNC_DEF("source", 1, js_camera_frame_source),
+    JS_CFUNC_DEF("read", 2, js_camera_frame_read),
+    JS_CFUNC_DEF("close", 0, js_camera_frame_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_camera_frame_class =
+    JS_CLASS_DEF("CameraFrame", 0, js_camera_frame_constructor,
+                 JS_CLASS_CAMERA_FRAME, NULL, js_camera_frame_proto, NULL,
+                 js_camera_frame_finalizer);
+
+static const JSPropDef js_camera_module[] = {
+    JS_CFUNC_DEF("capabilities", 0, js_camera_capabilities),
+    JS_CFUNC_DEF("open", 1, js_camera_open),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_camera_obj =
+    JS_OBJECT_DEF("camera", js_camera_module);
+#endif
+
 #if CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
 static const JSPropDef js_usb_serial[] = {
     JS_CGETSET_DEF("MAX_FRAME_BYTES", js_usb_serial_get_max_frame_bytes, NULL),
@@ -804,6 +878,7 @@ static const JSPropDef js_http_server_proto[] = {
     JS_CFUNC_DEF("start", 0, js_http_server_start),
     JS_CFUNC_DEF("stop", 0, js_http_server_stop),
     JS_CFUNC_DEF("close", 0, js_http_server_close),
+    JS_CFUNC_DEF("receive", 1, js_http_server_receive),
     JS_CFUNC_DEF("route", 2, js_http_server_route),
     JS_CFUNC_DEF("respond", 2, js_http_server_respond),
     JS_CFUNC_DEF("removeRoute", 2, js_http_server_remove_route),
@@ -824,12 +899,12 @@ static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("Stream", &js_stream_class),
     JS_PROP_CLASS_DEF("_ByteView", &js_byte_view_class),
     JS_PROP_CLASS_DEF("_ByteSpanSource", &js_byte_span_source_class),
-#if CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
-    JS_PROP_CLASS_DEF("_DisplayBufferSpanSource", &js_display_buffer_span_source_class),
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
+    JS_PROP_CLASS_DEF("_BitmapSpanSource", &js_bitmap_span_source_class),
     JS_PROP_CLASS_DEF("DisplayFont", &js_display_font_class),
     JS_PROP_CLASS_DEF("DisplayCommandBuffer", &js_display_command_buffer_class),
-    JS_PROP_CLASS_DEF("DisplayBuffer", &js_display_buffer_class),
-    JS_PROP_CLASS_DEF("displayBuffer", &js_display_buffer_obj),
+    JS_PROP_CLASS_DEF("Bitmap", &js_bitmap_class),
+    JS_PROP_CLASS_DEF("bitmap", &js_bitmap_obj),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
     JS_PROP_CLASS_DEF("fs", &js_fs_obj),
@@ -866,6 +941,15 @@ static const JSPropDef js_global_object_extra[] = {
 #if CONFIG_ESP32_MQUICKJS_FEATURE_UART
     JS_PROP_CLASS_DEF("uart", &js_uart_obj),
     JS_PROP_CLASS_DEF("UARTPort", &js_uart_port_class),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_I2S
+    JS_PROP_CLASS_DEF("i2s", &js_i2s_obj),
+    JS_PROP_CLASS_DEF("I2SInput", &js_i2s_input_class),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA
+    JS_PROP_CLASS_DEF("camera", &js_camera_obj),
+    JS_PROP_CLASS_DEF("Camera", &js_camera_class),
+    JS_PROP_CLASS_DEF("CameraFrame", &js_camera_frame_class),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     JS_PROP_CLASS_DEF("wifi", &js_wifi_obj),

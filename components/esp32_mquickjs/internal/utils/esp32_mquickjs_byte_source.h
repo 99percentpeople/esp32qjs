@@ -33,6 +33,7 @@ typedef struct {
                      int32_t y,
                      int32_t width,
                      int32_t height);
+    size_t (*known_length)(void *opaque);
     void (*destroy)(JSContext *ctx, void *opaque);
 } esp32_mquickjs_byte_span_source_object_ops_t;
 
@@ -65,6 +66,10 @@ bool esp32_mquickjs_open_byte_span_source(JSContext *ctx,
                                           esp32_mquickjs_byte_span_source_t *out,
                                           JSValue *out_error);
 
+bool esp32_mquickjs_byte_span_source_known_length(JSContext *ctx,
+                                                  JSValue value,
+                                                  size_t *out_length);
+
 JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx,
                                             JSValue owner,
                                             const esp32_mquickjs_byte_span_source_object_ops_t *ops,
@@ -84,16 +89,25 @@ bool esp32_mquickjs_update_byte_view(JSContext *ctx,
                                      const uint8_t *data,
                                      size_t length);
 
+bool esp32_mquickjs_byte_view_acquire_read(JSContext *ctx,
+                                           JSValue value,
+                                           const char *api_name,
+                                           const uint8_t **out_data,
+                                           size_t *out_length);
+void esp32_mquickjs_byte_view_release_read(JSContext *ctx, JSValue value);
+
 void esp32_mquickjs_release_byte_source(uint8_t *owned);
 
 bool esp32_mquickjs_byte_source_take_gc_request(void);
 
 JSValue js_byte_view_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 void js_byte_view_finalizer(JSContext *ctx, void *opaque);
+JSValue js_byte_view_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_byte_view_get_length(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_byte_view_to_array(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 
 JSValue js_byte_span_source_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
-JSValue js_display_buffer_span_source_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_byte_span_source_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_bitmap_span_source_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 void js_byte_span_source_finalizer(JSContext *ctx, void *opaque);
-JSValue js_display_buffer_span_source_set_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_bitmap_span_source_set_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

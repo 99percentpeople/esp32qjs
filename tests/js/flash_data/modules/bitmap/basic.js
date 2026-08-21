@@ -1,15 +1,30 @@
-test("display_buffer/basic", function () {
-  var mono = displayBuffer.create({ width: 8, height: 8, format: "mono1" });
+test("bitmap/basic", function () {
+  var mono = bitmap.create({ width: 8, height: 8, format: "mono1" });
   var dirty;
   var bytes;
   var rgb;
   var chunks;
   var source;
+  var converted;
+  var rotated;
+  var busySource;
+  var busyTarget;
+  var leasedPixels;
+  var rgb888Target;
+  var rgb888Commands;
+  var busySourceError = "";
+  var busyTargetError = "";
+  var busyPixelsError = "";
+  var root = globalThis;
   var wide;
   var closeError = "";
-  var font = displayBuffer.loadFont("_sys/display/fonts/mono5x7.eqf");
+  var font = bitmap.loadFont("_sys/display/fonts/mono5x7.eqf");
 
-  test.ok(typeof displayBuffer.create === "function", "displayBuffer.create should exist");
+  test.ok(typeof bitmap.create === "function", "bitmap.create should exist");
+  test.equal(typeof root["display" + "Buffer"], "undefined",
+    "the removed legacy module global should stay absent");
+  test.equal(typeof root["Display" + "Buffer"], "undefined",
+    "the removed legacy class global should stay absent");
   test.equal(mono.width, 8, "mono width should be exposed");
   test.equal(mono.height, 8, "mono height should be exposed");
   test.equal(mono.format, "mono1", "mono format should be exposed");
@@ -61,7 +76,7 @@ test("display_buffer/basic", function () {
   test.equal(mono.getPixel(1, 4), 1, "drawEllipse should draw the left endpoint");
   test.equal(mono.getPixel(7, 4), 1, "drawEllipse should draw the right endpoint");
   test.equal(mono.getPixel(4, 4), 0, "drawEllipse should leave the center clear");
-  wide = displayBuffer.create({ width: 21, height: 9, format: "mono1" });
+  wide = bitmap.create({ width: 21, height: 9, format: "mono1" });
   wide.clear(0).drawEllipse(10, 4, 6, 2, 1);
   test.equal(wide.getPixel(8, 3), 1, "drawEllipse should connect a shallow top arc");
   test.equal(wide.getPixel(12, 5), 1, "drawEllipse should connect a shallow bottom arc");
@@ -126,16 +141,59 @@ test("display_buffer/basic", function () {
   bytes = mono.readRect(0, 0, 8, 8).toArray();
   test.equal(bytes[0], 0x7e, "drawText should fill an explicit background before glyph pixels");
   test.equal(bytes[5], 0x00, "drawText explicit background should cover the advance gap");
-  mono.clear(1).drawBitmap(0, 0, { width: 2, height: 1, pixels: [1, 0] }, { color: 0 });
+  mono.clear(1).drawMask(0, 0, { width: 2, height: 1, pixels: [1, 0] }, { color: 0 });
   bytes = mono.readRect(0, 0, 8, 8).toArray();
-  test.equal(bytes[0], 0xfe, "drawBitmap should draw mask pixels with an options color");
-  test.equal(bytes[1], 0xff, "drawBitmap should keep off pixels transparent by default");
-  mono.clear(1).drawBitmap(0, 0, { width: 2, height: 1, pixels: [1, 0] }, { color: 1, background: 0 });
+  test.equal(bytes[0], 0xfe, "drawMask should draw mask pixels with an options color");
+  test.equal(bytes[1], 0xff, "drawMask should keep off pixels transparent by default");
+  mono.clear(1).drawMask(0, 0, { width: 2, height: 1, pixels: [1, 0] }, { color: 1, background: 0 });
   bytes = mono.readRect(0, 0, 8, 8).toArray();
-  test.equal(bytes[0], 0xff, "drawBitmap should draw on pixels with an options color");
-  test.equal(bytes[1], 0xfe, "drawBitmap should fill explicit background pixels");
+  test.equal(bytes[0], 0xff, "drawMask should draw on pixels with an options color");
+  test.equal(bytes[1], 0xfe, "drawMask should fill explicit background pixels");
+  mono.clear(0).clearDirty();
+  test.equal(mono.blit({
+    width: 2,
+    height: 2,
+    format: "gray8",
+    pixels: [0, 255, 255, 0]
+  }, { destinationRect: { x: 0, y: 0, width: 4, height: 4 } }), mono,
+  "blit should be chainable");
+  bytes = mono.readRect(0, 0, 4, 4).toArray();
+  test.equal(bytes[0], 0x0c, "blit should resize grayscale rows natively");
+  test.equal(bytes[1], 0x0c, "blit should repeat nearest source columns");
+  test.equal(bytes[2], 0x03, "blit should map bright pixels to mono1");
+  test.equal(bytes[3], 0x03, "blit should preserve the resized pattern");
+  dirty = mono.getDirty();
+  test.equal(dirty.width, 4, "blit should mark the destination width dirty");
+  test.equal(dirty.height, 4, "blit should mark the destination height dirty");
+  mono.clear(0).blit({
+    width: 4,
+    height: 4,
+    format: "gray8",
+    pixels: [
+      128, 128, 128, 128,
+      128, 128, 128, 128,
+      128, 128, 128, 128,
+      128, 128, 128, 128
+    ]
+  }, {
+    destinationRect: { x: 0, y: 0, width: 4, height: 4 },
+    dither: "bayer4x4"
+  });
+  bytes = mono.readRect(0, 0, 4, 4).toArray();
+  test.equal(bytes[0], 0x05, "blit should apply ordered grayscale dithering");
+  test.equal(bytes[1], 0x0a, "blit dither should alternate the next column");
+  test.equal(bytes[2], 0x05, "blit dither should repeat the Bayer tile");
+  test.equal(bytes[3], 0x0a, "blit dither should fill the fourth column");
+  try {
+    mono.blit({ width: 1, height: 1, format: "jpeg", pixels: [0] });
+  } catch (imageFormatError) {
+    closeError = String(imageFormatError);
+  }
+  test.ok(closeError.indexOf("invalid") >= 0,
+    "blit should reject unsupported source formats");
+  closeError = "";
   if (typeof mono.createCommandBuffer === "function") {
-    var commandTarget = displayBuffer.create({ width: 8, height: 8, format: "mono1" });
+    var commandTarget = bitmap.create({ width: 8, height: 8, format: "mono1" });
     var commands = commandTarget.createCommandBuffer({ commandCapacity: 2, textBytes: 8 });
     var commandStats;
 
@@ -154,8 +212,8 @@ test("display_buffer/basic", function () {
     test.equal(commandStats.count, 0, "reset should clear recorded commands");
     commandTarget.clear(0).clearDirty();
     test.equal(commands.appendPacked([
-      2, 1, 0, 1, 0, 2, 0, 2, 0, 1, 0,
-      4, 0, 0, 7, 0, 7, 0, 7, 0, 1, 0
+      2, 1, 0, 1, 0, 2, 0, 2, 0, 1, 0, 0, 0,
+      4, 0, 0, 7, 0, 7, 0, 7, 0, 1, 0, 0, 0
     ]), commands, "appendPacked should be chainable");
     commands.replay(commandTarget);
     test.equal(commandTarget.getPixel(1, 1), 1, "packed replay should draw filled rectangles");
@@ -170,7 +228,8 @@ test("display_buffer/basic", function () {
     commands.reset();
     commandTarget.clear(0).clearDirty();
     commands.appendPacked([
-      7, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0
+      7, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 1, 0
     ], { text: "A", font: font }).replay(commandTarget);
     bytes = commandTarget.readRect(0, 0, 8, 8).toArray();
     test.equal(bytes[0], 0x7e, "packed replay should draw text with native fonts");
@@ -184,6 +243,13 @@ test("display_buffer/basic", function () {
     closeError = "";
     commandTarget.close();
   }
+  rgb888Target = bitmap.create({ width: 1, height: 1, format: "rgb888" });
+  rgb888Commands = rgb888Target.createCommandBuffer({ commandCapacity: 1 });
+  rgb888Commands.appendPacked([1, 0x33, 0x22, 0x11, 0x00]).replay(rgb888Target);
+  test.equal(rgb888Target.getPixel(0, 0), 0x112233,
+    "packed command colors should retain all RGB888 channels");
+  rgb888Commands.close();
+  rgb888Target.close();
   try {
     mono.setPixel(0, 0, true);
   } catch (colorError) {
@@ -192,12 +258,107 @@ test("display_buffer/basic", function () {
   test.ok(closeError.indexOf("valid color") >= 0, "mono colors should reject boolean values");
   closeError = "";
 
-  rgb = displayBuffer.create({ width: 2, height: 2, format: "rgb565", chunkBytes: 4 });
+  rgb = bitmap.create({ width: 2, height: 2, format: "rgb565", chunkBytes: 4 });
   test.equal(rgb.layout, "linear", "rgb565 default layout should be linear");
   test.equal(rgb.stride, 4, "rgb565 stride should be width * 2");
   test.equal(rgb.byteLength, 8, "rgb565 byteLength should be width * height * 2");
   rgb.clear(0x1234).setPixel(1, 0, 0xabcd);
   test.equal(rgb.getPixel(1, 0), 0xabcd, "rgb565 getPixel should return the 16-bit color");
+  converted = bitmap.convert({
+    width: 2,
+    height: 1,
+    format: "gray8",
+    pixels: [100, 200]
+  }, { format: "gray8", normalize: true });
+  test.equal(converted.getPixel(0, 0), 0, "convert normalization should map the minimum to black");
+  test.equal(converted.getPixel(1, 0), 255, "convert normalization should map the maximum to white");
+  converted.close();
+
+  rotated = bitmap.convert({
+    width: 2,
+    height: 1,
+    format: "rgb565",
+    byteOrder: "le",
+    pixels: [0x00, 0xf8, 0xe0, 0x07]
+  }, { format: "rgb888", rotation: 90 });
+  test.equal(rotated.width, 1, "rotation should swap the natural output width");
+  test.equal(rotated.height, 2, "rotation should swap the natural output height");
+  test.equal(rotated.getPixel(0, 0), 0xff0000, "rgb565 little-endian input should decode red");
+  test.equal(rotated.getPixel(0, 1), 0x00ff00, "rgb565 little-endian input should decode green");
+  rotated.close();
+
+  converted = bitmap.convert({
+    width: 1,
+    height: 1,
+    format: "mono1",
+    layout: "linear",
+    bitOrder: "msb",
+    pixels: [0x80]
+  }, { format: "gray8" });
+  test.equal(converted.getPixel(0, 0), 255, "mono1 MSB input should decode enabled pixels");
+  converted.close();
+
+  busySource = bitmap.create({ width: 64, height: 64, format: "gray8" });
+  setTimeout(function () {
+    try {
+      busySource.close();
+    } catch (busySourceCloseError) {
+      busySourceError = String(busySourceCloseError);
+    }
+  }, 0);
+  converted = bitmap.convert(busySource, {
+    format: "gray8",
+    width: 128,
+    height: 128,
+    filter: "bilinear"
+  });
+  test.ok(busySourceError.indexOf("Bitmap is busy") >= 0,
+    "convert should hold a source Bitmap read lease during cooperative waits");
+  converted.close();
+  busySource.close();
+
+  busySource = bitmap.create({ width: 64, height: 64, format: "gray8" });
+  leasedPixels = busySource.readRect(0, 0, 64, 64);
+  setTimeout(function () {
+    try {
+      leasedPixels.close();
+    } catch (busyPixelsCloseError) {
+      busyPixelsError = String(busyPixelsCloseError);
+    }
+  }, 0);
+  converted = bitmap.convert({
+    width: 64,
+    height: 64,
+    format: "gray8",
+    pixels: leasedPixels
+  }, {
+    format: "gray8",
+    width: 128,
+    height: 128,
+    filter: "bilinear"
+  });
+  test.ok(busyPixelsError.indexOf("ByteView is busy") >= 0,
+    "convert should hold a ByteView read lease during cooperative waits");
+  converted.close();
+  leasedPixels.close();
+  busySource.close();
+
+  busyTarget = bitmap.create({ width: 128, height: 128, format: "gray8" });
+  setTimeout(function () {
+    try {
+      busyTarget.close();
+    } catch (busyTargetCloseError) {
+      busyTargetError = String(busyTargetCloseError);
+    }
+  }, 0);
+  busyTarget.blit({ width: 1, height: 1, format: "gray8", pixels: [127] }, {
+    destinationRect: { x: 0, y: 0, width: 128, height: 128 },
+    filter: "bilinear"
+  });
+  test.ok(busyTargetError.indexOf("Bitmap is busy") >= 0,
+    "blit should hold a target Bitmap write lease during cooperative waits");
+  busyTarget.close();
+  rgb.clear(0x1234).setPixel(1, 0, 0xabcd);
   bytes = rgb.readRect(0, 0, 2, 2, { byteOrder: "be" }).toArray();
   test.equal(bytes[0], 0x12, "rgb565 be export should start with high byte");
   test.equal(bytes[1], 0x34, "rgb565 be export should include low byte");
@@ -211,11 +372,11 @@ test("display_buffer/basic", function () {
   test.equal(chunks[0].length, 4, "readRectChunks should return ByteView chunks");
   source = rgb.createSpanSource({ byteOrder: "be", chunkBytes: 4 });
   test.equal(typeof _ByteSpanSource.prototype.setRect, "undefined", "generic ByteSpanSource should stay opaque");
-  test.ok(source instanceof _ByteSpanSource, "DisplayBufferSpanSource should be accepted as a ByteSpanSource");
-  test.ok(source instanceof _DisplayBufferSpanSource, "createSpanSource should return a DisplayBufferSpanSource");
-  test.ok(source && typeof source.setRect === "function", "DisplayBufferSpanSource should expose setRect");
-  test.equal(source.setRect(-1, -1, 2, 2), source, "DisplayBufferSpanSource setRect should return the source");
-  test.equal(source.setRect(0, 0, 2, 2), source, "DisplayBufferSpanSource setRect should allow repeated updates");
+  test.ok(source instanceof _ByteSpanSource, "BitmapSpanSource should be accepted as a ByteSpanSource");
+  test.ok(source instanceof _BitmapSpanSource, "createSpanSource should return a BitmapSpanSource");
+  test.ok(source && typeof source.setRect === "function", "BitmapSpanSource should expose setRect");
+  test.equal(source.setRect(-1, -1, 2, 2), source, "BitmapSpanSource setRect should return the source");
+  test.equal(source.setRect(0, 0, 2, 2), source, "BitmapSpanSource setRect should allow repeated updates");
   var reusedChunks = rgb.readRectChunks(0, 0, 2, 2, { byteOrder: "be", reuse: true });
   var reusedFirst = reusedChunks[0];
 

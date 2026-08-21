@@ -107,6 +107,13 @@
     return ((red & 0xf8) << 8) | ((green & 0xfc) << 3) | (blue >> 3);
   }
 
+  function rgb888(red, green, blue) {
+    red = clampInt(assertNumber(red, "display.rgb888(red, green, blue)") | 0, 0, 255);
+    green = clampInt(assertNumber(green, "display.rgb888(red, green, blue)") | 0, 0, 255);
+    blue = clampInt(assertNumber(blue, "display.rgb888(red, green, blue)") | 0, 0, 255);
+    return (red << 16) | (green << 8) | blue;
+  }
+
   function colorLimit(pixelFormat) {
     if (pixelFormat === "mono1") {
       return 1;
@@ -120,6 +127,9 @@
     if (pixelFormat === "rgb565") {
       return 0xffff;
     }
+    if (pixelFormat === "rgb888") {
+      return 0xffffff;
+    }
     throw new TypeError("unsupported display pixel format: " + pixelFormat);
   }
 
@@ -132,6 +142,9 @@
     }
     if (pixelFormat === "rgb565" && value && typeof value === "object") {
       return rgb565(value.r || 0, value.g || 0, value.b || 0);
+    }
+    if (pixelFormat === "rgb888" && value && typeof value === "object") {
+      return rgb888(value.r || 0, value.g || 0, value.b || 0);
     }
     if (typeof value !== "number" || value !== value) {
       throw new TypeError(apiName + " expects a packed " + pixelFormat + " color");
@@ -212,6 +225,7 @@
     gray4: gray4,
     gray8: gray8,
     rgb565: rgb565,
+    rgb888: rgb888,
     normalizeColor: normalizeColor,
     styleOptions: styleOptions,
     Registry: Registry
@@ -222,6 +236,7 @@
   display.gray4 = gray4;
   display.gray8 = gray8;
   display.rgb565 = rgb565;
+  display.rgb888 = rgb888;
   display.transports = new Registry("transports");
   display.drivers = new Registry("drivers");
   display.profiles = new Registry("profiles");

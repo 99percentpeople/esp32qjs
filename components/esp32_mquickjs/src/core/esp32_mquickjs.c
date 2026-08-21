@@ -10,9 +10,13 @@
 #include "esp32_mquickjs_http.h"
 #include "esp32_mquickjs_http_server.h"
 #include "esp32_mquickjs_i2c.h"
+#include "esp32_mquickjs_i2s.h"
+#include "esp32_mquickjs_camera.h"
+#include "esp32_mquickjs_bitmap.h"
 #include "esp32_mquickjs_ledc.h"
 #include "esp32_mquickjs_log_ring.h"
 #include "esp32_mquickjs_nvs.h"
+#include "esp32_mquickjs_peripheral_lease.h"
 #if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
 #include "esp32_mquickjs_runtime_logs.h"
 #endif
@@ -955,6 +959,8 @@ JSContext *esp32_mquickjs_create(void *mem_start,
         return NULL;
     }
 
+    esp32_mquickjs_peripheral_leases_reset();
+
     runtime->deadline_us = 0;
     runtime->eval_timeout_ms = eval_timeout_ms;
     runtime->async_generation = 0;
@@ -1100,6 +1106,16 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     esp32_mquickjs_deinit_wifi_runtime(ctx);
+#endif
+    esp32_mquickjs_deinit_stream_runtime();
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
+    esp32_mquickjs_deinit_bitmap_runtime(ctx);
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA
+    esp32_mquickjs_deinit_camera_runtime(ctx);
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_I2S
+    esp32_mquickjs_deinit_i2s_runtime();
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_GPIO
     esp32_mquickjs_deinit_gpio_runtime(ctx);
@@ -1294,6 +1310,12 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
         return false;
     }
 #endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
+    if (!esp32_mquickjs_init_bitmap_runtime(ctx, runtime)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
+#endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_LEDC
     esp32_mquickjs_init_ledc_runtime();
 #endif
@@ -1317,6 +1339,18 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_UART
     if (!esp32_mquickjs_init_uart_runtime(ctx, runtime)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_I2S
+    if (!esp32_mquickjs_init_i2s_runtime(ctx, runtime)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA
+    if (!esp32_mquickjs_init_camera_runtime(ctx, runtime)) {
         esp32_mquickjs_print_exception(ctx);
         return false;
     }

@@ -3,7 +3,7 @@
 #include "esp32_mquickjs_adc.h"
 #include "utils/esp32_mquickjs_byte_source.h"
 #include "esp32_mquickjs_dac.h"
-#include "esp32_mquickjs_display_buffer.h"
+#include "esp32_mquickjs_bitmap.h"
 #include "esp32_mquickjs_fs.h"
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_event_queue.h"
@@ -11,6 +11,8 @@
 #include "esp32_mquickjs_http.h"
 #include "esp32_mquickjs_http_server.h"
 #include "esp32_mquickjs_i2c.h"
+#include "esp32_mquickjs_i2s.h"
+#include "esp32_mquickjs_camera.h"
 #include "esp32_mquickjs_ledc.h"
 #include "esp32_mquickjs_nvs.h"
 #if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS

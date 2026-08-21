@@ -281,7 +281,7 @@ JSValue js_sys_feature_get(JSContext *ctx,
 #else
         false,
 #endif
-#if defined(CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER) && CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
+#if defined(CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP) && CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
         true,
 #else
         false,
@@ -302,6 +302,16 @@ JSValue js_sys_feature_get(JSContext *ctx,
         false,
 #endif
 #if defined(CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS) && CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
+        true,
+#else
+        false,
+#endif
+#if defined(CONFIG_ESP32_MQUICKJS_FEATURE_I2S) && CONFIG_ESP32_MQUICKJS_FEATURE_I2S
+        true,
+#else
+        false,
+#endif
+#if defined(CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA) && CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA
         true,
 #else
         false,

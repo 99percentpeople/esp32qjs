@@ -1,0 +1,209 @@
+import unittest
+from pathlib import Path
+
+from source_contract_test_case import SourceContractTestCase
+
+
+ROOT = Path(__file__).resolve().parents[2]
+MQUICKJS = ROOT / "components" / "esp32_mquickjs"
+
+
+class MediaArchitectureTests(SourceContractTestCase):
+    def test_i2s_and_camera_are_independent_feature_gated_modules(self):
+        kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
+        cmake = (MQUICKJS / "CMakeLists.txt").read_text(encoding="utf-8")
+        manifest = (MQUICKJS / "idf_component.yml").read_text(encoding="utf-8")
+        s3_defaults = (ROOT / "configs/mcus/esp32s3/sdkconfig.defaults").read_text(
+            encoding="utf-8"
+        )
+        stdlib = (MQUICKJS / "src/core/mqjs_stdlib_esp32.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("config ESP32_MQUICKJS_FEATURE_I2S", kconfig)
+        self.assertIn("depends on SOC_I2S_SUPPORTED", kconfig)
+        self.assertIn("config ESP32_MQUICKJS_FEATURE_CAMERA", kconfig)
+        self.assertIn("depends on IDF_TARGET_ESP32S3", kconfig)
+        self.assertIn("src/modules/i2s/esp32_mquickjs_i2s.c", cmake)
+        self.assertIn("if(IDF_TARGET STREQUAL \"esp32s3\")", cmake)
+        self.assertIn("src/modules/camera/esp32_mquickjs_camera.c", cmake)
+        self.assertIn('version: "~2.1.7"', manifest)
+        self.assertIn('if: "target == esp32s3"', manifest)
+        self.assertNotIn("CONFIG_CAMERA_PSRAM_DMA", s3_defaults)
+        self.assertNotIn("CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA=y", s3_defaults)
+        self.assertIn('JS_OBJECT_DEF("i2s", js_i2s)', stdlib)
+        self.assertIn('JS_OBJECT_DEF("camera", js_camera_module)', stdlib)
+        self.assertNotIn("camera", (MQUICKJS / "src/modules/i2s/esp32_mquickjs_i2s.c").read_text(encoding="utf-8"))
+
+    def test_s3_build_applies_version_checked_ov3660_psram_dma_workaround(self):
+        root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        patch = (ROOT / "scripts/patch_esp32_camera_2_1_7.cmake").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("patch_esp32_camera_2_1_7.cmake", root_cmake)
+        self.assertIn('IDF_TARGET STREQUAL "esp32s3"', patch)
+        self.assertIn("version:[ \\t]+['\\\"]?2\\\\.1\\\\.7", patch)
+        self.assertIn("espressif/esp32-camera#853", patch)
+        self.assertIn("cam_drop_psram_cache(dma_buffer->buf, dma_buffer->len);", patch)
+        self.assertIn(
+            "offset_e = cam_verify_jpeg_eoi(dma_buffer->buf,", patch
+        )
+
+    def test_i2s_isr_callbacks_only_wake_the_future_driver(self):
+        source = (MQUICKJS / "src/modules/i2s/esp32_mquickjs_i2s.c").read_text(
+            encoding="utf-8"
+        )
+        start = source.index("static bool IRAM_ATTR i2s_on_receive(")
+        end = source.index("\nstatic JSValue i2s_status_object(", start)
+        callbacks = source[start:end]
+
+        self.assertIn("esp32_mquickjs_future_wake_from_isr", callbacks)
+        self.assertNotIn("JS_", callbacks)
+        self.assertNotIn("heap_caps_", callbacks)
+        self.assertNotIn("i2s_channel_read", callbacks)
+
+    def test_i2s_read_retains_partial_dma_data_reported_with_timeout(self):
+        source = (MQUICKJS / "src/modules/i2s/esp32_mquickjs_i2s.c").read_text(
+            encoding="utf-8"
+        )
+        start = source.index("static void i2s_read_step(")
+        end = source.index("\nstatic bool i2s_read_start(", start)
+        step = source[start:end]
+
+        self.assertIn(
+            "state->err == ESP_OK || state->err == ESP_ERR_TIMEOUT", step
+        )
+        self.assertIn("state->received_bytes += read_bytes;", step)
+        self.assertLess(
+            step.index("state->received_bytes += read_bytes;"),
+            step.index("state->err = ESP_OK;", step.index("state->received_bytes += read_bytes;")),
+        )
+
+    def test_camera_capture_and_frame_lease_are_bounded(self):
+        source = (MQUICKJS / "src/modules/camera/esp32_mquickjs_camera.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("esp32_mquickjs_future_submit_worker", source)
+        self.assertIn("esp_camera_fb_get()", source)
+        self.assertIn("esp_camera_fb_return", source)
+        self.assertIn("CAMERA_MAX_COPY_BYTES (32U * 1024U)", source)
+        self.assertIn("CameraFrame.close() refused while a source is active", source)
+        self.assertIn("camera_release_frame();", source)
+        self.assertIn("does not accept a sensor model; the driver probes it", source)
+        self.assertIn("OV2640_PID", source)
+        self.assertIn("OV3660_PID", source)
+
+    def test_bitmap_worker_borrows_raw_camera_frames_with_checked_leases(self):
+        camera = (MQUICKJS / "src/modules/camera/esp32_mquickjs_camera.c").read_text(
+            encoding="utf-8"
+        )
+        image = (
+            MQUICKJS
+            / "src/modules/bitmap/esp32_mquickjs_bitmap_image.c"
+        ).read_text(encoding="utf-8")
+        core = (
+            MQUICKJS
+            / "src/modules/bitmap/esp32_mquickjs_bitmap_image_core.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("esp32_mquickjs_camera_frame_acquire_bitmap_view", camera)
+        self.assertIn("bitmap_read_leases", camera)
+        self.assertIn("camera_frame_from_value(ctx, value, api_name, &ref)", camera)
+        self.assertIn("JS_CLASS_CAMERA_FRAME", image)
+        self.assertIn("esp32_mquickjs_camera_frame_acquire_bitmap_view", image)
+        self.assertIn("esp32_mquickjs_future_submit_worker", image)
+        self.assertIn("bitmap_acquire_read", image)
+        self.assertIn("bitmap_acquire_write", image)
+        self.assertIn("esp32_mquickjs_byte_view_acquire_read", image)
+        self.assertIn("esp32_mquickjs_bitmap_transform", image)
+        self.assertNotIn("js_camera_frame_read", image)
+        self.assertNotIn("toArray", image)
+        self.assertIn("sample_nearest", core)
+        self.assertIn("sample_bilinear", core)
+        self.assertIn("s_bayer_4x4", core)
+        self.assertIn("inverse_rotate", core)
+
+    def test_media_uses_shared_generation_checked_peripheral_leases(self):
+        lease = (
+            MQUICKJS / "src/core/esp32_mquickjs_peripheral_lease.c"
+        ).read_text(encoding="utf-8")
+        sources = [
+            MQUICKJS / "src/modules/i2s/esp32_mquickjs_i2s.c",
+            MQUICKJS / "src/modules/camera/esp32_mquickjs_camera.c",
+            MQUICKJS / "src/modules/i2c/esp32_mquickjs_i2c.c",
+            MQUICKJS / "src/modules/ledc/esp32_mquickjs_ledc.c",
+        ]
+
+        self.assertIn("entry->generation == lease->generation", lease)
+        for path in sources:
+            self.assertIn(
+                "esp32_mquickjs_peripheral_lease_",
+                path.read_text(encoding="utf-8"),
+                str(path.relative_to(ROOT)),
+            )
+
+    def test_binary_http_and_tcp_share_close_on_terminal_source_semantics(self):
+        http = (MQUICKJS / "src/modules/http/esp32_mquickjs_http.c").read_text(
+            encoding="utf-8"
+        )
+        server = (
+            MQUICKJS / "src/modules/http/esp32_mquickjs_http_server.c"
+        ).read_text(encoding="utf-8")
+        socket = (
+            MQUICKJS / "src/modules/socket/esp32_mquickjs_socket.c"
+        ).read_text(encoding="utf-8")
+        request_response = (
+            MQUICKJS / "src/core/esp32_mquickjs_request_response.c"
+        ).read_text(encoding="utf-8")
+        core = (MQUICKJS / "src/core/esp32_mquickjs.c").read_text(
+            encoding="utf-8"
+        )
+        stdlib = (MQUICKJS / "src/core/mqjs_stdlib_esp32.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("http_materialize_body", http)
+        self.assertIn("Content-Length (%llu) does not match", http)
+        self.assertIn("MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT", http)
+        self.assertIn("httpd_send(req, data, length)", server)
+        self.assertIn("http_server_send_known_length_response", server)
+        self.assertIn("socket_future_load_send_span", socket)
+        self.assertIn("socket_future_release_send_source", socket)
+        self.assertIn("esp32_mquickjs_byte_span_source_close", socket)
+        self.assertIn("Response.bytes(body, init?)", request_response)
+        self.assertIn("rr_make_bytes_result", request_response)
+        self.assertIn('JS_CFUNC_DEF("receive", 1, js_http_server_receive)', stdlib)
+        self.assertIn("*events_obj, argc, argv", server)
+        self.assertNotIn(
+            'esp32_mquickjs_set_property_ref(ctx, server_obj, "receive"', server
+        )
+        self.assertLess(
+            core.index("esp32_mquickjs_deinit_stream_runtime();"),
+            core.index("esp32_mquickjs_deinit_camera_runtime(ctx);"),
+        )
+
+    def test_media_owned_wrappers_release_native_allocations_on_close(self):
+        byte_source = (
+            MQUICKJS / "src/core/esp32_mquickjs_byte_source.c"
+        ).read_text(encoding="utf-8")
+        camera = (
+            MQUICKJS / "src/modules/camera/esp32_mquickjs_camera.c"
+        ).read_text(encoding="utf-8")
+        i2s = (MQUICKJS / "src/modules/i2s/esp32_mquickjs_i2s.c").read_text(
+            encoding="utf-8"
+        )
+        stdlib = (MQUICKJS / "src/core/mqjs_stdlib_esp32.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('JS_CFUNC_DEF("close", 0, js_byte_view_close)', stdlib)
+        self.assertIn("JS_SetOpaque(ctx, *this_val, NULL);", byte_source)
+        self.assertIn("byte_view_release(view);", byte_source)
+        self.assertIn("heap_caps_free(ref);", camera[camera.index("JSValue js_camera_frame_close"):])
+        self.assertIn("heap_caps_free(ref);", i2s[i2s.index("JSValue js_i2s_input_close"):])
+
+
+if __name__ == "__main__":
+    unittest.main()

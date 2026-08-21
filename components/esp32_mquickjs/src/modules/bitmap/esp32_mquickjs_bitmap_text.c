@@ -1,6 +1,6 @@
-#include "esp32_mquickjs_display_buffer_internal.h"
+#include "esp32_mquickjs_bitmap_internal.h"
 
-#if CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -84,8 +84,8 @@ static const esp32_mquickjs_bitmap_font_t *text_font_from_options(JSContext *ctx
 static bool text_background_from_options(JSContext *ctx,
                                          uint8_t format,
                                          JSValue options,
-                                         uint16_t fallback,
-                                         uint16_t *out_color,
+                                         uint32_t fallback,
+                                         uint32_t *out_color,
                                          bool *out_has_background)
 {
     JSGCRef property_ref;
@@ -119,15 +119,15 @@ static bool text_background_from_options(JSContext *ctx,
     return true;
 }
 
-void display_buffer_draw_text_raw(esp32_mquickjs_display_buffer_t *buffer,
+void bitmap_draw_text_raw(esp32_mquickjs_bitmap_t *buffer,
                                   int32_t x,
                                   int32_t y,
                                   const char *text,
                                   const esp32_mquickjs_bitmap_font_t *font,
                                   int spacing,
-                                  uint16_t color,
+                                  uint32_t color,
                                   bool has_background,
-                                  uint16_t background)
+                                  uint32_t background)
 {
     int cursor_x = x;
     int cursor_y = y;
@@ -170,13 +170,13 @@ void display_buffer_draw_text_raw(esp32_mquickjs_display_buffer_t *buffer,
     mark_dirty(buffer, x, y, measured_width, measured_height);
 }
 
-JSValue js_display_buffer_draw_text(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_draw_text(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
+    esp32_mquickjs_bitmap_t *buffer;
     int32_t x;
     int32_t y;
-    uint16_t color;
-    uint16_t background;
+    uint32_t color;
+    uint32_t background;
     bool ok;
     bool has_background;
     JSCStringBuf text_buf;
@@ -187,15 +187,15 @@ JSValue js_display_buffer_draw_text(JSContext *ctx, JSValue *this_val, int argc,
     JSGCRef property_ref;
     JSValue *property;
 
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.drawText()");
+    buffer = bitmap_from_value(ctx, *this_val, "Bitmap.drawText()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
     if (argc < 3 || !value_to_i32(ctx, argv[0], &x) || !value_to_i32(ctx, argv[1], &y)) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawText(x, y, text, options?) expects x, y, and text");
+        return JS_ThrowTypeError(ctx, "Bitmap.drawText(x, y, text, options?) expects x, y, and text");
     }
     if (!text_options_is_object(ctx, argc >= 4 ? argv[3] : JS_UNDEFINED,
-                                "DisplayBuffer.drawText()")) {
+                                "Bitmap.drawText()")) {
         return JS_EXCEPTION;
     }
     color = buffer->foreground;
@@ -209,13 +209,13 @@ JSValue js_display_buffer_draw_text(JSContext *ctx, JSValue *this_val, int argc,
         color = normalize_color(ctx, buffer->format, *property, buffer->foreground, &ok);
         JS_PopGCRef(ctx, &property_ref);
         if (!ok) {
-            return JS_ThrowTypeError(ctx, "DisplayBuffer.drawText() option 'color' expects a valid color");
+            return JS_ThrowTypeError(ctx, "Bitmap.drawText() option 'color' expects a valid color");
         }
     }
     spacing = text_spacing_from_options(ctx, argc >= 4 ? argv[3] : JS_UNDEFINED, 0);
     font = text_font_from_options(ctx,
                                   argc >= 4 ? argv[3] : JS_UNDEFINED,
-                                  "DisplayBuffer.drawText() option 'font'",
+                                  "Bitmap.drawText() option 'font'",
                                   &font_ok);
     if (!font_ok || font == NULL) {
         return JS_EXCEPTION;
@@ -226,17 +226,17 @@ JSValue js_display_buffer_draw_text(JSContext *ctx, JSValue *this_val, int argc,
                                       buffer->background,
                                       &background,
                                       &has_background)) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawText() option 'background' expects a valid color or null");
+        return JS_ThrowTypeError(ctx, "Bitmap.drawText() option 'background' expects a valid color or null");
     }
     text = JS_ToCString(ctx, argv[2], &text_buf);
     if (text == NULL) {
         return JS_EXCEPTION;
     }
-    display_buffer_draw_text_raw(buffer, x, y, text, font, spacing, color, has_background, background);
+    bitmap_draw_text_raw(buffer, x, y, text, font, spacing, color, has_background, background);
     return *this_val;
 }
 
-JSValue js_display_buffer_measure_text(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_measure_text(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     JSCStringBuf text_buf;
     const char *text;
@@ -252,15 +252,15 @@ JSValue js_display_buffer_measure_text(JSContext *ctx, JSValue *this_val, int ar
     (void)this_val;
 
     if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.measureText(text, options?) expects text");
+        return JS_ThrowTypeError(ctx, "Bitmap.measureText(text, options?) expects text");
     }
-    if (!text_options_is_object(ctx, argc >= 2 ? argv[1] : JS_UNDEFINED, "DisplayBuffer.measureText()")) {
+    if (!text_options_is_object(ctx, argc >= 2 ? argv[1] : JS_UNDEFINED, "Bitmap.measureText()")) {
         return JS_EXCEPTION;
     }
     spacing = text_spacing_from_options(ctx, argc >= 2 ? argv[1] : JS_UNDEFINED, 0);
     font = text_font_from_options(ctx,
                                   argc >= 2 ? argv[1] : JS_UNDEFINED,
-                                  "DisplayBuffer.measureText() option 'font'",
+                                  "Bitmap.measureText() option 'font'",
                                   &font_ok);
     if (!font_ok || font == NULL) {
         return JS_EXCEPTION;

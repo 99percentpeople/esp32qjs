@@ -895,8 +895,8 @@ static JSValue spi_write_span_source(JSContext *ctx,
         }
 
         if (!esp32_mquickjs_byte_span_source_next(ctx, source, &span)) {
-            error = JS_GetException(ctx);
-            if (!JS_IsUndefined(error) && !JS_IsNull(error)) {
+            if (JS_HasException(ctx)) {
+                error = JS_EXCEPTION;
                 goto fail_with_js_error;
             }
             break;
@@ -2069,7 +2069,8 @@ JSValue js_spi_device_write_source(JSContext *ctx, JSValue *this_val, int argc, 
     spi_write_chunks_options_t options;
     esp32_mquickjs_byte_span_source_t source;
     JSValue error = JS_UNDEFINED;
-    JSValue result;
+    JSGCRef result_ref;
+    JSValue *result;
 
     memset(&source, 0, sizeof(source));
 
@@ -2099,9 +2100,15 @@ JSValue js_spi_device_write_source(JSContext *ctx, JSValue *this_val, int argc, 
         return JS_EXCEPTION;
     }
 
-    result = spi_write_span_source(ctx, bus_slot, device_slot, &source, &options, "SPIDevice.writeSource()");
+    result = JS_PushGCRef(ctx, &result_ref);
+    *result = spi_write_span_source(ctx,
+                                    bus_slot,
+                                    device_slot,
+                                    &source,
+                                    &options,
+                                    "SPIDevice.writeSource()");
     esp32_mquickjs_byte_span_source_close(ctx, &source);
-    return result;
+    return JS_PopGCRef(ctx, &result_ref);
 }
 
 JSValue js_spi_device_read(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

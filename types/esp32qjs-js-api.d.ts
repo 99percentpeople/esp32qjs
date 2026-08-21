@@ -47,8 +47,8 @@ namespace ESP32QJS {
   interface SurfaceMetadata {
     width: number;
     height: number;
-    pixelFormat: DisplayBufferFormat;
-    layout?: DisplayBufferLayout;
+    pixelFormat: BitmapFormat;
+    layout?: BitmapLayout;
   }
 
   interface SurfaceCommandBufferOptions {
@@ -58,8 +58,8 @@ namespace ESP32QJS {
 
   /** Hardware-independent framebuffer options. */
   interface SurfaceOptions {
-    storage?: DisplayBufferStorage;
-    fallbackStorage?: DisplayBufferStorage;
+    storage?: BitmapStorage;
+    fallbackStorage?: BitmapStorage;
     chunkBytes?: number;
     foreground?: ColorValue;
     background?: ColorValue;
@@ -77,15 +77,15 @@ namespace ESP32QJS {
     spacing?: number;
   }
 
-  interface BitmapStyle {
+  interface MaskStyle {
     color?: ColorValue;
     background?: ColorValue;
   }
 
   /**
-   * Monochrome bitmap payload accepted by `drawBitmap(...)`.
+   * Monochrome bitmap payload accepted by `drawMask(...)`.
    */
-  interface Bitmap {
+  interface MonoMask {
     width: number;
     height: number;
     pixels: ArrayLike<number | boolean>;
@@ -219,15 +219,15 @@ namespace ESP32QJS {
     readonly pixelFormat: string;
     readonly layout: string;
     readonly chunkBytes: number;
-    readRect(x: number, y: number, width: number, height: number, options?: DisplayBufferReadRectOptions): ByteView;
+    readRect(x: number, y: number, width: number, height: number, options?: BitmapReadRectOptions): ByteView;
     readRectChunks(
       x: number,
       y: number,
       width: number,
       height: number,
-      options?: DisplayBufferReadRectChunksOptions,
+      options?: BitmapReadRectChunksOptions,
     ): ByteView[];
-    getSpanSource(options?: DisplaySpanSourceOptions): DisplayBufferSpanSource | null;
+    getSpanSource(options?: DisplaySpanSourceOptions): BitmapSpanSource | null;
   }
 
   interface DisplayPresentResult {
@@ -257,8 +257,8 @@ namespace ESP32QJS {
     readonly transport: DisplayTransport;
     readonly width: number;
     readonly height: number;
-    readonly pixelFormat: DisplayBufferFormat;
-    readonly layout: DisplayBufferLayout;
+    readonly pixelFormat: BitmapFormat;
+    readonly layout: BitmapLayout;
     readonly byteOrder: string;
     readonly capabilities: PanelDriverCapabilities;
     state: DisplayObjectState;
@@ -335,7 +335,7 @@ namespace ESP32QJS {
     open(name: string, options?: Record<string, unknown>): Display;
   }
 
-  /** Hardware-independent renderer around one native DisplayBuffer. */
+  /** Hardware-independent renderer around one native Bitmap. */
   class Surface {
     constructor(metadata: SurfaceMetadata, options?: SurfaceOptions);
     readonly width: number;
@@ -347,7 +347,7 @@ namespace ESP32QJS {
     readonly spacing: number;
     readonly chunkBytes: number;
     readonly frame: DisplayFrameSource;
-    readonly nativeBuffer: DisplayBuffer;
+    readonly bitmap: Bitmap;
     readonly commandBuffer: DisplayCommandBuffer | null;
     readonly commandBufferEnabled: boolean;
     ready: boolean;
@@ -453,7 +453,8 @@ namespace ESP32QJS {
       color?: ColorValue,
       options?: CurveOptions,
     ): this;
-    drawBitmap(x: number, y: number, bitmap: Bitmap, options?: BitmapStyle): this;
+    drawMask(x: number, y: number, mask: MonoMask, options?: MaskStyle): this;
+    blit(source: BitmapSource, options?: BitmapBlitOptions): this;
     drawChar(x: number, y: number, ch: string, options?: TextStyle): this;
     drawText(x: number, y: number, text: string, options?: TextStyle): this;
     getDirty(): Rect | null;
@@ -521,7 +522,8 @@ namespace ESP32QJS {
     fillTriangle(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, color?: ColorValue): this;
     drawQuadraticBezier(x0: number, y0: number, cx: number, cy: number, x1: number, y1: number, color?: ColorValue, options?: CurveOptions): this;
     drawCubicBezier(x0: number, y0: number, c1x: number, c1y: number, c2x: number, c2y: number, x1: number, y1: number, color?: ColorValue, options?: CurveOptions): this;
-    drawBitmap(x: number, y: number, bitmap: Bitmap, options?: BitmapStyle): this;
+    drawMask(x: number, y: number, mask: MonoMask, options?: MaskStyle): this;
+    blit(source: BitmapSource, options?: BitmapBlitOptions): this;
     drawChar(x: number, y: number, ch: string, options?: TextStyle): this;
     drawText(x: number, y: number, text: string, options?: TextStyle): this;
     measureText(text: string, style?: TextStyle): TextMetrics;
@@ -561,6 +563,7 @@ namespace ESP32QJS {
     gray4(value: number): number;
     gray8(value: number): number;
     rgb565(red: number, green: number, blue: number): number;
+    rgb888(red: number, green: number, blue: number): number;
     measureText(text: string, style?: TextStyle): TextMetrics;
     encodeText(text: string, font?: DisplayFont): string;
     fontNeedsTextMapping(font?: DisplayFont): boolean;

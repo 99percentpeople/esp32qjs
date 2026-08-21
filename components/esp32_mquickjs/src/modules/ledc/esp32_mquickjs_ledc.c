@@ -3,6 +3,7 @@
 #if CONFIG_ESP32_MQUICKJS_FEATURE_LEDC
 
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_peripheral_lease.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -19,6 +20,7 @@ typedef struct {
     uint32_t freq_hz;
     ledc_timer_bit_t duty_resolution;
     ledc_clk_cfg_t clock;
+    esp32_mquickjs_peripheral_lease_t lease;
 } esp32_mquickjs_ledc_timer_state_t;
 
 typedef struct {
@@ -29,6 +31,7 @@ typedef struct {
     uint32_t hpoint;
     bool output_invert;
     ledc_sleep_mode_t sleep_mode;
+    esp32_mquickjs_peripheral_lease_t lease;
 } esp32_mquickjs_ledc_channel_state_t;
 
 static esp32_mquickjs_ledc_timer_state_t s_ledc_timers[SOC_LEDC_TIMER_NUM];
@@ -347,6 +350,7 @@ void esp32_mquickjs_deinit_ledc_runtime(void)
             (void)ledc_stop(LEDC_LOW_SPEED_MODE, (ledc_channel_t)i, 0);
             (void)ledc_channel_config(&config);
         }
+        esp32_mquickjs_peripheral_lease_release(&s_ledc_channels[i].lease);
     }
     for (size_t i = 0; i < SOC_LEDC_TIMER_NUM; ++i) {
         if (s_ledc_timers[i].configured) {
@@ -359,6 +363,7 @@ void esp32_mquickjs_deinit_ledc_runtime(void)
             (void)ledc_timer_pause(LEDC_LOW_SPEED_MODE, (ledc_timer_t)i);
             (void)ledc_timer_config(&config);
         }
+        esp32_mquickjs_peripheral_lease_release(&s_ledc_timers[i].lease);
     }
     if (s_ledc_fade_service_owned) {
         ledc_fade_func_uninstall();
@@ -393,6 +398,7 @@ JSValue js_ledc_timerConfig(JSContext *ctx, JSValue *this_val, int argc, JSValue
     ledc_clk_cfg_t clock = LEDC_AUTO_CLK;
     ledc_timer_config_t config = {0};
     esp_err_t err;
+    bool acquired = false;
 
     (void)this_val;
 
@@ -437,16 +443,32 @@ JSValue js_ledc_timerConfig(JSContext *ctx, JSValue *this_val, int argc, JSValue
         config.freq_hz = freq_hz;
         config.duty_resolution = duty_resolution;
         config.clk_cfg = clock;
+        if (!ledc_timer_state(timer)->configured) {
+            if (!esp32_mquickjs_peripheral_lease_acquire(
+                    ESP32_MQUICKJS_PERIPHERAL_LEDC_TIMER, (int)timer,
+                    ESP32_MQUICKJS_PERIPHERAL_OWNER_LEDC,
+                    &ledc_timer_state(timer)->lease)) {
+                return JS_ThrowInternalError(ctx,
+                                             "LEDC timer is reserved by another peripheral");
+            }
+            acquired = true;
+        }
     } else if (ledc_timer_state(timer)->configured) {
         (void)ledc_timer_pause(LEDC_LOW_SPEED_MODE, timer);
     }
 
     err = ledc_timer_config(&config);
     if (err != ESP_OK) {
+        if (acquired) {
+            esp32_mquickjs_peripheral_lease_release(
+                &ledc_timer_state(timer)->lease);
+        }
         return ledc_throw_error(ctx, err, "ledc_timer_config", (int)timer);
     }
 
     if (deconfigure) {
+        esp32_mquickjs_peripheral_lease_release(
+            &ledc_timer_state(timer)->lease);
         memset(ledc_timer_state(timer), 0, sizeof(*ledc_timer_state(timer)));
         ledc_timer_state(timer)->clock = LEDC_AUTO_CLK;
     } else {
@@ -472,6 +494,7 @@ JSValue js_ledc_channelConfig(JSContext *ctx, JSValue *this_val, int argc, JSVal
     ledc_sleep_mode_t sleep_mode = LEDC_SLEEP_MODE_NO_ALIVE_NO_PD;
     ledc_channel_config_t config = {0};
     esp_err_t err;
+    bool acquired = false;
 
     (void)this_val;
 
@@ -543,14 +566,30 @@ JSValue js_ledc_channelConfig(JSContext *ctx, JSValue *this_val, int argc, JSVal
         config.hpoint = (int)hpoint;
         config.sleep_mode = sleep_mode;
         config.flags.output_invert = output_invert ? 1U : 0U;
+        if (!ledc_channel_state(channel)->configured) {
+            if (!esp32_mquickjs_peripheral_lease_acquire(
+                    ESP32_MQUICKJS_PERIPHERAL_LEDC_CHANNEL, (int)channel,
+                    ESP32_MQUICKJS_PERIPHERAL_OWNER_LEDC,
+                    &ledc_channel_state(channel)->lease)) {
+                return JS_ThrowInternalError(ctx,
+                                             "LEDC channel is reserved by another peripheral");
+            }
+            acquired = true;
+        }
     }
 
     err = ledc_channel_config(&config);
     if (err != ESP_OK) {
+        if (acquired) {
+            esp32_mquickjs_peripheral_lease_release(
+                &ledc_channel_state(channel)->lease);
+        }
         return ledc_throw_error(ctx, err, "ledc_channel_config", (int)channel);
     }
 
     if (deconfigure) {
+        esp32_mquickjs_peripheral_lease_release(
+            &ledc_channel_state(channel)->lease);
         memset(ledc_channel_state(channel), 0, sizeof(*ledc_channel_state(channel)));
         ledc_channel_state(channel)->pin = -1;
         ledc_channel_state(channel)->timer = (ledc_timer_t)-1;

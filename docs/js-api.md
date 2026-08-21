@@ -26,7 +26,7 @@ intentionally loads nothing.
 The display library is composed from three independent layers:
 
 ```text
-Display facade -> Surface -> displayBuffer
+Display facade -> Surface -> bitmap
               -> PanelDriver -> DisplayTransport -> SPI/I2C/GPIO
 ```
 
@@ -164,7 +164,11 @@ hardware. Optional colors use the surface foreground, except `clear()` and
 - `drawPolyline`, `drawPolygon`, `fillPolygon`
 - `drawTriangle`, `fillTriangle`
 - `drawQuadraticBezier`, `drawCubicBezier`
-- `drawBitmap`, `drawChar`, `drawText`, `measureText`
+- `drawMask`, `blit`, `drawChar`, `drawText`, `measureText`
+  `blit(source, options?)` forwards to the native `Bitmap` transform worker. A
+  raw `CameraFrame`, Bitmap, or raw descriptor is accepted without a JavaScript
+  pixel loop; callers can crop, rotate, flip, resize, normalize gray output,
+  and request `dither: "bayer4x4"` for `mono1` output.
 - `beginBatch()` / `endBatch(batch)`
   Record/replay native drawing commands when `screen.supports("batch")`.
 

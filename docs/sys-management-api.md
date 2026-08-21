@@ -115,7 +115,7 @@ declare namespace ESP32QJS {
     readonly usbSerial: boolean;
     readonly socket: boolean;
     readonly websocket: boolean;
-    readonly displayBuffer: boolean;
+    readonly bitmap: boolean;
     readonly wifi: boolean;
     readonly http: boolean;
     readonly httpServer: boolean;

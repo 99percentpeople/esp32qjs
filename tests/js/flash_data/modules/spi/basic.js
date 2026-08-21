@@ -60,8 +60,8 @@ test("spi/basic", function () {
     writeSourceRejected = String(writeSourceError).indexOf("ByteSpanSource") >= 0;
   }
   test.ok(writeSourceRejected, "SPIDevice.writeSource should reject non-source inputs");
-  if (info.features.displayBuffer && typeof displayBuffer === "object") {
-    var buffer = displayBuffer.create({ width: 1, height: 1, format: "rgb565" });
+  if (info.features.bitmap && typeof bitmap === "object") {
+    var buffer = bitmap.create({ width: 1, height: 1, format: "rgb565" });
     try {
       var source = buffer.createSpanSource();
       var sourceStats = device.writeSource(source);

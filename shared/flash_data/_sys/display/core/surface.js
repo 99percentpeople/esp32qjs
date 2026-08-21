@@ -10,14 +10,14 @@
     return system.own(value, key);
   }
 
-  function requireDisplayBuffer() {
-    if (!global.displayBuffer || typeof global.displayBuffer.create !== "function") {
-      throw new Error("display.Surface requires the displayBuffer module");
+  function requireBitmap() {
+    if (!global.bitmap || typeof global.bitmap.create !== "function") {
+      throw new Error("display.Surface requires the bitmap module");
     }
   }
 
   function requireOpen(surface, apiName) {
-    if (surface.closed || !surface.nativeBuffer) {
+    if (surface.closed || !surface.bitmap) {
       throw new Error("cannot use a closed Surface in " + apiName);
     }
   }
@@ -71,7 +71,7 @@
 
   FrameSource.prototype.requireOpen = function (apiName) {
     requireOpen(this.surface, apiName);
-    return this.surface.nativeBuffer;
+    return this.surface.bitmap;
   };
 
   FrameSource.prototype.readRect = function (x, y, width, height, options) {
@@ -106,7 +106,7 @@
     return true;
   };
 
-  function createNativeBuffer(metadata, options, foreground, background) {
+  function createBitmap(metadata, options, foreground, background) {
     var storage = own(options, "storage") ? options.storage : "auto";
     var config = {
       width: metadata.width,
@@ -124,13 +124,13 @@
       config.chunkBytes = options.chunkBytes;
     }
     try {
-      return global.displayBuffer.create(config);
+      return global.bitmap.create(config);
     } catch (error) {
       if (!own(options, "fallbackStorage") || options.fallbackStorage === storage) {
         throw error;
       }
       config.storage = options.fallbackStorage;
-      return global.displayBuffer.create(config);
+      return global.bitmap.create(config);
     }
   }
 
@@ -139,7 +139,7 @@
     var foregroundDefault;
     var backgroundDefault;
 
-    requireDisplayBuffer();
+    requireBitmap();
     system.assertObject(metadata, "new display.Surface(metadata, options)");
     options = system.assertKnownOptions(options || {}, [
       "storage",
@@ -162,7 +162,9 @@
 
     foregroundDefault = this.pixelFormat === "mono1" ? 1 : system.normalizeColor(
       this.pixelFormat,
-      this.pixelFormat === "rgb565" ? 0xffff : 1,
+      this.pixelFormat === "rgb565"
+        ? 0xffff
+        : (this.pixelFormat === "rgb888" ? 0xffffff : 0xff),
       1,
       "display.Surface foreground"
     );
@@ -181,7 +183,7 @@
     );
     this.spacing = own(options, "spacing") ? options.spacing | 0 : 0;
     this.chunkBytes = own(options, "chunkBytes") ? options.chunkBytes | 0 : 0;
-    this.nativeBuffer = createNativeBuffer(metadata, options, this.foreground, this.background);
+    this.bitmap = createBitmap(metadata, options, this.foreground, this.background);
     this.frame = new FrameSource(this);
     this.commandBufferEnabled = options.commandBuffer !== false;
     commandOptions = options.commandBuffer && typeof options.commandBuffer === "object"
@@ -205,7 +207,7 @@
   Surface.prototype.clear = function (color) {
     requireOpen(this, "Surface.clear()");
     color = normalizeDrawColor(this, color, this.background, "Surface.clear(color)");
-    this.nativeBuffer.clear(color);
+    this.bitmap.clear(color);
     return this;
   };
 
@@ -216,20 +218,20 @@
   Surface.prototype.setPixel = function (x, y, color) {
     requireOpen(this, "Surface.setPixel()");
     color = normalizeDrawColor(this, color, this.foreground, "Surface.setPixel(x, y, color)");
-    this.nativeBuffer.setPixel(x, y, color);
+    this.bitmap.setPixel(x, y, color);
     return this;
   };
 
   Surface.prototype.getPixel = function (x, y) {
     requireOpen(this, "Surface.getPixel()");
-    return this.nativeBuffer.getPixel(x, y);
+    return this.bitmap.getPixel(x, y);
   };
 
   Surface.prototype.fillRect = function (x, y, width, height, color) {
     requireOpen(this, "Surface.fillRect()");
     color = normalizeDrawColor(this, color, this.foreground,
       "Surface.fillRect(x, y, width, height, color)");
-    this.nativeBuffer.fillRect(x, y, width, height, color);
+    this.bitmap.fillRect(x, y, width, height, color);
     return this;
   };
 
@@ -237,7 +239,7 @@
     requireOpen(this, "Surface.drawCircle()");
     color = normalizeDrawColor(this, color, this.foreground,
       "Surface.drawCircle(cx, cy, radius, color)");
-    this.nativeBuffer.drawCircle(cx, cy, radius, color);
+    this.bitmap.drawCircle(cx, cy, radius, color);
     return this;
   };
 
@@ -245,7 +247,7 @@
     requireOpen(this, "Surface.fillCircle()");
     color = normalizeDrawColor(this, color, this.foreground,
       "Surface.fillCircle(cx, cy, radius, color)");
-    this.nativeBuffer.fillCircle(cx, cy, radius, color);
+    this.bitmap.fillCircle(cx, cy, radius, color);
     return this;
   };
 
@@ -253,7 +255,7 @@
     requireOpen(this, "Surface.drawEllipse()");
     color = normalizeDrawColor(this, color, this.foreground,
       "Surface.drawEllipse(cx, cy, rx, ry, color)");
-    this.nativeBuffer.drawEllipse(cx, cy, rx, ry, color, options);
+    this.bitmap.drawEllipse(cx, cy, rx, ry, color, options);
     return this;
   };
 
@@ -261,7 +263,7 @@
     requireOpen(this, "Surface.fillEllipse()");
     color = normalizeDrawColor(this, color, this.foreground,
       "Surface.fillEllipse(cx, cy, rx, ry, color)");
-    this.nativeBuffer.fillEllipse(cx, cy, rx, ry, color);
+    this.bitmap.fillEllipse(cx, cy, rx, ry, color);
     return this;
   };
 
@@ -269,7 +271,7 @@
     requireOpen(this, "Surface.drawLine()");
     color = normalizeDrawColor(this, color, this.foreground,
       "Surface.drawLine(x0, y0, x1, y1, color)");
-    this.nativeBuffer.drawLine(x0, y0, x1, y1, color);
+    this.bitmap.drawLine(x0, y0, x1, y1, color);
     return this;
   };
 
@@ -277,7 +279,7 @@
     requireOpen(this, "Surface.drawRect()");
     color = normalizeDrawColor(this, color, this.foreground,
       "Surface.drawRect(x, y, width, height, color)");
-    this.nativeBuffer.drawRect(x, y, width, height, color);
+    this.bitmap.drawRect(x, y, width, height, color);
     return this;
   };
 
@@ -285,7 +287,7 @@
     requireOpen(this, "Surface.drawRoundRect()");
     color = normalizeDrawColor(this, color, this.foreground,
       "Surface.drawRoundRect(x, y, width, height, radius, color)");
-    this.nativeBuffer.drawRoundRect(x, y, width, height, radius, color);
+    this.bitmap.drawRoundRect(x, y, width, height, radius, color);
     return this;
   };
 
@@ -293,7 +295,7 @@
     requireOpen(this, "Surface.fillRoundRect()");
     color = normalizeDrawColor(this, color, this.foreground,
       "Surface.fillRoundRect(x, y, width, height, radius, color)");
-    this.nativeBuffer.fillRoundRect(x, y, width, height, radius, color);
+    this.bitmap.fillRoundRect(x, y, width, height, radius, color);
     return this;
   };
 
@@ -301,7 +303,7 @@
     requireOpen(this, "Surface.drawPolyline()");
     color = normalizeDrawColor(this, color, this.foreground,
       "Surface.drawPolyline(points, color)");
-    this.nativeBuffer.drawPolyline(points, color);
+    this.bitmap.drawPolyline(points, color);
     return this;
   };
 
@@ -309,7 +311,7 @@
     requireOpen(this, "Surface.drawPolygon()");
     color = normalizeDrawColor(this, color, this.foreground,
       "Surface.drawPolygon(points, color)");
-    this.nativeBuffer.drawPolygon(points, color);
+    this.bitmap.drawPolygon(points, color);
     return this;
   };
 
@@ -317,7 +319,7 @@
     requireOpen(this, "Surface.fillPolygon()");
     color = normalizeDrawColor(this, color, this.foreground,
       "Surface.fillPolygon(points, color)");
-    this.nativeBuffer.fillPolygon(points, color);
+    this.bitmap.fillPolygon(points, color);
     return this;
   };
 
@@ -325,7 +327,7 @@
     requireOpen(this, "Surface.drawTriangle()");
     color = normalizeDrawColor(this, color, this.foreground,
       "Surface.drawTriangle(x0, y0, x1, y1, x2, y2, color)");
-    this.nativeBuffer.drawTriangle(x0, y0, x1, y1, x2, y2, color);
+    this.bitmap.drawTriangle(x0, y0, x1, y1, x2, y2, color);
     return this;
   };
 
@@ -333,7 +335,7 @@
     requireOpen(this, "Surface.fillTriangle()");
     color = normalizeDrawColor(this, color, this.foreground,
       "Surface.fillTriangle(x0, y0, x1, y1, x2, y2, color)");
-    this.nativeBuffer.fillTriangle(x0, y0, x1, y1, x2, y2, color);
+    this.bitmap.fillTriangle(x0, y0, x1, y1, x2, y2, color);
     return this;
   };
 
@@ -341,7 +343,7 @@
     requireOpen(this, "Surface.drawQuadraticBezier()");
     color = normalizeDrawColor(this, color, this.foreground,
       "Surface.drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color)");
-    this.nativeBuffer.drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color, options);
+    this.bitmap.drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color, options);
     return this;
   };
 
@@ -349,25 +351,31 @@
     requireOpen(this, "Surface.drawCubicBezier()");
     color = normalizeDrawColor(this, color, this.foreground,
       "Surface.drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color)");
-    this.nativeBuffer.drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options);
+    this.bitmap.drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options);
     return this;
   };
 
-  Surface.prototype.drawBitmap = function (x, y, bitmap, options) {
-    var style = system.styleOptions(options, "Surface.drawBitmap(x, y, bitmap, options)");
+  Surface.prototype.drawMask = function (x, y, mask, options) {
+    var style = system.styleOptions(options, "Surface.drawMask(x, y, mask, options)");
     var nativeOptions = {
       color: normalizeDrawColor(this, style.color, this.foreground,
-        "Surface.drawBitmap(x, y, bitmap, options).color")
+        "Surface.drawMask(x, y, mask, options).color")
     };
 
-    requireOpen(this, "Surface.drawBitmap()");
+    requireOpen(this, "Surface.drawMask()");
     if (own(style, "background")) {
       nativeOptions.background = style.background === null
         ? null
         : normalizeDrawColor(this, style.background, this.background,
-            "Surface bitmap background");
+            "Surface mask background");
     }
-    this.nativeBuffer.drawBitmap(x, y, bitmap, nativeOptions);
+    this.bitmap.drawMask(x, y, mask, nativeOptions);
+    return this;
+  };
+
+  Surface.prototype.blit = function (source, options) {
+    requireOpen(this, "Surface.blit()");
+    this.bitmap.blit(source, options);
     return this;
   };
 
@@ -383,14 +391,14 @@
     nativeOptions = nativeTextOptions(this, style);
     nativeOptions.color = normalizeDrawColor(this, style.color, this.foreground,
       "Surface.drawText(x, y, text, options).color");
-    this.nativeBuffer.drawText(x, y, nativeText(this, text, style), nativeOptions);
+    this.bitmap.drawText(x, y, nativeText(this, text, style), nativeOptions);
     return this;
   };
 
   Surface.prototype.measureText = function (text, style) {
     requireOpen(this, "Surface.measureText()");
     style = system.styleOptions(style, "Surface.measureText(text, style)");
-    return this.nativeBuffer.measureText(
+    return this.bitmap.measureText(
       nativeText(this, text, style),
       nativeTextOptions(this, style)
     );
@@ -398,18 +406,18 @@
 
   Surface.prototype.getDirty = function () {
     requireOpen(this, "Surface.getDirty()");
-    return this.nativeBuffer.getDirty();
+    return this.bitmap.getDirty();
   };
 
   Surface.prototype.clearDirty = function () {
     requireOpen(this, "Surface.clearDirty()");
-    this.nativeBuffer.clearDirty();
+    this.bitmap.clearDirty();
     return this;
   };
 
   Surface.prototype.markDirty = function (x, y, width, height) {
     requireOpen(this, "Surface.markDirty()");
-    this.nativeBuffer.markDirty(x, y, width, height);
+    this.bitmap.markDirty(x, y, width, height);
     return this;
   };
 
@@ -431,13 +439,23 @@
     pushU16(out, value);
   }
 
+  function pushU32(out, value) {
+    value = value >>> 0;
+    out.push(
+      value & 0xff,
+      (value >>> 8) & 0xff,
+      (value >>> 16) & 0xff,
+      (value >>> 24) & 0xff
+    );
+  }
+
   function pushRectCommand(out, op, x, y, width, height, color) {
     out.push(op);
     pushI16(out, x);
     pushI16(out, y);
     pushI16(out, width);
     pushI16(out, height);
-    pushU16(out, color);
+    pushU32(out, color);
   }
 
   function pushRoundRectCommand(out, op, x, y, width, height, radius, color) {
@@ -447,7 +465,7 @@
     pushI16(out, width);
     pushI16(out, height);
     pushI16(out, radius);
-    pushU16(out, color);
+    pushU32(out, color);
   }
 
   function clampTextSpacing(value) {
@@ -496,7 +514,7 @@
     color = normalizeDrawColor(this.surface, color, this.background,
       "Surface batch clear(color)");
     this.bytes.push(CMD_CLEAR);
-    pushU16(this.bytes, color);
+    pushU32(this.bytes, color);
     return this;
   };
 
@@ -587,8 +605,8 @@
     this.bytes.push(CMD_DRAW_TEXT);
     pushI16(this.bytes, x);
     pushI16(this.bytes, y);
-    pushU16(this.bytes, color);
-    pushU16(this.bytes, background);
+    pushU32(this.bytes, color);
+    pushU32(this.bytes, background);
     pushU16(this.bytes, hasBackground ? CMD_TEXT_HAS_BACKGROUND : 0);
     pushI16(this.bytes, clampTextSpacing(textOptions.spacing));
     pushU16(this.bytes, textOffset);
@@ -608,11 +626,11 @@
   Surface.prototype.beginBatch = function () {
     requireOpen(this, "Surface.beginBatch()");
     if (!this.commandBufferEnabled ||
-        typeof this.nativeBuffer.createCommandBuffer !== "function") {
+        typeof this.bitmap.createCommandBuffer !== "function") {
       return null;
     }
     if (!this.commandBuffer) {
-      this.commandBuffer = this.nativeBuffer.createCommandBuffer(this.commandBufferOptions);
+      this.commandBuffer = this.bitmap.createCommandBuffer(this.commandBufferOptions);
     } else {
       this.commandBuffer.reset();
     }
@@ -630,7 +648,7 @@
       batch.flush();
     }
     if (nativeBatch && typeof nativeBatch.replay === "function") {
-      nativeBatch.replay(this.nativeBuffer);
+      nativeBatch.replay(this.bitmap);
     }
     return this;
   };
@@ -656,16 +674,16 @@
       this.frame.close();
       this.frame = null;
     }
-    if (this.nativeBuffer) {
+    if (this.bitmap) {
       try {
-        this.nativeBuffer.close();
+        this.bitmap.close();
       } catch (error2) {
         if (!firstError) {
           firstError = error2;
         }
       }
     }
-    this.nativeBuffer = null;
+    this.bitmap = null;
     if (firstError) {
       throw firstError;
     }

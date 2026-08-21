@@ -202,6 +202,159 @@
       "minimum": 0,
       "maximum": 5000,
       "consumer": "uart.open().timeoutMs"
+    },
+    {
+      "key": "ESP32QJS_I2S_PDM_CLK",
+      "label": "PDM microphone clock GPIO",
+      "category": "I2S",
+      "type": "gpio",
+      "allowMinusOne": false,
+      "consumer": "i2s.open({ mode: pdm }).pins.clk"
+    },
+    {
+      "key": "ESP32QJS_I2S_PDM_DIN",
+      "label": "PDM microphone data GPIO",
+      "category": "I2S",
+      "type": "gpio",
+      "allowMinusOne": false,
+      "consumer": "i2s.open({ mode: pdm }).pins.din"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_XCLK",
+      "label": "Camera XCLK GPIO",
+      "category": "Camera",
+      "type": "gpio",
+      "allowMinusOne": false,
+      "consumer": "camera.open().pins.xclk"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_SCCB_SDA",
+      "label": "Camera SCCB SDA GPIO",
+      "category": "Camera",
+      "type": "gpio",
+      "allowMinusOne": false,
+      "consumer": "camera.open().pins.sccbSda"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_SCCB_SCL",
+      "label": "Camera SCCB SCL GPIO",
+      "category": "Camera",
+      "type": "gpio",
+      "allowMinusOne": false,
+      "consumer": "camera.open().pins.sccbScl"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_D0",
+      "label": "Camera data D0 GPIO",
+      "category": "Camera",
+      "type": "gpio",
+      "allowMinusOne": false,
+      "consumer": "camera.open().pins.d0"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_D1",
+      "label": "Camera data D1 GPIO",
+      "category": "Camera",
+      "type": "gpio",
+      "allowMinusOne": false,
+      "consumer": "camera.open().pins.d1"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_D2",
+      "label": "Camera data D2 GPIO",
+      "category": "Camera",
+      "type": "gpio",
+      "allowMinusOne": false,
+      "consumer": "camera.open().pins.d2"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_D3",
+      "label": "Camera data D3 GPIO",
+      "category": "Camera",
+      "type": "gpio",
+      "allowMinusOne": false,
+      "consumer": "camera.open().pins.d3"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_D4",
+      "label": "Camera data D4 GPIO",
+      "category": "Camera",
+      "type": "gpio",
+      "allowMinusOne": false,
+      "consumer": "camera.open().pins.d4"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_D5",
+      "label": "Camera data D5 GPIO",
+      "category": "Camera",
+      "type": "gpio",
+      "allowMinusOne": false,
+      "consumer": "camera.open().pins.d5"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_D6",
+      "label": "Camera data D6 GPIO",
+      "category": "Camera",
+      "type": "gpio",
+      "allowMinusOne": false,
+      "consumer": "camera.open().pins.d6"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_D7",
+      "label": "Camera data D7 GPIO",
+      "category": "Camera",
+      "type": "gpio",
+      "allowMinusOne": false,
+      "consumer": "camera.open().pins.d7"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_VSYNC",
+      "label": "Camera VSYNC GPIO",
+      "category": "Camera",
+      "type": "gpio",
+      "allowMinusOne": false,
+      "consumer": "camera.open().pins.vsync"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_HREF",
+      "label": "Camera HREF GPIO",
+      "category": "Camera",
+      "type": "gpio",
+      "allowMinusOne": false,
+      "consumer": "camera.open().pins.href"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_PCLK",
+      "label": "Camera PCLK GPIO",
+      "category": "Camera",
+      "type": "gpio",
+      "allowMinusOne": false,
+      "consumer": "camera.open().pins.pclk"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_PWDN",
+      "label": "Camera power-down GPIO",
+      "category": "Camera",
+      "type": "gpio",
+      "allowMinusOne": true,
+      "consumer": "camera.open().pins.pwdn"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_RESET",
+      "label": "Camera reset GPIO",
+      "category": "Camera",
+      "type": "gpio",
+      "allowMinusOne": true,
+      "consumer": "camera.open().pins.reset"
+    },
+    {
+      "key": "ESP32QJS_CAMERA_XCLK_FREQ_HZ",
+      "label": "Camera XCLK frequency",
+      "category": "Camera",
+      "type": "integer",
+      "minimum": 1000000,
+      "maximum": 40000000,
+      "consumer": "camera.open().xclkFreqHz"
     }
   ]
 }

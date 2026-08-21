@@ -188,7 +188,7 @@ static bool socket_open_options(JSContext *ctx,
     if (argc < 2 || JS_IsUndefined(argv[1])) {
         return true;
     }
-    if (!JS_IsObject(argv[1]) || JS_IsArray(ctx, argv[1])) {
+    if (JS_GetClassID(ctx, argv[1]) < 0 || JS_IsArray(ctx, argv[1])) {
         return false;
     }
 
@@ -605,6 +605,7 @@ typedef enum {
 
 struct esp32_mquickjs_future_driver_state {
     socket_future_kind_t kind;
+    JSContext *ctx;
     esp32_mquickjs_runtime_t *runtime;
     esp32_mquickjs_future_token_t token;
     esp_timer_handle_t poll_timer;
@@ -620,6 +621,12 @@ struct esp32_mquickjs_future_driver_state {
     size_t offset;
     ssize_t received;
     uint8_t *data;
+    const uint8_t *send_data;
+    JSGCRef send_owner_ref;
+    esp32_mquickjs_byte_span_source_t send_source;
+    esp32_mquickjs_byte_span_t send_span;
+    size_t send_span_offset;
+    size_t source_produced;
     struct sockaddr_storage address;
     socklen_t address_len;
     char host[SOCKET_HOST_MAX_BYTES + 1U];
@@ -630,6 +637,10 @@ struct esp32_mquickjs_future_driver_state {
     bool empty_result;
     bool completed;
     bool cancelled;
+    bool send_owner_rooted;
+    bool send_source_open;
+    bool send_is_span_source;
+    bool source_has_known_length;
 };
 
 static socket_entry_t *socket_future_entry(
@@ -693,6 +704,91 @@ static bool socket_future_copy_source(JSContext *ctx,
     return true;
 }
 
+static void socket_future_release_send_source(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL) {
+        return;
+    }
+    esp32_mquickjs_byte_span_clear(&state->send_span);
+    if (state->send_source_open) {
+        esp32_mquickjs_byte_span_source_close(state->ctx,
+                                              &state->send_source);
+        state->send_source_open = false;
+    }
+    if (state->send_owner_rooted) {
+        JS_DeleteGCRef(state->ctx, &state->send_owner_ref);
+        state->send_owner_rooted = false;
+    }
+}
+
+static bool socket_future_prepare_tcp_source(
+    JSContext *ctx,
+    JSValue value,
+    const char *api_name,
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    int class_id = JS_GetClassID(ctx, value);
+
+    if (class_id == JS_CLASS_BYTE_SPAN_SOURCE ||
+        class_id == JS_CLASS_BITMAP_SPAN_SOURCE) {
+        JSValue source_error = JS_UNDEFINED;
+        size_t known_length = 0;
+
+        state->source_has_known_length =
+            esp32_mquickjs_byte_span_source_known_length(
+                ctx, value, &known_length);
+        if (state->source_has_known_length &&
+            known_length > CONFIG_ESP32_MQUICKJS_SOCKET_MAX_SOURCE_BYTES) {
+            JS_ThrowRangeError(ctx, "%s source exceeds socket stream limit",
+                               api_name);
+            return false;
+        }
+        if (!esp32_mquickjs_open_byte_span_source(
+                ctx, value, api_name, &state->send_source, &source_error)) {
+            if (!JS_IsUndefined(source_error) &&
+                !JS_IsException(source_error)) {
+                (void)JS_Throw(ctx, source_error);
+            }
+            return false;
+        }
+        state->send_source_open = true;
+        state->send_is_span_source = true;
+        state->length = known_length;
+        *JS_AddGCRef(ctx, &state->send_owner_ref) = value;
+        state->send_owner_rooted = true;
+        return true;
+    }
+
+    {
+        esp32_mquickjs_byte_source_t source;
+        uint8_t *owned = NULL;
+        JSValue source_error = JS_UNDEFINED;
+
+        if (!esp32_mquickjs_get_byte_source(ctx, value, api_name, &source,
+                                            &owned, &source_error)) {
+            if (!JS_IsUndefined(source_error) &&
+                !JS_IsException(source_error)) {
+                (void)JS_Throw(ctx, source_error);
+            }
+            return false;
+        }
+        if (source.length > CONFIG_ESP32_MQUICKJS_SOCKET_MAX_MESSAGE_BYTES) {
+            esp32_mquickjs_release_byte_source(owned);
+            JS_ThrowRangeError(ctx, "%s data exceeds socket limit", api_name);
+            return false;
+        }
+        state->data = owned;
+        state->send_data = source.data;
+        state->length = source.length;
+        if (owned == NULL && source.length > 0) {
+            *JS_AddGCRef(ctx, &state->send_owner_ref) = value;
+            state->send_owner_rooted = true;
+        }
+        return true;
+    }
+}
+
 static esp32_mquickjs_future_driver_state_t *socket_future_allocate(
     JSContext *ctx,
     JSValue socket_id,
@@ -715,10 +811,12 @@ static esp32_mquickjs_future_driver_state_t *socket_future_allocate(
         return NULL;
     }
     state->kind = kind;
+    state->ctx = ctx;
     state->entry_id = entry->id;
     state->fd = entry->fd;
     state->client_fd = -1;
     state->received = -1;
+    esp32_mquickjs_byte_span_clear(&state->send_span);
     return state;
 }
 
@@ -823,7 +921,7 @@ static bool socket_tcp_send_future_prepare(
     (void)this_ref;
     if (out_state == NULL || argc < 2 || argc > 3) {
         JS_ThrowTypeError(ctx,
-                          "socket.tcp.send(socketId, data, timeoutMs?) expects ByteSource data");
+                          "socket.tcp.send(socketId, data, timeoutMs?) expects ByteView or ByteSpanSource data");
         return false;
     }
     state = socket_future_allocate(ctx, argv[0].val, SOCKET_PROTOCOL_TCP,
@@ -836,16 +934,17 @@ static bool socket_tcp_send_future_prepare(
         (argc >= 3 && !JS_IsUndefined(argv[2].val) &&
          !socket_to_int(ctx, argv[2].val, 0, SOCKET_MAX_TIMEOUT_MS,
                         &state->timeout_ms)) ||
-        !socket_future_copy_source(ctx, argv[1].val,
-                                   "socket.tcp.send(socketId, data, timeoutMs?)",
-                                   state)) {
+        !socket_future_prepare_tcp_source(
+            ctx, argv[1].val,
+            "socket.tcp.send(socketId, data, timeoutMs?)", state)) {
+        socket_future_release_send_source(state);
         heap_caps_free(state->data);
         heap_caps_free(state);
         if (entry != NULL && !entry->connected) {
             JS_ThrowInternalError(ctx, "TCP socket is not connected");
-        } else {
+        } else if (!JS_HasException(ctx)) {
             JS_ThrowTypeError(ctx,
-                              "socket.tcp.send(socketId, data, timeoutMs?) expects ByteSource data");
+                              "socket.tcp.send(socketId, data, timeoutMs?) expects ByteView or ByteSpanSource data");
         }
         return false;
     }
@@ -1102,15 +1201,77 @@ static void socket_future_step_accept(esp32_mquickjs_future_driver_state_t *stat
     state->completed = true;
 }
 
+static bool socket_future_load_send_span(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    unsigned empty_spans = 0;
+
+    while (state->send_span_offset >= state->send_span.length) {
+        esp32_mquickjs_byte_span_clear(&state->send_span);
+        state->send_span_offset = 0;
+        if (!esp32_mquickjs_byte_span_source_next(
+                state->ctx, &state->send_source, &state->send_span)) {
+            if (JS_HasException(state->ctx)) {
+                (void)JS_GetException(state->ctx);
+                socket_future_fail(state, EIO,
+                                   "ByteSpanSource iteration failed");
+            } else if (state->source_has_known_length &&
+                       state->offset != state->length) {
+                socket_future_fail(state, EIO,
+                                   "ByteSpanSource length changed during send");
+            } else {
+                state->completed = true;
+            }
+            return false;
+        }
+        if (state->send_span.length == 0) {
+            if (++empty_spans > 16) {
+                socket_future_fail(state, EIO,
+                                   "ByteSpanSource yielded too many empty spans");
+                return false;
+            }
+            continue;
+        }
+        if (state->send_span.data == NULL ||
+            state->send_span.length >
+                CONFIG_ESP32_MQUICKJS_SOCKET_MAX_SOURCE_BYTES -
+                    state->source_produced) {
+            socket_future_fail(state, EFBIG,
+                               "ByteSpanSource exceeds socket stream limit");
+            return false;
+        }
+        if (state->source_has_known_length &&
+            state->send_span.length > state->length - state->source_produced) {
+            socket_future_fail(state, EIO,
+                               "ByteSpanSource length changed during send");
+            return false;
+        }
+        state->source_produced += state->send_span.length;
+    }
+    return true;
+}
+
 static void socket_future_step_send(esp32_mquickjs_future_driver_state_t *state,
                                     socket_entry_t *entry)
 {
+    const uint8_t *data;
+    size_t remaining;
     ssize_t sent;
     int ready;
 
-    if (state->offset >= state->length) {
-        state->completed = true;
-        return;
+    if (state->send_is_span_source) {
+        if (!socket_future_load_send_span(state)) {
+            return;
+        }
+        data = state->send_span.data + state->send_span_offset;
+        remaining = state->send_span.length - state->send_span_offset;
+    } else {
+        if (state->offset >= state->length) {
+            state->completed = true;
+            return;
+        }
+        data = state->send_data + state->offset;
+        remaining = state->length - state->offset;
     }
     if (entry->secure) {
         if (entry->tls == NULL) {
@@ -1118,8 +1279,8 @@ static void socket_future_step_send(esp32_mquickjs_future_driver_state_t *state,
             return;
         }
         sent = esp_tls_conn_write(entry->tls,
-                                  state->data + state->offset,
-                                  state->length - state->offset);
+                                  data,
+                                  remaining);
         if (sent == ESP_TLS_ERR_SSL_WANT_READ ||
             sent == ESP_TLS_ERR_SSL_WANT_WRITE) {
             return;
@@ -1134,8 +1295,8 @@ static void socket_future_step_send(esp32_mquickjs_future_driver_state_t *state,
             return;
         }
         sent = send(entry->fd,
-                    state->data + state->offset,
-                    state->length - state->offset,
+                    data,
+                    remaining,
                     0);
         if (sent < 0 &&
             (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
@@ -1155,7 +1316,9 @@ static void socket_future_step_send(esp32_mquickjs_future_driver_state_t *state,
         return;
     }
     state->offset += (size_t)sent;
-    if (state->offset >= state->length) {
+    if (state->send_is_span_source) {
+        state->send_span_offset += (size_t)sent;
+    } else if (state->offset >= state->length) {
         state->completed = true;
     }
 }
@@ -1530,6 +1693,7 @@ static void socket_future_destroy(esp32_mquickjs_future_driver_state_t *state)
     if (state->client_fd >= 0) {
         close(state->client_fd);
     }
+    socket_future_release_send_source(state);
     heap_caps_free(state->data);
     heap_caps_free(state);
 }

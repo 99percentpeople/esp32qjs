@@ -18,13 +18,15 @@ set(ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS
     CONFIG_ESP32_MQUICKJS_FEATURE_I2C
     CONFIG_ESP32_MQUICKJS_FEATURE_SPI
     CONFIG_ESP32_MQUICKJS_FEATURE_UART
+    CONFIG_ESP32_MQUICKJS_FEATURE_I2S
+    CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
     CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
     CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
-    CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
+    CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
     CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
 )
 
@@ -234,6 +236,7 @@ set(ESP32_MQUICKJS_SRCS
     "src/core/esp32_mquickjs_event_queue.c"
     "src/core/esp32_mquickjs_byte_span.c"
     "src/core/esp32_mquickjs_byte_source.c"
+    "src/core/esp32_mquickjs_peripheral_lease.c"
     "src/core/esp32_mquickjs_profile.c"
     "src/core/esp32_mquickjs_sys.c"
     "src/core/esp32_mquickjs_stream.c"
@@ -281,6 +284,7 @@ set(ESP32_MQUICKJS_PRIV_REQUIRES
     esp_driver_i2c
     esp_driver_spi
     esp_driver_uart
+    esp_driver_i2s
     esp_http_client
     esp_http_server
     esp_event
@@ -364,6 +368,26 @@ esp32_mquickjs_append_feature_component(
         esp_driver_uart
 )
 
+esp32_mquickjs_append_feature_component(
+    CONFIG_ESP32_MQUICKJS_FEATURE_I2S
+    "src/modules/i2s/esp32_mquickjs_i2s.c"
+    PRIV_REQUIRES
+        esp_driver_gpio
+        esp_driver_i2s
+)
+
+if(IDF_TARGET STREQUAL "esp32s3")
+    esp32_mquickjs_append_feature_component(
+        CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA
+        "src/modules/camera/esp32_mquickjs_camera.c"
+        PRIV_REQUIRES
+            espressif__esp32-camera
+            esp_driver_gpio
+            esp_driver_i2c
+            esp_driver_ledc
+    )
+endif()
+
 if(DEFINED CONFIG_ESP32_MQUICKJS_FEATURE_UART AND CONFIG_ESP32_MQUICKJS_FEATURE_UART)
     list(APPEND ESP32_MQUICKJS_PRIV_REQUIRES esp_driver_gpio esp_driver_uart)
 endif()
@@ -430,13 +454,15 @@ if(DEFINED CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET AND CONFIG_ESP32_MQUICKJS_FEA
 endif()
 
 esp32_mquickjs_append_feature_component(
-    CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
-    "src/modules/display_buffer/esp32_mquickjs_font.c"
-    "src/modules/display_buffer/esp32_mquickjs_display_buffer.c"
-    "src/modules/display_buffer/esp32_mquickjs_display_command_buffer.c"
-    "src/modules/display_buffer/esp32_mquickjs_display_buffer_draw.c"
-    "src/modules/display_buffer/esp32_mquickjs_display_buffer_font.c"
-    "src/modules/display_buffer/esp32_mquickjs_display_buffer_text.c"
+    CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
+    "src/modules/bitmap/esp32_mquickjs_font.c"
+    "src/modules/bitmap/esp32_mquickjs_bitmap.c"
+    "src/modules/bitmap/esp32_mquickjs_display_command_buffer.c"
+    "src/modules/bitmap/esp32_mquickjs_bitmap_draw.c"
+    "src/modules/bitmap/esp32_mquickjs_bitmap_image.c"
+    "src/modules/bitmap/esp32_mquickjs_bitmap_image_core.c"
+    "src/modules/bitmap/esp32_mquickjs_bitmap_font.c"
+    "src/modules/bitmap/esp32_mquickjs_bitmap_text.c"
 )
 
 esp32_mquickjs_append_feature_component(

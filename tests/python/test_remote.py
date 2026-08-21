@@ -106,7 +106,7 @@ class RemoteConfigTests(unittest.TestCase):
         self.assertTrue(minimal.sdkconfig_defaults.is_file())
         self.assertEqual(minimal.partition_layout, "storage")
         self.assertEqual(demo.name, "demo")
-        self.assertTrue((demo.flash_data_dir / "demo" / "ui_immediate.js").is_file())
+        self.assertTrue((demo.flash_data_dir / "index.js").is_file())
         self.assertTrue(demo.sdkconfig_defaults.is_file())
         self.assertEqual(demo.partition_layout, "storage")
 
@@ -251,16 +251,52 @@ class RemoteConfigTests(unittest.TestCase):
             "CONFIG_ESP32QJS_JS_HEAP_SIZE=524288",
             test_config.sdkconfig_defaults[-1].read_text(),
         )
+        self.assertIn(
+            "# CONFIG_ESP32_MQUICKJS_DEBUG_GC is not set",
+            test_config.sdkconfig_defaults[-1].read_text(),
+        )
         test_defaults = REMOTE.JS_TEST_SDKCONFIG_DEFAULTS.read_text()
         self.assertIn("CONFIG_ESP32_MQUICKJS_DEBUG_GC=y", test_defaults)
         self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET=y", test_defaults)
         self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET=y", test_defaults)
         self.assertIn("socket", REMOTE.JS_TEST_MODULE_MAP)
         self.assertIn("websocket", REMOTE.JS_TEST_MODULE_MAP)
+        self.assertEqual(
+            REMOTE.JS_TEST_MODULE_MAP["camera-bitmap"].required_features,
+            ("camera", "bitmap"),
+        )
+        self.assertEqual(
+            REMOTE.JS_TEST_MODULE_MAP["camera-bitmap"].cases[0].required_capabilities,
+            ("media-hardware",),
+        )
         self.assertIn(
             "-DESP32QJS_FLASH_DATA_INCLUDE_SHARED=ON",
             test_config.cmake_cache_entries,
         )
+
+    def test_explicit_js_modules_stage_only_selected_test_data(self):
+        args, mcu, app = REMOTE.parse_args([
+            "--mcu", "esp32s3",
+            "--app", "minimal",
+            "show-config",
+        ])
+        config = REMOTE.build_project_config(args, mcu, app)
+        modules = REMOTE.resolve_js_modules(["bitmap", "camera-bitmap"])
+        test_config = REMOTE.js_test_build_config(
+            config,
+            modules=modules,
+            explicit_module_selection=True,
+        )
+
+        staged = test_config.flash_data_override
+        self.assertIsNotNone(staged)
+        self.assertTrue((staged / "index.js").is_file())
+        self.assertTrue((staged / "_test" / "harness.js").is_file())
+        self.assertTrue((staged / "modules" / "bitmap" / "basic.js").is_file())
+        self.assertTrue(
+            (staged / "modules" / "camera" / "bitmap-hardware.js").is_file()
+        )
+        self.assertFalse((staged / "modules" / "wifi").exists())
 
     def test_c3_js_test_build_keeps_the_mcu_heap_budget(self):
         args, mcu, app = REMOTE.parse_args([
@@ -294,6 +330,7 @@ class RemoteConfigTests(unittest.TestCase):
             patch.object(REMOTE, "start_monitor_session", return_value=session) as start,
             patch.object(REMOTE, "read_monitor_until_text", return_value="ready"),
             patch.object(REMOTE, "wait_for_optional_js_repl_banner"),
+            patch.object(REMOTE, "ensure_js_test_runtime"),
             patch.object(REMOTE, "probe_js_runtime_features", return_value={"fs": True}),
             patch.object(REMOTE, "close_monitor_session") as close,
         ):

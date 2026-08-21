@@ -152,8 +152,25 @@ def build_checker(build_dir: Path, *, compiler: str | None = None, rebuild: bool
 def verify_checker_dialect(tool: Path, build_dir: Path) -> None:
     valid_source = build_dir / "dialect-valid.js"
     modern_source = build_dir / "dialect-modern.js"
+    duplicate_catch_source = build_dir / "dialect-duplicate-catch.js"
+    parameter_catch_source = build_dir / "dialect-parameter-catch.js"
+    nested_catch_source = build_dir / "dialect-nested-catch.js"
     valid_source.write_text("var value = 1;\n", encoding="utf-8")
     modern_source.write_text("const value = (input) => input;\n", encoding="utf-8")
+    duplicate_catch_source.write_text(
+        "function run() { try {} catch (captureError) {} "
+        "try {} catch (captureError) {} }\n",
+        encoding="utf-8",
+    )
+    parameter_catch_source.write_text(
+        "function run(closeError) { try {} catch (closeError) {} }\n",
+        encoding="utf-8",
+    )
+    nested_catch_source.write_text(
+        "function outer() { try {} catch (captureError) {} "
+        "function inner() { try {} catch (captureError) {} } return inner; }\n",
+        encoding="utf-8",
+    )
 
     valid = subprocess.run([str(tool), str(valid_source)], capture_output=True, text=True)
     modern = subprocess.run([str(tool), str(modern_source)], capture_output=True, text=True)
@@ -164,6 +181,28 @@ def verify_checker_dialect(tool: Path, build_dir: Path) -> None:
     if modern.returncode == 0:
         raise RuntimeError(
             "MQuickJS checker unexpectedly accepted const/arrow syntax."
+        )
+    duplicate_catch = subprocess.run(
+        [str(tool), str(duplicate_catch_source)], capture_output=True, text=True
+    )
+    if duplicate_catch.returncode == 0 or "catch variable already exists" not in duplicate_catch.stderr:
+        raise RuntimeError(
+            "MQuickJS checker did not enforce function-wide unique catch bindings."
+        )
+    parameter_catch = subprocess.run(
+        [str(tool), str(parameter_catch_source)], capture_output=True, text=True
+    )
+    if parameter_catch.returncode == 0 or "catch variable already exists" not in parameter_catch.stderr:
+        raise RuntimeError(
+            "MQuickJS checker did not reject a catch binding that conflicts with a parameter."
+        )
+    nested_catch = subprocess.run(
+        [str(tool), str(nested_catch_source)], capture_output=True, text=True
+    )
+    if nested_catch.returncode != 0:
+        raise RuntimeError(
+            "MQuickJS checker rejected legal catch-name reuse in a nested function:\n"
+            + nested_catch.stderr.strip()
         )
     stdin_check = subprocess.run(
         [str(tool), "--stdin", "<server-preflight>"],

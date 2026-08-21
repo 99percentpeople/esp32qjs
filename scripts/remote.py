@@ -117,18 +117,41 @@ JS_TEST_MODULES = (
         ),
         required_features=("uart",),
     ),
+    JsTestModule(
+        "i2s",
+        (JsTestCase("modules/i2s/offline.js"),),
+        required_features=("i2s",),
+    ),
+    JsTestModule(
+        "camera",
+        (JsTestCase("modules/camera/offline.js"),),
+        required_features=("camera",),
+    ),
+    JsTestModule(
+        "camera-bitmap",
+        (
+            JsTestCase(
+                "modules/camera/bitmap-hardware.js",
+                required_capabilities=("media-hardware",),
+                timeout_seconds=90.0,
+                reset_before=True,
+                reset_after=True,
+            ),
+        ),
+        required_features=("camera", "bitmap"),
+    ),
     JsTestModule("timers", (JsTestCase("modules/timers/runtime.js"),)),
     JsTestModule("fs", (JsTestCase("modules/fs/filesystem.js"),), required_features=("fs",)),
     JsTestModule("nvs", (JsTestCase("modules/nvs/basic.js"),), required_features=("nvs",)),
     JsTestModule("stream", (JsTestCase("modules/stream/stream.js"),)),
     JsTestModule("load", (JsTestCase("modules/load/load.js"),), required_features=("fs",)),
     JsTestModule(
-        "displayBuffer",
+        "bitmap",
         (
-            JsTestCase("modules/display_buffer/basic.js", timeout_seconds=60.0),
-            JsTestCase("modules/display_buffer/font.js"),
+            JsTestCase("modules/bitmap/basic.js", timeout_seconds=60.0),
+            JsTestCase("modules/bitmap/font.js"),
         ),
-        required_features=("displayBuffer",),
+        required_features=("bitmap",),
     ),
     JsTestModule(
         "display",
@@ -139,7 +162,7 @@ JS_TEST_MODULES = (
                 reset_before=True,
             ),
         ),
-        required_features=("displayBuffer",),
+        required_features=("bitmap",),
     ),
     JsTestModule(
         "wifi",
@@ -184,6 +207,7 @@ JS_TEST_MODULE_MAP = {module.name: module for module in JS_TEST_MODULES}
 JS_TEST_CAPABILITY_FLAGS = {
     "network": "--network",
     "loopback": "--loopback",
+    "media-hardware": "--media-hardware",
 }
 
 
@@ -1558,6 +1582,8 @@ def resolve_js_test_capabilities(args: argparse.Namespace) -> set[str]:
         capabilities.add("network")
     if args.loopback:
         capabilities.add("loopback")
+    if args.media_hardware:
+        capabilities.add("media-hardware")
     return capabilities
 
 
@@ -1696,11 +1722,11 @@ def format_output_tail(output: str, max_lines: int = 20) -> str:
 
 
 def start_monitor_session(config: ProjectConfig) -> MonitorSession:
-    """Start an ESP-IDF monitor session in a PTY so the JS runner can interact with it programmatically."""
+    """Start a resetting ESP-IDF monitor so USB devices boot after attachment."""
     master_fd, slave_fd = os.openpty()
     try:
         process = subprocess.Popen(
-            monitor_cmd(config, no_reset=True),
+            monitor_cmd(config),
             cwd=ROOT_DIR,
             stdin=slave_fd,
             stdout=slave_fd,
@@ -1865,9 +1891,49 @@ def send_js_command(session: MonitorSession, command: str) -> None:
     os.write(session.master_fd, payload)
 
 
-def js_test_build_config(config: ProjectConfig) -> ProjectConfig:
+def stage_selected_js_test_flash_data(
+    build_dir: Path,
+    modules: tuple[JsTestModule, ...],
+) -> Path:
+    """Stage only explicitly selected JS modules plus the common test harness."""
+    stage_dir = build_dir / "esp32qjs-selected-test-data"
+    if stage_dir.exists():
+        shutil.rmtree(stage_dir)
+    stage_dir.mkdir(parents=True)
+
+    for source in JS_TEST_FLASH_DATA_DIR.iterdir():
+        if source.name == "modules":
+            continue
+        destination = stage_dir / source.name
+        if source.is_dir():
+            shutil.copytree(source, destination)
+        else:
+            shutil.copy2(source, destination)
+
+    for module in modules:
+        for case in module.cases:
+            source = JS_TEST_FLASH_DATA_DIR / case.path
+            if not source.is_file():
+                raise SystemExit(f"JS test case data does not exist: {source}")
+            destination = stage_dir / case.path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+
+    return stage_dir
+
+
+def js_test_build_config(
+    config: ProjectConfig,
+    modules: tuple[JsTestModule, ...] = (),
+    explicit_module_selection: bool = False,
+) -> ProjectConfig:
     """Return a build config that enables test instrumentation and test LittleFS."""
     build_dir = BUILD_ROOT / config.mcu / f"{config.app}-js-test"
+    flash_data_dir = (
+        stage_selected_js_test_flash_data(build_dir, modules)
+        if explicit_module_selection
+        else JS_TEST_FLASH_DATA_DIR
+    )
     target_defaults = JS_TEST_DIR / f"sdkconfig.{config.idf_target}.defaults"
     test_defaults = (JS_TEST_SDKCONFIG_DEFAULTS,)
     if target_defaults.is_file():
@@ -1877,7 +1943,7 @@ def js_test_build_config(config: ProjectConfig) -> ProjectConfig:
         if not entry.startswith("-DESP32QJS_FLASH_DATA_DIR=") and
         not entry.startswith("-DESP32QJS_FLASH_DATA_INCLUDE_SHARED=")
     ]
-    cmake_entries.append(f"-DESP32QJS_FLASH_DATA_DIR={JS_TEST_FLASH_DATA_DIR}")
+    cmake_entries.append(f"-DESP32QJS_FLASH_DATA_DIR={flash_data_dir}")
     cmake_entries.append("-DESP32QJS_FLASH_DATA_INCLUDE_SHARED=ON")
 
     return replace(
@@ -1885,7 +1951,7 @@ def js_test_build_config(config: ProjectConfig) -> ProjectConfig:
         build_dir=build_dir,
         generated_sdkconfig=build_dir / config.generated_sdkconfig.name,
         sdkconfig_defaults=config.sdkconfig_defaults + test_defaults,
-        flash_data_override=JS_TEST_FLASH_DATA_DIR,
+        flash_data_override=flash_data_dir,
         cmake_cache_entries=tuple(cmake_entries),
     )
 
@@ -1910,10 +1976,10 @@ def ensure_js_test_runtime(session: MonitorSession) -> None:
 
 
 def probe_js_runtime_features(session: MonitorSession) -> dict[str, bool]:
-    """Read the runtime feature map from `sys.info().features`."""
+    """Read the runtime feature map from the lazy `sys.info.features` namespace."""
     send_js_command(
         session,
-        'print("__ESP32QJS_TEST_FEATURES__:" + JSON.stringify(sys.info().features))',
+        'print("__ESP32QJS_TEST_FEATURES__:" + JSON.stringify(sys.info.features))',
     )
     output = read_monitor_until_line_prefix(
         session,
@@ -2169,7 +2235,11 @@ def run_js_tests(config: ProjectConfig,
         selection_label="modules",
         selection=tuple(module.name for module in modules),
     )
-    js_config = js_test_build_config(config)
+    js_config = js_test_build_config(
+        config,
+        modules=modules,
+        explicit_module_selection=explicit_module_selection,
+    )
 
     if flash_firmware_first:
         print("Flashing dedicated JS test firmware (leaving storage for the JS test image)", flush=True)
@@ -2182,7 +2252,7 @@ def run_js_tests(config: ProjectConfig,
             raise TestStageError(summary, "JS firmware flash failed.") from exc
 
     if flash_fs_first:
-        print(f"Flashing JS test LittleFS image from {JS_TEST_FLASH_DATA_DIR}", flush=True)
+        print(f"Flashing JS test LittleFS image from {js_config.flash_data_override}", flush=True)
         try:
             flash_fs(js_config, build_first=True)
         except subprocess.CalledProcessError as exc:
@@ -2202,6 +2272,17 @@ def run_js_tests(config: ProjectConfig,
         try:
             startup_output = read_monitor_until_text(session, MONITOR_READY_MARKER, 10.0, "the ESP-IDF monitor banner")
             wait_for_optional_js_repl_banner(session, startup_output)
+        except MarkerTimeoutError as exc:
+            summary.status = "failed"
+            summary.note = f"startup timeout waiting for {exc.description}"
+            print_test_stage_summary(summary)
+            raise TestStageError(
+                summary,
+                f"Timed out waiting for {exc.description}.\n"
+                f"Last serial output:\n{format_output_tail(exc.output)}",
+            ) from exc
+        try:
+            ensure_js_test_runtime(session)
         except MarkerTimeoutError as exc:
             summary.status = "failed"
             summary.note = f"startup timeout waiting for {exc.description}"
@@ -2248,17 +2329,6 @@ def run_js_tests(config: ProjectConfig,
             summary.note = str(exc)
             print_test_stage_summary(summary)
             raise TestStageError(summary, str(exc)) from exc
-        try:
-            ensure_js_test_runtime(session)
-        except MarkerTimeoutError as exc:
-            summary.status = "failed"
-            summary.note = f"startup timeout waiting for {exc.description}"
-            print_test_stage_summary(summary)
-            raise TestStageError(
-                summary,
-                f"Timed out waiting for {exc.description}.\n"
-                f"Last serial output:\n{format_output_tail(exc.output)}",
-            ) from exc
         try:
             configure_js_test_runtime(session, js_config)
         except MarkerTimeoutError as exc:
@@ -2344,6 +2414,8 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
             raise SystemExit("`--network` requires JS scope.")
         if args.loopback:
             raise SystemExit("`--loopback` requires JS scope.")
+        if args.media_hardware:
+            raise SystemExit("`--media-hardware` requires JS scope.")
         if args.no_flash_firmware:
             raise SystemExit("`--no-flash-firmware` requires JS scope.")
         if args.no_flash_fs:
@@ -2429,7 +2501,7 @@ def generated_hardware_defaults(
             lines.append("CONFIG_SPIRAM=n")
         lines.extend((
             f"CONFIG_ESP32QJS_JS_HEAP_SIZE={heap_size}",
-            "CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER=n",
+            "CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP=n",
         ))
     else:
         if idf_target != "esp32s3":
@@ -2452,7 +2524,7 @@ def generated_hardware_defaults(
             "CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384",
             "CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768",
             f"CONFIG_ESP32QJS_JS_HEAP_SIZE={heap_size}",
-            "CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER=y",
+            "CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP=y",
         ))
 
     return "\n".join(lines) + "\n"
@@ -2811,6 +2883,11 @@ def parse_args(
         "--loopback",
         action="store_true",
         help="Enable JS cases that require physical loopback wiring, such as SPI MOSI-to-MISO or UART TX-to-RX validation.",
+    )
+    test.add_argument(
+        "--media-hardware",
+        action="store_true",
+        help="Enable JS cases that require the selected camera or microphone hardware template and attached media hardware.",
     )
     test.add_argument(
         "--no-flash-firmware",

@@ -1,4 +1,4 @@
-test("display_buffer/font", function () {
+test("bitmap/font", function () {
   var info = sys.info;
   var path = "display-font-test.eqf";
   var fontData;
@@ -8,7 +8,7 @@ test("display_buffer/font", function () {
   var metrics;
 
   if (!info.features.fs) {
-    test.skip("displayBuffer.loadFont requires fs");
+    test.skip("bitmap.loadFont requires fs");
   }
 
   fontData = String.fromCharCode(
@@ -22,13 +22,13 @@ test("display_buffer/font", function () {
   );
   fs.writeText(path, fontData);
 
-  font = displayBuffer.loadFont(path);
+  font = bitmap.loadFont(path);
   test.equal(font.width, 1, "dynamic font width should match file");
   test.equal(font.height, 7, "dynamic font height should match file");
   test.equal(font.advance, 2, "dynamic font advance should match file");
   test.equal(font.lineHeight, 9, "dynamic font line height should match file");
 
-  mono = displayBuffer.create({ width: 8, height: 16, format: displayBuffer.MONO1 });
+  mono = bitmap.create({ width: 8, height: 16, format: bitmap.MONO1 });
   metrics = mono.measureText("A", { font: font, spacing: 1 });
   test.equal(metrics.width, 2, "measureText should use dynamic font advance");
   test.equal(metrics.height, 9, "measureText should use dynamic font line height");

@@ -1,6 +1,6 @@
-#include "esp32_mquickjs_display_buffer_internal.h"
+#include "esp32_mquickjs_bitmap_internal.h"
 
-#if CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
 
 #include <limits.h>
 #include <stdbool.h>
@@ -9,12 +9,12 @@
 
 #include "esp_heap_caps.h"
 
-#define DISPLAY_BUFFER_STACK_POINTS 32U
+#define BITMAP_STACK_POINTS 32U
 
 typedef struct {
     int32_t x;
     int32_t y;
-} display_buffer_point_t;
+} bitmap_point_t;
 
 static uint32_t abs_i32_to_u32(int32_t value)
 {
@@ -23,7 +23,7 @@ static uint32_t abs_i32_to_u32(int32_t value)
 
 static uint32_t clamp_radius_u32(uint32_t value)
 {
-    return value > DISPLAY_BUFFER_MAX_DIMENSION ? DISPLAY_BUFFER_MAX_DIMENSION : value;
+    return value > BITMAP_MAX_DIMENSION ? BITMAP_MAX_DIMENSION : value;
 }
 
 static uint32_t isqrt_u64(uint64_t value)
@@ -46,11 +46,11 @@ static uint32_t isqrt_u64(uint64_t value)
     return (uint32_t)result;
 }
 
-static void fill_span_raw(esp32_mquickjs_display_buffer_t *buffer,
+static void fill_span_raw(esp32_mquickjs_bitmap_t *buffer,
                           int64_t x0,
                           int y,
                           int64_t x1,
-                          uint16_t color,
+                          uint32_t color,
                           int *dirty_x0,
                           int *dirty_y0,
                           int *dirty_x1,
@@ -79,10 +79,10 @@ static void fill_span_raw(esp32_mquickjs_display_buffer_t *buffer,
     }
 }
 
-static void set_pixel_dirty_raw(esp32_mquickjs_display_buffer_t *buffer,
+static void set_pixel_dirty_raw(esp32_mquickjs_bitmap_t *buffer,
                                 int x,
                                 int y,
-                                uint16_t color,
+                                uint32_t color,
                                 int *dirty_x0,
                                 int *dirty_y0,
                                 int *dirty_x1,
@@ -132,7 +132,7 @@ static bool horizontal_radius_range(int32_t center, uint32_t radius, int limit, 
     return *out_start <= *out_end;
 }
 
-static void mark_dirty_if_touched(esp32_mquickjs_display_buffer_t *buffer,
+static void mark_dirty_if_touched(esp32_mquickjs_bitmap_t *buffer,
                                   int dirty_x0,
                                   int dirty_y0,
                                   int dirty_x1,
@@ -143,11 +143,11 @@ static void mark_dirty_if_touched(esp32_mquickjs_display_buffer_t *buffer,
     }
 }
 
-static void draw_circle_raw(esp32_mquickjs_display_buffer_t *buffer,
+static void draw_circle_raw(esp32_mquickjs_bitmap_t *buffer,
                             int32_t cx,
                             int32_t cy,
                             uint32_t radius,
-                            uint16_t color)
+                            uint32_t color)
 {
     int dirty_x0 = buffer->width;
     int dirty_y0 = buffer->height;
@@ -186,11 +186,11 @@ static void draw_circle_raw(esp32_mquickjs_display_buffer_t *buffer,
     mark_dirty_if_touched(buffer, dirty_x0, dirty_y0, dirty_x1, dirty_y1);
 }
 
-static void fill_circle_raw(esp32_mquickjs_display_buffer_t *buffer,
+static void fill_circle_raw(esp32_mquickjs_bitmap_t *buffer,
                             int32_t cx,
                             int32_t cy,
                             uint32_t radius,
-                            uint16_t color)
+                            uint32_t color)
 {
     int dirty_x0 = buffer->width;
     int dirty_y0 = buffer->height;
@@ -228,19 +228,19 @@ static void fill_circle_raw(esp32_mquickjs_display_buffer_t *buffer,
     mark_dirty_if_touched(buffer, dirty_x0, dirty_y0, dirty_x1, dirty_y1);
 }
 
-void draw_line_raw(esp32_mquickjs_display_buffer_t *buffer,
+void draw_line_raw(esp32_mquickjs_bitmap_t *buffer,
                    int x0,
                    int y0,
                    int x1,
                    int y1,
-                   uint16_t color);
+                   uint32_t color);
 
-static void fill_ellipse_raw(esp32_mquickjs_display_buffer_t *buffer,
+static void fill_ellipse_raw(esp32_mquickjs_bitmap_t *buffer,
                              int32_t cx,
                              int32_t cy,
                              uint32_t rx,
                              uint32_t ry,
-                             uint16_t color)
+                             uint32_t color)
 {
     int dirty_x0 = buffer->width;
     int dirty_y0 = buffer->height;
@@ -312,12 +312,12 @@ static void fill_ellipse_raw(esp32_mquickjs_display_buffer_t *buffer,
     mark_dirty_if_touched(buffer, dirty_x0, dirty_y0, dirty_x1, dirty_y1);
 }
 
-static void draw_ellipse_raw(esp32_mquickjs_display_buffer_t *buffer,
+static void draw_ellipse_raw(esp32_mquickjs_bitmap_t *buffer,
                              int32_t cx,
                              int32_t cy,
                              uint32_t rx,
                              uint32_t ry,
-                             uint16_t color)
+                             uint32_t color)
 {
     int dirty_x0 = buffer->width;
     int dirty_y0 = buffer->height;
@@ -428,12 +428,12 @@ static void expand_line_bounds(int x0,
     }
 }
 
-void draw_line_raw(esp32_mquickjs_display_buffer_t *buffer,
+void draw_line_raw(esp32_mquickjs_bitmap_t *buffer,
                    int x0,
                    int y0,
                    int x1,
                    int y1,
-                   uint16_t color)
+                   uint32_t color)
 {
     int dx = x1 >= x0 ? x1 - x0 : x0 - x1;
     int sx = x0 < x1 ? 1 : -1;
@@ -461,12 +461,12 @@ void draw_line_raw(esp32_mquickjs_display_buffer_t *buffer,
     }
 }
 
-void draw_rect_raw(esp32_mquickjs_display_buffer_t *buffer,
+void draw_rect_raw(esp32_mquickjs_bitmap_t *buffer,
                    int32_t x,
                    int32_t y,
                    int32_t width,
                    int32_t height,
-                   uint16_t color)
+                   uint32_t color)
 {
     if (width <= 0 || height <= 0) {
         return;
@@ -478,13 +478,13 @@ void draw_rect_raw(esp32_mquickjs_display_buffer_t *buffer,
     mark_dirty(buffer, x, y, width, height);
 }
 
-void draw_round_rect_raw(esp32_mquickjs_display_buffer_t *buffer,
+void draw_round_rect_raw(esp32_mquickjs_bitmap_t *buffer,
                          int32_t x,
                          int32_t y,
                          int32_t width,
                          int32_t height,
                          uint32_t radius,
-                         uint16_t color)
+                         uint32_t color)
 {
     int32_t r;
     int32_t cx0;
@@ -545,13 +545,13 @@ void draw_round_rect_raw(esp32_mquickjs_display_buffer_t *buffer,
     mark_dirty(buffer, x, y, width, height);
 }
 
-void fill_round_rect_raw(esp32_mquickjs_display_buffer_t *buffer,
+void fill_round_rect_raw(esp32_mquickjs_bitmap_t *buffer,
                          int32_t x,
                          int32_t y,
                          int32_t width,
                          int32_t height,
                          uint32_t radius,
-                         uint16_t color)
+                         uint32_t color)
 {
     int32_t r;
     uint64_t rr;
@@ -588,14 +588,14 @@ void fill_round_rect_raw(esp32_mquickjs_display_buffer_t *buffer,
     mark_dirty(buffer, x, y, width, height);
 }
 
-static void draw_quadratic_bezier_raw(esp32_mquickjs_display_buffer_t *buffer,
+static void draw_quadratic_bezier_raw(esp32_mquickjs_bitmap_t *buffer,
                                       int32_t x0,
                                       int32_t y0,
                                       int32_t cx,
                                       int32_t cy,
                                       int32_t x1,
                                       int32_t y1,
-                                      uint16_t color,
+                                      uint32_t color,
                                       uint32_t segments)
 {
     int prev_x = x0;
@@ -620,7 +620,7 @@ static void draw_quadratic_bezier_raw(esp32_mquickjs_display_buffer_t *buffer,
     mark_dirty(buffer, min_x, min_y, max_x - min_x + 1, max_y - min_y + 1);
 }
 
-static void draw_cubic_bezier_raw(esp32_mquickjs_display_buffer_t *buffer,
+static void draw_cubic_bezier_raw(esp32_mquickjs_bitmap_t *buffer,
                                   int32_t x0,
                                   int32_t y0,
                                   int32_t c1x,
@@ -629,7 +629,7 @@ static void draw_cubic_bezier_raw(esp32_mquickjs_display_buffer_t *buffer,
                                   int32_t c2y,
                                   int32_t x1,
                                   int32_t y1,
-                                  uint16_t color,
+                                  uint32_t color,
                                   uint32_t segments)
 {
     int prev_x = x0;
@@ -715,9 +715,9 @@ static bool point_list_get_length(JSContext *ctx, JSValue points, const char *ap
 static bool parse_point_list(JSContext *ctx,
                              JSValue points_value,
                              const char *api_name,
-                             display_buffer_point_t *stack_points,
+                             bitmap_point_t *stack_points,
                              uint32_t stack_capacity,
-                             display_buffer_point_t **out_points,
+                             bitmap_point_t **out_points,
                              uint32_t *out_count,
                              bool *out_owned)
 {
@@ -727,7 +727,7 @@ static bool parse_point_list(JSContext *ctx,
     JSValue *rooted_points;
     JSValue *item;
     JSValue *property;
-    display_buffer_point_t *points = NULL;
+    bitmap_point_t *points = NULL;
     uint32_t length = 0;
     uint32_t count = 0;
     uint32_t i;
@@ -864,10 +864,10 @@ fail:
     return false;
 }
 
-static bool fill_polygon_raw(esp32_mquickjs_display_buffer_t *buffer,
-                             const display_buffer_point_t *points,
+static bool fill_polygon_raw(esp32_mquickjs_bitmap_t *buffer,
+                             const bitmap_point_t *points,
                              uint32_t count,
-                             uint16_t color,
+                             uint32_t color,
                              int64_t *stack_intersections,
                              uint32_t stack_capacity)
 {
@@ -975,11 +975,11 @@ static bool fill_polygon_raw(esp32_mquickjs_display_buffer_t *buffer,
     return true;
 }
 
-static void draw_polyline_raw(esp32_mquickjs_display_buffer_t *buffer,
-                              const display_buffer_point_t *points,
+static void draw_polyline_raw(esp32_mquickjs_bitmap_t *buffer,
+                              const bitmap_point_t *points,
                               uint32_t count,
                               bool closed,
-                              uint16_t color)
+                              uint32_t color)
 {
     int min_x;
     int min_y;
@@ -1055,123 +1055,123 @@ static bool curve_segments_from_options(JSContext *ctx,
     return true;
 }
 
-JSValue js_display_buffer_draw_circle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_draw_circle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
+    esp32_mquickjs_bitmap_t *buffer;
     int32_t cx;
     int32_t cy;
     int32_t radius;
-    uint16_t color;
+    uint32_t color;
     bool ok;
 
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.drawCircle()");
+    buffer = bitmap_from_value(ctx, *this_val, "Bitmap.drawCircle()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
     if (argc < 3 || !value_to_i32(ctx, argv[0], &cx) || !value_to_i32(ctx, argv[1], &cy) ||
         !value_to_i32(ctx, argv[2], &radius)) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawCircle(cx, cy, radius, color) expects integer coordinates");
+        return JS_ThrowTypeError(ctx, "Bitmap.drawCircle(cx, cy, radius, color) expects integer coordinates");
     }
     color = normalize_color(ctx, buffer->format, argc >= 4 ? argv[3] : JS_UNDEFINED, buffer->foreground, &ok);
     if (!ok) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawCircle(cx, cy, radius, color) expects a valid color");
+        return JS_ThrowTypeError(ctx, "Bitmap.drawCircle(cx, cy, radius, color) expects a valid color");
     }
     draw_circle_raw(buffer, cx, cy, abs_i32_to_u32(radius), color);
     return *this_val;
 }
 
-JSValue js_display_buffer_fill_circle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_fill_circle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
+    esp32_mquickjs_bitmap_t *buffer;
     int32_t cx;
     int32_t cy;
     int32_t radius;
-    uint16_t color;
+    uint32_t color;
     bool ok;
 
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.fillCircle()");
+    buffer = bitmap_from_value(ctx, *this_val, "Bitmap.fillCircle()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
     if (argc < 3 || !value_to_i32(ctx, argv[0], &cx) || !value_to_i32(ctx, argv[1], &cy) ||
         !value_to_i32(ctx, argv[2], &radius)) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.fillCircle(cx, cy, radius, color) expects integer coordinates");
+        return JS_ThrowTypeError(ctx, "Bitmap.fillCircle(cx, cy, radius, color) expects integer coordinates");
     }
     color = normalize_color(ctx, buffer->format, argc >= 4 ? argv[3] : JS_UNDEFINED, buffer->foreground, &ok);
     if (!ok) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.fillCircle(cx, cy, radius, color) expects a valid color");
+        return JS_ThrowTypeError(ctx, "Bitmap.fillCircle(cx, cy, radius, color) expects a valid color");
     }
     fill_circle_raw(buffer, cx, cy, abs_i32_to_u32(radius), color);
     return *this_val;
 }
 
-JSValue js_display_buffer_draw_ellipse(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_draw_ellipse(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
+    esp32_mquickjs_bitmap_t *buffer;
     int32_t cx;
     int32_t cy;
     int32_t rx;
     int32_t ry;
-    uint16_t color;
+    uint32_t color;
     bool ok;
 
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.drawEllipse()");
+    buffer = bitmap_from_value(ctx, *this_val, "Bitmap.drawEllipse()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
     if (argc < 4 || !value_to_i32(ctx, argv[0], &cx) || !value_to_i32(ctx, argv[1], &cy) ||
         !value_to_i32(ctx, argv[2], &rx) || !value_to_i32(ctx, argv[3], &ry)) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawEllipse(cx, cy, rx, ry, color) expects integer coordinates");
+        return JS_ThrowTypeError(ctx, "Bitmap.drawEllipse(cx, cy, rx, ry, color) expects integer coordinates");
     }
     color = normalize_color(ctx, buffer->format, argc >= 5 ? argv[4] : JS_UNDEFINED, buffer->foreground, &ok);
     if (!ok) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawEllipse(cx, cy, rx, ry, color) expects a valid color");
+        return JS_ThrowTypeError(ctx, "Bitmap.drawEllipse(cx, cy, rx, ry, color) expects a valid color");
     }
     draw_ellipse_raw(buffer, cx, cy, abs_i32_to_u32(rx), abs_i32_to_u32(ry), color);
     return *this_val;
 }
 
-JSValue js_display_buffer_fill_ellipse(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_fill_ellipse(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
+    esp32_mquickjs_bitmap_t *buffer;
     int32_t cx;
     int32_t cy;
     int32_t rx;
     int32_t ry;
-    uint16_t color;
+    uint32_t color;
     bool ok;
 
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.fillEllipse()");
+    buffer = bitmap_from_value(ctx, *this_val, "Bitmap.fillEllipse()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
     if (argc < 4 || !value_to_i32(ctx, argv[0], &cx) || !value_to_i32(ctx, argv[1], &cy) ||
         !value_to_i32(ctx, argv[2], &rx) || !value_to_i32(ctx, argv[3], &ry)) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.fillEllipse(cx, cy, rx, ry, color) expects integer coordinates");
+        return JS_ThrowTypeError(ctx, "Bitmap.fillEllipse(cx, cy, rx, ry, color) expects integer coordinates");
     }
     color = normalize_color(ctx, buffer->format, argc >= 5 ? argv[4] : JS_UNDEFINED, buffer->foreground, &ok);
     if (!ok) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.fillEllipse(cx, cy, rx, ry, color) expects a valid color");
+        return JS_ThrowTypeError(ctx, "Bitmap.fillEllipse(cx, cy, rx, ry, color) expects a valid color");
     }
     fill_ellipse_raw(buffer, cx, cy, abs_i32_to_u32(rx), abs_i32_to_u32(ry), color);
     return *this_val;
 }
 
-JSValue js_display_buffer_draw_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_draw_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
+    esp32_mquickjs_bitmap_t *buffer;
     int32_t x;
     int32_t y;
     int32_t width;
     int32_t height;
-    uint16_t color;
+    uint32_t color;
     bool ok;
 
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.drawRect()");
+    buffer = bitmap_from_value(ctx, *this_val, "Bitmap.drawRect()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
-    if (!rect_from_args(ctx, argc, argv, &x, &y, &width, &height, "DisplayBuffer.drawRect()")) {
+    if (!rect_from_args(ctx, argc, argv, &x, &y, &width, &height, "Bitmap.drawRect()")) {
         return JS_EXCEPTION;
     }
     if (width <= 0 || height <= 0) {
@@ -1179,24 +1179,24 @@ JSValue js_display_buffer_draw_rect(JSContext *ctx, JSValue *this_val, int argc,
     }
     color = normalize_color(ctx, buffer->format, argc >= 5 ? argv[4] : JS_UNDEFINED, buffer->foreground, &ok);
     if (!ok) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawRect(x, y, width, height, color) expects a valid color");
+        return JS_ThrowTypeError(ctx, "Bitmap.drawRect(x, y, width, height, color) expects a valid color");
     }
     draw_rect_raw(buffer, x, y, width, height, color);
     return *this_val;
 }
 
-JSValue js_display_buffer_draw_round_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_draw_round_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
+    esp32_mquickjs_bitmap_t *buffer;
     int32_t x;
     int32_t y;
     int32_t width;
     int32_t height;
     int32_t radius;
-    uint16_t color;
+    uint32_t color;
     bool ok;
 
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.drawRoundRect()");
+    buffer = bitmap_from_value(ctx, *this_val, "Bitmap.drawRoundRect()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
@@ -1204,28 +1204,28 @@ JSValue js_display_buffer_draw_round_rect(JSContext *ctx, JSValue *this_val, int
         !value_to_i32(ctx, argv[2], &width) || !value_to_i32(ctx, argv[3], &height) ||
         !value_to_i32(ctx, argv[4], &radius)) {
         return JS_ThrowTypeError(ctx,
-                                 "DisplayBuffer.drawRoundRect(x, y, width, height, radius, color) expects integer coordinates");
+                                 "Bitmap.drawRoundRect(x, y, width, height, radius, color) expects integer coordinates");
     }
     color = normalize_color(ctx, buffer->format, argc >= 6 ? argv[5] : JS_UNDEFINED, buffer->foreground, &ok);
     if (!ok) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawRoundRect(x, y, width, height, radius, color) expects a valid color");
+        return JS_ThrowTypeError(ctx, "Bitmap.drawRoundRect(x, y, width, height, radius, color) expects a valid color");
     }
     draw_round_rect_raw(buffer, x, y, width, height, abs_i32_to_u32(radius), color);
     return *this_val;
 }
 
-JSValue js_display_buffer_fill_round_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_fill_round_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
+    esp32_mquickjs_bitmap_t *buffer;
     int32_t x;
     int32_t y;
     int32_t width;
     int32_t height;
     int32_t radius;
-    uint16_t color;
+    uint32_t color;
     bool ok;
 
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.fillRoundRect()");
+    buffer = bitmap_from_value(ctx, *this_val, "Bitmap.fillRoundRect()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
@@ -1233,41 +1233,41 @@ JSValue js_display_buffer_fill_round_rect(JSContext *ctx, JSValue *this_val, int
         !value_to_i32(ctx, argv[2], &width) || !value_to_i32(ctx, argv[3], &height) ||
         !value_to_i32(ctx, argv[4], &radius)) {
         return JS_ThrowTypeError(ctx,
-                                 "DisplayBuffer.fillRoundRect(x, y, width, height, radius, color) expects integer coordinates");
+                                 "Bitmap.fillRoundRect(x, y, width, height, radius, color) expects integer coordinates");
     }
     color = normalize_color(ctx, buffer->format, argc >= 6 ? argv[5] : JS_UNDEFINED, buffer->foreground, &ok);
     if (!ok) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.fillRoundRect(x, y, width, height, radius, color) expects a valid color");
+        return JS_ThrowTypeError(ctx, "Bitmap.fillRoundRect(x, y, width, height, radius, color) expects a valid color");
     }
     fill_round_rect_raw(buffer, x, y, width, height, abs_i32_to_u32(radius), color);
     return *this_val;
 }
 
-JSValue js_display_buffer_draw_line(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_draw_line(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
+    esp32_mquickjs_bitmap_t *buffer;
     int32_t x0;
     int32_t y0;
     int32_t x1;
     int32_t y1;
-    uint16_t color;
+    uint32_t color;
     bool ok;
     int min_x;
     int min_y;
     int max_x;
     int max_y;
 
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.drawLine()");
+    buffer = bitmap_from_value(ctx, *this_val, "Bitmap.drawLine()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
     if (argc < 4 || !value_to_i32(ctx, argv[0], &x0) || !value_to_i32(ctx, argv[1], &y0) ||
         !value_to_i32(ctx, argv[2], &x1) || !value_to_i32(ctx, argv[3], &y1)) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawLine(x0, y0, x1, y1, color) expects integer coordinates");
+        return JS_ThrowTypeError(ctx, "Bitmap.drawLine(x0, y0, x1, y1, color) expects integer coordinates");
     }
     color = normalize_color(ctx, buffer->format, argc >= 5 ? argv[4] : JS_UNDEFINED, buffer->foreground, &ok);
     if (!ok) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawLine(x0, y0, x1, y1, color) expects a valid color");
+        return JS_ThrowTypeError(ctx, "Bitmap.drawLine(x0, y0, x1, y1, color) expects a valid color");
     }
     draw_line_raw(buffer, x0, y0, x1, y1, color);
     min_x = x0 < x1 ? x0 : x1;
@@ -1285,15 +1285,15 @@ static JSValue draw_point_list(JSContext *ctx,
                                const char *api_name,
                                bool closed)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
-    display_buffer_point_t stack_points[DISPLAY_BUFFER_STACK_POINTS];
-    display_buffer_point_t *points = NULL;
+    esp32_mquickjs_bitmap_t *buffer;
+    bitmap_point_t stack_points[BITMAP_STACK_POINTS];
+    bitmap_point_t *points = NULL;
     uint32_t count = 0;
-    uint16_t color;
+    uint32_t color;
     bool ok;
     bool owns_points = false;
 
-    buffer = display_buffer_from_value(ctx, *this_val, api_name);
+    buffer = bitmap_from_value(ctx, *this_val, api_name);
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
@@ -1301,7 +1301,7 @@ static JSValue draw_point_list(JSContext *ctx,
                                       argv[0],
                                       api_name,
                                       stack_points,
-                                      DISPLAY_BUFFER_STACK_POINTS,
+                                      BITMAP_STACK_POINTS,
                                       &points,
                                       &count,
                                       &owns_points)) {
@@ -1321,37 +1321,37 @@ static JSValue draw_point_list(JSContext *ctx,
     return *this_val;
 }
 
-JSValue js_display_buffer_draw_polyline(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_draw_polyline(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    return draw_point_list(ctx, this_val, argc, argv, "DisplayBuffer.drawPolyline(points, color)", false);
+    return draw_point_list(ctx, this_val, argc, argv, "Bitmap.drawPolyline(points, color)", false);
 }
 
-JSValue js_display_buffer_draw_polygon(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_draw_polygon(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    return draw_point_list(ctx, this_val, argc, argv, "DisplayBuffer.drawPolygon(points, color)", true);
+    return draw_point_list(ctx, this_val, argc, argv, "Bitmap.drawPolygon(points, color)", true);
 }
 
-JSValue js_display_buffer_fill_polygon(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_fill_polygon(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
-    display_buffer_point_t stack_points[DISPLAY_BUFFER_STACK_POINTS];
-    display_buffer_point_t *points = NULL;
-    int64_t stack_intersections[DISPLAY_BUFFER_STACK_POINTS];
+    esp32_mquickjs_bitmap_t *buffer;
+    bitmap_point_t stack_points[BITMAP_STACK_POINTS];
+    bitmap_point_t *points = NULL;
+    int64_t stack_intersections[BITMAP_STACK_POINTS];
     uint32_t count = 0;
-    uint16_t color;
+    uint32_t color;
     bool ok;
     bool owns_points = false;
     bool filled;
 
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.fillPolygon()");
+    buffer = bitmap_from_value(ctx, *this_val, "Bitmap.fillPolygon()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
     if (argc < 1 || !parse_point_list(ctx,
                                       argv[0],
-                                      "DisplayBuffer.fillPolygon(points, color)",
+                                      "Bitmap.fillPolygon(points, color)",
                                       stack_points,
-                                      DISPLAY_BUFFER_STACK_POINTS,
+                                      BITMAP_STACK_POINTS,
                                       &points,
                                       &count,
                                       &owns_points)) {
@@ -1362,9 +1362,9 @@ JSValue js_display_buffer_fill_polygon(JSContext *ctx, JSValue *this_val, int ar
         if (owns_points) {
             heap_caps_free(points);
         }
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.fillPolygon(points, color) expects a valid color");
+        return JS_ThrowTypeError(ctx, "Bitmap.fillPolygon(points, color) expects a valid color");
     }
-    filled = fill_polygon_raw(buffer, points, count, color, stack_intersections, DISPLAY_BUFFER_STACK_POINTS);
+    filled = fill_polygon_raw(buffer, points, count, color, stack_intersections, BITMAP_STACK_POINTS);
     if (owns_points) {
         heap_caps_free(points);
     }
@@ -1374,14 +1374,14 @@ JSValue js_display_buffer_fill_polygon(JSContext *ctx, JSValue *this_val, int ar
     return *this_val;
 }
 
-JSValue js_display_buffer_draw_triangle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_draw_triangle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
-    display_buffer_point_t points[3];
-    uint16_t color;
+    esp32_mquickjs_bitmap_t *buffer;
+    bitmap_point_t points[3];
+    uint32_t color;
     bool ok;
 
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.drawTriangle()");
+    buffer = bitmap_from_value(ctx, *this_val, "Bitmap.drawTriangle()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
@@ -1393,26 +1393,26 @@ JSValue js_display_buffer_draw_triangle(JSContext *ctx, JSValue *this_val, int a
         !value_to_i32(ctx, argv[4], &points[2].x) ||
         !value_to_i32(ctx, argv[5], &points[2].y)) {
         return JS_ThrowTypeError(ctx,
-                                 "DisplayBuffer.drawTriangle(x0, y0, x1, y1, x2, y2, color) expects integer coordinates");
+                                 "Bitmap.drawTriangle(x0, y0, x1, y1, x2, y2, color) expects integer coordinates");
     }
     color = normalize_color(ctx, buffer->format, argc >= 7 ? argv[6] : JS_UNDEFINED, buffer->foreground, &ok);
     if (!ok) {
         return JS_ThrowTypeError(ctx,
-                                 "DisplayBuffer.drawTriangle(x0, y0, x1, y1, x2, y2, color) expects a valid color");
+                                 "Bitmap.drawTriangle(x0, y0, x1, y1, x2, y2, color) expects a valid color");
     }
     draw_polyline_raw(buffer, points, 3, true, color);
     return *this_val;
 }
 
-JSValue js_display_buffer_fill_triangle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_fill_triangle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
-    display_buffer_point_t points[3];
+    esp32_mquickjs_bitmap_t *buffer;
+    bitmap_point_t points[3];
     int64_t intersections[3];
-    uint16_t color;
+    uint32_t color;
     bool ok;
 
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.fillTriangle()");
+    buffer = bitmap_from_value(ctx, *this_val, "Bitmap.fillTriangle()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
@@ -1424,12 +1424,12 @@ JSValue js_display_buffer_fill_triangle(JSContext *ctx, JSValue *this_val, int a
         !value_to_i32(ctx, argv[4], &points[2].x) ||
         !value_to_i32(ctx, argv[5], &points[2].y)) {
         return JS_ThrowTypeError(ctx,
-                                 "DisplayBuffer.fillTriangle(x0, y0, x1, y1, x2, y2, color) expects integer coordinates");
+                                 "Bitmap.fillTriangle(x0, y0, x1, y1, x2, y2, color) expects integer coordinates");
     }
     color = normalize_color(ctx, buffer->format, argc >= 7 ? argv[6] : JS_UNDEFINED, buffer->foreground, &ok);
     if (!ok) {
         return JS_ThrowTypeError(ctx,
-                                 "DisplayBuffer.fillTriangle(x0, y0, x1, y1, x2, y2, color) expects a valid color");
+                                 "Bitmap.fillTriangle(x0, y0, x1, y1, x2, y2, color) expects a valid color");
     }
     if (!fill_polygon_raw(buffer, points, 3, color, intersections, 3)) {
         return JS_ThrowOutOfMemory(ctx);
@@ -1437,9 +1437,9 @@ JSValue js_display_buffer_fill_triangle(JSContext *ctx, JSValue *this_val, int a
     return *this_val;
 }
 
-JSValue js_display_buffer_draw_quadratic_bezier(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_draw_quadratic_bezier(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
+    esp32_mquickjs_bitmap_t *buffer;
     int32_t x0;
     int32_t y0;
     int32_t cx;
@@ -1447,10 +1447,10 @@ JSValue js_display_buffer_draw_quadratic_bezier(JSContext *ctx, JSValue *this_va
     int32_t x1;
     int32_t y1;
     uint32_t segments;
-    uint16_t color;
+    uint32_t color;
     bool ok;
 
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.drawQuadraticBezier()");
+    buffer = bitmap_from_value(ctx, *this_val, "Bitmap.drawQuadraticBezier()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
@@ -1462,17 +1462,17 @@ JSValue js_display_buffer_draw_quadratic_bezier(JSContext *ctx, JSValue *this_va
         !value_to_i32(ctx, argv[4], &x1) ||
         !value_to_i32(ctx, argv[5], &y1)) {
         return JS_ThrowTypeError(ctx,
-                                 "DisplayBuffer.drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color, options) expects integer coordinates");
+                                 "Bitmap.drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color, options) expects integer coordinates");
     }
     color = normalize_color(ctx, buffer->format, argc >= 7 ? argv[6] : JS_UNDEFINED, buffer->foreground, &ok);
     if (!ok) {
         return JS_ThrowTypeError(ctx,
-                                 "DisplayBuffer.drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color, options) expects a valid color");
+                                 "Bitmap.drawQuadraticBezier(x0, y0, cx, cy, x1, y1, color, options) expects a valid color");
     }
     if (!curve_segments_from_options(ctx,
                                      argc >= 8 ? argv[7] : JS_UNDEFINED,
                                      24,
-                                     "DisplayBuffer.drawQuadraticBezier()",
+                                     "Bitmap.drawQuadraticBezier()",
                                      &segments)) {
         return JS_EXCEPTION;
     }
@@ -1480,9 +1480,9 @@ JSValue js_display_buffer_draw_quadratic_bezier(JSContext *ctx, JSValue *this_va
     return *this_val;
 }
 
-JSValue js_display_buffer_draw_cubic_bezier(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_draw_cubic_bezier(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
+    esp32_mquickjs_bitmap_t *buffer;
     int32_t x0;
     int32_t y0;
     int32_t c1x;
@@ -1492,10 +1492,10 @@ JSValue js_display_buffer_draw_cubic_bezier(JSContext *ctx, JSValue *this_val, i
     int32_t x1;
     int32_t y1;
     uint32_t segments;
-    uint16_t color;
+    uint32_t color;
     bool ok;
 
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.drawCubicBezier()");
+    buffer = bitmap_from_value(ctx, *this_val, "Bitmap.drawCubicBezier()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
@@ -1509,17 +1509,17 @@ JSValue js_display_buffer_draw_cubic_bezier(JSContext *ctx, JSValue *this_val, i
         !value_to_i32(ctx, argv[6], &x1) ||
         !value_to_i32(ctx, argv[7], &y1)) {
         return JS_ThrowTypeError(ctx,
-                                 "DisplayBuffer.drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options) expects integer coordinates");
+                                 "Bitmap.drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options) expects integer coordinates");
     }
     color = normalize_color(ctx, buffer->format, argc >= 9 ? argv[8] : JS_UNDEFINED, buffer->foreground, &ok);
     if (!ok) {
         return JS_ThrowTypeError(ctx,
-                                 "DisplayBuffer.drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options) expects a valid color");
+                                 "Bitmap.drawCubicBezier(x0, y0, c1x, c1y, c2x, c2y, x1, y1, color, options) expects a valid color");
     }
     if (!curve_segments_from_options(ctx,
                                      argc >= 10 ? argv[9] : JS_UNDEFINED,
                                      32,
-                                     "DisplayBuffer.drawCubicBezier()",
+                                     "Bitmap.drawCubicBezier()",
                                      &segments)) {
         return JS_EXCEPTION;
     }
@@ -1527,9 +1527,9 @@ JSValue js_display_buffer_draw_cubic_bezier(JSContext *ctx, JSValue *this_val, i
     return *this_val;
 }
 
-JSValue js_display_buffer_draw_bitmap(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_draw_mask(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
+    esp32_mquickjs_bitmap_t *buffer;
     int32_t x;
     int32_t y;
     uint32_t width = 0;
@@ -1539,19 +1539,19 @@ JSValue js_display_buffer_draw_bitmap(JSContext *ctx, JSValue *this_val, int arg
     JSValue *pixels;
     JSValue *property;
     uint32_t index = 0;
-    uint16_t color;
-    uint16_t background;
+    uint32_t color;
+    uint32_t background;
     bool ok;
     bool has_background = false;
     uint32_t row;
 
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.drawBitmap()");
+    buffer = bitmap_from_value(ctx, *this_val, "Bitmap.drawMask()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
     if (argc < 3 || !value_to_i32(ctx, argv[0], &x) || !value_to_i32(ctx, argv[1], &y) ||
         JS_GetClassID(ctx, argv[2]) < 0) {
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap(x, y, bitmap, options?) expects a bitmap object");
+        return JS_ThrowTypeError(ctx, "Bitmap.drawMask(x, y, bitmap, options?) expects a bitmap object");
     }
     pixels = JS_PushGCRef(ctx, &pixels_ref);
     property = JS_PushGCRef(ctx, &property_ref);
@@ -1560,13 +1560,13 @@ JSValue js_display_buffer_draw_bitmap(JSContext *ctx, JSValue *this_val, int arg
     if (JS_IsException(*property) || !value_to_u32(ctx, *property, &width)) {
         JS_PopGCRef(ctx, &property_ref);
         JS_PopGCRef(ctx, &pixels_ref);
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() bitmap.width must be numeric");
+        return JS_ThrowTypeError(ctx, "Bitmap.drawMask() bitmap.width must be numeric");
     }
     *property = JS_GetPropertyStr(ctx, argv[2], "height");
     if (JS_IsException(*property) || !value_to_u32(ctx, *property, &height)) {
         JS_PopGCRef(ctx, &property_ref);
         JS_PopGCRef(ctx, &pixels_ref);
-        return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() bitmap.height must be numeric");
+        return JS_ThrowTypeError(ctx, "Bitmap.drawMask() bitmap.height must be numeric");
     }
     *pixels = JS_GetPropertyStr(ctx, argv[2], "pixels");
     if (JS_IsException(*pixels)) {
@@ -1580,7 +1580,7 @@ JSValue js_display_buffer_draw_bitmap(JSContext *ctx, JSValue *this_val, int arg
         if (JS_GetClassID(ctx, argv[3]) < 0) {
             JS_PopGCRef(ctx, &property_ref);
             JS_PopGCRef(ctx, &pixels_ref);
-            return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() options must be an object");
+            return JS_ThrowTypeError(ctx, "Bitmap.drawMask() options must be an object");
         }
         *property = JS_GetPropertyStr(ctx, argv[3], "color");
         if (JS_IsException(*property)) {
@@ -1592,7 +1592,7 @@ JSValue js_display_buffer_draw_bitmap(JSContext *ctx, JSValue *this_val, int arg
         if (!ok) {
             JS_PopGCRef(ctx, &property_ref);
             JS_PopGCRef(ctx, &pixels_ref);
-            return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() option 'color' must be valid");
+            return JS_ThrowTypeError(ctx, "Bitmap.drawMask() option 'color' must be valid");
         }
         *property = JS_GetPropertyStr(ctx, argv[3], "background");
         if (JS_IsException(*property)) {
@@ -1605,7 +1605,7 @@ JSValue js_display_buffer_draw_bitmap(JSContext *ctx, JSValue *this_val, int arg
             if (!ok) {
                 JS_PopGCRef(ctx, &property_ref);
                 JS_PopGCRef(ctx, &pixels_ref);
-                return JS_ThrowTypeError(ctx, "DisplayBuffer.drawBitmap() option 'background' must be valid or null");
+                return JS_ThrowTypeError(ctx, "Bitmap.drawMask() option 'background' must be valid or null");
             }
             has_background = true;
         }

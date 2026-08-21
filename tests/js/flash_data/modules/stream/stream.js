@@ -5,6 +5,7 @@ test("stream/stream", function () {
   var first;
   var second;
   var byteChunk;
+  var byteTailView;
   var byteTail;
   var bytes;
 
@@ -50,10 +51,21 @@ test("stream/stream", function () {
   test.equal(bytes[1], 0x62, "binary read second byte");
   test.equal(bytes[2], 0x63, "binary read third byte");
   test.equal(bytes[3], 0x64, "binary read fourth byte");
-  byteTail = stream.read(8).toArray();
+  byteTailView = stream.read(8);
+  byteTail = byteTailView.toArray();
   test.equal(byteTail.length, 2, "binary read should return short tail chunk");
   test.equal(byteTail[0], 0x65, "binary read tail first byte");
   test.equal(byteTail[1], 0x66, "binary read tail second byte");
+  test.equal(byteChunk.close(), true, "ByteView close should succeed");
+  test.equal(byteChunk.close(), true, "ByteView close should be idempotent");
+  test.equal(byteTailView.close(), true, "tail ByteView close should succeed");
+  try {
+    byteChunk.toArray();
+  } catch (closedViewError) {
+    bytes = String(closedViewError);
+  }
+  test.ok(bytes.indexOf("closed") >= 0,
+    "closed ByteView should reject later reads");
   test.equal(stream.read(1), null, "binary read at eof should return null");
   stream.close();
   fs.remove(path);

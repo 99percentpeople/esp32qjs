@@ -1,6 +1,6 @@
-#include "esp32_mquickjs_display_buffer_internal.h"
+#include "esp32_mquickjs_bitmap_internal.h"
 
-#if CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
 
 #include <limits.h>
 #include <stdbool.h>
@@ -16,10 +16,10 @@
 #define DISPLAY_COMMAND_BUFFER_FONTS_KEY "__esp32qjsDisplayCommandFonts"
 #define DISPLAY_COMMAND_TEXT_HAS_BACKGROUND 0x01U
 
-#define DISPLAY_COMMAND_PACKED_CLEAR_SIZE 3U
-#define DISPLAY_COMMAND_PACKED_RECT_SIZE 11U
-#define DISPLAY_COMMAND_PACKED_ROUND_RECT_SIZE 13U
-#define DISPLAY_COMMAND_PACKED_TEXT_SIZE 17U
+#define DISPLAY_COMMAND_PACKED_CLEAR_SIZE 5U
+#define DISPLAY_COMMAND_PACKED_RECT_SIZE 13U
+#define DISPLAY_COMMAND_PACKED_ROUND_RECT_SIZE 15U
+#define DISPLAY_COMMAND_PACKED_TEXT_SIZE 21U
 
 typedef enum {
     DISPLAY_COMMAND_CLEAR = 1,
@@ -40,8 +40,8 @@ typedef struct {
     int32_t height;
     int32_t radius;
     int16_t spacing;
-    uint16_t color;
-    uint16_t background;
+    uint32_t color;
+    uint32_t background;
     size_t text_offset;
     size_t text_length;
     const esp32_mquickjs_bitmap_font_t *font;
@@ -57,8 +57,8 @@ typedef struct {
     size_t text_capacity;
     size_t default_text_capacity;
     uint8_t format;
-    uint16_t foreground;
-    uint16_t background;
+    uint32_t foreground;
+    uint32_t background;
     size_t font_ref_count;
     bool closed;
 } display_command_buffer_t;
@@ -76,6 +76,14 @@ static uint16_t packed_u16(const uint8_t *data)
 static int16_t packed_i16(const uint8_t *data)
 {
     return (int16_t)packed_u16(data);
+}
+
+static uint32_t packed_u32(const uint8_t *data)
+{
+    return (uint32_t)data[0] |
+           ((uint32_t)data[1] << 8U) |
+           ((uint32_t)data[2] << 16U) |
+           ((uint32_t)data[3] << 24U);
 }
 
 static display_command_buffer_t *display_command_buffer_from_value(JSContext *ctx,
@@ -377,8 +385,8 @@ static bool keep_font_alive(JSContext *ctx,
 static bool text_background_from_options(JSContext *ctx,
                                          uint8_t format,
                                          JSValue options,
-                                         uint16_t fallback,
-                                         uint16_t *out_color,
+                                         uint32_t fallback,
+                                         uint32_t *out_color,
                                          bool *out_has_background)
 {
     JSGCRef property_ref;
@@ -410,12 +418,18 @@ static bool text_background_from_options(JSContext *ctx,
     return true;
 }
 
-static bool packed_color_is_valid(uint8_t format, uint16_t color)
+static bool packed_color_is_valid(uint8_t format, uint32_t color)
 {
-    if (format == DISPLAY_BUFFER_FORMAT_MONO1) {
+    if (format == BITMAP_FORMAT_MONO1) {
         return color <= 1U;
     }
-    return true;
+    if (format == BITMAP_FORMAT_GRAY8) {
+        return color <= 0xffU;
+    }
+    if (format == BITMAP_FORMAT_RGB565) {
+        return color <= 0xffffU;
+    }
+    return format == BITMAP_FORMAT_RGB888 && color <= 0xffffffU;
 }
 
 static bool packed_skip_command(const uint8_t *data, uint8_t op)
@@ -428,7 +442,7 @@ static bool packed_skip_command(const uint8_t *data, uint8_t op)
     case DISPLAY_COMMAND_FILL_ROUND_RECT:
         return packed_i16(data + 5) <= 0 || packed_i16(data + 7) <= 0;
     case DISPLAY_COMMAND_DRAW_TEXT:
-        return packed_u16(data + 15) == 0U;
+        return packed_u16(data + 19) == 0U;
     default:
         return false;
     }
@@ -451,8 +465,8 @@ static bool packed_command_scan(JSContext *ctx,
     while (offset < length) {
         uint8_t op = data[offset];
         size_t command_size;
-        uint16_t color = 0;
-        uint16_t background = 0;
+        uint32_t color = 0;
+        uint32_t background = 0;
 
         switch (op) {
         case DISPLAY_COMMAND_CLEAR:
@@ -477,11 +491,11 @@ static bool packed_command_scan(JSContext *ctx,
                 JS_ThrowTypeError(ctx, "DisplayCommandBuffer.appendPacked() found a truncated text command");
                 return false;
             }
-            color = packed_u16(data + offset + 5U);
-            background = packed_u16(data + offset + 7U);
-            flags = packed_u16(data + offset + 9U);
-            text_offset = packed_u16(data + offset + 13U);
-            command_text_length = packed_u16(data + offset + 15U);
+            color = packed_u32(data + offset + 5U);
+            background = packed_u32(data + offset + 9U);
+            flags = packed_u16(data + offset + 13U);
+            text_offset = packed_u16(data + offset + 17U);
+            command_text_length = packed_u16(data + offset + 19U);
             if ((flags & ~DISPLAY_COMMAND_TEXT_HAS_BACKGROUND) != 0U) {
                 JS_ThrowTypeError(ctx, "DisplayCommandBuffer.appendPacked() found unsupported text flags");
                 return false;
@@ -512,16 +526,16 @@ static bool packed_command_scan(JSContext *ctx,
         }
         switch (op) {
         case DISPLAY_COMMAND_CLEAR:
-            color = packed_u16(data + offset + 1U);
+            color = packed_u32(data + offset + 1U);
             break;
         case DISPLAY_COMMAND_FILL_RECT:
         case DISPLAY_COMMAND_DRAW_RECT:
         case DISPLAY_COMMAND_DRAW_LINE:
-            color = packed_u16(data + offset + 9U);
+            color = packed_u32(data + offset + 9U);
             break;
         case DISPLAY_COMMAND_DRAW_ROUND_RECT:
         case DISPLAY_COMMAND_FILL_ROUND_RECT:
-            color = packed_u16(data + offset + 11U);
+            color = packed_u32(data + offset + 11U);
             break;
         default:
             break;
@@ -550,7 +564,7 @@ JSValue js_display_command_buffer_constructor(JSContext *ctx, JSValue *this_val,
     (void)argc;
     (void)argv;
 
-    return JS_ThrowTypeError(ctx, "DisplayCommandBuffer objects are created by DisplayBuffer.createCommandBuffer()");
+    return JS_ThrowTypeError(ctx, "DisplayCommandBuffer objects are created by Bitmap.createCommandBuffer()");
 }
 
 void js_display_command_buffer_finalizer(JSContext *ctx, void *opaque)
@@ -561,24 +575,24 @@ void js_display_command_buffer_finalizer(JSContext *ctx, void *opaque)
     heap_caps_free(command_buffer);
 }
 
-JSValue js_display_buffer_create_command_buffer(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_create_command_buffer(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_display_buffer_t *buffer;
+    esp32_mquickjs_bitmap_t *buffer;
     display_command_buffer_t *command_buffer;
     uint32_t command_capacity = DISPLAY_COMMAND_BUFFER_DEFAULT_COMMANDS;
     uint32_t text_capacity = DISPLAY_COMMAND_BUFFER_DEFAULT_TEXT_BYTES;
     JSGCRef object_ref;
     JSValue *object;
 
-    buffer = display_buffer_from_value(ctx, *this_val, "DisplayBuffer.createCommandBuffer()");
+    buffer = bitmap_from_value(ctx, *this_val, "Bitmap.createCommandBuffer()");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
-    if (!text_options_is_object(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, "DisplayBuffer.createCommandBuffer()") ||
+    if (!text_options_is_object(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, "Bitmap.createCommandBuffer()") ||
         !get_u32_option(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED,
-                        "commandCapacity", &command_capacity, "DisplayBuffer.createCommandBuffer()") ||
+                        "commandCapacity", &command_capacity, "Bitmap.createCommandBuffer()") ||
         !get_u32_option(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED,
-                        "textBytes", &text_capacity, "DisplayBuffer.createCommandBuffer()")) {
+                        "textBytes", &text_capacity, "Bitmap.createCommandBuffer()")) {
         return JS_EXCEPTION;
     }
     if (command_capacity == 0) {
@@ -650,7 +664,7 @@ JSValue js_display_command_buffer_clear(JSContext *ctx, JSValue *this_val, int a
 {
     display_command_buffer_t *command_buffer;
     display_command_t *command;
-    uint16_t color;
+    uint32_t color;
     bool ok;
 
     command_buffer = display_command_buffer_from_value(ctx, *this_val, "DisplayCommandBuffer.clear()");
@@ -678,7 +692,7 @@ JSValue js_display_command_buffer_fill_rect(JSContext *ctx, JSValue *this_val, i
     int32_t y;
     int32_t width;
     int32_t height;
-    uint16_t color;
+    uint32_t color;
     bool ok;
 
     command_buffer = display_command_buffer_from_value(ctx, *this_val, "DisplayCommandBuffer.fillRect()");
@@ -716,7 +730,7 @@ JSValue js_display_command_buffer_draw_rect(JSContext *ctx, JSValue *this_val, i
     int32_t y;
     int32_t width;
     int32_t height;
-    uint16_t color;
+    uint32_t color;
     bool ok;
 
     command_buffer = display_command_buffer_from_value(ctx, *this_val, "DisplayCommandBuffer.drawRect()");
@@ -754,7 +768,7 @@ JSValue js_display_command_buffer_draw_line(JSContext *ctx, JSValue *this_val, i
     int32_t y0;
     int32_t x1;
     int32_t y1;
-    uint16_t color;
+    uint32_t color;
     bool ok;
 
     command_buffer = display_command_buffer_from_value(ctx, *this_val, "DisplayCommandBuffer.drawLine()");
@@ -791,7 +805,7 @@ JSValue js_display_command_buffer_draw_round_rect(JSContext *ctx, JSValue *this_
     int32_t width;
     int32_t height;
     int32_t radius;
-    uint16_t color;
+    uint32_t color;
     bool ok;
 
     command_buffer = display_command_buffer_from_value(ctx, *this_val, "DisplayCommandBuffer.drawRoundRect()");
@@ -834,7 +848,7 @@ JSValue js_display_command_buffer_fill_round_rect(JSContext *ctx, JSValue *this_
     int32_t width;
     int32_t height;
     int32_t radius;
-    uint16_t color;
+    uint32_t color;
     bool ok;
 
     command_buffer = display_command_buffer_from_value(ctx, *this_val, "DisplayCommandBuffer.fillRoundRect()");
@@ -874,8 +888,8 @@ JSValue js_display_command_buffer_draw_text(JSContext *ctx, JSValue *this_val, i
     display_command_t *command;
     int32_t x;
     int32_t y;
-    uint16_t color;
-    uint16_t background;
+    uint32_t color;
+    uint32_t background;
     bool ok;
     bool has_background;
     JSCStringBuf text_buf;
@@ -1114,7 +1128,7 @@ JSValue js_display_command_buffer_append_packed(JSContext *ctx, JSValue *this_va
         command->op = op;
         switch (op) {
         case DISPLAY_COMMAND_CLEAR:
-            command->color = packed_u16(packet + 1U);
+            command->color = packed_u32(packet + 1U);
             break;
         case DISPLAY_COMMAND_FILL_RECT:
         case DISPLAY_COMMAND_DRAW_RECT:
@@ -1122,14 +1136,14 @@ JSValue js_display_command_buffer_append_packed(JSContext *ctx, JSValue *this_va
             command->y = packed_i16(packet + 3U);
             command->width = packed_i16(packet + 5U);
             command->height = packed_i16(packet + 7U);
-            command->color = packed_u16(packet + 9U);
+            command->color = packed_u32(packet + 9U);
             break;
         case DISPLAY_COMMAND_DRAW_LINE:
             command->x = packed_i16(packet + 1U);
             command->y = packed_i16(packet + 3U);
             command->width = packed_i16(packet + 5U);
             command->height = packed_i16(packet + 7U);
-            command->color = packed_u16(packet + 9U);
+            command->color = packed_u32(packet + 9U);
             break;
         case DISPLAY_COMMAND_DRAW_ROUND_RECT:
         case DISPLAY_COMMAND_FILL_ROUND_RECT:
@@ -1138,18 +1152,18 @@ JSValue js_display_command_buffer_append_packed(JSContext *ctx, JSValue *this_va
             command->width = packed_i16(packet + 5U);
             command->height = packed_i16(packet + 7U);
             command->radius = packed_i16(packet + 9U);
-            command->color = packed_u16(packet + 11U);
+            command->color = packed_u32(packet + 11U);
             break;
         case DISPLAY_COMMAND_DRAW_TEXT: {
-            uint16_t text_offset = packed_u16(packet + 13U);
-            uint16_t text_length = packed_u16(packet + 15U);
-            int16_t spacing = packed_i16(packet + 11U);
+            uint16_t text_offset = packed_u16(packet + 17U);
+            uint16_t text_length = packed_u16(packet + 19U);
+            int16_t spacing = packed_i16(packet + 15U);
 
             command->x = packed_i16(packet + 1U);
             command->y = packed_i16(packet + 3U);
-            command->color = packed_u16(packet + 5U);
-            command->background = packed_u16(packet + 7U);
-            command->flags = (uint8_t)packed_u16(packet + 9U);
+            command->color = packed_u32(packet + 5U);
+            command->background = packed_u32(packet + 9U);
+            command->flags = (uint8_t)packed_u16(packet + 13U);
             if (spacing < 0) {
                 spacing = 0;
             } else if (spacing > 32) {
@@ -1189,7 +1203,7 @@ fail:
 JSValue js_display_command_buffer_replay(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     display_command_buffer_t *command_buffer;
-    esp32_mquickjs_display_buffer_t *buffer;
+    esp32_mquickjs_bitmap_t *buffer;
     size_t i;
 
     command_buffer = display_command_buffer_from_value(ctx, *this_val, "DisplayCommandBuffer.replay()");
@@ -1197,9 +1211,9 @@ JSValue js_display_command_buffer_replay(JSContext *ctx, JSValue *this_val, int 
         return JS_EXCEPTION;
     }
     if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "DisplayCommandBuffer.replay(target) expects a DisplayBuffer target");
+        return JS_ThrowTypeError(ctx, "DisplayCommandBuffer.replay(target) expects a Bitmap target");
     }
-    buffer = display_buffer_from_value(ctx, argv[0], "DisplayCommandBuffer.replay(target)");
+    buffer = bitmap_from_value(ctx, argv[0], "DisplayCommandBuffer.replay(target)");
     if (buffer == NULL) {
         return JS_EXCEPTION;
     }
@@ -1248,7 +1262,7 @@ JSValue js_display_command_buffer_replay(JSContext *ctx, JSValue *this_val, int 
                                 command->color);
             break;
         case DISPLAY_COMMAND_DRAW_TEXT:
-            display_buffer_draw_text_raw(buffer,
+            bitmap_draw_text_raw(buffer,
                                          command->x,
                                          command->y,
                                          command_buffer->text + command->text_offset,

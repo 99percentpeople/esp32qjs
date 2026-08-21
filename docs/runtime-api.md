@@ -40,8 +40,10 @@ Available operations:
   Request a stop and wait for the task. Passing `0` uses the configured default.
 - `esp32qjs_runtime_destroy(runtime)`
   Stop HTTP/WebSocket clients and servers, detach USB serial and GPIO/Wi-Fi
-  callbacks, deinitialize ADC, DAC, LEDC, I2C, SPI, and UART resources, release the context and native timer/poller
-  state, unmount LittleFS, and free the JS heap. The runtime must
+  callbacks, close every Stream and native byte source, deinitialize ADC, DAC,
+  LEDC, I2C, SPI, UART, I2S, and camera resources, return any leased camera
+  framebuffer, release the context and native timer/poller state, unmount
+  LittleFS, and free the JS heap. The runtime must
   already be stopped. It requests cancellation and returns
   `ESP_ERR_INVALID_STATE` while an outgoing asynchronous HTTP worker is still
   unwinding; retry after that worker completes.

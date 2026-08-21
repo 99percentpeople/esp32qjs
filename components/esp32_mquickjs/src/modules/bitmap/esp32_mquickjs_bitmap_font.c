@@ -1,6 +1,6 @@
-#include "esp32_mquickjs_display_buffer_internal.h"
+#include "esp32_mquickjs_bitmap_internal.h"
 
-#if CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
 
 #include "utils/esp32_mquickjs_fs_path.h"
 
@@ -92,12 +92,12 @@ static JSValue display_font_make(JSContext *ctx,
     JSValue *object;
 
     if (bytes == NULL || length < DISPLAY_FONT_HEADER_SIZE) {
-        return JS_ThrowTypeError(ctx, "displayBuffer.loadFont(path) found an invalid font file");
+        return JS_ThrowTypeError(ctx, "bitmap.loadFont(path) found an invalid font file");
     }
     if (bytes[0] != DISPLAY_FONT_MAGIC0 || bytes[1] != DISPLAY_FONT_MAGIC1 ||
         bytes[2] != DISPLAY_FONT_MAGIC2 || bytes[3] != DISPLAY_FONT_MAGIC3 ||
         bytes[4] != DISPLAY_FONT_FORMAT_BITMAP_FIXED || bytes[5] != 0) {
-        return JS_ThrowTypeError(ctx, "displayBuffer.loadFont(path) expects EQF1 bitmap-fixed font data");
+        return JS_ThrowTypeError(ctx, "bitmap.loadFont(path) expects EQF1 bitmap-fixed font data");
     }
 
     first = bytes[6];
@@ -109,7 +109,7 @@ static JSValue display_font_make(JSContext *ctx,
     glyph_length = read_u32_le(bytes + 12);
     if (last < first || width == 0 || height == 0 || height > 64 ||
         advance == 0 || line_height == 0 || line_height < height) {
-        return JS_ThrowTypeError(ctx, "displayBuffer.loadFont(path) found invalid font metrics");
+        return JS_ThrowTypeError(ctx, "bitmap.loadFont(path) found invalid font metrics");
     }
 
     bytes_per_column = (uint8_t)((height + 7U) / 8U);
@@ -118,7 +118,7 @@ static JSValue display_font_make(JSContext *ctx,
     if (glyph_stride == 0 || glyph_count > SIZE_MAX / glyph_stride ||
         glyph_length != glyph_count * glyph_stride ||
         (size_t)glyph_length > length - DISPLAY_FONT_HEADER_SIZE) {
-        return JS_ThrowTypeError(ctx, "displayBuffer.loadFont(path) found invalid glyph data length");
+        return JS_ThrowTypeError(ctx, "bitmap.loadFont(path) found invalid glyph data length");
     }
 
     font = heap_caps_malloc(sizeof(*font), MALLOC_CAP_8BIT);
@@ -170,7 +170,7 @@ static uint8_t *display_font_read_file(JSContext *ctx,
                                         script_path,
                                         resolved_path,
                                         resolved_path_size)) {
-        JS_ThrowTypeError(ctx, "displayBuffer.loadFont(path) expects a path under %s",
+        JS_ThrowTypeError(ctx, "bitmap.loadFont(path) expects a path under %s",
                           ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
         return NULL;
     }
@@ -178,25 +178,25 @@ static uint8_t *display_font_read_file(JSContext *ctx,
     file = fopen(resolved_path, "rb");
     if (file == NULL) {
         JS_ThrowReferenceError(ctx,
-                               "displayBuffer.loadFont(path) failed for %s (%s)",
+                               "bitmap.loadFont(path) failed for %s (%s)",
                                resolved_path,
                                strerror(errno));
         return NULL;
     }
     if (fseek(file, 0, SEEK_END) != 0) {
         fclose(file);
-        JS_ThrowInternalError(ctx, "displayBuffer.loadFont(path) failed to seek %s", resolved_path);
+        JS_ThrowInternalError(ctx, "bitmap.loadFont(path) failed to seek %s", resolved_path);
         return NULL;
     }
     file_size = ftell(file);
     if (file_size < 0 || fseek(file, 0, SEEK_SET) != 0) {
         fclose(file);
-        JS_ThrowInternalError(ctx, "displayBuffer.loadFont(path) failed to size %s", resolved_path);
+        JS_ThrowInternalError(ctx, "bitmap.loadFont(path) failed to size %s", resolved_path);
         return NULL;
     }
     if (file_size < (long)DISPLAY_FONT_HEADER_SIZE) {
         fclose(file);
-        JS_ThrowTypeError(ctx, "displayBuffer.loadFont(path) found a truncated font file: %s", resolved_path);
+        JS_ThrowTypeError(ctx, "bitmap.loadFont(path) found a truncated font file: %s", resolved_path);
         return NULL;
     }
 
@@ -210,7 +210,7 @@ static uint8_t *display_font_read_file(JSContext *ctx,
     fclose(file);
     if (read_len != (size_t)file_size) {
         heap_caps_free(bytes);
-        JS_ThrowInternalError(ctx, "displayBuffer.loadFont(path) failed to read %s", resolved_path);
+        JS_ThrowInternalError(ctx, "bitmap.loadFont(path) failed to read %s", resolved_path);
         return NULL;
     }
 
@@ -224,7 +224,7 @@ JSValue js_display_font_constructor(JSContext *ctx, JSValue *this_val, int argc,
     (void)this_val;
     (void)argc;
     (void)argv;
-    return JS_ThrowTypeError(ctx, "DisplayFont cannot be constructed directly; use displayBuffer.loadFont(path)");
+    return JS_ThrowTypeError(ctx, "DisplayFont cannot be constructed directly; use bitmap.loadFont(path)");
 }
 
 void js_display_font_finalizer(JSContext *ctx, void *opaque)
@@ -286,12 +286,12 @@ JSValue js_display_font_get_line_height(JSContext *ctx, JSValue *this_val, int a
     return font == NULL ? JS_EXCEPTION : JS_NewUint32(ctx, font->font.line_height);
 }
 
-JSValue js_display_buffer_load_font(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_bitmap_load_font(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;
 
     if (argc < 1 || !JS_IsString(ctx, argv[0])) {
-        return JS_ThrowTypeError(ctx, "displayBuffer.loadFont(path) expects a font path");
+        return JS_ThrowTypeError(ctx, "bitmap.loadFont(path) expects a font path");
     }
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
@@ -316,7 +316,7 @@ JSValue js_display_buffer_load_font(JSContext *ctx, JSValue *this_val, int argc,
         return result;
     }
 #else
-    return JS_ThrowInternalError(ctx, "displayBuffer.loadFont(path) requires the fs feature");
+    return JS_ThrowInternalError(ctx, "bitmap.loadFont(path) requires the fs feature");
 #endif
 }
 

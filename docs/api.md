@@ -5,7 +5,10 @@ This project exposes a small JavaScript runtime with an optional REPL. Run `help
 The API is split into two parts:
 
 - [docs/c-api.md](c-api.md)
-  C-side host APIs exported by the firmware runtime, including global helpers, `fs`, `nvs`, `Stream`, `Request`, `Response`, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `displayBuffer`, `sys`, `socket`, `wifi`, and `http`.
+  C-side host APIs exported by the firmware runtime, including global helpers,
+  `fs`, `nvs`, `Stream`, `Request`, `Response`, `gpio`, `ledc`, `adc`, `dac`,
+  `i2c`, `spi`, `uart`, `i2s`, `camera`, `bitmap`, `sys`, `socket`,
+  `wifi`, and `http`.
 - [docs/js-api.md](js-api.md)
   JavaScript-side APIs loaded from LittleFS, currently including `display` and `ui`.
 - [docs/api-stability-plan.md](api-stability-plan.md)

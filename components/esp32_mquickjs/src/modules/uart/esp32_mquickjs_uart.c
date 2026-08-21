@@ -592,10 +592,9 @@ static JSValue uart_write_span_source(JSContext *ctx,
         int written;
 
         if (!esp32_mquickjs_byte_span_source_next(ctx, &source, &span)) {
-            error = JS_GetException(ctx);
-            if (!JS_IsUndefined(error) && !JS_IsNull(error)) {
+            if (JS_HasException(ctx)) {
                 esp32_mquickjs_byte_span_source_close(ctx, &source);
-                return error;
+                return JS_EXCEPTION;
             }
             break;
         }

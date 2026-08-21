@@ -4,11 +4,15 @@
 
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_event_queue.h"
+#include "esp32_mquickjs_future.h"
 #include "utils/esp32_mquickjs_request_response.h"
 #include "esp32_mquickjs_stream.h"
 
+#include <ctype.h>
+#include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_heap_caps.h"
@@ -67,7 +71,8 @@ typedef struct {
     char *method;
     char *path;
     char *query_string;
-    char *body;
+    uint8_t *body;
+    size_t body_len;
     esp32_mquickjs_http_server_header_t *headers;
     size_t header_count;
 } esp32_mquickjs_http_server_request_t;
@@ -96,6 +101,9 @@ typedef struct {
     int32_t status;
     char *status_text;
     bool has_body_stream;
+    bool body_binary;
+    bool has_known_length;
+    size_t known_length;
     esp32_mquickjs_fs_stream_ref_t body_stream_ref;
     esp32_mquickjs_http_server_header_t *headers;
     size_t header_count;
@@ -637,30 +645,34 @@ static bool http_server_glob_match(const char *pattern, const char *text)
     return *pattern == '\0';
 }
 
-static char *http_server_recv_body(httpd_req_t *req, size_t max_len, esp_err_t *out_err)
+static uint8_t *http_server_recv_body(httpd_req_t *req,
+                                      size_t max_len,
+                                      size_t *out_len,
+                                      esp_err_t *out_err)
 {
     size_t remaining;
     size_t offset = 0;
-    char *body;
+    uint8_t *body;
 
     *out_err = ESP_OK;
-    if (req->content_len <= 0) {
-        return http_server_strdup("");
+    *out_len = 0;
+    if (req->content_len == 0) {
+        return NULL;
     }
-    if (req->content_len > (int)max_len) {
+    if (req->content_len > max_len) {
         *out_err = ESP_ERR_HTTPD_RESP_SEND;
         return NULL;
     }
 
-    body = heap_caps_malloc((size_t)req->content_len + 1, MALLOC_CAP_8BIT);
+    body = heap_caps_malloc(req->content_len, MALLOC_CAP_8BIT);
     if (body == NULL) {
         *out_err = ESP_ERR_NO_MEM;
         return NULL;
     }
 
-    remaining = (size_t)req->content_len;
+    remaining = req->content_len;
     while (remaining > 0) {
-        int received = httpd_req_recv(req, body + offset, remaining);
+        int received = httpd_req_recv(req, (char *)(body + offset), remaining);
 
         if (received <= 0) {
             heap_caps_free(body);
@@ -671,7 +683,7 @@ static char *http_server_recv_body(httpd_req_t *req, size_t max_len, esp_err_t *
         remaining -= (size_t)received;
     }
 
-    body[offset] = '\0';
+    *out_len = offset;
     return body;
 }
 
@@ -776,8 +788,10 @@ static esp_err_t http_server_dispatch_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    request->body = http_server_recv_body(async_req, ESP32_MQUICKJS_HTTP_SERVER_MAX_BODY_LEN, &err);
-    if (request->body == NULL) {
+    request->body = http_server_recv_body(
+        async_req, ESP32_MQUICKJS_HTTP_SERVER_MAX_BODY_LEN,
+        &request->body_len, &err);
+    if (request->body == NULL && err != ESP_OK) {
         if (err == ESP_ERR_HTTPD_RESP_SEND) {
             http_server_send_error(async_req, 413, "request body too large");
         } else {
@@ -800,7 +814,7 @@ static esp_err_t http_server_dispatch_handler(httpd_req_t *req)
 }
 
 static bool http_server_make_request_object(JSContext *ctx,
-                                            const esp32_mquickjs_http_server_request_t *request,
+                                            esp32_mquickjs_http_server_request_t *request,
                                             const esp32_mquickjs_http_server_route_t *route,
                                             JSValue *out_obj)
 {
@@ -948,7 +962,10 @@ static bool http_server_make_request_object(JSContext *ctx,
         }
     }
 
-    *body_value = JS_NewString(ctx, request->body != NULL ? request->body : "");
+    *body_value = esp32_mquickjs_stream_open_memory_owned_binary(
+        ctx, *global_obj, request->body, request->body_len);
+    request->body = NULL;
+    request->body_len = 0;
     if (JS_IsException(*body_value)) {
         goto fail;
     }
@@ -1168,6 +1185,7 @@ static int http_server_make_response(JSContext *ctx,
     memset(out_response, 0, sizeof(*out_response));
     out_response->status = 200;
     out_response->status_text = NULL;
+    out_response->has_known_length = true;
 
     if (!esp32_mquickjs_is_response_object(ctx, *value)) {
         JS_ThrowTypeError(ctx, "http.server handlers must return a Response");
@@ -1212,6 +1230,56 @@ static int http_server_make_response(JSContext *ctx,
             goto fail;
         }
         out_response->has_body_stream = true;
+        out_response->body_binary =
+            esp32_mquickjs_stream_is_binary(&out_response->body_stream_ref);
+        out_response->has_known_length = esp32_mquickjs_stream_known_length(
+            &out_response->body_stream_ref, &out_response->known_length);
+    }
+
+    {
+        size_t i;
+
+        for (i = 0; i < out_response->header_count; ++i) {
+            const char *cursor;
+            char *end = NULL;
+            unsigned long long parsed;
+
+            if (strcasecmp(out_response->headers[i].key,
+                           "Content-Length") != 0) {
+                continue;
+            }
+            if (!out_response->has_known_length) {
+                JS_ThrowTypeError(
+                    ctx,
+                    "Response Content-Length requires a body with known length");
+                goto fail;
+            }
+            cursor = out_response->headers[i].value != NULL
+                         ? out_response->headers[i].value
+                         : "";
+            while (isspace((unsigned char)*cursor)) {
+                cursor++;
+            }
+            errno = 0;
+            parsed = strtoull(cursor, &end, 10);
+            while (end != NULL && isspace((unsigned char)*end)) {
+                end++;
+            }
+            if (*cursor == '\0' || *cursor == '-' || errno != 0 ||
+                end == cursor || end == NULL || *end != '\0' ||
+                parsed > SIZE_MAX) {
+                JS_ThrowTypeError(
+                    ctx, "Response Content-Length must be a non-negative integer");
+                goto fail;
+            }
+            if ((size_t)parsed != out_response->known_length) {
+                JS_ThrowRangeError(
+                    ctx,
+                    "Response Content-Length (%llu) does not match the body (%u bytes)",
+                    parsed, (unsigned)out_response->known_length);
+                goto fail;
+            }
+        }
     }
 
     JS_PopGCRef(ctx, &status_text_ref);
@@ -1241,13 +1309,174 @@ static bool http_server_has_content_type(const esp32_mquickjs_http_server_respon
     return false;
 }
 
+static bool http_server_has_header(
+    const esp32_mquickjs_http_server_response_t *response,
+    const char *name)
+{
+    size_t i;
+
+    for (i = 0; i < response->header_count; ++i) {
+        if (strcasecmp(response->headers[i].key, name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static esp_err_t http_server_close_response_body(
+    esp32_mquickjs_http_server_response_t *response)
+{
+    esp_err_t err;
+
+    if (response == NULL || !response->has_body_stream) {
+        return ESP_OK;
+    }
+    err = esp32_mquickjs_fs_stream_close(&response->body_stream_ref);
+    response->has_body_stream = false;
+    return err;
+}
+
+static esp_err_t http_server_raw_send_all(httpd_req_t *req,
+                                          const char *data,
+                                          size_t length)
+{
+    while (length > 0) {
+        int sent = httpd_send(req, data, length);
+
+        if (sent <= 0) {
+            return ESP_ERR_HTTPD_RESP_SEND;
+        }
+        data += sent;
+        length -= (size_t)sent;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t http_server_send_known_length_response(
+    httpd_req_t *req,
+    esp32_mquickjs_http_server_response_t *response)
+{
+    char line[192];
+    uint8_t *chunk_buffer = NULL;
+    size_t sent_body = 0;
+    size_t i;
+    int line_len;
+    esp_err_t err;
+
+    line_len = snprintf(
+        line, sizeof(line), "HTTP/1.1 %" PRId32 " %s\r\n",
+        response->status,
+        response->status_text != NULL
+            ? response->status_text
+            : http_server_status_text(response->status));
+    if (line_len < 0 || (size_t)line_len >= sizeof(line)) {
+        return ESP_ERR_HTTPD_RESP_HDR;
+    }
+    err = http_server_raw_send_all(req, line, (size_t)line_len);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (response->has_body_stream && !response->body_binary &&
+        !http_server_has_content_type(response)) {
+        static const char default_type[] =
+            "Content-Type: text/plain; charset=utf-8\r\n";
+
+        err = http_server_raw_send_all(req, default_type,
+                                       sizeof(default_type) - 1);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    if (!http_server_has_header(response, "Content-Length")) {
+        line_len = snprintf(line, sizeof(line), "Content-Length: %u\r\n",
+                            (unsigned)response->known_length);
+        if (line_len < 0 || (size_t)line_len >= sizeof(line)) {
+            return ESP_ERR_HTTPD_RESP_HDR;
+        }
+        err = http_server_raw_send_all(req, line, (size_t)line_len);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    for (i = 0; i < response->header_count; ++i) {
+        err = http_server_raw_send_all(req, response->headers[i].key,
+                                       strlen(response->headers[i].key));
+        if (err == ESP_OK) {
+            err = http_server_raw_send_all(req, ": ", 2);
+        }
+        if (err == ESP_OK) {
+            err = http_server_raw_send_all(
+                req, response->headers[i].value,
+                strlen(response->headers[i].value));
+        }
+        if (err == ESP_OK) {
+            err = http_server_raw_send_all(req, "\r\n", 2);
+        }
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    err = http_server_raw_send_all(req, "\r\n", 2);
+    if (err != ESP_OK || !response->has_body_stream) {
+        return err;
+    }
+    if (req->method == HTTP_HEAD) {
+        return http_server_close_response_body(response);
+    }
+
+    chunk_buffer = heap_caps_malloc(
+        ESP32_MQUICKJS_HTTP_SERVER_STREAM_CHUNK_SIZE, MALLOC_CAP_8BIT);
+    if (chunk_buffer == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    while (sent_body < response->known_length) {
+        size_t read_len = 0;
+
+        err = esp32_mquickjs_fs_stream_read(
+            &response->body_stream_ref, chunk_buffer,
+            ESP32_MQUICKJS_HTTP_SERVER_STREAM_CHUNK_SIZE, &read_len);
+        if (err != ESP_OK || read_len == 0 ||
+            read_len > response->known_length - sent_body) {
+            heap_caps_free(chunk_buffer);
+            (void)http_server_close_response_body(response);
+            return err != ESP_OK ? err : ESP_ERR_INVALID_SIZE;
+        }
+        err = http_server_raw_send_all(req, (const char *)chunk_buffer,
+                                       read_len);
+        if (err != ESP_OK) {
+            heap_caps_free(chunk_buffer);
+            (void)http_server_close_response_body(response);
+            return err;
+        }
+        sent_body += read_len;
+    }
+    {
+        uint8_t trailing_byte;
+        size_t trailing_len = 0;
+
+        err = esp32_mquickjs_fs_stream_read(
+            &response->body_stream_ref, &trailing_byte, 1, &trailing_len);
+        if (err != ESP_OK || trailing_len != 0) {
+            heap_caps_free(chunk_buffer);
+            (void)http_server_close_response_body(response);
+            return err != ESP_OK ? err : ESP_ERR_INVALID_SIZE;
+        }
+    }
+    heap_caps_free(chunk_buffer);
+    return http_server_close_response_body(response);
+}
+
 static esp_err_t http_server_send_response(httpd_req_t *req,
-                                           const esp32_mquickjs_http_server_response_t *response)
+                                           esp32_mquickjs_http_server_response_t *response)
 {
     char status_line[32];
     uint8_t *chunk_buffer = NULL;
     size_t i;
     esp_err_t err;
+
+    if (response->has_known_length) {
+        return http_server_send_known_length_response(req, response);
+    }
 
     snprintf(status_line,
              sizeof(status_line),
@@ -1258,7 +1487,7 @@ static esp_err_t http_server_send_response(httpd_req_t *req,
     if (err != ESP_OK) {
         return err;
     }
-    if (response->has_body_stream &&
+    if (response->has_body_stream && !response->body_binary &&
         !http_server_has_content_type(response)) {
         err = httpd_resp_set_type(req, "text/plain; charset=utf-8");
         if (err != ESP_OK) {
@@ -1277,7 +1506,7 @@ static esp_err_t http_server_send_response(httpd_req_t *req,
         size_t read_len = 0;
 
         if (req->method == HTTP_HEAD) {
-            err = esp32_mquickjs_fs_stream_close(&response->body_stream_ref);
+            err = http_server_close_response_body(response);
             if (err != ESP_OK) {
                 return err;
             }
@@ -1294,20 +1523,20 @@ static esp_err_t http_server_send_response(httpd_req_t *req,
                                                 &read_len);
             if (err != ESP_OK) {
                 heap_caps_free(chunk_buffer);
-                esp32_mquickjs_fs_stream_close(&response->body_stream_ref);
+                (void)http_server_close_response_body(response);
                 return err;
             }
             if (read_len > 0) {
                 err = httpd_resp_send_chunk(req, (const char *)chunk_buffer, read_len);
                 if (err != ESP_OK) {
                     heap_caps_free(chunk_buffer);
-                    esp32_mquickjs_fs_stream_close(&response->body_stream_ref);
+                    (void)http_server_close_response_body(response);
                     return err;
                 }
             }
         } while (read_len > 0);
         heap_caps_free(chunk_buffer);
-        err = esp32_mquickjs_fs_stream_close(&response->body_stream_ref);
+        err = http_server_close_response_body(response);
         if (err != ESP_OK) {
             return err;
         }
@@ -1566,20 +1795,16 @@ static JSValue http_server_make_server_object(JSContext *ctx, JSValue global_obj
 {
     JSGCRef server_ref;
     JSGCRef events_ref;
-    JSGCRef receive_ref;
     JSValue *server_obj;
     JSValue *events_obj;
-    JSValue *receive_fn;
     esp32_mquickjs_http_server_slot_t *server = http_server_get_slot(server_id);
     esp32_mquickjs_http_server_event_source_t *source = NULL;
 
     (void)global_obj;
     server_obj = JS_PushGCRef(ctx, &server_ref);
     events_obj = JS_PushGCRef(ctx, &events_ref);
-    receive_fn = JS_PushGCRef(ctx, &receive_ref);
     *server_obj = JS_NewObjectClassUser(ctx, JS_CLASS_HTTP_SERVER);
     *events_obj = JS_UNDEFINED;
-    *receive_fn = JS_UNDEFINED;
     if (JS_IsException(*server_obj) || server == NULL) {
         goto fail;
     }
@@ -1608,8 +1833,7 @@ static JSValue http_server_make_server_object(JSContext *ctx, JSValue global_obj
     }
     source = NULL;
     server->events = esp32_mquickjs_event_queue_from_value(ctx, *events_obj);
-    *receive_fn = JS_GetPropertyStr(ctx, *events_obj, "receive");
-    if (server->events == NULL || JS_IsException(*receive_fn)) {
+    if (server->events == NULL) {
         goto fail;
     }
 
@@ -1629,18 +1853,15 @@ static JSValue http_server_make_server_object(JSContext *ctx, JSValue global_obj
                                                       : "0.0.0.0")) ||
         !esp32_mquickjs_set_property_ref(ctx, server_obj, "started", JS_NewBool(server->started)) ||
         !esp32_mquickjs_set_property_ref(ctx, server_obj, "closed", JS_FALSE) ||
-        !esp32_mquickjs_set_property_ref(ctx, server_obj, "_eventQueue", *events_obj) ||
-        !esp32_mquickjs_set_property_ref(ctx, server_obj, "receive", *receive_fn)) {
+        !esp32_mquickjs_set_property_ref(ctx, server_obj, "_eventQueue", *events_obj)) {
         goto fail;
     }
 
-    JS_PopGCRef(ctx, &receive_ref);
     JS_PopGCRef(ctx, &events_ref);
     return JS_PopGCRef(ctx, &server_ref);
 
 fail:
     heap_caps_free(source);
-    JS_PopGCRef(ctx, &receive_ref);
     JS_PopGCRef(ctx, &events_ref);
     JS_PopGCRef(ctx, &server_ref);
     return JS_EXCEPTION;
@@ -1728,6 +1949,45 @@ JSValue js_http_server_close(JSContext *ctx, JSValue *this_val, int argc, JSValu
         return JS_EXCEPTION;
     }
     return JS_UNDEFINED;
+}
+
+JSValue js_http_server_receive(JSContext *ctx, JSValue *this_val,
+                               int argc, JSValue *argv)
+{
+    JSGCRef server_ref;
+    JSGCRef events_ref;
+    JSGCRef receive_ref;
+    JSValue *server_obj = JS_PushGCRef(ctx, &server_ref);
+    JSValue *events_obj = JS_PushGCRef(ctx, &events_ref);
+    JSValue *receive_fn = JS_PushGCRef(ctx, &receive_ref);
+    JSValue result;
+    int32_t server_id = -1;
+
+    *server_obj = this_val != NULL ? *this_val : JS_UNDEFINED;
+    *events_obj = JS_UNDEFINED;
+    *receive_fn = JS_UNDEFINED;
+    if (http_server_server_id_from_object(ctx, *server_obj,
+                                          "server.receive", &server_id) != 0) {
+        result = JS_EXCEPTION;
+        goto done;
+    }
+    *events_obj = JS_GetPropertyStr(ctx, *server_obj, "_eventQueue");
+    *receive_fn = JS_IsException(*events_obj)
+                      ? JS_EXCEPTION
+                      : JS_GetPropertyStr(ctx, *events_obj, "receive");
+    if (JS_IsException(*events_obj) || JS_IsException(*receive_fn)) {
+        result = JS_EXCEPTION;
+        goto done;
+    }
+    result = esp32_mquickjs_future_call_and_wait(
+        ctx, esp32_mquickjs_get_active_runtime(), *receive_fn,
+        *events_obj, argc, argv);
+
+done:
+    JS_PopGCRef(ctx, &receive_ref);
+    JS_PopGCRef(ctx, &events_ref);
+    JS_PopGCRef(ctx, &server_ref);
+    return result;
 }
 
 JSValue js_http_server_clear_routes(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

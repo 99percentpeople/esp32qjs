@@ -14,6 +14,7 @@
 typedef enum {
     ESP32_MQUICKJS_STREAM_KIND_FILE = 0,
     ESP32_MQUICKJS_STREAM_KIND_MEMORY = 1,
+    ESP32_MQUICKJS_STREAM_KIND_SOURCE = 2,
 } esp32_mquickjs_stream_kind_t;
 
 typedef struct {
@@ -35,6 +36,18 @@ typedef struct {
             size_t pos;
             bool owned;
         } memory;
+        struct {
+            JSContext *ctx;
+            JSGCRef owner_ref;
+            esp32_mquickjs_byte_span_source_t source;
+            esp32_mquickjs_byte_span_t span;
+            size_t span_offset;
+            size_t total_read;
+            size_t known_length;
+            bool rooted;
+            bool eof;
+            bool has_known_length;
+        } source;
     } handle;
 } esp32_mquickjs_stream_slot_t;
 
@@ -57,7 +70,8 @@ static void stream_init_once(void)
 
 static const char *stream_kind_name(esp32_mquickjs_stream_kind_t kind)
 {
-    return kind == ESP32_MQUICKJS_STREAM_KIND_MEMORY ? "memory" : "file";
+    return kind == ESP32_MQUICKJS_STREAM_KIND_MEMORY ? "memory" :
+           kind == ESP32_MQUICKJS_STREAM_KIND_SOURCE ? "source" : "file";
 }
 
 static esp32_mquickjs_stream_slot_t *stream_alloc_slot(void)
@@ -102,6 +116,14 @@ static void stream_cleanup_slot(esp32_mquickjs_stream_slot_t *slot)
     } else if (slot->kind == ESP32_MQUICKJS_STREAM_KIND_MEMORY && slot->handle.memory.owned) {
         heap_caps_free(slot->handle.memory.data);
         slot->handle.memory.data = NULL;
+    } else if (slot->kind == ESP32_MQUICKJS_STREAM_KIND_SOURCE) {
+        esp32_mquickjs_byte_span_source_close(slot->handle.source.ctx,
+                                              &slot->handle.source.source);
+        if (slot->handle.source.rooted) {
+            JS_DeleteGCRef(slot->handle.source.ctx,
+                           &slot->handle.source.owner_ref);
+            slot->handle.source.rooted = false;
+        }
     }
 
     heap_caps_free(slot->path);
@@ -315,8 +337,9 @@ fail:
     return JS_EXCEPTION;
 }
 
-static int stream_open_memory_owned_slot(char *data,
+static int stream_open_memory_owned_slot(uint8_t *data,
                                          size_t data_len,
+                                         bool binary,
                                          esp32_mquickjs_stream_slot_t **out_slot)
 {
     esp32_mquickjs_stream_slot_t *slot = stream_alloc_slot();
@@ -328,10 +351,10 @@ static int stream_open_memory_owned_slot(char *data,
     slot->kind = ESP32_MQUICKJS_STREAM_KIND_MEMORY;
     slot->readable = true;
     slot->writable = false;
-    slot->binary = false;
+    slot->binary = binary;
     slot->seekable = true;
-    memcpy(slot->mode, "r", 2);
-    slot->handle.memory.data = (uint8_t *)data;
+    memcpy(slot->mode, binary ? "rb" : "r", binary ? 3 : 2);
+    slot->handle.memory.data = data;
     slot->handle.memory.len = data_len;
     slot->handle.memory.pos = 0;
     slot->handle.memory.owned = true;
@@ -374,6 +397,53 @@ static int stream_slot_read(esp32_mquickjs_stream_slot_t *slot,
             slot->handle.memory.pos += read_len;
         }
         *out_len = read_len;
+        return 0;
+    }
+
+    if (slot->kind == ESP32_MQUICKJS_STREAM_KIND_SOURCE) {
+        size_t copied = 0;
+        unsigned empty_spans = 0;
+
+        while (copied < buf_len && !slot->handle.source.eof) {
+            size_t available;
+            size_t take;
+
+            if (slot->handle.source.span_offset >= slot->handle.source.span.length) {
+                esp32_mquickjs_byte_span_clear(&slot->handle.source.span);
+                slot->handle.source.span_offset = 0;
+                if (!esp32_mquickjs_byte_span_source_next(
+                        slot->handle.source.ctx,
+                        &slot->handle.source.source,
+                        &slot->handle.source.span)) {
+                    if (JS_HasException(slot->handle.source.ctx)) {
+                        return -1;
+                    }
+                    slot->handle.source.eof = true;
+                    break;
+                }
+                if (slot->handle.source.span.length == 0) {
+                    if (++empty_spans > 16) {
+                        return -1;
+                    }
+                    continue;
+                }
+                if (slot->handle.source.span.data == NULL) {
+                    return -1;
+                }
+            }
+            available = slot->handle.source.span.length -
+                        slot->handle.source.span_offset;
+            take = available < (buf_len - copied) ? available :
+                   (buf_len - copied);
+            memcpy((uint8_t *)buf + copied,
+                   slot->handle.source.span.data +
+                       slot->handle.source.span_offset,
+                   take);
+            slot->handle.source.span_offset += take;
+            slot->handle.source.total_read += take;
+            copied += take;
+        }
+        *out_len = copied;
         return 0;
     }
 
@@ -439,6 +509,9 @@ static int64_t stream_slot_tell(esp32_mquickjs_stream_slot_t *slot)
     if (slot->kind == ESP32_MQUICKJS_STREAM_KIND_MEMORY) {
         return (int64_t)slot->handle.memory.pos;
     }
+    if (slot->kind == ESP32_MQUICKJS_STREAM_KIND_SOURCE) {
+        return (int64_t)slot->handle.source.total_read;
+    }
     return -1;
 }
 
@@ -452,6 +525,9 @@ static bool stream_slot_eof(esp32_mquickjs_stream_slot_t *slot)
     }
     if (slot->kind == ESP32_MQUICKJS_STREAM_KIND_MEMORY) {
         return slot->handle.memory.pos >= slot->handle.memory.len;
+    }
+    if (slot->kind == ESP32_MQUICKJS_STREAM_KIND_SOURCE) {
+        return slot->handle.source.eof;
     }
     return true;
 }
@@ -507,11 +583,99 @@ JSValue esp32_mquickjs_stream_open_memory_owned(JSContext *ctx,
     if (data == NULL && data_len != 0) {
         return JS_ThrowInternalError(ctx, "memory stream requires valid data");
     }
-    if (stream_open_memory_owned_slot(data, data_len, &slot) != 0) {
+    if (stream_open_memory_owned_slot((uint8_t *)data, data_len, false, &slot) != 0) {
         heap_caps_free(data);
         return JS_ThrowInternalError(ctx, "too many open streams");
     }
 
+    result = stream_make_object(ctx, global_obj, slot);
+    if (JS_IsException(result)) {
+        stream_cleanup_slot(slot);
+    }
+    return result;
+}
+
+JSValue esp32_mquickjs_stream_open_memory_owned_binary(JSContext *ctx,
+                                                       JSValue global_obj,
+                                                       uint8_t *data,
+                                                       size_t data_len)
+{
+    esp32_mquickjs_stream_slot_t *slot;
+    JSValue result;
+
+    if (data == NULL && data_len != 0) {
+        return JS_ThrowInternalError(ctx, "binary memory stream requires valid data");
+    }
+    if (stream_open_memory_owned_slot(data, data_len, true, &slot) != 0) {
+        heap_caps_free(data);
+        return JS_ThrowInternalError(ctx, "too many open streams");
+    }
+    result = stream_make_object(ctx, global_obj, slot);
+    if (JS_IsException(result)) {
+        stream_cleanup_slot(slot);
+    }
+    return result;
+}
+
+JSValue esp32_mquickjs_stream_open_bytes_copy(JSContext *ctx,
+                                              JSValue global_obj,
+                                              JSValue bytes_value,
+                                              const char *api_name)
+{
+    esp32_mquickjs_byte_source_t source;
+    uint8_t *converted = NULL;
+    uint8_t *copy = NULL;
+    JSValue error = JS_UNDEFINED;
+
+    if (!esp32_mquickjs_get_byte_source(ctx, bytes_value, api_name,
+                                        &source, &converted, &error)) {
+        return JS_IsUndefined(error) ? JS_EXCEPTION : error;
+    }
+    if (source.length > 0) {
+        copy = heap_caps_malloc(source.length, MALLOC_CAP_8BIT);
+        if (copy == NULL) {
+            esp32_mquickjs_release_byte_source(converted);
+            return JS_ThrowOutOfMemory(ctx);
+        }
+        memcpy(copy, source.data, source.length);
+    }
+    esp32_mquickjs_release_byte_source(converted);
+    return esp32_mquickjs_stream_open_memory_owned_binary(ctx, global_obj,
+                                                          copy, source.length);
+}
+
+JSValue esp32_mquickjs_stream_open_byte_source(JSContext *ctx,
+                                               JSValue global_obj,
+                                               JSValue source_value)
+{
+    esp32_mquickjs_stream_slot_t *slot = stream_alloc_slot();
+    JSValue error = JS_UNDEFINED;
+    JSValue *owner;
+    JSValue result;
+
+    if (slot == NULL) {
+        return JS_ThrowInternalError(ctx, "too many open streams");
+    }
+    slot->kind = ESP32_MQUICKJS_STREAM_KIND_SOURCE;
+    slot->readable = true;
+    slot->binary = true;
+    slot->seekable = false;
+    memcpy(slot->mode, "rb", 3);
+    slot->handle.source.ctx = ctx;
+    esp32_mquickjs_byte_span_clear(&slot->handle.source.span);
+    if (!esp32_mquickjs_open_byte_span_source(ctx, source_value,
+                                              "binary body",
+                                              &slot->handle.source.source,
+                                              &error)) {
+        slot->allocated = false;
+        return JS_IsUndefined(error) ? JS_EXCEPTION : error;
+    }
+    owner = JS_AddGCRef(ctx, &slot->handle.source.owner_ref);
+    *owner = source_value;
+    slot->handle.source.rooted = true;
+    slot->handle.source.has_known_length =
+        esp32_mquickjs_byte_span_source_known_length(
+            ctx, source_value, &slot->handle.source.known_length);
     result = stream_make_object(ctx, global_obj, slot);
     if (JS_IsException(result)) {
         stream_cleanup_slot(slot);
@@ -627,6 +791,129 @@ int esp32_mquickjs_stream_read_all_text(JSContext *ctx,
 done:
     heap_caps_free(buffer);
     return result;
+}
+
+int esp32_mquickjs_stream_read_all_bytes(JSContext *ctx,
+                                         JSValue stream_value,
+                                         const char *api_name,
+                                         size_t max_bytes,
+                                         uint8_t **out_data,
+                                         size_t *out_len)
+{
+    esp32_mquickjs_fs_stream_ref_t ref;
+    esp32_mquickjs_stream_slot_t *slot;
+    uint8_t *buffer = NULL;
+    size_t length = 0;
+    size_t capacity = 0;
+
+    if (out_data == NULL || out_len == NULL || max_bytes == 0) {
+        return -1;
+    }
+    *out_data = NULL;
+    *out_len = 0;
+    if (stream_ref_from_object(ctx, stream_value, api_name, &ref) != 0) {
+        return -1;
+    }
+    slot = stream_get_slot(&ref);
+    if (slot == NULL || !slot->readable) {
+        JS_ThrowTypeError(ctx, "%s expects a readable Stream", api_name);
+        return -1;
+    }
+
+    for (;;) {
+        uint8_t chunk[ESP32_MQUICKJS_STREAM_READ_ALL_CHUNK];
+        size_t read_len = 0;
+        size_t needed;
+
+        if (stream_slot_read(slot, chunk, sizeof(chunk), &read_len) != 0) {
+            JS_ThrowInternalError(ctx, "%s failed while reading the stream", api_name);
+            goto fail;
+        }
+        if (read_len == 0) {
+            break;
+        }
+        if (read_len > max_bytes || length > max_bytes - read_len) {
+            JS_ThrowRangeError(ctx, "%s body exceeds maxBytes", api_name);
+            goto fail;
+        }
+        needed = length + read_len;
+        if (capacity < needed) {
+            size_t new_capacity = capacity == 0 ? 1024 : capacity;
+            uint8_t *grown;
+
+            while (new_capacity < needed && new_capacity < max_bytes) {
+                size_t doubled = new_capacity > SIZE_MAX / 2
+                                     ? max_bytes
+                                     : new_capacity * 2;
+                new_capacity = doubled > max_bytes ? max_bytes : doubled;
+            }
+            grown = heap_caps_realloc(buffer, new_capacity,
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (grown == NULL) {
+                grown = heap_caps_realloc(buffer, new_capacity,
+                                          MALLOC_CAP_8BIT);
+            }
+            if (grown == NULL) {
+                JS_ThrowOutOfMemory(ctx);
+                goto fail;
+            }
+            buffer = grown;
+            capacity = new_capacity;
+        }
+        memcpy(buffer + length, chunk, read_len);
+        length += read_len;
+    }
+
+    *out_data = buffer;
+    *out_len = length;
+    return 0;
+
+fail:
+    heap_caps_free(buffer);
+    return -1;
+}
+
+bool esp32_mquickjs_stream_is_binary(
+    const esp32_mquickjs_fs_stream_ref_t *ref)
+{
+    esp32_mquickjs_stream_slot_t *slot = stream_get_slot(ref);
+
+    return slot != NULL && slot->binary;
+}
+
+bool esp32_mquickjs_stream_known_length(
+    const esp32_mquickjs_fs_stream_ref_t *ref,
+    size_t *out_length)
+{
+    esp32_mquickjs_stream_slot_t *slot = stream_get_slot(ref);
+
+    if (slot == NULL || out_length == NULL) {
+        return false;
+    }
+    if (slot->kind == ESP32_MQUICKJS_STREAM_KIND_MEMORY) {
+        *out_length = slot->handle.memory.len - slot->handle.memory.pos;
+        return true;
+    }
+    if (slot->kind == ESP32_MQUICKJS_STREAM_KIND_SOURCE &&
+        slot->handle.source.has_known_length &&
+        slot->handle.source.total_read <= slot->handle.source.known_length) {
+        *out_length = slot->handle.source.known_length -
+                      slot->handle.source.total_read;
+        return true;
+    }
+    return false;
+}
+
+void esp32_mquickjs_deinit_stream_runtime(void)
+{
+    size_t i;
+
+    stream_init_once();
+    for (i = 0; i < ESP32_MQUICKJS_MAX_STREAMS; ++i) {
+        if (s_streams[i].allocated) {
+            stream_cleanup_slot(&s_streams[i]);
+        }
+    }
 }
 
 esp_err_t esp32_mquickjs_stream_close_value(JSContext *ctx, JSValue stream_value)

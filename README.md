@@ -2,7 +2,9 @@
 
 ESP32QJS is an ESP-IDF framework for running trusted JavaScript applications on
 ESP32 MCUs with mquickjs. It provides feature-gated native APIs for GPIO,
-I2C, SPI, UART, USB serial frames, TCP lines, Wi-Fi, HTTP, WebSocket, LittleFS, bounded NVS strings, timers, and display buffers, plus
+I2C, SPI, UART, I2S/PDM microphone input, ESP32-S3 still-camera capture, USB
+serial frames, binary TCP/TLS, Wi-Fi, HTTP, WebSocket, LittleFS, bounded NVS
+strings, timers, and native Bitmaps, plus
 versioned JavaScript display and immediate-mode UI libraries.
 
 Framework version: **0.1.0**
@@ -16,7 +18,7 @@ apps/                       application profiles, behavior, partitions, and file
   minimal/                  hardware-neutral default application
   demo/                     display and immediate-mode UI demos
 shared/flash_data/_sys/     JavaScript libraries shared by applications
-configs/mcus/               MCU targets and intrinsic feature defaults
+configs/mcus/               MCU targets and unsupported-module exclusions
 components/esp32_mquickjs/  mquickjs adapter and native Host API
 components/esp32qjs_runtime reusable runtime lifecycle component
 components/esp32qjs_interactive optional serial REPL frontend
@@ -24,11 +26,12 @@ main/                       minimal firmware entry point
 tests/                      host C and device-backed JavaScript tests
 ```
 
-Configuration is layered as MCU defaults, application defaults, then a generated
-hardware overlay for Flash, PSRAM, and optional wiring. Partition tables are generated
-from the selected Flash capacity and application layout. The LittleFS image is built by
-copying shared files first and the selected application's files second;
-applications may intentionally override shared paths.
+Configuration is layered as MCU capability exclusions, application defaults, then a
+generated hardware overlay for Flash, PSRAM, and optional constants. Server product
+builds append a validated generated module-selection overlay as the final layer.
+Partition tables are generated from the selected Flash capacity and application
+layout. The LittleFS image is built by copying shared files first and the selected
+application's files second; applications may intentionally override shared paths.
 
 ## Prerequisites
 
@@ -90,9 +93,12 @@ A complete LittleFS source directory can be supplied for compatibility or test
 workflows with `--flash-data-dir PATH`. One-off application inputs can be
 selected with `--app-sdkconfig-defaults PATH` and `--partition-table PATH`.
 Use `--flash-size-mb`, `--psram-mode`, `--psram-size`, and
-`--hardware-constants` only with measured hardware values. The constants file
-may contain registered `ESP32QJS_*` driver defaults and application-owned
-`APP_*` values. Unknown PSRAM must use `--psram-mode none`.
+`--hardware-constants` only with measured hardware values. The latter remains
+an ephemeral local/test input for generated `ESP32QJS_*` driver defaults and
+application-owned `APP_*` values; this repository does not store board pin
+maps under `configs/`. ESP32QJS product builds define those constants in the
+server hardware template and generate the include inside the build directory.
+Unknown PSRAM must use `--psram-mode none`.
 
 ## Create an Application
 
@@ -114,9 +120,11 @@ APP_SDKCONFIG_DEFAULTS=sdkconfig.defaults
 PARTITION_LAYOUT=storage
 ```
 
-Application defaults control behavior such as REPL/autorun policy, while MCU
-defaults retain only target and intrinsic feature settings. Flash/PSRAM settings and
-optional pin defaults are generated per build. `APP_ID` is the
+Application defaults control behavior such as REPL/autorun policy and explicitly
+enable the native modules the application needs. All optional module Kconfig defaults
+are off; MCU defaults only force modules off when that target cannot support them.
+Flash/PSRAM settings and optional constants are generated per build. Server builds
+append their validated module selection after the application defaults. `APP_ID` is the
 stable build identifier and must contain only letters, digits, `.`, `_`, or
 `-`. Select a bundled app with `--app my_app` or `APP=my_app` in `.env`.
 
@@ -132,6 +140,13 @@ python scripts/remote.py --app ../agent/device flash --erase-workspace
 The destructive flag initializes an external profile's optional workspace
 partition. Subsequent `flash` and `flash-fs` calls preserve it; use
 `flash-workspace` only when an explicit workspace reset is intended.
+
+Control-plane builds do not expose raw partition CSV. The server resolves its
+validated `auto`, `compatible`, or `custom` build selection into a generated
+table, records the complete geometry in the immutable Artifact, and packages a
+verified empty workspace initializer. The flash request then explicitly chooses
+preserve or erase; this product-level policy remains outside MCU defaults and
+hardware templates.
 
 External profiles own the same `app.env`, `sdkconfig.defaults`, partition layout,
 and `flash_data/` structure as bundled profiles. Set `APP_FILE`
@@ -178,6 +193,7 @@ python scripts/remote.py test --scope js --module nvs
 python scripts/remote.py test --scope js --module tcp
 python scripts/remote.py test --scope js --module wifi --module http --network
 python scripts/remote.py test --scope js --module spi --module uart --loopback
+python scripts/remote.py test --scope js --module camera-bitmap --media-hardware
 ```
 
 ## API and Pending Work

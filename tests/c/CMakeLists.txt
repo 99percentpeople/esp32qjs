@@ -32,6 +32,20 @@ target_include_directories(test_byte_span PRIVATE ../../components/esp32_mquickj
 target_include_directories(test_byte_span PRIVATE ../../components/esp32_mquickjs/vendor/mquickjs)
 add_test(NAME test_byte_span COMMAND test_byte_span)
 
+add_executable(test_bitmap_image
+    test_bitmap_image.c
+    ../../components/esp32_mquickjs/src/modules/bitmap/esp32_mquickjs_bitmap_image_core.c
+)
+target_include_directories(test_bitmap_image PRIVATE ../../components/esp32_mquickjs/internal)
+add_test(NAME test_bitmap_image COMMAND test_bitmap_image)
+
+add_executable(test_peripheral_lease
+    test_peripheral_lease.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_peripheral_lease.c
+)
+target_include_directories(test_peripheral_lease PRIVATE ../../components/esp32_mquickjs/internal)
+add_test(NAME test_peripheral_lease COMMAND test_peripheral_lease)
+
 add_executable(test_line_framer
     test_line_framer.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_line_framer.c

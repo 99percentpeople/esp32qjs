@@ -7,7 +7,7 @@ This plan covers:
 
 - built-in C-side host APIs exported by the firmware runtime
 - MCU/peripheral bindings such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, and `uart`
-- low-level native helpers such as `displayBuffer`
+- low-level native helpers such as `bitmap`
 - transport/runtime helpers such as `wifi`, `http`, timers, and `load(...)`
 
 It does not treat JS-side LittleFS libraries such as `display` and `ui` as firmware ABI. Those should remain versioned JS libraries layered on top of the built-in host APIs.
@@ -24,7 +24,7 @@ The stable API should satisfy these rules:
 - Module names stay small and literal. Prefer raw ESP-IDF or platform names such as `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `wifi`, `http`, `socket`, `sys`, `fs`, `nvs`.
 - Built-in host APIs stay low-level. Board-independent drivers, widgets, protocol stacks, debounce logic, animation helpers, and other policy belong in JavaScript.
 - Additive change is preferred. Once a module shape is frozen, new fields and methods may be added, but existing names and semantics should not be renamed or weakened.
-- Host modules should be MCU-selectable features. Each optional module should be enabled or disabled by a `CONFIG_...` feature macro and chosen from SoC capability under `configs/mcus/<mcu>/sdkconfig.defaults`.
+- Host modules should be project-selectable features. Each optional module is enabled or disabled by a `CONFIG_...` feature macro; MCU defaults only force unsupported modules off.
 - Compiled feature sets should be discoverable from JS in one stable place such as `sys.info.features`, instead of forcing user scripts to probe globals with `typeof`.
 - Mutating peripheral calls should return state objects when that improves observability, but status objects must reflect real or intentionally tracked state, not guessed state.
 - ISR and background-task events must always be bridged back onto the single JS runtime task.
@@ -50,7 +50,8 @@ The built-in host API should be split into:
 - `Core runtime surface`
   Small helpers and types that are effectively part of the runtime itself.
 - `Optional host features`
-  Peripheral or connectivity modules that may be compiled in or out per MCU.
+  Peripheral or connectivity modules that may be compiled in or out per project,
+  within the selected MCU's capability constraints.
 
 Recommended compile-time model:
 
@@ -60,7 +61,7 @@ Recommended compile-time model:
   - compile out implementation files or guard their registration paths
   - conditionally include component dependencies
 - Use those generated `CONFIG_...` symbols directly in source code; do not add a second alias layer such as `ESP32_MQUICKJS_FEATURE_*`.
-- Let each MCU profile set intrinsic feature defaults in `configs/mcus/<mcu>/sdkconfig.defaults`; generated hardware overlays own Flash, PSRAM, and optional wiring.
+- Keep every optional module disabled by its base Kconfig default. Applications select their required modules, MCU profiles only disable unsupported modules, and generated hardware overlays own Flash, PSRAM, and optional constants. Managed product builds append a validated module-selection overlay last.
 
 Recommended feature symbols:
 
@@ -79,7 +80,7 @@ Recommended feature symbols:
 - `CONFIG_ESP32_MQUICKJS_FEATURE_WIFI`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_HTTP`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER`
-- `CONFIG_ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP`
 
 Recommended dependency rules:
 
@@ -96,9 +97,9 @@ Recommended dependency rules:
 - `FEATURE_WIFI` depends on `SOC_WIFI_SUPPORTED`
 - `FEATURE_HTTP` depends on `FEATURE_WIFI` in the current firmware, unless another network backend is introduced later
 - `FEATURE_HTTP_SERVER` depends on `FEATURE_WIFI` in the current firmware
-- `FEATURE_DISPLAY_BUFFER` has no direct peripheral dependency, but full-frame RGB buffers should be enabled only by a measured PSRAM profile with a sufficient memory budget
+- `FEATURE_BITMAP` has no direct peripheral dependency, but full-frame RGB buffers should be enabled only by a measured PSRAM profile with a sufficient memory budget
 - `staticFileHandler` is a composite capability that depends on `FEATURE_HTTP_SERVER && FEATURE_FS`
-- `FEATURE_FS` stays enabled on supported MCUs because `load(...)`, LittleFS startup, and static file serving depend on it
+- Applications using `load(...)`, LittleFS startup, or static file serving must explicitly select `FEATURE_FS`
 
 Recommended runtime discovery:
 
@@ -120,7 +121,7 @@ print(JSON.stringify(sys.info.features));
 //   usbSerial: false,
 //   socket: true,
 //   websocket: false,
-//   displayBuffer: true,
+//   bitmap: true,
 //   wifi: true,
 //   http: true,
 //   httpServer: true,
@@ -135,23 +136,26 @@ Behavior rule:
 
 ## MCU and Hardware Profiles
 
-MCU directories under [configs/mcus](../configs/mcus) are the canonical intrinsic
-feature presets. Current presets are `esp32c3` and `esp32s3`; they do not identify a
-development board and must not provide guessed LED or bus pins.
+MCU directories under [configs/mcus](../configs/mcus) are canonical target capability
+profiles. Current presets are `esp32c3` and `esp32s3`; their module entries only force
+unsupported features off. They do not identify a development board and must not
+provide guessed LED or bus pins.
 
 Each concrete build combines:
 
 - detected MCU and Flash capacity;
 - detected PSRAM mode/capacity, or the safe no-PSRAM profile when it is unknown;
 - an optional server-stored named hardware-constant profile;
-- the application behavior and partition layout.
+- the application behavior, selected module set, and partition layout.
 
-Peripheral modules remain compiled when the MCU supports them. API defaults resolve
+Only modules selected by the application or managed build are compiled, and the MCU
+capability layer prevents unsupported selections. API defaults resolve
 from an explicit option, then an immutable hardware-profile constant, then a safe
 Kconfig default. If no pin exists, convenience calls must reject the missing default
-while explicit-pin APIs remain available. Future MCU presets may enable
-`FEATURE_DAC=y` only when the SoC supports it; board routing remains deployment
-configuration, not an MCU-family assumption.
+while explicit-pin APIs remain available. Future MCU presets may stop forcing
+`FEATURE_DAC=n` when the SoC supports it; the project still decides whether to compile
+the module. Board routing remains deployment configuration, not an MCU-family
+assumption.
 
 ## Module Inventory
 
@@ -161,12 +165,12 @@ Built-in modules and types currently in scope:
 - Data/runtime types: `Headers`, `Request`, `Response`, `Stream`
 - Filesystem/runtime modules: `fs`, `nvs`, `sys`
 - Peripheral modules: `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`
-- Low-level graphics buffer modules: `displayBuffer`
+- Low-level graphics buffer modules: `bitmap`
 - Transport/connectivity modules: `usbSerial`, `socket`, `websocketClient`, `wifi`, `http`, `HttpServer`, `StaticFileHandler`
 - Generic concurrency types: planned `Future` and `EventQueue`
 - JS-side libraries outside the firmware ABI: `display`, `ui`
 
-In the long-term plan, `nvs`, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `usbSerial`, `socket`, `websocketClient`, `displayBuffer`, `wifi`, `http`, and `httpServer` should all be treated as optional host features rather than unconditional globals.
+In the long-term plan, `nvs`, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `usbSerial`, `socket`, `websocketClient`, `bitmap`, `wifi`, `http`, and `httpServer` should all be treated as optional host features rather than unconditional globals.
 
 ## Freeze Principles By Area
 
@@ -217,7 +221,7 @@ Freeze recommendations:
 - Keep current path sandboxing under `/littlefs`.
 - Keep current text-oriented convenience helpers such as `readText` and `writeText`.
 - Keep `Stream` as the common file/request/response body abstraction.
-- Treat `fs` as a feature-gated module in build configuration, but leave it enabled by default on normal boards.
+- Treat `fs` as a feature-gated module in build configuration; applications that use `load(...)`, LittleFS startup, or static files must enable it explicitly.
 
 Adjustments that can still be additive later:
 
@@ -396,7 +400,7 @@ What should stay intentional:
 
 - The runtime now uses a bus-object model instead of a single global singleton, and future transport modules should follow that direction.
 - The current `add device -> transact -> remove device` flow on every call is still acceptable for the first stable raw I2C surface, but it should remain an internal detail rather than leaking into the JS API shape.
-- Display drivers may pass native byte chunks through this module, but I2C should not inspect `displayBuffer` internals.
+- Display drivers may pass native byte chunks through this module, but I2C should not inspect `bitmap` internals.
 
 Recommended stable target:
 
@@ -485,7 +489,7 @@ Recommended stable target:
 - Let `uart.open(options?)` return a `UARTPort`, using board/profile default `port`, `tx`, `rx`, and `baud` values when no override is supplied.
 - Keep the first stable surface synchronous and explicit:
   `UARTPort.write(...)`, `UARTPort.writeChunks(...)`, `UARTPort.writeSource(...)`, `UARTPort.read(...)`, `UARTPort.available()`, `UARTPort.flush(...)`, and `UARTPort.clearRx()`.
-- Keep `write(...)` on `ByteSource`, `writeChunks(...)` on chunk arrays, and `writeSource(...)` on generic `ByteSpanSource`; UART should not inspect display-buffer internals.
+- Keep `write(...)` on `ByteSource`, `writeChunks(...)` on chunk arrays, and `writeSource(...)` on generic `ByteSpanSource`; UART should not inspect Bitmap internals.
 - Keep explicit `close()` as the primary lifecycle boundary and stale-handle errors after close.
 - Gate the module behind `FEATURE_UART`.
 
@@ -496,22 +500,22 @@ Intentional non-goals for the first stable UART layer:
 - no RS485 mode
 - no pattern detection or event queue surface
 
-### `displayBuffer`
+### `bitmap`
 
 Status: `Candidate for freeze`
 
-The old display buffer plan has been implemented and the remaining active surface is now part of the host API reference.
+The native Bitmap plan has been implemented and the active surface is now part of the host API reference.
 
 What is already good:
 
-- `displayBuffer` is feature-gated and reported through `sys.info.features.displayBuffer`.
-- The module exposes native `mono1` and `rgb565` buffers, dirty bounds, drawing primitives, EQF1 fixed bitmap font loading, and byte-view rectangle export.
-- `readRect(...)` and `readRectChunks(...)` return generic native byte sources; `createSpanSource(...)` returns a retained `DisplayBufferSpanSource` whose display-only `setRect(...)` control is separate from the generic `ByteSpanSource` consumed by SPI.
+- `bitmap` is feature-gated and reported through `sys.info.features.bitmap`.
+- The module exposes native `mono1`, `gray8`, `rgb565`, and `rgb888` buffers, dirty bounds, drawing primitives, EQF1 fixed bitmap font loading, byte-view rectangle export, and a fused transform worker.
+- `readRect(...)` and `readRectChunks(...)` return generic native byte sources; `createSpanSource(...)` returns a retained `BitmapSpanSource` whose display-only `setRect(...)` control is separate from the generic `ByteSpanSource` consumed by SPI.
 - The layered JavaScript display library separates framebuffer rendering, panel command sequencing, presentation policy, and SPI/I2C transport ownership.
 
 Recommended stable target:
 
-- Keep `displayBuffer` as a low-level pixel buffer and byte-export primitive, not a panel driver.
+- Keep `bitmap` as a low-level pixel buffer and byte-export primitive, not a panel driver.
 - Keep JS libraries responsible for ST7789, SSD1306, double-buffer policy, animation timing, and widget behavior.
 - Keep the native text API intentionally simple. UTF-8 or Chinese display should continue to use JS-side mapped fonts unless a measured workload proves a native text shaper is needed.
 - Treat storage and DMA behavior as buffer/export options, not as SPI-specific shortcuts.
@@ -519,8 +523,8 @@ Recommended stable target:
 Remaining freeze work:
 
 - Keep tests for close/finalizer behavior, dirty bounds, drawing primitives, font loading, and byte-source chunk exports.
-- Add future formats such as grayscale only when a concrete display driver needs them.
-- Consider `copyFrom(...)`, `blitFrom(...)`, multi-rect dirty tracking, or native clipping only after profiling shows the current bounding-rect path is limiting real UI workloads.
+- Keep transform ordering, lease ownership, cancellation, and descriptor byte/bit order covered by table-driven tests.
+- Consider multi-rect dirty tracking or compressed-image decoders only after a concrete workload requires them; keep JPEG, PNG, and BMP decoding independent from the raw pixel pipeline.
 
 ### `dac`
 
@@ -676,7 +680,7 @@ Before calling the built-in host API stable, adopt these rules:
 - Keep module methods callback-free; repeated input such as GPIO interrupts uses
   `EventQueue`, and concurrency is composed through `Future`.
 - Do not add broad alias sets for every peripheral API. One clear name is better than many compatibility names.
-- New optional modules should always be introduced as named build features with board-level defaults, not as unconditional globals.
+- New optional modules should always be introduced as named build features with application-selected defaults and MCU capability constraints, not as unconditional globals.
 
 ## Freeze Order
 
@@ -685,7 +689,7 @@ Recommended order for stabilization:
 1. Freeze now:
    `help/load/timers`, `fs`, `Stream`, `Headers`, `Request`, `Response`, `adc`
 2. Candidate for freeze after focused validation:
-   `nvs`, `i2c`, `spi`, `uart`, `displayBuffer`
+   `nvs`, `i2c`, `spi`, `uart`, `bitmap`
 3. Adjust before freeze:
    `sys`, `Future`, `EventQueue`, `gpio`, `wifi`, `http`, `ledc`, `dac`
 
@@ -695,7 +699,7 @@ Recommended implementation order from this plan:
 
 1. Tighten `ledc` status semantics so status objects never imply configuration that did not happen, then decide whether low-speed mode is intentionally fixed for the first stable API.
 2. Validate `dac` lifecycle and status on an `esp32` or `esp32s2` board before calling the module stable.
-3. Finish freeze coverage for the current byte payload paths: `DisplayBuffer.createSpanSource(...)`, `SPIDevice.writeSource(...)`, `displayBuffer.readRectChunks(...)`, `SPIDevice.writeChunks(...)`, and `I2CBus.writeChunks(...)`.
-4. Keep `i2c`, `spi`, `uart`, `displayBuffer`, `wifi`, and `http` reference docs and TypeScript definitions aligned with their current implementation before marking them stable.
+3. Finish freeze coverage for the current byte payload paths: `Bitmap.createSpanSource(...)`, `SPIDevice.writeSource(...)`, `bitmap.readRectChunks(...)`, `SPIDevice.writeChunks(...)`, and `I2CBus.writeChunks(...)`.
+4. Keep `i2c`, `spi`, `uart`, `bitmap`, `wifi`, and `http` reference docs and TypeScript definitions aligned with their current implementation before marking them stable.
 5. Improve JS display demo smoke coverage so native drawing, mapped fonts, transparent text, dirty bounds, and chunked flushes are exercised together.
-6. Consider `displayBuffer` follow-up features only when a measured workload needs them: grayscale formats, `copyFrom(...)`, `blitFrom(...)`, multi-rect dirty tracking, or native clipping.
+6. Consider `bitmap` follow-up features only when a measured workload needs them: multi-rect dirty tracking, compressed-image decoders, or native clipping.

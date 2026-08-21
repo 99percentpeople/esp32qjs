@@ -12,7 +12,7 @@ class DisplayArchitectureTests(SourceContractTestCase):
     def test_panel_drivers_do_not_own_rendering_or_native_buses(self):
         forbidden = (
             "display.Surface.call",
-            "displayBuffer.create",
+            "bitmap.create",
             ".prototype.drawText",
             ".prototype.fillRect",
             "spi.openBus",

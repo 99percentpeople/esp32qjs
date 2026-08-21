@@ -403,7 +403,7 @@ load("_sys/display/st7789.js");
   var latest = null;
   var visibleFps = "-- FPS";
 
-  function drawImageAt(dx, dy) {
+  function renderPngAt(dx, dy) {
     var fills = 0;
     for (var i = 0; i < image.rects.length; i++) {
       var rect = image.rects[i];
@@ -455,7 +455,7 @@ load("_sys/display/st7789.js");
       x -= span;
     }
     while (x < width) {
-      fills += drawImageAt(x, logoY);
+      fills += renderPngAt(x, logoY);
       x += span;
     }
     fills += drawHud();

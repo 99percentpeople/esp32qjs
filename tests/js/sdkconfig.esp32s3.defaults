@@ -1,2 +1,8 @@
-# Keep the moving heap compact enough for DEBUG_GC on PSRAM-backed S3 boards.
+# The S3 test heap lives in externally mapped PSRAM. DEBUG_GC compacts before
+# every allocation and can fault the shared flash/PSRAM cache during context
+# construction, before any test code runs. Exercise the normal compacting
+# collector on S3; the common host and internal-heap targets retain DEBUG_GC.
 CONFIG_ESP32QJS_JS_HEAP_SIZE=524288
+# CONFIG_ESP32_MQUICKJS_DEBUG_GC is not set
+CONFIG_ESP32_MQUICKJS_FEATURE_I2S=y
+CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA=y

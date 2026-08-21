@@ -93,6 +93,18 @@ test("display/lifecycle", function () {
   test.equal(presentCount, 1, "open should present the pre-rendered first frame");
   test.equal(screen.surface.getDirty(), null, "successful presentation should clear dirty state");
 
+  test.equal(screen.blit({
+    width: 2,
+    height: 1,
+    format: "gray8",
+    pixels: [0, 255]
+  }, { destinationRect: { x: 0, y: 0, width: 2, height: 1 } }), screen,
+  "Display.blit should delegate native grayscale conversion through Surface");
+  test.equal(screen.getPixel(0, 0), 0,
+    "Display.blit should map dark grayscale pixels to mono1 background");
+  test.equal(screen.getPixel(1, 0), 1,
+    "Display.blit should map bright grayscale pixels to mono1 foreground");
+
   screen.fillRect(1, 1, 4, 3, 1);
   screen.present([
     { x: 1, y: 1, width: 4, height: 3 },

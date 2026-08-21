@@ -14,7 +14,10 @@ typedef struct {
 typedef struct {
     char *url;
     char *method;
-    char *body;
+    uint8_t *body;
+    size_t body_len;
+    bool body_present;
+    bool body_binary;
     uint32_t timeout_ms;
     size_t max_body_bytes;
     esp32_mquickjs_http_header_t *headers;
@@ -28,7 +31,8 @@ typedef struct {
     int32_t status;
     char *url;
     char *status_text;
-    char *body;
+    uint8_t *body;
+    size_t body_len;
     esp32_mquickjs_http_header_t *headers;
     size_t header_count;
 } esp32_mquickjs_http_response_t;
@@ -64,7 +68,7 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
                                                                     char *error_text,
                                                                     size_t error_text_size);
 JSValue esp32_mquickjs_http_make_response_object(JSContext *ctx,
-                                                 const esp32_mquickjs_http_response_t *response);
+                                                 esp32_mquickjs_http_response_t *response);
 int esp32_mquickjs_http_build_request_from_args(JSContext *ctx,
                                                 int argc,
                                                 JSGCRef *argv,

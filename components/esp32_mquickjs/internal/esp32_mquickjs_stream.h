@@ -27,6 +27,20 @@ JSValue esp32_mquickjs_stream_open_memory_owned(JSContext *ctx,
                                                 char *data,
                                                 size_t data_len);
 
+JSValue esp32_mquickjs_stream_open_memory_owned_binary(JSContext *ctx,
+                                                       JSValue global_obj,
+                                                       uint8_t *data,
+                                                       size_t data_len);
+
+JSValue esp32_mquickjs_stream_open_bytes_copy(JSContext *ctx,
+                                              JSValue global_obj,
+                                              JSValue bytes_value,
+                                              const char *api_name);
+
+JSValue esp32_mquickjs_stream_open_byte_source(JSContext *ctx,
+                                               JSValue global_obj,
+                                               JSValue source_value);
+
 JSValue esp32_mquickjs_stream_clone(JSContext *ctx,
                                     JSValue global_obj,
                                     JSValue stream_value);
@@ -36,6 +50,21 @@ int esp32_mquickjs_stream_read_all_text(JSContext *ctx,
                                         const char *api_name,
                                         char **out_text,
                                         size_t *out_len);
+
+int esp32_mquickjs_stream_read_all_bytes(JSContext *ctx,
+                                         JSValue stream_value,
+                                         const char *api_name,
+                                         size_t max_bytes,
+                                         uint8_t **out_data,
+                                         size_t *out_len);
+
+bool esp32_mquickjs_stream_is_binary(
+    const esp32_mquickjs_fs_stream_ref_t *ref);
+bool esp32_mquickjs_stream_known_length(
+    const esp32_mquickjs_fs_stream_ref_t *ref,
+    size_t *out_length);
+
+void esp32_mquickjs_deinit_stream_runtime(void);
 
 esp_err_t esp32_mquickjs_stream_close_value(JSContext *ctx, JSValue stream_value);
 

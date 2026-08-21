@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -75,6 +76,50 @@ class ProfileConstantsTests(unittest.TestCase):
         raw = (ROOT / "configs" / "profile-constants.json").read_text(encoding="utf-8")
         self.assertLess(len(raw.encode("utf-8")), 16_384)
         self.assertEqual(json.loads(raw)["version"], 1)
+
+    def test_repository_does_not_store_board_pin_overlays(self):
+        hardware_config = ROOT / "configs" / "hardware"
+        self.assertFalse(hardware_config.exists())
+
+    def test_mcu_defaults_only_disable_unsupported_modules(self):
+        feature_lines = {}
+        for mcu in ("esp32c3", "esp32s3"):
+            defaults = (
+                ROOT / "configs" / "mcus" / mcu / "sdkconfig.defaults"
+            ).read_text(encoding="utf-8")
+            feature_lines[mcu] = {
+                line for line in defaults.splitlines()
+                if line.startswith("CONFIG_ESP32_MQUICKJS_FEATURE_")
+            }
+            self.assertNotIn("_PIN=", defaults)
+
+        self.assertEqual(feature_lines["esp32c3"], {
+            "CONFIG_ESP32_MQUICKJS_FEATURE_DAC=n",
+            "CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA=n",
+        })
+        self.assertEqual(feature_lines["esp32s3"], {
+            "CONFIG_ESP32_MQUICKJS_FEATURE_DAC=n",
+        })
+
+        for app in ("minimal", "demo"):
+            defaults = (ROOT / "apps" / app / "sdkconfig.defaults").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_FS=y", defaults)
+
+    def test_optional_modules_require_explicit_project_selection(self):
+        kconfig = (
+            ROOT / "components" / "esp32_mquickjs" / "Kconfig.projbuild"
+        ).read_text(encoding="utf-8")
+        feature_sections = re.findall(
+            r"config (ESP32_MQUICKJS_FEATURE_[A-Z0-9_]+)\n(.*?)(?=\nconfig |\nmenu |\nendmenu|\Z)",
+            kconfig,
+            flags=re.DOTALL,
+        )
+
+        self.assertGreaterEqual(len(feature_sections), 18)
+        for symbol, section in feature_sections:
+            self.assertRegex(section, r"(?m)^\s+default n\s*$", symbol)
 
 
 if __name__ == "__main__":

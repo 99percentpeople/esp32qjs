@@ -1,8 +1,11 @@
 #include "utils/esp32_mquickjs_request_response.h"
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_stream.h"
+#include "utils/esp32_mquickjs_byte_source.h"
 
 #include <ctype.h>
+#include <math.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "esp_heap_caps.h"
@@ -596,6 +599,24 @@ JSValue esp32_mquickjs_make_text_body_stream(JSContext *ctx,
     return esp32_mquickjs_stream_open_memory_owned(ctx, global_obj, copy, text_len);
 }
 
+static JSValue rr_make_text_body_stream_len(JSContext *ctx,
+                                            JSValue global_obj,
+                                            const char *text,
+                                            size_t text_len)
+{
+    char *copy = heap_caps_malloc(text_len + 1, MALLOC_CAP_8BIT);
+
+    if (copy == NULL) {
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    if (text_len > 0) {
+        memcpy(copy, text, text_len);
+    }
+    copy[text_len] = '\0';
+    return esp32_mquickjs_stream_open_memory_owned(ctx, global_obj, copy,
+                                                   text_len);
+}
+
 static JSValue rr_body_to_stream(JSContext *ctx,
                                  JSValue global_obj,
                                  JSValue body_value,
@@ -607,6 +628,7 @@ static JSValue rr_body_to_stream(JSContext *ctx,
     JSValue *rooted_body;
     JSCStringBuf body_buf;
     const char *body_str;
+    size_t body_len = 0;
     JSValue result;
 
     rooted_global = JS_PushGCRef(ctx, &global_ref);
@@ -617,14 +639,26 @@ static JSValue rr_body_to_stream(JSContext *ctx,
     if (JS_IsUndefined(*rooted_body) || JS_IsNull(*rooted_body)) {
         result = esp32_mquickjs_make_text_body_stream(ctx, *rooted_global, "");
     } else if (JS_IsString(ctx, *rooted_body)) {
-        body_str = JS_ToCString(ctx, *rooted_body, &body_buf);
+        body_str = JS_ToCStringLen(ctx, &body_len, *rooted_body, &body_buf);
         result = body_str != NULL
-                     ? esp32_mquickjs_make_text_body_stream(ctx, *rooted_global, body_str)
+                     ? rr_make_text_body_stream_len(ctx, *rooted_global,
+                                                    body_str, body_len)
                      : JS_EXCEPTION;
     } else if (esp32_mquickjs_stream_is_stream(ctx, *rooted_body)) {
         result = esp32_mquickjs_stream_clone(ctx, *rooted_global, *rooted_body);
+    } else if (JS_GetClassID(ctx, *rooted_body) == JS_CLASS_BYTE_VIEW) {
+        result = esp32_mquickjs_stream_open_bytes_copy(
+            ctx, *rooted_global, *rooted_body, api_name);
+    } else if (JS_GetClassID(ctx, *rooted_body) == JS_CLASS_BYTE_SPAN_SOURCE ||
+               JS_GetClassID(ctx, *rooted_body) ==
+                   JS_CLASS_BITMAP_SPAN_SOURCE) {
+        result = esp32_mquickjs_stream_open_byte_source(
+            ctx, *rooted_global, *rooted_body);
     } else {
-        result = JS_ThrowTypeError(ctx, "%s expects body to be a string or Stream", api_name);
+        result = JS_ThrowTypeError(
+            ctx,
+            "%s expects body to be a string, Stream, ByteView, or ByteSpanSource",
+            api_name);
     }
 
     JS_PopGCRef(ctx, &body_ref);
@@ -983,6 +1017,59 @@ done:
     return result;
 }
 
+#define ESP32_MQUICKJS_BODY_BYTES_DEFAULT_MAX (1024U * 1024U)
+
+static JSValue rr_make_bytes_result(JSContext *ctx,
+                                    JSValue target_value,
+                                    const char *api_name,
+                                    int argc,
+                                    JSValue *argv)
+{
+    JSGCRef body_ref;
+    JSValue *body_value;
+    uint8_t *data = NULL;
+    size_t length = 0;
+    int max_bytes = (int)ESP32_MQUICKJS_BODY_BYTES_DEFAULT_MAX;
+    double max_bytes_number;
+    JSValue result = JS_EXCEPTION;
+
+    if (argc > 1 ||
+        (argc == 1 && !JS_IsUndefined(argv[0]) &&
+         (!JS_IsNumber(ctx, argv[0]) ||
+          JS_ToNumber(ctx, &max_bytes_number, argv[0]) != 0 ||
+          !isfinite(max_bytes_number) || max_bytes_number <= 0 ||
+          max_bytes_number > INT32_MAX ||
+          (double)(int)max_bytes_number != max_bytes_number ||
+          (max_bytes = (int)max_bytes_number) <= 0))) {
+        return JS_ThrowTypeError(ctx, "%s expects maxBytes to be a positive integer", api_name);
+    }
+    body_value = JS_PushGCRef(ctx, &body_ref);
+    *body_value = JS_GetPropertyStr(ctx, target_value, "body");
+    if (JS_IsException(*body_value)) {
+        goto done;
+    }
+    if (JS_IsUndefined(*body_value) || JS_IsNull(*body_value)) {
+        result = esp32_mquickjs_new_owned_byte_view(ctx, NULL, 0);
+        goto done;
+    }
+    if (esp32_mquickjs_stream_read_all_bytes(ctx, *body_value, api_name,
+                                             (size_t)max_bytes,
+                                             &data, &length) != 0) {
+        (void)esp32_mquickjs_stream_close_value(ctx, *body_value);
+        goto done;
+    }
+    (void)esp32_mquickjs_stream_close_value(ctx, *body_value);
+    result = esp32_mquickjs_new_owned_byte_view(ctx, data, length);
+    if (!JS_IsException(result)) {
+        data = NULL;
+    }
+
+done:
+    heap_caps_free(data);
+    JS_PopGCRef(ctx, &body_ref);
+    return result;
+}
+
 static JSValue rr_make_request_from_args(JSContext *ctx, JSValue global_obj, int argc, JSValue *argv)
 {
     JSGCRef global_ref;
@@ -1296,18 +1383,22 @@ static JSValue rr_make_response_text_factory(JSContext *ctx, JSValue global_obj,
     JSValue *body_stream;
     JSCStringBuf text_buf;
     const char *text;
+    size_t text_len = 0;
     JSValue result;
 
     rooted_global = JS_PushGCRef(ctx, &global_ref);
     body_stream = JS_PushGCRef(ctx, &body_ref);
     *rooted_global = global_obj;
     *body_stream = JS_UNDEFINED;
-    text = argc >= 1 ? JS_ToCString(ctx, argv[0], &text_buf) : "";
+    text = argc >= 1
+               ? JS_ToCStringLen(ctx, &text_len, argv[0], &text_buf)
+               : "";
     if (argc >= 1 && text == NULL) {
         result = JS_EXCEPTION;
         goto done;
     }
-    *body_stream = esp32_mquickjs_make_text_body_stream(ctx, *rooted_global, text != NULL ? text : "");
+    *body_stream = rr_make_text_body_stream_len(
+        ctx, *rooted_global, text != NULL ? text : "", text_len);
     if (JS_IsException(*body_stream)) {
         result = JS_EXCEPTION;
         goto done;
@@ -1434,6 +1525,29 @@ static JSValue rr_make_response_stream_factory(JSContext *ctx, JSValue global_ob
     }
     JS_PopGCRef(ctx, &global_ref);
     return result;
+}
+
+static JSValue rr_make_response_bytes_factory(JSContext *ctx,
+                                              JSValue global_obj,
+                                              int argc,
+                                              JSValue *argv)
+{
+    int class_id;
+
+    if (argc < 1 || argc > 2) {
+        return JS_ThrowTypeError(ctx, "Response.bytes(body, init?) expects binary body data");
+    }
+    class_id = JS_GetClassID(ctx, argv[0]);
+    if (class_id != JS_CLASS_BYTE_VIEW &&
+        class_id != JS_CLASS_BYTE_SPAN_SOURCE &&
+        class_id != JS_CLASS_BITMAP_SPAN_SOURCE) {
+        return JS_ThrowTypeError(
+            ctx,
+            "Response.bytes(body, init?) expects a ByteView or ByteSpanSource");
+    }
+    return rr_make_response_from_args(
+        ctx, global_obj, argc >= 2 ? 2 : 1,
+        (JSValue[]){argv[0], argc >= 2 ? argv[1] : JS_UNDEFINED});
 }
 
 static JSValue rr_require_global_object(JSContext *ctx)
@@ -1800,6 +1914,14 @@ JSValue js_request_json(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
     return rr_json_parse(ctx, text_value);
 }
 
+JSValue js_request_bytes(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    if (JS_IsException(rr_require_request_this(ctx, *this_val, "Request.bytes()"))) {
+        return JS_EXCEPTION;
+    }
+    return rr_make_bytes_result(ctx, *this_val, "Request.bytes()", argc, argv);
+}
+
 JSValue js_response_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     JSGCRef global_ref;
@@ -1846,6 +1968,14 @@ JSValue js_response_json(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
         return JS_EXCEPTION;
     }
     return rr_json_parse(ctx, text_value);
+}
+
+JSValue js_response_bytes(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    if (JS_IsException(rr_require_response_this(ctx, *this_val, "Response.bytes()"))) {
+        return JS_EXCEPTION;
+    }
+    return rr_make_bytes_result(ctx, *this_val, "Response.bytes()", argc, argv);
 }
 
 JSValue js_response_make_text(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -1898,6 +2028,24 @@ JSValue js_response_make_stream(JSContext *ctx, JSValue *this_val, int argc, JSV
         return JS_EXCEPTION;
     }
     result = rr_make_response_stream_factory(ctx, *global_obj, argc, argv);
+    JS_PopGCRef(ctx, &global_ref);
+    return result;
+}
+
+JSValue js_response_make_bytes(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    JSGCRef global_ref;
+    JSValue *global_obj;
+    JSValue result;
+
+    (void)this_val;
+    global_obj = JS_PushGCRef(ctx, &global_ref);
+    *global_obj = rr_require_global_object(ctx);
+    if (JS_IsException(*global_obj)) {
+        JS_PopGCRef(ctx, &global_ref);
+        return JS_EXCEPTION;
+    }
+    result = rr_make_response_bytes_factory(ctx, *global_obj, argc, argv);
     JS_PopGCRef(ctx, &global_ref);
     return result;
 }

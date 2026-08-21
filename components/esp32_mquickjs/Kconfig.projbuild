@@ -20,7 +20,7 @@ menu "Host API features"
 
 config ESP32_MQUICKJS_FEATURE_FS
     bool "Enable fs module"
-    default y
+    default n
     help
         Enable the LittleFS-backed fs module and related script-path settings.
 
@@ -34,28 +34,28 @@ config ESP32_MQUICKJS_FEATURE_NVS
 
 config ESP32_MQUICKJS_FEATURE_GPIO
     bool "Enable gpio module"
-    default y
+    default n
     help
         Enable GPIO host bindings such as pinMode(), digitalRead(), and
         attachInterrupt().
 
 config ESP32_MQUICKJS_FEATURE_LEDC
     bool "Enable ledc module"
-    default y if SOC_LEDC_SUPPORTED
+    default n
     depends on SOC_LEDC_SUPPORTED
     help
         Enable LEDC timer/channel bindings for hardware PWM output.
 
 config ESP32_MQUICKJS_FEATURE_ADC
     bool "Enable adc module"
-    default y if SOC_ADC_SUPPORTED
+    default n
     depends on SOC_ADC_SUPPORTED
     help
         Enable ADC oneshot and channel-mapping bindings.
 
 config ESP32_MQUICKJS_FEATURE_DAC
     bool "Enable dac module"
-    default y if SOC_DAC_SUPPORTED
+    default n
     depends on SOC_DAC_SUPPORTED
     help
         Reserve DAC host-feature selection for targets that expose hardware DAC
@@ -63,14 +63,14 @@ config ESP32_MQUICKJS_FEATURE_DAC
 
 config ESP32_MQUICKJS_FEATURE_I2C
     bool "Enable i2c module"
-    default y if SOC_I2C_SUPPORTED
+    default n
     depends on SOC_I2C_SUPPORTED
     help
         Enable I2C bus bindings and related default pin settings.
 
 config ESP32_MQUICKJS_FEATURE_SPI
     bool "Enable spi module"
-    default y if SOC_GPSPI_SUPPORTED
+    default n
     depends on SOC_GPSPI_SUPPORTED
     help
         Enable SPI master bus/device bindings such as spi.openBus() and
@@ -78,15 +78,33 @@ config ESP32_MQUICKJS_FEATURE_SPI
 
 config ESP32_MQUICKJS_FEATURE_UART
     bool "Enable uart module"
-    default y if SOC_UART_SUPPORTED
+    default n
     depends on SOC_UART_SUPPORTED
     help
         Enable synchronous UART port bindings such as uart.open(),
         UARTPort.write(), and UARTPort.read().
 
+config ESP32_MQUICKJS_FEATURE_I2S
+    bool "Enable I2S receive module"
+    default n
+    depends on SOC_I2S_SUPPORTED
+    help
+        Enable bounded receive-only standard I2S and hardware PDM-to-PCM
+        bindings. Version 1 intentionally does not expose transmit or duplex
+        operation.
+
+config ESP32_MQUICKJS_FEATURE_CAMERA
+    bool "Enable camera capture module"
+    default n
+    depends on IDF_TARGET_ESP32S3
+    help
+        Enable explicit single-frame camera capture backed by esp32-camera.
+        Version 1 is an ESP32-S3-only singleton and does not run a video
+        encoder or streaming server.
+
 config ESP32_MQUICKJS_FEATURE_WIFI
     bool "Enable wifi module"
-    default y if SOC_WIFI_SUPPORTED
+    default n
     depends on SOC_WIFI_SUPPORTED
     help
         Enable Wi-Fi station bindings such as wifi.status(), wifi.scan(), and
@@ -103,7 +121,7 @@ config ESP32_MQUICKJS_FEATURE_SOCKET
 
 config ESP32_MQUICKJS_FEATURE_HTTP
     bool "Enable http module"
-    default y if ESP32_MQUICKJS_FEATURE_WIFI
+    default n
     depends on ESP32_MQUICKJS_FEATURE_WIFI
     help
         Enable fetch(), http.fetch(), and related HTTP client helpers. In the
@@ -111,7 +129,7 @@ config ESP32_MQUICKJS_FEATURE_HTTP
 
 config ESP32_MQUICKJS_FEATURE_HTTP_SERVER
     bool "Enable http_server feature"
-    default y if ESP32_MQUICKJS_FEATURE_WIFI
+    default n
     depends on ESP32_MQUICKJS_FEATURE_WIFI
     help
         Enable the declarative http.server() route/request EventQueue API.
@@ -134,12 +152,13 @@ config ESP32_MQUICKJS_FEATURE_WEBSOCKET
         connect only after Wi-Fi is ready and remain responsible for pairing
         and authorization policy.
 
-config ESP32_MQUICKJS_FEATURE_DISPLAY_BUFFER
-    bool "Enable displayBuffer module"
-    default y
+config ESP32_MQUICKJS_FEATURE_BITMAP
+    bool "Enable bitmap module"
+    default n
     help
-        Enable the native displayBuffer module for C-backed mono1 and rgb565
-        pixel buffers, drawing primitives, dirty bounds, and byte-view exports.
+        Enable the native bitmap module for C-backed mono1, gray8, rgb565,
+        and rgb888 buffers, worker-backed crop/rotate/resize/color transforms,
+        drawing primitives, dirty bounds, and byte-view/span exports.
 
 config ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
     bool "Capture Agent standard output for host diagnostics"
@@ -491,6 +510,16 @@ config ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BODY_BYTES
         Stop fetch response capture after this many bytes. Individual requests
         can select a smaller or larger positive limit with maxBodyBytes.
 
+config ESP32_MQUICKJS_HTTP_MAX_REQUEST_BODY_BYTES
+    int "Maximum materialized HTTP request body size (bytes)"
+    range 1024 4194304
+    default 1048576
+    depends on ESP32_MQUICKJS_FEATURE_HTTP
+    help
+        Bound request bodies before the HTTP worker starts. Stream, ByteView,
+        and ByteSpanSource bodies are materialized into a native buffer so the
+        worker never accesses JavaScript-owned memory.
+
 config ESP32_MQUICKJS_HTTP_TASK_STACK_SIZE
     int "HTTP async worker task stack size (bytes)"
     range 4096 32768
@@ -544,6 +573,15 @@ config ESP32_MQUICKJS_SOCKET_MAX_MESSAGE_BYTES
     range 256 32768
     default 8192
     depends on ESP32_MQUICKJS_FEATURE_SOCKET
+
+config ESP32_MQUICKJS_SOCKET_MAX_SOURCE_BYTES
+    int "Maximum streamed TCP source size (bytes)"
+    range 32768 4194304
+    default 1048576
+    depends on ESP32_MQUICKJS_FEATURE_SOCKET
+    help
+        Bound a ByteSpanSource consumed by socket.tcp.send(). Individual spans
+        are written directly and remain limited only by the source contract.
 
 config ESP32_MQUICKJS_WEBSOCKET_MAX_MESSAGE_BYTES
     int "Maximum WebSocket text message size (bytes)"
