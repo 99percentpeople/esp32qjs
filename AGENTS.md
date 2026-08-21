@@ -37,6 +37,9 @@ the repository `.env` file.
 ## Coding Style
 Use 4-space indentation and standard ESP-IDF C style. Prefer `snake_case` for functions and locals, `UPPER_SNAKE_CASE` for macros, and keep ESP32-specific code in the adapter layer instead of editing the submodule directly. Match existing logging and error-handling patterns with `ESP_LOG*`, `ESP_ERROR_CHECK`, and thin adapter helpers around third-party code.
 
+## Development Versioning
+Keep project-owned firmware APIs, wire protocols, manifests, and persisted configuration schemas at version `1`/`v1` while the project remains in development. Breaking changes replace the sole v1 contract in place. Do not add v2/v3 identifiers, legacy aliases, compatibility parsers, migration branches, or tests for superseded project formats unless the user explicitly changes this policy. Runtime/entity revisions, dependency versions, and third-party protocol versions are outside this rule.
+
 ## Testing
 The default validation target is `python scripts/remote.py test`. It runs host C tests plus the JS modules enabled by the active hardware profile's runtime feature set, runs the MQuickJS syntax preflight before JS scope, and flashes the latest code with the dedicated JS test sdkconfig defaults before device-backed JS tests so C-side changes are not left stale on the device. Use `--scope c`, `--scope js`, `--module ...`, `--network`, and `--loopback` to narrow or extend coverage when needed. Hardware-specific JS tests can read optional values from `TEST_JS_CONFIG`; SPI loopback cases require `--loopback`, use `spi.DEFAULT_*` by default, and `testConfig.spiLoopback` only overrides selected fields. Use `--no-flash-firmware` and `--no-flash-fs` only when you intentionally want to reuse what is already on the board.
 
