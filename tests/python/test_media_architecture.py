@@ -86,11 +86,59 @@ class MediaArchitectureTests(SourceContractTestCase):
         )
 
         self.assertIn("esp32_mquickjs_future_submit_worker", source)
-        self.assertIn("esp_camera_fb_get()", source)
+        capture_worker = source[
+            source.index("static void camera_capture_worker") : source.index(
+                "\nstatic bool camera_capture_prepare"
+            )
+        ]
+        self.assertIn("esp_camera_available_frames()", capture_worker)
+        self.assertIn("cam_take(1)", capture_worker)
+        self.assertIn("state->cancelled", capture_worker)
+        self.assertIn("state->timeout_ms", capture_worker)
+        self.assertNotIn("esp_camera_fb_get()", capture_worker)
+        capture_cancel = source[
+            source.index("static bool camera_capture_cancel") : source.index(
+                "\nstatic void camera_capture_destroy"
+            )
+        ]
+        self.assertIn("s_camera.release_pending = true;", capture_cancel)
+        self.assertNotIn("state->completed || state->cancelled", capture_cancel)
         self.assertIn("esp_camera_fb_return", source)
         self.assertIn("CAMERA_MAX_COPY_BYTES (32U * 1024U)", source)
         self.assertIn("CameraFrame.close() refused while a source is active", source)
         self.assertIn("camera_release_frame();", source)
+        self.assertIn("static void camera_cleanup_if_ready(void)", source)
+        self.assertIn("static void camera_revoke_frame(void)", source)
+        self.assertIn("s_camera.frame_revoked = true;", source)
+        self.assertIn("camera_frame_storage_matches", source)
+        frame_revoke = source[
+            source.index("static void camera_revoke_frame") : source.index(
+                "\nstatic void camera_release_leases"
+            )
+        ]
+        self.assertIn("source->consumed = true;", frame_revoke)
+        self.assertIn("if (!source->iterator_active)", frame_revoke)
+        self.assertNotIn("source->destroy_requested = true;", frame_revoke)
+        self.assertIn("camera_revoke_frame();", source)
+        self.assertIn("s_camera.release_pending = true;", source)
+        camera_close = source[source.index("JSValue js_camera_close"):source.index("JSValue js_camera_frame_constructor")]
+        self.assertIn("esp32_mquickjs_future_call_and_wait", camera_close)
+        self.assertNotIn("refused while capture is pending", camera_close)
+        self.assertNotIn("refused while a frame is leased", camera_close)
+        self.assertIn("static const esp32_mquickjs_future_driver_t s_camera_close_driver", source)
+        self.assertIn("camera_close_worker", source)
+        self.assertIn("s_camera.capture_state = state;", source)
+        self.assertIn("camera_capture_cancel(s_camera.capture_state)", source)
+        close_cancel = source[
+            source.index("static bool camera_close_cancel") : source.index(
+                "\nstatic void camera_close_destroy"
+            )
+        ]
+        self.assertIn("return false;", close_cancel)
+        self.assertIn(
+            "Future.call(cam.close, cam, [])",
+            (ROOT / "docs/c-api.md").read_text(encoding="utf-8"),
+        )
         self.assertIn("does not accept a sensor model; the driver probes it", source)
         self.assertIn("OV2640_PID", source)
         self.assertIn("OV3660_PID", source)

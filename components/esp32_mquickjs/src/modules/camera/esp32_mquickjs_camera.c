@@ -22,6 +22,8 @@
 #include "esp_psram.h"
 #endif
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "sensor.h"
 #include "soc/soc_caps.h"
 
@@ -32,6 +34,14 @@
 #define CAMERA_MAX_COPY_BYTES (32U * 1024U)
 #define CAMERA_SCCB_I2C_PORT 1
 #define CAMERA_FRAME_OWNER_KEY "__esp32qjsCameraFrameOwner"
+
+/*
+ * esp32-camera exposes only a fixed four-second esp_camera_fb_get() wait.
+ * The component version pinned by this project exports cam_take(), which lets
+ * the adapter keep the public Camera.capture(timeoutMs) contract and poll
+ * cancellation without modifying the dependency.
+ */
+extern camera_fb_t *cam_take(TickType_t timeout);
 
 static bool camera_psram_is_initialized(void)
 {
@@ -60,6 +70,8 @@ typedef struct {
     uint32_t frame_generation;
 } esp32_mquickjs_camera_frame_ref_t;
 
+typedef struct esp32_mquickjs_camera_source esp32_mquickjs_camera_source_t;
+
 typedef struct {
     bool allocated;
     bool initialized;
@@ -77,15 +89,19 @@ typedef struct {
     camera_fb_location_t buffer_location;
     sensor_t *sensor;
     camera_fb_t *leased_fb;
+    bool frame_revoked;
     bool source_active;
+    esp32_mquickjs_camera_source_t *source;
     uint16_t bitmap_read_leases;
+    esp32_mquickjs_future_driver_state_t *capture_state;
+    esp32_mquickjs_future_driver_state_t *close_state;
     esp32_mquickjs_peripheral_lease_t camera_lease;
     esp32_mquickjs_peripheral_lease_t i2c_lease;
     esp32_mquickjs_peripheral_lease_t ledc_timer_lease;
     esp32_mquickjs_peripheral_lease_t ledc_channel_lease;
 } esp32_mquickjs_camera_slot_t;
 
-typedef struct {
+struct esp32_mquickjs_camera_source {
     uint32_t camera_generation;
     uint32_t frame_generation;
     size_t chunk_bytes;
@@ -94,7 +110,7 @@ typedef struct {
     bool iterator_active;
     bool consumed;
     bool destroy_requested;
-} esp32_mquickjs_camera_source_t;
+};
 
 struct esp32_mquickjs_future_driver_state {
     JSContext *ctx;
@@ -104,11 +120,18 @@ struct esp32_mquickjs_future_driver_state {
     uint32_t camera_generation;
     uint32_t timeout_ms;
     uint64_t started_us;
+    framesize_t frame_size;
+    pixformat_t pixel_format;
     camera_fb_t *frame;
     bool owner_retained;
     bool started;
+    bool cleanup_started;
+    bool cleanup_submitted;
+    bool cleanup_finalized;
+    bool close_initialized;
     volatile bool completed;
-    bool cancelled;
+    volatile bool cancelled;
+    esp_err_t close_result;
 };
 
 static esp32_mquickjs_camera_slot_t s_camera;
@@ -269,21 +292,68 @@ static bool camera_slot_matches(uint32_t generation)
     return s_camera.allocated && s_camera.generation == generation;
 }
 
-static bool camera_frame_matches(uint32_t camera_generation,
-                                 uint32_t frame_generation)
+static bool camera_frame_storage_matches(uint32_t camera_generation,
+                                         uint32_t frame_generation)
 {
     return camera_slot_matches(camera_generation) &&
            s_camera.leased_fb != NULL &&
            s_camera.frame_generation == frame_generation;
 }
 
+static bool camera_frame_matches(uint32_t camera_generation,
+                                 uint32_t frame_generation)
+{
+    return camera_frame_storage_matches(camera_generation,
+                                        frame_generation) &&
+           !s_camera.frame_revoked;
+}
+
+static void camera_cleanup(void);
+static void camera_close_schedule_cleanup(
+    esp32_mquickjs_future_driver_state_t *state);
+
+static void camera_cleanup_if_ready(void)
+{
+    if (s_camera.release_pending && !s_camera.busy &&
+        s_camera.leased_fb == NULL && !s_camera.source_active &&
+        s_camera.bitmap_read_leases == 0) {
+        if (s_camera.close_state != NULL) {
+            camera_close_schedule_cleanup(s_camera.close_state);
+        } else {
+            camera_cleanup();
+        }
+    }
+}
+
 static void camera_release_frame(void)
 {
+    if (s_camera.source_active || s_camera.bitmap_read_leases != 0) {
+        return;
+    }
     if (s_camera.leased_fb != NULL) {
         esp_camera_fb_return(s_camera.leased_fb);
         s_camera.leased_fb = NULL;
     }
-    s_camera.source_active = false;
+    s_camera.frame_revoked = false;
+    camera_cleanup_if_ready();
+}
+
+static void camera_revoke_frame(void)
+{
+    esp32_mquickjs_camera_source_t *source = s_camera.source;
+
+    if (s_camera.leased_fb == NULL) {
+        return;
+    }
+    s_camera.frame_revoked = true;
+    if (source != NULL) {
+        source->consumed = true;
+        if (!source->iterator_active) {
+            s_camera.source_active = false;
+            s_camera.source = NULL;
+        }
+    }
+    camera_release_frame();
 }
 
 static void camera_release_leases(void)
@@ -296,9 +366,11 @@ static void camera_release_leases(void)
 
 static void camera_cleanup(void)
 {
-    if (!s_camera.allocated || s_camera.busy) {
+    if (!s_camera.allocated || s_camera.busy || s_camera.source_active ||
+        s_camera.bitmap_read_leases != 0) {
         return;
     }
+    s_camera.release_pending = false;
     camera_release_frame();
     if (s_camera.initialized) {
         (void)esp_camera_deinit();
@@ -439,12 +511,17 @@ void esp32_mquickjs_camera_frame_release_bitmap_view(
     if (lease == NULL || !lease->active) {
         return;
     }
-    if (camera_frame_matches(lease->camera_generation,
-                             lease->frame_generation) &&
+    if (camera_frame_storage_matches(lease->camera_generation,
+                                     lease->frame_generation) &&
         s_camera.bitmap_read_leases != 0) {
         --s_camera.bitmap_read_leases;
     }
     lease->active = false;
+    if (s_camera.frame_revoked) {
+        camera_release_frame();
+    } else {
+        camera_cleanup_if_ready();
+    }
 }
 
 static JSValue camera_make_object(JSContext *ctx)
@@ -560,8 +637,12 @@ static void camera_source_iterator_close(JSContext *ctx, void *opaque)
     }
     source->iterator_active = false;
     source->consumed = true;
-    if (camera_frame_matches(source->camera_generation,
-                             source->frame_generation)) {
+    if (camera_frame_storage_matches(source->camera_generation,
+                                     source->frame_generation)) {
+        if (s_camera.source == source) {
+            s_camera.source = NULL;
+            s_camera.source_active = false;
+        }
         camera_release_frame();
     }
     if (source->destroy_requested) {
@@ -614,10 +695,15 @@ static void camera_source_destroy(JSContext *ctx, void *opaque)
     }
     if (source->iterator_active) {
         source->destroy_requested = true;
+        source->consumed = true;
         return;
     }
-    if (camera_frame_matches(source->camera_generation,
-                             source->frame_generation)) {
+    if (camera_frame_storage_matches(source->camera_generation,
+                                     source->frame_generation)) {
+        if (s_camera.source == source) {
+            s_camera.source = NULL;
+            s_camera.source_active = false;
+        }
         camera_release_frame();
     }
     heap_caps_free(source);
@@ -633,11 +719,34 @@ static const esp32_mquickjs_byte_span_source_object_ops_t s_camera_source_ops = 
 static void camera_capture_worker(void *opaque)
 {
     esp32_mquickjs_future_driver_state_t *state = opaque;
+    uint64_t elapsed_us;
 
     if (state == NULL) {
         return;
     }
-    state->frame = esp_camera_fb_get();
+    for (;;) {
+        if (state->cancelled) {
+            break;
+        }
+        elapsed_us = (uint64_t)esp_timer_get_time() - state->started_us;
+        if (state->timeout_ms > 0 &&
+            elapsed_us >= (uint64_t)state->timeout_ms * 1000ULL) {
+            break;
+        }
+        if (esp_camera_available_frames()) {
+            state->frame = cam_take(1);
+            if (state->frame != NULL) {
+                state->frame->width = resolution[state->frame_size].width;
+                state->frame->height = resolution[state->frame_size].height;
+                state->frame->format = state->pixel_format;
+                break;
+            }
+        }
+        if (state->timeout_ms == 0) {
+            break;
+        }
+        vTaskDelay(1);
+    }
     state->completed = true;
 }
 
@@ -704,11 +813,9 @@ static bool camera_capture_start(
     state->token = token;
     state->started = true;
     state->started_us = (uint64_t)esp_timer_get_time();
-    if (state->timeout_ms == 0 && !esp_camera_available_frames()) {
-        state->completed = true;
-        (void)esp32_mquickjs_future_wake(runtime, token);
-        return true;
-    }
+    state->frame_size = s_camera.frame_size;
+    state->pixel_format = s_camera.pixel_format;
+    s_camera.capture_state = state;
     if (!esp32_mquickjs_future_submit_worker(runtime, token,
                                              camera_capture_worker, state)) {
         JS_ThrowInternalError(ctx, "Camera capture worker queue is full");
@@ -734,7 +841,8 @@ static JSValue camera_capture_finish(
     if (state == NULL || state->cancelled) {
         return JS_ThrowInternalError(ctx, "Camera capture cancelled");
     }
-    if (!camera_slot_matches(state->camera_generation)) {
+    if (!camera_slot_matches(state->camera_generation) ||
+        s_camera.release_pending) {
         return JS_ThrowReferenceError(ctx, "Camera closed during capture");
     }
     elapsed_ms = ((uint64_t)esp_timer_get_time() - state->started_us) / 1000ULL;
@@ -759,11 +867,17 @@ static JSValue camera_capture_finish(
 static bool camera_capture_cancel(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL || state->completed || state->cancelled) {
+    bool interrupted;
+
+    if (state == NULL || state->cancelled) {
         return false;
     }
+    interrupted = !state->completed;
     state->cancelled = true;
-    return true;
+    if (state->started && camera_slot_matches(state->camera_generation)) {
+        s_camera.release_pending = true;
+    }
+    return interrupted;
 }
 
 static void camera_capture_destroy(
@@ -776,10 +890,11 @@ static void camera_capture_destroy(
         esp_camera_fb_return(state->frame);
     }
     if (state->started && camera_slot_matches(state->camera_generation)) {
-        s_camera.busy = false;
-        if (s_camera.release_pending) {
-            camera_cleanup();
+        if (s_camera.capture_state == state) {
+            s_camera.capture_state = NULL;
         }
+        s_camera.busy = false;
+        camera_cleanup_if_ready();
     }
     if (state->owner_retained) {
         JS_DeleteGCRef(state->ctx, &state->owner_ref);
@@ -796,25 +911,194 @@ static const esp32_mquickjs_future_driver_t s_camera_capture_driver = {
     .destroy = camera_capture_destroy,
 };
 
+static void camera_close_worker(void *opaque)
+{
+    esp32_mquickjs_future_driver_state_t *state = opaque;
+
+    if (state == NULL) {
+        return;
+    }
+    state->close_result = state->close_initialized
+                              ? esp_camera_deinit()
+                              : ESP_OK;
+    state->completed = true;
+}
+
+static void camera_close_schedule_cleanup(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || state->cleanup_started ||
+        !camera_slot_matches(state->camera_generation)) {
+        return;
+    }
+    state->cleanup_started = true;
+    state->cleanup_submitted = esp32_mquickjs_future_submit_worker(
+        state->runtime, state->token, camera_close_worker, state);
+    if (!state->cleanup_submitted) {
+        state->completed = true;
+        (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+    }
+}
+
+static bool camera_close_prepare(
+    JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+    esp32_mquickjs_camera_ref_t *camera_ref;
+    JSValue *owner;
+
+    (void)argv;
+    if (out_state == NULL || argc != 0 ||
+        JS_GetClassID(ctx, this_ref->val) != JS_CLASS_CAMERA) {
+        JS_ThrowTypeError(ctx, "Camera.close() expects no arguments");
+        return false;
+    }
+    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    if (state == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        return false;
+    }
+    state->ctx = ctx;
+    state->close_result = ESP_OK;
+    camera_ref = JS_GetOpaque(ctx, this_ref->val);
+    if (camera_ref != NULL && camera_slot_matches(camera_ref->generation)) {
+        state->camera_generation = camera_ref->generation;
+        owner = JS_AddGCRef(ctx, &state->owner_ref);
+        *owner = this_ref->val;
+        state->owner_retained = true;
+    }
+    *out_state = state;
+    return true;
+}
+
+static bool camera_close_start(
+    JSContext *ctx, esp32_mquickjs_runtime_t *runtime,
+    esp32_mquickjs_future_token_t token,
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    esp32_mquickjs_camera_ref_t *camera_ref;
+
+    if (state == NULL) {
+        return false;
+    }
+    state->runtime = runtime;
+    state->token = token;
+    state->started = true;
+    if (state->camera_generation == 0 ||
+        !camera_slot_matches(state->camera_generation)) {
+        state->completed = true;
+        (void)esp32_mquickjs_future_wake(runtime, token);
+        return true;
+    }
+    if (s_camera.close_state != NULL) {
+        JS_ThrowInternalError(ctx, "Camera close is already pending");
+        return false;
+    }
+    camera_ref = JS_GetOpaque(ctx, state->owner_ref.val);
+    if (camera_ref != NULL &&
+        camera_ref->generation == state->camera_generation) {
+        JS_SetOpaque(ctx, state->owner_ref.val, NULL);
+        heap_caps_free(camera_ref);
+    }
+    state->close_initialized = s_camera.initialized;
+    s_camera.release_pending = true;
+    s_camera.close_state = state;
+    if (s_camera.capture_state != NULL) {
+        (void)camera_capture_cancel(s_camera.capture_state);
+    }
+    camera_revoke_frame();
+    camera_cleanup_if_ready();
+    return true;
+}
+
+static esp32_mquickjs_future_poll_t camera_close_poll(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || !state->completed) {
+        return ESP32_MQUICKJS_FUTURE_PENDING;
+    }
+    if (!state->cleanup_finalized) {
+        if (!state->cleanup_submitted && state->close_initialized) {
+            state->close_result = esp_camera_deinit();
+        }
+        if (camera_slot_matches(state->camera_generation) &&
+            s_camera.close_state == state) {
+            camera_release_leases();
+            memset(&s_camera, 0, sizeof(s_camera));
+        }
+        state->cleanup_finalized = true;
+    }
+    return ESP32_MQUICKJS_FUTURE_READY;
+}
+
+static JSValue camera_close_finish(
+    JSContext *ctx, esp32_mquickjs_future_driver_state_t *state)
+{
+    (void)ctx;
+    (void)state;
+    return JS_TRUE;
+}
+
+static bool camera_close_cancel(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || state->completed) {
+        return false;
+    }
+    state->cancelled = true;
+    return false;
+}
+
+static void camera_close_destroy(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL) {
+        return;
+    }
+    if (state->owner_retained) {
+        JS_DeleteGCRef(state->ctx, &state->owner_ref);
+    }
+    heap_caps_free(state);
+}
+
+static const esp32_mquickjs_future_driver_t s_camera_close_driver = {
+    .prepare = camera_close_prepare,
+    .start = camera_close_start,
+    .poll = camera_close_poll,
+    .finish = camera_close_finish,
+    .cancel = camera_close_cancel,
+    .destroy = camera_close_destroy,
+};
+
 static bool camera_register_future_driver(
     JSContext *ctx, esp32_mquickjs_runtime_t *runtime)
 {
     JSGCRef object_ref;
     JSGCRef capture_ref;
+    JSGCRef close_ref;
     JSValue *object = JS_PushGCRef(ctx, &object_ref);
     JSValue *capture = JS_PushGCRef(ctx, &capture_ref);
+    JSValue *close = JS_PushGCRef(ctx, &close_ref);
     bool result;
 
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_CAMERA);
     *capture = JS_IsException(*object)
                    ? JS_EXCEPTION
                    : JS_GetPropertyStr(ctx, *object, "capture");
+    *close = JS_IsException(*object)
+                 ? JS_EXCEPTION
+                 : JS_GetPropertyStr(ctx, *object, "close");
     result = !JS_IsException(*capture) &&
+             !JS_IsException(*close) &&
              esp32_mquickjs_future_register_driver(
-                 ctx, runtime, *capture, &s_camera_capture_driver);
+                 ctx, runtime, *capture, &s_camera_capture_driver) &&
+             esp32_mquickjs_future_register_driver(
+                 ctx, runtime, *close, &s_camera_close_driver);
     if (!result && !JS_IsException(*object)) {
         JS_ThrowInternalError(ctx, "failed to register Camera Future driver");
     }
+    JS_PopGCRef(ctx, &close_ref);
     JS_PopGCRef(ctx, &capture_ref);
     JS_PopGCRef(ctx, &object_ref);
     return result;
@@ -857,11 +1141,8 @@ void js_camera_finalizer(JSContext *ctx, void *opaque)
 
     (void)ctx;
     if (ref != NULL && camera_slot_matches(ref->generation)) {
-        if (s_camera.busy) {
-            s_camera.release_pending = true;
-        } else {
-            camera_cleanup();
-        }
+        s_camera.release_pending = true;
+        camera_cleanup_if_ready();
     }
     heap_caps_free(ref);
 }
@@ -1053,34 +1334,18 @@ JSValue js_camera_set_control(JSContext *ctx, JSValue *this_val,
 JSValue js_camera_close(JSContext *ctx, JSValue *this_val,
                         int argc, JSValue *argv)
 {
-    esp32_mquickjs_camera_ref_t *ref;
+    JSGCRef method_ref;
+    JSValue *method = JS_PushGCRef(ctx, &method_ref);
+    JSValue result;
 
-    (void)argc;
-    (void)argv;
-    if (JS_GetClassID(ctx, *this_val) != JS_CLASS_CAMERA) {
-        return JS_ThrowTypeError(ctx, "Camera.close() expects a Camera");
-    }
-    ref = JS_GetOpaque(ctx, *this_val);
-    if (ref == NULL) {
-        return JS_TRUE;
-    }
-    if (!camera_slot_matches(ref->generation)) {
-        JS_SetOpaque(ctx, *this_val, NULL);
-        heap_caps_free(ref);
-        return JS_TRUE;
-    }
-    if (s_camera.busy) {
-        return JS_ThrowInternalError(ctx,
-                                     "Camera.close() refused while capture is pending");
-    }
-    if (s_camera.leased_fb != NULL) {
-        return JS_ThrowInternalError(ctx,
-                                     "Camera.close() refused while a frame is leased");
-    }
-    camera_cleanup();
-    JS_SetOpaque(ctx, *this_val, NULL);
-    heap_caps_free(ref);
-    return JS_TRUE;
+    *method = JS_GetPropertyStr(ctx, *this_val, "close");
+    result = JS_IsException(*method)
+                 ? JS_EXCEPTION
+                 : esp32_mquickjs_future_call_and_wait(
+                       ctx, esp32_mquickjs_get_active_runtime(), *method,
+                       *this_val, argc, argv);
+    JS_PopGCRef(ctx, &method_ref);
+    return result;
 }
 
 JSValue js_camera_frame_constructor(JSContext *ctx, JSValue *this_val,
@@ -1098,8 +1363,9 @@ void js_camera_frame_finalizer(JSContext *ctx, void *opaque)
     esp32_mquickjs_camera_frame_ref_t *ref = opaque;
 
     (void)ctx;
-    if (ref != NULL && camera_frame_matches(ref->camera_generation,
-                                            ref->frame_generation)) {
+    if (ref != NULL &&
+        camera_frame_storage_matches(ref->camera_generation,
+                                     ref->frame_generation)) {
         camera_release_frame();
     }
     heap_caps_free(ref);
@@ -1154,6 +1420,7 @@ JSValue js_camera_frame_source(JSContext *ctx, JSValue *this_val,
     source->frame_generation = ref->frame_generation;
     source->chunk_bytes = chunk_bytes;
     s_camera.source_active = true;
+    s_camera.source = source;
     return esp32_mquickjs_new_byte_span_source(ctx, *this_val,
                                                &s_camera_source_ops, source);
 }
@@ -1217,9 +1484,12 @@ JSValue js_camera_frame_close(JSContext *ctx, JSValue *this_val,
         return JS_TRUE;
     }
     if (!camera_frame_matches(ref->camera_generation, ref->frame_generation)) {
+        owner_result = JS_SetPropertyStr(ctx, *this_val,
+                                         CAMERA_FRAME_OWNER_KEY,
+                                         JS_UNDEFINED);
         JS_SetOpaque(ctx, *this_val, NULL);
         heap_caps_free(ref);
-        return JS_TRUE;
+        return JS_IsException(owner_result) ? JS_EXCEPTION : JS_TRUE;
     }
     if (s_camera.source_active) {
         return JS_ThrowInternalError(ctx,
