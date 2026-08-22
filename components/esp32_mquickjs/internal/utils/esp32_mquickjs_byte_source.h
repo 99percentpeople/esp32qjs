@@ -95,6 +95,8 @@ bool esp32_mquickjs_update_byte_view(JSContext *ctx,
                                      const uint8_t *data,
                                      size_t length);
 
+bool esp32_mquickjs_byte_view_is_open(JSContext *ctx, JSValue value);
+
 bool esp32_mquickjs_byte_view_acquire_read(JSContext *ctx,
                                            JSValue value,
                                            const char *api_name,

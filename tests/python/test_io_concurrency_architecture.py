@@ -132,6 +132,96 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("internal_allocation_depth", future)
         self.assertIn("future_find_free_slot(state, internal)", future)
 
+    def test_internal_idle_jobs_only_run_outside_javascript_execution(self):
+        core = (MQUICKJS / "src/core/esp32_mquickjs.c").read_text(
+            encoding="utf-8"
+        )
+        stdlib = (MQUICKJS / "src/core/mqjs_stdlib_esp32.c").read_text(
+            encoding="utf-8"
+        )
+        declarations = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("state->execution_depth != 0", core)
+        self.assertIn("esp32_mquickjs_execution_enter(runtime);", core)
+        self.assertIn("esp32_mquickjs_execution_leave(runtime);", core)
+        self.assertIn("esp32_mquickjs_poll_idle_job(ctx, runtime)", core)
+        self.assertIn('JS_CFUNC_DEF("_deferIdle", 1, js_runtime_defer_idle)', stdlib)
+        self.assertNotIn("_deferIdle", declarations)
+
+    def test_future_wait_checks_its_deadline_after_each_scheduler_pump(self):
+        future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
+            encoding="utf-8"
+        )
+        start = future.index("JSValue js_future_wait(")
+        end = future.index("\nJSValue js_future_cancel(", start)
+        wait = future[start:end]
+
+        self.assertLess(
+            wait.index("if (handle->terminal)"),
+            wait.index("if (wait_deadline_us > 0 && now_us >= wait_deadline_us)"),
+        )
+        self.assertLess(
+            wait.index("if (wait_deadline_us > 0 && now_us >= wait_deadline_us)"),
+            wait.index("if (poll_result != ESP32_MQUICKJS_POLL_NONE)"),
+            "ready work must not bypass a finite wait deadline",
+        )
+
+    def test_uart_write_backpressure_and_read_readiness_are_cooperative(self):
+        uart = (
+            MQUICKJS / "src/modules/uart/esp32_mquickjs_uart.c"
+        ).read_text(encoding="utf-8")
+        write_start = uart.index("static esp32_mquickjs_uart_write_result_t uart_write_cooperative(")
+        write_end = uart.index("\nstatic JSValue uart_write_error(", write_start)
+        write = uart[write_start:write_end]
+        notifier_start = uart.index("static void IRAM_ATTR uart_notify_from_isr(")
+        notifier_end = uart.index("\nstatic void uart_set_notifier(", notifier_start)
+        notifier = uart[notifier_start:notifier_end]
+
+        self.assertIn("uart_get_tx_buffer_free_size", write)
+        self.assertIn("uart_tx_chars", write)
+        self.assertIn("esp32_mquickjs_poll(ctx, runtime)", write)
+        self.assertIn("esp32_mquickjs_wait_for_activity(runtime, wait_ms)", write)
+        self.assertNotIn("portMAX_DELAY", write)
+        self.assertIn("esp32_mquickjs_future_wake_from_isr", notifier)
+        self.assertIn("esp32_mquickjs_notify_active_runtime_from_isr", notifier)
+        self.assertIn("esp_timer_start_once(state->poll_timer", uart)
+        self.assertIn("slot->write_busy", uart)
+        self.assertIn("esp32_mquickjs_byte_view_acquire_read", uart)
+        self.assertIn("scope->deadline_us", write)
+        self.assertIn("scope->bytes_written", uart)
+        self.assertIn('"bytesWritten"', uart)
+        self.assertIn("slot->timeout_ms", uart)
+        self.assertNotIn("UART_WRITE_STALL_TIMEOUT_MS", uart)
+        self.assertNotIn("span_copy", uart)
+
+    def test_byte_span_sources_hold_an_explicit_iterator_read_lease(self):
+        byte_source = (
+            MQUICKJS / "src/core/esp32_mquickjs_byte_source.c"
+        ).read_text(encoding="utf-8")
+        bitmap = (
+            MQUICKJS / "src/modules/bitmap/esp32_mquickjs_bitmap.c"
+        ).read_text(encoding="utf-8")
+        usb_serial = (
+            MQUICKJS / "src/modules/usb_serial/esp32_mquickjs_usb_serial.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("esp32_mquickjs_leased_byte_span_source_t", byte_source)
+        self.assertIn("source->read_leases++", byte_source)
+        self.assertIn("source->owner->read_leases--", byte_source)
+        self.assertIn(
+            'ByteSpanSource.close() failed because the source is busy',
+            byte_source,
+        )
+        self.assertIn(
+            'BitmapSpanSource.setRect() failed because the source is busy',
+            byte_source,
+        )
+        self.assertIn("bitmap_acquire_read", bitmap)
+        self.assertIn("bitmap_release_read", bitmap)
+        self.assertNotIn("span_copy", usb_serial)
+
     def test_io_modules_do_not_invoke_javascript_callbacks_directly(self):
         module_sources = (MQUICKJS / "src/modules").rglob("*.c")
 

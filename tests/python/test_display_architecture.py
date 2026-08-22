@@ -27,7 +27,7 @@ class DisplayArchitectureTests(SourceContractTestCase):
             self.assertIn("display.drivers.register", source)
             self.assertIn("prototype.present", source)
 
-    def test_wlk_module_is_a_profile_not_a_driver_alias(self):
+    def test_wlk_module_is_a_profile_not_driver_alias(self):
         source = (DISPLAY_DIR / "profiles" / "wlk1501spi8p.js").read_text(
             encoding="utf-8"
         )
@@ -67,6 +67,13 @@ class DisplayArchitectureTests(SourceContractTestCase):
         self.assertNotIn("frame.readRect(rect.x, y0, rect.width, y1 - y0).toArray()", driver)
         self.assertIn("bus.writeSegments", transport)
         self.assertIn("[[this.dataPrefix & 0xff], body]", transport)
+
+    def test_panel_drivers_close_single_byte_view_payloads(self):
+        for name in ("ssd1306.js", "st7789.js"):
+            driver = (DISPLAY_DIR / "drivers" / name).read_text(encoding="utf-8")
+            self.assertIn("payload = frame.readRect", driver)
+            self.assertIn("this.transport.write(payload)", driver)
+            self.assertIn("payload.close()", driver)
 
 
 if __name__ == "__main__":

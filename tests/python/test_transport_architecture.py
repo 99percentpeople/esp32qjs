@@ -125,6 +125,26 @@ class TransportArchitectureTests(SourceContractTestCase):
             self.assertNotIn("JS_Call(", text, source)
             self.assertNotIn("JSGCRef callback", text, source)
 
+    def test_usb_serial_output_waits_cooperatively_for_tx_capacity(self):
+        source = (
+            MQUICKJS / "src" / "modules" / "usb_serial" / "esp32_mquickjs_usb_serial.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("USJ_SELECT_WRITE_NOTIF", source)
+        self.assertIn("esp32_mquickjs_notify_active_runtime_from_isr", source)
+        self.assertIn("usb_serial_jtag_is_connected()", source)
+        self.assertIn("esp32_mquickjs_poll(ctx, runtime)", source)
+        self.assertIn("esp32_mquickjs_wait_for_activity(runtime, wait_ms)", source)
+        self.assertIn("usb_serial_jtag_write_bytes(\n            data + offset,\n            chunk,\n            0)", source)
+        self.assertIn("if (written > 0)", source)
+        self.assertIn("offset += (size_t)written", source)
+        self.assertNotIn("pdMS_TO_TICKS(USB_SERIAL_BINARY_WRITE", source)
+        self.assertLess(
+            source.index("if (now_us >= progress_deadline_us)"),
+            source.index("if (poll_result != ESP32_MQUICKJS_POLL_NONE)"),
+            "ready timers must not starve the finite USB TX stall deadline",
+        )
+
     def test_i2c_reuses_the_active_address_handle(self):
         source = (
             MQUICKJS / "src" / "modules" / "i2c" / "esp32_mquickjs_i2c.c"

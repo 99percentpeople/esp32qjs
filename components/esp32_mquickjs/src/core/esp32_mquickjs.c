@@ -83,10 +83,22 @@ typedef struct {
     void *opaque;
 } esp32_mquickjs_async_poller_entry_t;
 
+#define ESP32_MQUICKJS_IDLE_JOB_CAPACITY 8
+
+typedef struct {
+    JSGCRef callback;
+    bool allocated;
+} esp32_mquickjs_idle_job_t;
+
 typedef struct {
     void *task_handle;
     size_t poller_count;
     esp32_mquickjs_async_poller_entry_t *pollers;
+    esp32_mquickjs_idle_job_t idle_jobs[ESP32_MQUICKJS_IDLE_JOB_CAPACITY];
+    uint8_t idle_head;
+    uint8_t idle_tail;
+    uint8_t idle_count;
+    uint32_t execution_depth;
 } esp32_mquickjs_async_state_t;
 
 static esp32_mquickjs_timer_state_t *esp32_mquickjs_timer_state(
@@ -130,6 +142,85 @@ static esp32_mquickjs_async_state_t *esp32_mquickjs_async_state(esp32_mquickjs_r
         return NULL;
     }
     return runtime->async_state;
+}
+
+static void esp32_mquickjs_execution_enter(esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+
+    if (state != NULL) {
+        state->execution_depth++;
+    }
+}
+
+static void esp32_mquickjs_execution_leave(esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+
+    if (state != NULL && state->execution_depth > 0) {
+        state->execution_depth--;
+    }
+}
+
+static void esp32_mquickjs_clear_idle_jobs(JSContext *ctx,
+                                           esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+
+    if (state == NULL) {
+        return;
+    }
+    while (state->idle_count > 0) {
+        esp32_mquickjs_idle_job_t *job = &state->idle_jobs[state->idle_head];
+
+        if (job->allocated && ctx != NULL) {
+            JS_DeleteGCRef(ctx, &job->callback);
+        }
+        job->allocated = false;
+        state->idle_head = (uint8_t)(
+            (state->idle_head + 1U) % ESP32_MQUICKJS_IDLE_JOB_CAPACITY);
+        state->idle_count--;
+    }
+    state->idle_head = 0;
+    state->idle_tail = 0;
+}
+
+static bool esp32_mquickjs_poll_idle_job(JSContext *ctx,
+                                         esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+    esp32_mquickjs_idle_job_t *job;
+    JSGCRef callback_ref;
+    JSValue *callback;
+    JSValue result;
+
+    if (ctx == NULL || state == NULL || state->execution_depth != 0 ||
+        state->idle_count == 0) {
+        return false;
+    }
+
+    job = &state->idle_jobs[state->idle_head];
+    if (!job->allocated) {
+        state->idle_head = (uint8_t)(
+            (state->idle_head + 1U) % ESP32_MQUICKJS_IDLE_JOB_CAPACITY);
+        state->idle_count--;
+        return true;
+    }
+
+    callback = JS_PushGCRef(ctx, &callback_ref);
+    *callback = job->callback.val;
+    JS_DeleteGCRef(ctx, &job->callback);
+    job->allocated = false;
+    state->idle_head = (uint8_t)(
+        (state->idle_head + 1U) % ESP32_MQUICKJS_IDLE_JOB_CAPACITY);
+    state->idle_count--;
+
+    result = esp32_mquickjs_call(ctx, runtime, *callback, JS_NULL, 0, NULL);
+    if (JS_IsException(result)) {
+        esp32_mquickjs_print_exception(ctx);
+    }
+    JS_PopGCRef(ctx, &callback_ref);
+    return true;
 }
 
 static bool esp32_mquickjs_init_async_state(esp32_mquickjs_runtime_t *runtime)
@@ -548,7 +639,9 @@ JSValue esp32_mquickjs_call(JSContext *ctx,
     }
     JS_PushArg(ctx, *rooted_function);
     JS_PushArg(ctx, *rooted_this);
+    esp32_mquickjs_execution_enter(runtime);
     result = JS_Call(ctx, argc);
+    esp32_mquickjs_execution_leave(runtime);
 
     if (runtime != NULL) {
         runtime->deadline_us = previous_deadline;
@@ -1087,6 +1180,7 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
     if (!esp32_mquickjs_prepare_future_runtime_destroy(ctx, runtime)) {
         return false;
     }
+    esp32_mquickjs_clear_idle_jobs(ctx, runtime);
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
     esp32_mquickjs_deinit_socket_runtime(ctx);
@@ -1240,7 +1334,9 @@ JSValue esp32_mquickjs_eval(JSContext *ctx,
         }
     }
 
+    esp32_mquickjs_execution_enter(runtime);
     result = JS_Eval(ctx, source, strlen(source), filename, eval_flags);
+    esp32_mquickjs_execution_leave(runtime);
 
     if (runtime != NULL) {
         runtime->deadline_us = previous_deadline;
@@ -1264,7 +1360,9 @@ JSValue esp32_mquickjs_run(JSContext *ctx,
         }
     }
 
+    esp32_mquickjs_execution_enter(runtime);
     result = JS_Run(ctx, compiled_code);
+    esp32_mquickjs_execution_leave(runtime);
 
     if (runtime != NULL) {
         runtime->deadline_us = previous_deadline;
@@ -1430,7 +1528,9 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
     if (state == NULL || state->queue == NULL || state->slots == NULL) {
         async_handled = esp32_mquickjs_poll_registered(ctx, runtime);
         run_pending_external_gc(ctx);
-        if (async_handled) {
+        core_async_handled = esp32_mquickjs_poll_idle_job(ctx, runtime) ||
+                             core_async_handled;
+        if (core_async_handled || async_handled) {
             runtime->async_generation++;
             result |= ESP32_MQUICKJS_POLL_ASYNC;
         }
@@ -1494,6 +1594,8 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
 
     async_handled = esp32_mquickjs_poll_registered(ctx, runtime);
     run_pending_external_gc(ctx);
+    core_async_handled = esp32_mquickjs_poll_idle_job(ctx, runtime) ||
+                         core_async_handled;
     if (core_async_handled || async_handled) {
         runtime->async_generation++;
         result |= ESP32_MQUICKJS_POLL_ASYNC;
@@ -1574,6 +1676,38 @@ JSValue js_sleep(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
         return JS_ThrowInternalError(ctx, "sleep(ms) was interrupted by a runtime stop request");
     }
     return JS_NewInt32(ctx, delay_ms);
+}
+
+JSValue js_runtime_defer_idle(JSContext *ctx, JSValue *this_val,
+                              int argc, JSValue *argv)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(s_active_runtime);
+    esp32_mquickjs_idle_job_t *job;
+    JSValue *callback;
+
+    (void)this_val;
+    if (argc != 1 || !JS_IsFunction(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "sys._deferIdle(callback) expects one function");
+    }
+    if (state == NULL) {
+        return JS_ThrowInternalError(ctx, "runtime idle queue is unavailable");
+    }
+    if (state->idle_count >= ESP32_MQUICKJS_IDLE_JOB_CAPACITY) {
+        return JS_ThrowInternalError(ctx, "runtime idle queue is full");
+    }
+
+    job = &state->idle_jobs[state->idle_tail];
+    if (job->allocated) {
+        return JS_ThrowInternalError(ctx, "runtime idle queue is inconsistent");
+    }
+    callback = JS_AddGCRef(ctx, &job->callback);
+    *callback = argv[0];
+    job->allocated = true;
+    state->idle_tail = (uint8_t)(
+        (state->idle_tail + 1U) % ESP32_MQUICKJS_IDLE_JOB_CAPACITY);
+    state->idle_count++;
+    esp32_mquickjs_notify_activity(s_active_runtime);
+    return JS_UNDEFINED;
 }
 
 JSValue js_setTimeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

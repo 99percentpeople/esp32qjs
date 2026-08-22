@@ -29,6 +29,7 @@ JSValue js_framework_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *
 JSValue js_fs_get_root(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_fs_set_root(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_sleep(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_runtime_defer_idle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_setTimeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_setInterval(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_clearTimeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

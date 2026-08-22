@@ -5,6 +5,7 @@ test("bitmap/basic", function () {
   var rgb;
   var chunks;
   var source;
+  var stagedView;
   var converted;
   var rotated;
   var busySource;
@@ -41,6 +42,13 @@ test("bitmap/basic", function () {
   test.equal(bytes.length, 8, "mono readRect should return a ByteView with array conversion");
   test.equal(bytes[0], 0x01, "mono readRect should pack y=0 in bit 0");
   test.equal(bytes[1], 0x80, "mono readRect should pack y=7 in bit 7");
+  stagedView = mono.readRect(1, 0, 4, 8);
+  test.equal(stagedView.byteLength, 4, "partial mono readRect should use a staged ByteView");
+  stagedView.close();
+  stagedView = mono.readRect(1, 0, 4, 8);
+  test.equal(stagedView.toArray()[0], 0x80,
+    "partial mono readRect should rebuild a closed staged ByteView");
+  stagedView.close();
 
   dirty = mono.getDirty();
   test.equal(dirty.x, 0, "dirty x should include set pixels");
@@ -385,6 +393,15 @@ test("bitmap/basic", function () {
   test.equal(reusedAgain, reusedChunks, "readRectChunks reuse should keep the chunk array stable");
   test.equal(reusedAgain[0], reusedFirst, "readRectChunks reuse should keep ByteView wrappers stable");
   test.equal(reusedAgain[0].toArray()[1], 0x01, "reused ByteView should point at updated pixel data");
+  reusedFirst.close();
+  rgb.setPixel(0, 0, 0x0002);
+  reusedAgain = rgb.readRectChunks(0, 0, 2, 2, { byteOrder: "be", reuse: true });
+  test.equal(reusedAgain, reusedChunks,
+    "readRectChunks reuse should keep the chunk array after a cached ByteView is closed");
+  test.ok(reusedAgain[0] !== reusedFirst,
+    "readRectChunks reuse should replace a closed cached ByteView");
+  test.equal(reusedAgain[0].toArray()[1], 0x02,
+    "replacement ByteView should point at updated pixel data");
 
   if (sys.info.features.spi && typeof spi === "object") {
     var bus = spi.openBus();

@@ -27,7 +27,9 @@ typedef struct {
     int iter_remaining;
     JSGCRef owner_ref;
     bool owner_ref_added;
+    bool buffer_read_leased;
     bool iterating;
+    bool destroy_requested;
 } bitmap_span_source_t;
 
 static const char *format_name(uint8_t format)
@@ -1383,10 +1385,19 @@ static bool display_span_source_open(JSContext *ctx,
 {
     bitmap_span_source_t *source = opaque;
 
-    if (source == NULL || source->buffer == NULL || source->buffer->closed) {
-        *out_error = JS_ThrowReferenceError(ctx, "SPIDevice.writeSource(source) failed because the Bitmap is closed");
+    if (source == NULL || source->destroy_requested || source->iterating ||
+        source->buffer == NULL || source->buffer->closed) {
+        *out_error = JS_ThrowReferenceError(
+            ctx,
+            "ByteSpanSource iteration failed because the Bitmap is closed or busy");
         return false;
     }
+    if (!bitmap_acquire_read(ctx, source->buffer,
+                             "ByteSpanSource iteration")) {
+        *out_error = JS_EXCEPTION;
+        return false;
+    }
+    source->buffer_read_leased = true;
     if (source->owner_ref_added) {
         JS_DeleteGCRef(ctx, &source->owner_ref);
     }
@@ -1457,15 +1468,24 @@ static bool display_span_source_next(JSContext *ctx, void *opaque, esp32_mquickj
 static void display_span_source_close(JSContext *ctx, void *opaque)
 {
     bitmap_span_source_t *source = opaque;
+    bool destroy_requested;
 
-    (void)ctx;
     if (source == NULL) {
         return;
     }
+    destroy_requested = source->destroy_requested;
     source->iterating = false;
+    if (source->buffer_read_leased) {
+        bitmap_release_read(source->buffer);
+        source->buffer_read_leased = false;
+    }
     if (source->owner_ref_added) {
         JS_DeleteGCRef(ctx, &source->owner_ref);
         source->owner_ref_added = false;
+    }
+    if (destroy_requested) {
+        heap_caps_free(source->scratch);
+        heap_caps_free(source);
     }
 }
 
@@ -1475,6 +1495,14 @@ static void display_span_source_destroy(JSContext *ctx, void *opaque)
 
     if (source == NULL) {
         return;
+    }
+    if (source->iterating) {
+        source->destroy_requested = true;
+        return;
+    }
+    if (source->buffer_read_leased) {
+        bitmap_release_read(source->buffer);
+        source->buffer_read_leased = false;
     }
     if (source->owner_ref_added) {
         JS_DeleteGCRef(ctx, &source->owner_ref);
@@ -1558,7 +1586,7 @@ static JSValue make_staged_rect_byte_view(JSContext *ctx,
     if (JS_IsException(*staged_view)) {
         goto fail;
     }
-    if (JS_GetClassID(ctx, *staged_view) == JS_CLASS_BYTE_VIEW) {
+    if (esp32_mquickjs_byte_view_is_open(ctx, *staged_view)) {
         if (!esp32_mquickjs_update_byte_view(ctx, *staged_view, data, length)) {
             goto fail;
         }
@@ -1721,7 +1749,7 @@ static JSValue make_reused_direct_rect_chunks(JSContext *ctx,
                 JS_PopGCRef(ctx, &array_ref);
                 return JS_EXCEPTION;
             }
-            if (JS_GetClassID(ctx, *item) == JS_CLASS_BYTE_VIEW) {
+            if (esp32_mquickjs_byte_view_is_open(ctx, *item)) {
                 if (!esp32_mquickjs_update_byte_view(ctx, *item, direct_data, length)) {
                     JS_PopGCRef(ctx, &item_ref);
                     JS_PopGCRef(ctx, &array_ref);

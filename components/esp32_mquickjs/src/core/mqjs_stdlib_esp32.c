@@ -600,6 +600,7 @@ static const JSPropDef js_sys[] = {
     JS_CFUNC_DEF("freeHeap", 0, js_sys_freeHeap),
     JS_CFUNC_DEF("randomHex", 1, js_sys_randomHex),
     JS_CFUNC_DEF("withTimeout", 2, js_sys_withTimeout),
+    JS_CFUNC_DEF("_deferIdle", 1, js_runtime_defer_idle),
     JS_PROP_END,
 };
 

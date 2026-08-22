@@ -1728,6 +1728,7 @@ JSValue js_future_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
     }
     handle->observed = true;
     while (!handle->terminal) {
+        esp32_mquickjs_poll_result_t poll_result;
         uint32_t wait_ms = ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS;
         uint64_t now_us;
 
@@ -1735,8 +1736,9 @@ JSValue js_future_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
             return JS_ThrowInternalError(ctx, "future.wait() lost its operation");
         }
 
-        if (esp32_mquickjs_poll(ctx, runtime) != ESP32_MQUICKJS_POLL_NONE) {
-            continue;
+        poll_result = esp32_mquickjs_poll(ctx, runtime);
+        if (handle->terminal) {
+            break;
         }
         now_us = (uint64_t)esp_timer_get_time();
         if (wait_deadline_us > 0 && now_us >= wait_deadline_us) {
@@ -1744,6 +1746,9 @@ JSValue js_future_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
         }
         if (!esp32_mquickjs_cooperate(runtime)) {
             return JS_ThrowInternalError(ctx, "future.wait() was interrupted by a runtime stop request");
+        }
+        if (poll_result != ESP32_MQUICKJS_POLL_NONE) {
+            continue;
         }
         if (wait_deadline_us > now_us) {
             uint64_t remaining_us = wait_deadline_us - now_us;

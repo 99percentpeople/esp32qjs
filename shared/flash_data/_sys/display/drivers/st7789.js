@@ -274,7 +274,11 @@
         timings.prepareUs = nowUs() - step;
         transferStart = nowUs();
       }
-      this.transport.write(payload);
+      try {
+        this.transport.write(payload);
+      } finally {
+        payload.close();
+      }
       result = {
         chunks: 1,
         bytes: rect.width * rect.height * 2,

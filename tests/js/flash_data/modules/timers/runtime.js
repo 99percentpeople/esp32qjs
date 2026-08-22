@@ -28,6 +28,12 @@ test("timers/runtime", function () {
   var reentrantDepth = 0;
   var maximumReentrantDepth = 0;
   var reentrantIntervalId;
+  var idleJobRan = false;
+  var waitTimeoutFuture;
+  var waitTimeoutIntervalId;
+  var waitTimeoutStarted;
+  var waitTimeoutElapsed;
+  var waitTimeoutError = "";
 
   test.ok(typeof Future === "function", "Future factory should exist");
   test.ok(typeof EventQueue === "function", "EventQueue class should exist");
@@ -157,6 +163,31 @@ test("timers/runtime", function () {
     "repeating timer should continue after a callback pumps nested Future work");
   test.equal(maximumReentrantDepth, 1,
     "repeating timer callback should not re-enter itself during nested Future polling");
+
+  waitTimeoutFuture = Future.sleep(200);
+  waitTimeoutIntervalId = setInterval(function () {
+    intervalTicks++;
+  }, 1);
+  waitTimeoutStarted = sys.millis();
+  try {
+    waitTimeoutFuture.wait(20);
+  } catch (waitError) {
+    waitTimeoutError = String(waitError);
+  }
+  waitTimeoutElapsed = sys.millis() - waitTimeoutStarted;
+  clearInterval(waitTimeoutIntervalId);
+  waitTimeoutFuture.cancel();
+  test.ok(waitTimeoutError.indexOf("timed out after 20 ms") >= 0,
+    "ready timers must not starve a finite Future.wait timeout");
+  test.ok(waitTimeoutElapsed < 150,
+    "Future.wait timeout should not be delayed until the input Future completes");
+
+  sys._deferIdle(function () {
+    idleJobRan = true;
+  });
+  Future.sleep(30).wait(500);
+  test.ok(!idleJobRan,
+    "top-level idle jobs must not run from a nested Future wait");
 
   test.equal(delay(5100), 5100, "long native delay should cooperate with the task watchdog");
 

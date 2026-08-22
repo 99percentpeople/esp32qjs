@@ -528,7 +528,8 @@ static bool rpc_encode_map(JSContext *ctx,
             goto done;
         }
         memcpy(keys[i].name, key, key_len + 1U);
-        keys[i].integer_key = rpc_field_id(codec, key, &keys[i].field_id) == 0;
+        keys[i].integer_key =
+            rpc_field_id(codec, key, &keys[i].field_id) == 0;
         if (!keys[i].integer_key && !string_keys_allowed) {
             JS_PopGCRef(ctx, &key_ref);
             JS_ThrowTypeError(ctx,
@@ -545,6 +546,36 @@ static bool rpc_encode_map(JSContext *ctx,
             keys[i].encoded_key_len = prefix_len + key_len;
         }
         JS_PopGCRef(ctx, &key_ref);
+    }
+    if (string_keys_allowed) {
+        for (i = 0; i < length; ++i) {
+            uint32_t j;
+            char field_id_key[16];
+            int field_id_key_len;
+
+            if (!keys[i].integer_key) {
+                continue;
+            }
+            field_id_key_len = snprintf(field_id_key, sizeof(field_id_key),
+                                        "%lu", (unsigned long)keys[i].field_id);
+            if (field_id_key_len < 0 ||
+                (size_t)field_id_key_len >= sizeof(field_id_key)) {
+                JS_ThrowInternalError(ctx,
+                                      "rpc.encode() could not format a field id");
+                goto done;
+            }
+            for (j = 0; j < length; ++j) {
+                if (strcmp(keys[j].name, field_id_key) == 0) {
+                    uint8_t prefix[9];
+                    size_t key_len = strlen(keys[i].name);
+                    size_t prefix_len =
+                        rpc_encode_unsigned_bytes(3, key_len, prefix);
+                    keys[i].integer_key = false;
+                    keys[i].encoded_key_len = prefix_len + key_len;
+                    break;
+                }
+            }
+        }
     }
     qsort(keys, length, sizeof(*keys), rpc_map_key_compare);
     if (!rpc_encode_unsigned(buffer, 5, length)) {

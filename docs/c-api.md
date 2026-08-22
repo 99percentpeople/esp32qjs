@@ -75,6 +75,12 @@ slot is immediately reusable. Synchronous native adapters use a separate
 reserved slot pool, keeping transport and cancellation paths responsive when
 public Future capacity is full.
 
+Finite synchronous hardware operations are cooperative scheduler yield points.
+While one is waiting for an interrupt, readiness event, or timeout, timer
+callbacks and ready Futures may run before the hardware method returns. This is
+single-threaded cooperative re-entry, not parallel JavaScript execution. Idle
+application jobs are not started from a nested synchronous wait.
+
 Examples:
 
 ```js
@@ -212,6 +218,11 @@ read-only native byte view; `toArray()` makes an explicit JavaScript copy. A
 `close()` method is idempotent and releases producer-owned resources. Owned
 `ByteView` values also have an idempotent `close()`; call it after the last
 consumer or `toArray()` conversion to release native storage deterministically.
+Opening a `ByteSpanSource` acquires a read lease until the consumer finishes.
+The current span remains valid until the consumer asks for the next span or
+closes the iterator, so cooperative UART and USB consumers do not make a
+defensive full-span copy. Calling `close()` or changing a reusable source with
+`setRect()` while it is leased throws a busy error.
 
 - `Stream.SEEK_SET`
 - `Stream.SEEK_CUR`
@@ -476,7 +487,7 @@ This module exposes synchronous TTL UART ports. It is intended for bounded perip
 - `uart.DEFAULT_TX_BUFFER_SIZE`
   Default UART driver TX buffer size.
 - `uart.DEFAULT_TIMEOUT_MS`
-  Default timeout for `read()` and `flush()`.
+  Default timeout for UART read, write, and flush operations.
 - `uart.open(options?)`
   Open one UART port and return a `UARTPort`. `options` can include `{ port, tx, rx, baud, dataBits, parity, stopBits, rxBufferSize, txBufferSize, timeoutMs }`. `parity` is `"none"`, `"even"`, or `"odd"`; `stopBits` is `1`, `1.5`, or `2`. Opening an already-open UART port throws.
 
@@ -485,15 +496,33 @@ This module exposes synchronous TTL UART ports. It is intended for bounded perip
 - `port.status()`
   Return `{ opened, port, tx, rx, baud, dataBits, parity, stopBits, rxBufferSize, txBufferSize, timeoutMs }`.
 - `port.close()`
-  Close the driver and make the JS object stale. GC finalization also releases forgotten ports eventually, but explicit `close()` remains the intended lifecycle boundary.
+  Close the driver and make the JS object stale. It refuses with a busy error
+  while a read, write, or flush is active; it does not implicitly cancel an
+  operation. GC finalization also releases forgotten ports eventually, but
+  explicit `close()` remains the intended lifecycle boundary.
 - `port.write(data)`
-  Write an array-like sequence of bytes or native byte view and return the number of bytes accepted by the UART driver.
+  Write an array-like sequence of bytes or native byte view and return the
+  number of bytes accepted by the UART driver. TX backpressure keeps the
+  synchronous call surface but waits cooperatively on UART write-ready events;
+  timers and ready Futures continue to run. Only one write may be active per
+  port. The port's configured `timeoutMs` is the total deadline for enqueueing
+  the complete value; `timeoutMs: 0` performs one immediate non-blocking
+  attempt. If a write fails after producing output, the thrown error exposes
+  the exact partial count as `error.bytesWritten`; callers must not retry the
+  whole value blindly.
 - `port.writeChunks(chunks)`
   Write an array-like list of byte-source chunks and return `{ chunks, bytes, totalUs }`.
 - `port.writeSource(source)`
   Write spans from a generic `ByteSpanSource`, such as `Bitmap.createSpanSource(...)`, and return `{ chunks, bytes, totalUs }`.
+
+`write()`, `writeChunks()`, and `writeSource()` each use one operation-wide
+deadline; chunk or span boundaries do not restart it. Their operational errors
+all report the cumulative `bytesWritten` count.
+
 - `port.read(length, timeoutMs = uart.DEFAULT_TIMEOUT_MS)`
-  Read up to `length` bytes and return the bytes actually received as a JavaScript array.
+  Read up to `length` bytes and return the bytes actually received as a
+  JavaScript array. RX readiness is interrupt-driven; the timeout uses a
+  one-shot native timer rather than readiness polling.
 - `port.available()`
   Return the number of bytes currently buffered for reading.
 - `port.flush(timeoutMs = uart.DEFAULT_TIMEOUT_MS)`
@@ -550,7 +579,7 @@ operation is pending and cannot be changed during that lease.
 
 `RMTChannel` provides `start()`, `stop()`, `status()`, and idempotent `close()`.
 TX uses `transmit(symbols, { loopCount?, endLevel?, timeoutMs? })`; loop counts
-must be finite. RX uses
+must be finite. `timeoutMs` defaults to 1000 for both directions. RX uses
 `receive(symbols, { minPulseNs?, idleThresholdNs, timeoutMs? })`, fills the
 caller's buffer, updates its logical length, and returns `{ length, truncated }`
 or `null` at timeout. Only one operation may be pending per channel. Use
@@ -757,7 +786,10 @@ consume the same USB input stream.
 - `handle.send(value)` / `handle.status()` / `handle.close()`
   Send one frame/chunk, inspect counters, or close the queue. Text mode accepts
   bounded strings. Binary mode accepts `ByteView` or `ByteSpanSource` and writes
-  the exact bytes without a terminator.
+  the exact bytes without a terminator. Sending remains synchronous, but TX
+  backpressure waits cooperatively on the USB write-ready interrupt so timers
+  and other ready runtime work continue to run. A physically disconnected USB
+  link fails immediately, and only one send may be active at a time.
 
 ```js
 var serial = usbSerial.open({ maxFrameBytes: 4096 });
@@ -1515,8 +1547,9 @@ an application schema.
 - `rpc.createCodec(options)`
   Create a codec and return its numeric handle. `options.fields` is the
   non-empty ordered list that maps application field names to CBOR integer
-  keys. `dynamicFields` optionally names fields whose nested JSON-like maps may
-  use string keys. `allowStringKeys` permits string keys at the root when true.
+  keys. `dynamicFields` optionally names fields whose nested JSON-like maps use
+  CBOR text keys exclusively, including numeric-looking JavaScript property
+  names. `allowStringKeys` applies the same text-key rule at the root when true.
   `streamDirectory` optionally selects where incoming transparent streams are
   spooled; without it, that codec rejects streamed input.
 - `rpc.releaseCodec(codecId)`
