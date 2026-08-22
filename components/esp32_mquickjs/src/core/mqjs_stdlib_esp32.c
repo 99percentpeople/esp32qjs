@@ -136,6 +136,7 @@ static const JSClassDef js_byte_view_class =
     JS_CLASS_DEF("ByteView", 0, js_byte_view_constructor, JS_CLASS_BYTE_VIEW, NULL, js_byte_view_proto, NULL, js_byte_view_finalizer);
 
 static const JSPropDef js_byte_span_source_proto[] = {
+    JS_CGETSET_DEF("byteLength", js_byte_span_source_get_length, NULL),
     JS_CFUNC_DEF("close", 0, js_byte_span_source_close),
     JS_PROP_END,
 };
@@ -468,6 +469,7 @@ static const JSPropDef js_sys_info_features[] = {
     JS_CGETSET_MAGIC_DEF("runtimeLogs", js_sys_feature_get, NULL, 16),
     JS_CGETSET_MAGIC_DEF("i2s", js_sys_feature_get, NULL, 17),
     JS_CGETSET_MAGIC_DEF("camera", js_sys_feature_get, NULL, 18),
+    JS_CGETSET_MAGIC_DEF("rpc", js_sys_feature_get, NULL, 19),
     JS_PROP_END,
 };
 
@@ -792,6 +794,35 @@ static const JSClassDef js_usb_serial_obj =
     JS_OBJECT_DEF("usbSerial", js_usb_serial);
 #endif
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RPC
+static const JSPropDef js_rpc[] = {
+    JS_PROP_DOUBLE_DEF("FIRST", 1, 0),
+    JS_PROP_DOUBLE_DEF("LAST", 2, 0),
+    JS_PROP_DOUBLE_DEF("RESPONSE", 4, 0),
+    JS_PROP_DOUBLE_DEF("ERROR", 8, 0),
+    JS_PROP_DOUBLE_DEF("MAX_FRAME_BYTES", 7740, 0),
+    JS_PROP_DOUBLE_DEF("MAX_MESSAGE_BYTES", 65536, 0),
+    JS_PROP_DOUBLE_DEF("MAX_STREAM_BYTES", 33554432, 0),
+    JS_PROP_DOUBLE_DEF("SEGMENT_PAYLOAD_BYTES", 7680, 0),
+    JS_CFUNC_DEF("createCodec", 1, js_rpc_create_codec),
+    JS_CFUNC_DEF("releaseCodec", 1, js_rpc_release_codec),
+    JS_CFUNC_DEF("createDecoder", 1, js_rpc_create_decoder),
+    JS_CFUNC_DEF("releaseDecoder", 1, js_rpc_release_decoder),
+    JS_CFUNC_DEF("resetDecoder", 1, js_rpc_reset_decoder),
+    JS_CFUNC_DEF("feed", 2, js_rpc_feed),
+    JS_CFUNC_DEF("encode", 5, js_rpc_encode),
+    JS_CFUNC_DEF("bytes", 1, js_rpc_bytes),
+    JS_CFUNC_DEF("fileSource", 1, js_rpc_file_source),
+    JS_CFUNC_DEF("sourceInfo", 1, js_rpc_source_info),
+    JS_CFUNC_DEF("adoptFile", 2, js_rpc_adopt_file),
+    JS_CFUNC_DEF("status", 0, js_rpc_status),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_rpc_obj =
+    JS_OBJECT_DEF("rpc", js_rpc);
+#endif
+
 #if CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
 static const JSPropDef js_socket_tcp[] = {
     JS_CFUNC_DEF("connect", 4, js_socket_tcp_connect),
@@ -926,6 +957,9 @@ static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("dac", &js_dac_obj),
 #endif
     JS_PROP_CLASS_DEF("sys", &js_sys_obj),
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RPC
+    JS_PROP_CLASS_DEF("rpc", &js_rpc_obj),
+#endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
     JS_PROP_CLASS_DEF("runtimeLogs", &js_runtime_logs_obj),
 #endif

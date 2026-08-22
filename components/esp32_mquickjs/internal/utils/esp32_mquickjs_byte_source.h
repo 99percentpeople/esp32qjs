@@ -70,6 +70,12 @@ bool esp32_mquickjs_byte_span_source_known_length(JSContext *ctx,
                                                   JSValue value,
                                                   size_t *out_length);
 
+void *esp32_mquickjs_byte_span_source_get_opaque(
+    JSContext *ctx,
+    JSValue value,
+    const esp32_mquickjs_byte_span_source_object_ops_t *expected_ops,
+    const char *api_name);
+
 JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx,
                                             JSValue owner,
                                             const esp32_mquickjs_byte_span_source_object_ops_t *ops,
@@ -107,6 +113,7 @@ JSValue js_byte_view_get_length(JSContext *ctx, JSValue *this_val, int argc, JSV
 JSValue js_byte_view_to_array(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 
 JSValue js_byte_span_source_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_byte_span_source_get_length(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_byte_span_source_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_bitmap_span_source_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 void js_byte_span_source_finalizer(JSContext *ctx, void *opaque);

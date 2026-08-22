@@ -68,6 +68,33 @@ class TransportArchitectureTests(SourceContractTestCase):
         self.assertNotIn("Authorization", source)
         self.assertNotIn("Bearer ", source)
 
+    def test_rpc_is_an_optional_codec_without_agent_business_rules(self):
+        kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
+        cmake = (MQUICKJS / "CMakeLists.txt").read_text(encoding="utf-8")
+        source = (
+            MQUICKJS / "src" / "core" / "esp32_mquickjs_rpc.c"
+        ).read_text(encoding="utf-8")
+        public_header = MQUICKJS / "include" / "esp32qjs_rpc_wire.h"
+
+        self.assertIn("config ESP32_MQUICKJS_FEATURE_RPC", kconfig)
+        self.assertIn(
+            "esp32_mquickjs_append_feature_component(\n"
+            "    CONFIG_ESP32_MQUICKJS_FEATURE_RPC",
+            cmake,
+        )
+        self.assertTrue(public_header.is_file())
+        self.assertIn("rpc.createCodec(options)", source)
+        for application_rule in (
+            '"hardwareId"',
+            '"tool"',
+            '"result"',
+            '"/workspace"',
+            "0x0101U",
+            ".esp32qjs-agent-rpc-",
+            "agent.server/1",
+        ):
+            self.assertNotIn(application_rule, source)
+
     def test_websocket_control_frames_are_not_application_errors(self):
         source = (
             MQUICKJS / "src" / "modules" / "websocket" / "esp32_mquickjs_websocket.c"

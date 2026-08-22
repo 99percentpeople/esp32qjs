@@ -119,6 +119,16 @@ config ESP32_MQUICKJS_FEATURE_SOCKET
         bundle verification. Framing, reconnect policy, authentication, and
         all application protocols remain application responsibilities.
 
+config ESP32_MQUICKJS_FEATURE_RPC
+    bool "Enable generic native binary RPC codec"
+    default n
+    help
+        Enable the optional esp32qjs.rpc/1 COBS, CRC-32, deterministic CBOR,
+        segmentation, reassembly, and transparent ByteSpanSource bridge.
+        Applications supply their own field table, dynamic-value fields,
+        stream spool directory, opcodes, authentication, dispatch, queueing,
+        and business validation. The framework contains no Agent contract.
+
 config ESP32_MQUICKJS_FEATURE_HTTP
     bool "Enable http module"
     default n
@@ -541,14 +551,14 @@ config ESP32_MQUICKJS_HTTP_TASK_STACK_IN_PSRAM
         normal internal-RAM task allocator.
 
 config ESP32_MQUICKJS_USB_SERIAL_MAX_FRAME_BYTES
-    int "Maximum USB serial protocol frame size (bytes)"
+    int "Maximum USB serial frame or binary chunk size (bytes)"
     range 256 16384
     default 8192
     depends on ESP32_MQUICKJS_FEATURE_USB_SERIAL
     help
-        Maximum complete NDJSON line accepted or sent by usbSerial. Oversized
-        input is discarded through the next line boundary and emitted as an
-        EventQueue overflow error.
+        Maximum complete text frame or binary chunk accepted or sent by
+        usbSerial. Text overflow is discarded through the next line boundary;
+        binary overflow is reported as an EventQueue error.
 
 config ESP32_MQUICKJS_USB_SERIAL_RX_BUFFER_SIZE
     int "USB serial driver RX buffer size (bytes)"
@@ -576,7 +586,7 @@ config ESP32_MQUICKJS_SOCKET_MAX_MESSAGE_BYTES
 
 config ESP32_MQUICKJS_SOCKET_MAX_SOURCE_BYTES
     int "Maximum streamed TCP source size (bytes)"
-    range 32768 4194304
+    range 32768 67108864
     default 1048576
     depends on ESP32_MQUICKJS_FEATURE_SOCKET
     help

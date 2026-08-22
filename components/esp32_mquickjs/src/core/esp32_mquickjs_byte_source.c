@@ -384,6 +384,25 @@ bool esp32_mquickjs_byte_span_source_known_length(JSContext *ctx,
     return true;
 }
 
+void *esp32_mquickjs_byte_span_source_get_opaque(
+    JSContext *ctx,
+    JSValue value,
+    const esp32_mquickjs_byte_span_source_object_ops_t *expected_ops,
+    const char *api_name)
+{
+    esp32_mquickjs_byte_span_source_object_t *source =
+        byte_span_source_from_value(ctx, value, api_name);
+
+    if (source == NULL) {
+        return NULL;
+    }
+    if (source->ops != expected_ops) {
+        JS_ThrowTypeError(ctx, "%s expects an RPC file ByteSpanSource", api_name);
+        return NULL;
+    }
+    return source->opaque;
+}
+
 JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx,
                                             JSValue owner,
                                             const esp32_mquickjs_byte_span_source_object_ops_t *ops,
@@ -628,6 +647,24 @@ JSValue js_byte_span_source_close(JSContext *ctx, JSValue *this_val, int argc, J
     JS_SetOpaque(ctx, *this_val, NULL);
     heap_caps_free(source);
     return JS_IsException(owner_result) ? JS_EXCEPTION : JS_TRUE;
+}
+
+JSValue js_byte_span_source_get_length(JSContext *ctx,
+                                       JSValue *this_val,
+                                       int argc,
+                                       JSValue *argv)
+{
+    size_t length = 0;
+
+    (void)argc;
+    (void)argv;
+    if (!esp32_mquickjs_byte_span_source_known_length(ctx, *this_val, &length)) {
+        if (JS_HasException(ctx)) {
+            return JS_EXCEPTION;
+        }
+        return JS_NULL;
+    }
+    return JS_NewUint32(ctx, (uint32_t)length);
 }
 
 JSValue js_bitmap_span_source_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

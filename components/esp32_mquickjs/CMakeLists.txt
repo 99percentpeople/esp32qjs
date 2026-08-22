@@ -22,6 +22,7 @@ set(ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS
     CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
+    CONFIG_ESP32_MQUICKJS_FEATURE_RPC
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
     CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
@@ -294,6 +295,14 @@ set(ESP32_MQUICKJS_PRIV_REQUIRES
     esp_driver_usb_serial_jtag
     esp_websocket_client
     lwip
+)
+
+esp32_mquickjs_append_feature_component(
+    CONFIG_ESP32_MQUICKJS_FEATURE_RPC
+    "src/core/esp32_mquickjs_rpc.c"
+    "src/core/esp32_mquickjs_rpc_wire.c"
+    PRIV_REQUIRES
+        espressif__cbor
 )
 
 esp32_mquickjs_append_feature_component(

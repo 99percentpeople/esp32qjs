@@ -53,6 +53,16 @@ add_executable(test_line_framer
 target_include_directories(test_line_framer PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_line_framer COMMAND test_line_framer)
 
+add_executable(test_rpc_wire
+    test_rpc_wire.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_rpc_wire.c
+)
+target_include_directories(test_rpc_wire PRIVATE ../../components/esp32_mquickjs/include)
+target_compile_definitions(test_rpc_wire PRIVATE
+    RPC_GOLDEN_VECTOR_PATH="${CMAKE_CURRENT_SOURCE_DIR}/rpc-v1-golden.txt"
+)
+add_test(NAME test_rpc_wire COMMAND test_rpc_wire)
+
 add_executable(test_log_ring
     test_log_ring.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_log_ring.c

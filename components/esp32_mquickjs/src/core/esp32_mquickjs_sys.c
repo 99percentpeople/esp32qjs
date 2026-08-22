@@ -316,6 +316,11 @@ JSValue js_sys_feature_get(JSContext *ctx,
 #else
         false,
 #endif
+#if defined(CONFIG_ESP32_MQUICKJS_FEATURE_RPC) && CONFIG_ESP32_MQUICKJS_FEATURE_RPC
+        true,
+#else
+        false,
+#endif
     };
 
     (void)this_val;

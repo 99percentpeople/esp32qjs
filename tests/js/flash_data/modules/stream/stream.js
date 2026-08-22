@@ -8,6 +8,8 @@ test("stream/stream", function () {
   var byteTailView;
   var byteTail;
   var bytes;
+  var binaryPath = "stream-binary-test.bin";
+  var binaryStream;
 
   writeStream = fs.open(path, "w+");
   test.equal(writeStream.kind, "file", "stream kind");
@@ -56,6 +58,14 @@ test("stream/stream", function () {
   test.equal(byteTail.length, 2, "binary read should return short tail chunk");
   test.equal(byteTail[0], 0x65, "binary read tail first byte");
   test.equal(byteTail[1], 0x66, "binary read tail second byte");
+
+  binaryStream = fs.open(binaryPath, "wb");
+  test.equal(binaryStream.write(byteChunk), 4,
+    "binary stream should write a ByteView without text conversion");
+  test.equal(binaryStream.write(byteTailView), 2,
+    "binary stream should append a second ByteView exactly");
+  binaryStream.close();
+
   test.equal(byteChunk.close(), true, "ByteView close should succeed");
   test.equal(byteChunk.close(), true, "ByteView close should be idempotent");
   test.equal(byteTailView.close(), true, "tail ByteView close should succeed");
@@ -69,6 +79,7 @@ test("stream/stream", function () {
   test.equal(stream.read(1), null, "binary read at eof should return null");
   stream.close();
   fs.remove(path);
+  fs.remove(binaryPath);
 
   return { first: first, second: second };
 });

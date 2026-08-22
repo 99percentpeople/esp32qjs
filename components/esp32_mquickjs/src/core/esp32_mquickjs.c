@@ -17,6 +17,9 @@
 #include "esp32_mquickjs_log_ring.h"
 #include "esp32_mquickjs_nvs.h"
 #include "esp32_mquickjs_peripheral_lease.h"
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RPC
+#include "esp32_mquickjs_rpc.h"
+#endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
 #include "esp32_mquickjs_runtime_logs.h"
 #endif
@@ -1097,6 +1100,9 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
     esp32_mquickjs_deinit_usb_serial_runtime(ctx);
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RPC
+    esp32_mquickjs_deinit_rpc_runtime();
 #endif
     if (s_active_runtime == runtime) {
         s_active_runtime = NULL;

@@ -1118,8 +1118,66 @@ JSValue js_stream_write(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
     if (!slot->writable || slot->kind != ESP32_MQUICKJS_STREAM_KIND_FILE) {
         return JS_ThrowTypeError(ctx, "stream.write(text) requires a writable file stream");
     }
-    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
-        return JS_ThrowTypeError(ctx, "stream.write(text) expects a string");
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "stream.write(data) expects data");
+    }
+    if (slot->binary) {
+        int class_id = JS_GetClassID(ctx, argv[0]);
+
+        if (class_id == JS_CLASS_BYTE_SPAN_SOURCE ||
+            class_id == JS_CLASS_BITMAP_SPAN_SOURCE) {
+            esp32_mquickjs_byte_span_source_t source;
+            JSValue error = JS_UNDEFINED;
+            size_t total = 0;
+
+            if (!esp32_mquickjs_open_byte_span_source(ctx, argv[0],
+                                                      "stream.write(data)",
+                                                      &source, &error)) {
+                return JS_IsUndefined(error) ? JS_EXCEPTION : error;
+            }
+            while (true) {
+                esp32_mquickjs_byte_span_t span;
+                if (!esp32_mquickjs_byte_span_source_next(ctx, &source, &span)) {
+                    if (JS_HasException(ctx)) {
+                        esp32_mquickjs_byte_span_source_close(ctx, &source);
+                        return JS_EXCEPTION;
+                    }
+                    break;
+                }
+                if (span.length == 0) {
+                    continue;
+                }
+                written = fwrite(span.data, 1, span.length, slot->handle.file);
+                if (written != span.length) {
+                    esp32_mquickjs_byte_span_source_close(ctx, &source);
+                    return JS_ThrowInternalError(ctx, "stream.write() failed for %s",
+                                                 slot->path != NULL ? slot->path : "<stream>");
+                }
+                total += written;
+            }
+            esp32_mquickjs_byte_span_source_close(ctx, &source);
+            return JS_NewInt64(ctx, (int64_t)total);
+        } else {
+            esp32_mquickjs_byte_source_t source;
+            uint8_t *owned = NULL;
+            JSValue error = JS_UNDEFINED;
+
+            if (!esp32_mquickjs_get_byte_source(ctx, argv[0],
+                                                "stream.write(data)",
+                                                &source, &owned, &error)) {
+                return JS_IsUndefined(error) ? JS_EXCEPTION : error;
+            }
+            written = fwrite(source.data, 1, source.length, slot->handle.file);
+            esp32_mquickjs_release_byte_source(owned);
+            if (written != source.length) {
+                return JS_ThrowInternalError(ctx, "stream.write() failed for %s",
+                                             slot->path != NULL ? slot->path : "<stream>");
+            }
+            return JS_NewInt64(ctx, (int64_t)written);
+        }
+    }
+    if (!JS_IsString(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "stream.write(text) expects a string in text mode");
     }
     text = JS_ToCStringLen(ctx, &text_len, argv[0], &text_buf);
     if (text == NULL) {

@@ -9,7 +9,7 @@ This document covers the APIs exported directly by the firmware runtime.
 - `print(...values)`
   Write values to the runtime's standard-output sink. Normal profiles use the
   serial console; the headless Agent profile forwards a bounded copy to its
-  host diagnostics cache so protocol NDJSON is not polluted.
+  host diagnostics cache so protocol byte streams are not polluted.
 - `gc()`
   Run the JavaScript garbage collector.
 - `fetch(input, options?)`
@@ -230,8 +230,11 @@ Stream instance shape:
 - `writable`
 - `read(size?)`
   Read up to `size` bytes. Text streams return a UTF-8 string, while streams opened with a binary mode such as `"rb"` return a native `ByteView`. Returns `null` at EOF. Default chunk size is `1024`. Use `typeof chunk === "string"` to distinguish text from binary chunks; call `toArray()` when JavaScript needs to inspect or parse `ByteView` bytes.
-- `write(text)`
-  Write a string and return the written byte count.
+- `write(value)`
+  Write and return the exact byte count. Text file modes accept strings.
+  Binary file modes accept `ByteView`, array-like byte data, or a retained
+  `ByteSpanSource`; the source is consumed synchronously and no newline is
+  added.
 - `flush()`
 - `close()`
 - `seek(offset, whence?)`
@@ -670,22 +673,25 @@ try {
 
 ## `usbSerial` Module
 
-`usbSerial` is a bounded USB Serial/JTAG text-frame transport for headless
+`usbSerial` is a bounded USB Serial/JTAG text or binary transport for headless
 applications. It is compiled only when `sys.info.features.usbSerial` is
 true and is mutually exclusive with `CONFIG_ESP32QJS_ENABLE_REPL`, because both
 consume the same USB input stream.
 
 - `usbSerial.MAX_FRAME_BYTES`
-  Compile-time upper bound for one UTF-8 line.
+  Compile-time upper bound for one text frame or received binary chunk.
 - `usbSerial.open(options?)`
-  Start receiving lines and return a bounded EventQueue handle.
-  `options.maxFrameBytes` may select a smaller bound.
+  Return a bounded EventQueue handle. `options.mode` is explicitly `"text"`
+  (the default) or `"binary"`; `options.maxFrameBytes` may select a smaller
+  bound.
 - `handle.recv(timeoutMs?)`
-  Return the next text frame, or `null` at the timeout. CR, LF, and CRLF
-  terminate a frame; oversized input is discarded through the next terminator.
-- `handle.send(text)` / `handle.status()` / `handle.close()`
-  Send one frame, inspect counters, or close the queue. Embedded CR/LF and
-  oversized outbound strings are rejected.
+  Return the next text frame or owning `ByteView`, or `null` at the timeout.
+  Text mode uses CR/LF boundaries. Binary mode returns native input chunks and
+  never inserts, strips, or waits for a newline.
+- `handle.send(value)` / `handle.status()` / `handle.close()`
+  Send one frame/chunk, inspect counters, or close the queue. Text mode accepts
+  bounded strings. Binary mode accepts `ByteView` or `ByteSpanSource` and writes
+  the exact bytes without a terminator.
 
 ```js
 var serial = usbSerial.open({ maxFrameBytes: 4096 });
@@ -694,8 +700,8 @@ if (line !== null) serial.send(line);
 ```
 
 Boot and framework logs can precede protocol traffic. Host clients should wait
-for an application-level ready envelope rather than assuming the first serial
-line is JSON.
+for a valid COBS-delimited application ready record rather than interpreting
+boot text as protocol data.
 
 ## `bitmap` Module
 
@@ -1428,6 +1434,81 @@ socket.udp.sendto(udp, "192.0.2.10", 9001, "hello");
 print(JSON.stringify(socket.udp.recvfrom(udp, 1024, 100)));
 socket.close(udp);
 ```
+
+## `rpc` Module
+
+`rpc` is exposed only when `sys.info.features.rpc` is enabled. It is a generic
+`esp32qjs.rpc/1` connection codec: COBS record framing, CRC-32 corruption
+detection, deterministic CBOR, incremental reassembly, and transparent
+`ByteSpanSource` streaming. The framework does not define opcodes, request
+dispatch, authentication, authorization, retries, queues, workspace paths, or
+an application schema.
+
+- `rpc.createCodec(options)`
+  Create a codec and return its numeric handle. `options.fields` is the
+  non-empty ordered list that maps application field names to CBOR integer
+  keys. `dynamicFields` optionally names fields whose nested JSON-like maps may
+  use string keys. `allowStringKeys` permits string keys at the root when true.
+  `streamDirectory` optionally selects where incoming transparent streams are
+  spooled; without it, that codec rejects streamed input.
+- `rpc.releaseCodec(codecId)`
+  Release a codec. All decoders created from it must be released first.
+- `rpc.createDecoder(codecId)` / `rpc.releaseDecoder(decoderId)`
+  Allocate or release incremental connection state. Keep one decoder per
+  physical connection; each decoder accepts arbitrary input chunk boundaries.
+- `rpc.feed(decoderId, data)`
+  Feed one raw transport chunk and return zero or more complete
+  `{ opcode, requestId, flags, logicalLength, payload }` messages. The caller
+  never parses or reassembles segments.
+- `rpc.resetDecoder(decoderId)`
+  Discard an incomplete message and any temporary streamed input while keeping
+  the decoder handle.
+- `rpc.encode(codecId, opcode, requestId, flags, payload)`
+  Encode one logical message. A regular payload returns an array of owning
+  `ByteView` frames. If the final CBOR value is a `ByteSpanSource`, it returns a
+  one-shot `ByteSpanSource` that produces already framed bytes lazily. The
+  caller writes either result to a binary transport without adding delimiters
+  or performing its own segmentation.
+- `rpc.bytes(value)`
+  Copy byte data into an owning `ByteView` suitable for a CBOR byte string.
+- `rpc.fileSource(path)` / `rpc.sourceInfo(source)`
+  Create a one-shot file-backed `ByteSpanSource` for any readable regular file
+  within the RPC stream limit, and inspect its `{ size, crc32 }` metadata.
+  Locally created sources report a null CRC until transferred.
+- `rpc.adoptFile(source, path)`
+  Atomically rename an unused inbound temporary stream to an
+  application-selected destination. It does not impose a workspace policy.
+- `rpc.status()`
+  Return the wire protocol name and aggregate codec, decoder, message, and
+  error counters.
+
+The codec accepts only the deterministic, definite-length CBOR subset. It
+rejects tags, indefinite values, duplicate/non-canonical map keys, invalid
+UTF-8, non-finite floats, excessive nesting, trailing data, interleaved logical
+messages, and invalid frame CRCs. CRC-32 detects accidental transport or
+storage corruption; it is not authentication.
+
+```js
+var codec = rpc.createCodec({
+  fields: ["ok", "result", "data"],
+  dynamicFields: ["result"],
+  streamDirectory: "/data"
+});
+var decoder = rpc.createDecoder(codec);
+var frames = rpc.encode(codec, 1, 7, 0, {
+  data: rpc.bytes([0, 1, 2, 255])
+});
+
+// A TCP/serial receive callback may pass chunks of any size.
+var messages = rpc.feed(decoder, incomingChunk);
+
+rpc.releaseDecoder(decoder);
+rpc.releaseCodec(codec);
+```
+
+The public C wire contract and incremental decoder are declared in
+`include/esp32qjs_rpc_wire.h`, so a firmware application may use the framing
+layer without adopting the JavaScript Agent product.
 
 ## `websocketClient` Module
 
