@@ -1068,6 +1068,7 @@ namespace ESP32QJS {
     readonly i2c: boolean;
     readonly spi: boolean;
     readonly uart: boolean;
+    readonly rmt: boolean;
     readonly i2s: boolean;
     readonly camera: boolean;
     readonly usbSerial: boolean;
@@ -1645,7 +1646,97 @@ namespace ESP32QJS {
     open(options?: UARTOpenOptions): UARTPort;
   }
 
+  type RMTDirection = "rx" | "tx";
+
+  interface RMTSymbol {
+    duration0Ticks: number;
+    level0: boolean;
+    duration1Ticks: number;
+    level1: boolean;
+  }
+
+  interface RMTChannelOpenOptions {
+    direction: RMTDirection;
+    pin: number;
+    resolutionHz: number;
+    memorySymbols?: number;
+    dma?: boolean;
+    invert?: boolean;
+  }
+
+  interface RMTTransmitOptions {
+    loopCount?: number;
+    endLevel?: boolean | 0 | 1;
+    timeoutMs?: number;
+  }
+
+  interface RMTReceiveOptions {
+    minPulseNs?: number;
+    idleThresholdNs: number;
+    timeoutMs?: number;
+  }
+
+  interface RMTTransmitResult {
+    symbols: number;
+    loopCount: number;
+  }
+
+  interface RMTReceiveResult {
+    length: number;
+    truncated: boolean;
+  }
+
+  interface RMTChannelStatus extends RMTChannelOpenOptions {
+    memorySymbols: number;
+    dma: boolean;
+    invert: boolean;
+    running: boolean;
+    busy: boolean;
+  }
+
+  interface RMTCapabilities {
+    rx: true;
+    tx: true;
+    dma: boolean;
+    minMemorySymbols: number;
+    maxSymbols: 4096;
+    maxDurationTicks: 32767;
+    finiteLoops: true;
+  }
+
+  class RMTSymbolBuffer {
+    private constructor();
+    readonly capacity: number;
+    readonly length: number;
+    push(duration0Ticks: number, level0: boolean | 0 | 1,
+      duration1Ticks: number, level1: boolean | 0 | 1): number;
+    get(index: number): RMTSymbol;
+    set(index: number, duration0Ticks: number, level0: boolean | 0 | 1,
+      duration1Ticks: number, level1: boolean | 0 | 1): boolean;
+    clear(): boolean;
+    close(): boolean;
+  }
+
+  class RMTChannel {
+    private constructor();
+    start(): boolean;
+    stop(): boolean;
+    transmit(symbols: RMTSymbolBuffer,
+      options?: RMTTransmitOptions): RMTTransmitResult;
+    receive(symbols: RMTSymbolBuffer,
+      options: RMTReceiveOptions): RMTReceiveResult | null;
+    status(): RMTChannelStatus;
+    close(): boolean;
+  }
+
+  interface RMTModule {
+    capabilities(): RMTCapabilities;
+    createSymbols(capacity: number): RMTSymbolBuffer;
+    open(options: RMTChannelOpenOptions): RMTChannel;
+  }
+
   type I2SMode = "standard" | "pdm";
+  type I2SDirection = "rx" | "tx" | "duplex";
   type I2SDataBits = 8 | 16 | 24 | 32;
   type I2SSlotMode = "mono" | "stereo";
   type I2SSlotMask = "left" | "right" | "both";
@@ -1661,7 +1752,8 @@ namespace ESP32QJS {
   interface I2SStandardPins {
     bclk: number;
     ws: number;
-    din: number;
+    din?: number;
+    dout?: number;
     mclk?: number;
   }
 
@@ -1671,7 +1763,6 @@ namespace ESP32QJS {
   }
 
   interface I2SOpenOptionsBase {
-    direction: "rx";
     port?: "auto" | number;
     sampleRateHz?: number;
     dma?: I2SDmaOptions;
@@ -1679,6 +1770,7 @@ namespace ESP32QJS {
   }
 
   interface I2SStandardOpenOptions extends I2SOpenOptionsBase {
+    direction: I2SDirection;
     mode: "standard";
     pins: I2SStandardPins;
     dataBits?: I2SDataBits;
@@ -1689,6 +1781,7 @@ namespace ESP32QJS {
   }
 
   interface I2SPdmOpenOptions extends I2SOpenOptionsBase {
+    direction: "rx";
     mode: "pdm";
     /** May be omitted when the selected hardware constants provide both pins. */
     pins?: I2SPdmPins;
@@ -1709,8 +1802,12 @@ namespace ESP32QJS {
   interface I2SStatus {
     port: number;
     running: boolean;
+    direction: I2SDirection;
     mode: I2SMode;
     overruns: number;
+    underruns: number;
+    readBusy: boolean;
+    writeBusy: boolean;
     pcm: {
       sampleRateHz: number;
       dataBits: I2SDataBits;
@@ -1728,27 +1825,38 @@ namespace ESP32QJS {
   interface I2SCapabilities {
     ports: number[];
     standard: true;
+    standardRx: true;
+    standardTx: true;
+    standardDuplex: true;
     pdm: boolean;
     dataBits: I2SDataBits[];
     limits: {
       maxDescriptorBytes: 4092;
       maxReadBytes: 65536;
+      maxWriteBytes: 65536;
     };
   }
 
-  /** Explicitly started I2S receive channel. */
-  class I2SInput {
+  interface I2SWriteResult {
+    frames: number;
+    byteLength: number;
+    timestampUs: number;
+  }
+
+  /** Explicitly started standard I2S or receive-only PDM channel. */
+  class I2SChannel {
     private constructor();
     start(): boolean;
     stop(): boolean;
     read(frameCount: number, timeoutMs?: number): I2SReadResult | null;
+    write(data: ByteSource | ByteSpanSource, timeoutMs?: number): I2SWriteResult;
     status(): I2SStatus;
     close(): boolean;
   }
 
   interface I2SModule {
     capabilities(): I2SCapabilities;
-    open(options: I2SOpenOptions): I2SInput;
+    open(options: I2SOpenOptions): I2SChannel;
   }
 
   type CameraPixelFormat = "jpeg" | "grayscale" | "rgb565";
@@ -2176,7 +2284,9 @@ namespace ESP32QJS {
   const DisplayFont: ESP32QJS.DisplayFontConstructor;
   const Bitmap: typeof ESP32QJS.Bitmap;
   const DisplayCommandBuffer: typeof ESP32QJS.DisplayCommandBuffer;
-  const I2SInput: typeof ESP32QJS.I2SInput;
+  const RMTSymbolBuffer: typeof ESP32QJS.RMTSymbolBuffer;
+  const RMTChannel: typeof ESP32QJS.RMTChannel;
+  const I2SChannel: typeof ESP32QJS.I2SChannel;
   const Camera: typeof ESP32QJS.Camera;
   const CameraFrame: typeof ESP32QJS.CameraFrame;
   const Future: ESP32QJS.FutureFactory;
@@ -2264,7 +2374,9 @@ namespace ESP32QJS {
   var spi: ESP32QJS.SPIModule;
   /** Synchronous UART port helpers. */
   var uart: ESP32QJS.UARTModule;
-  /** Standard-I2S and PDM receive channels. */
+  /** Generic RMT receive/transmit channels and native symbol buffers. */
+  var rmt: ESP32QJS.RMTModule;
+  /** Standard-I2S receive/transmit/duplex and receive-only PDM channels. */
   var i2s: ESP32QJS.I2SModule;
   /** Explicit single-frame camera capture. Available only on supported targets. */
   var camera: ESP32QJS.CameraModule;

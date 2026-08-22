@@ -234,6 +234,7 @@ test("sys/runtime", function () {
   expectFeature("i2c", hasObject("i2c"));
   expectFeature("spi", hasObject("spi"));
   expectFeature("uart", hasObject("uart"));
+  expectFeature("rmt", hasObject("rmt"));
   expectFeature("i2s", hasObject("i2s"));
   expectFeature("camera", hasObject("camera"));
   expectFeature("usbSerial", hasObject("usbSerial"));

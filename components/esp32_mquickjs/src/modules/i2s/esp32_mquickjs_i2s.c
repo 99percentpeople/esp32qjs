@@ -27,6 +27,7 @@
 #include "soc/soc_caps.h"
 
 #define I2S_MAX_READ_BYTES (64U * 1024U)
+#define I2S_MAX_WRITE_BYTES (64U * 1024U)
 #define I2S_DMA_MAX_DESCRIPTOR_BYTES 4092U
 #define I2S_DEFAULT_SAMPLE_RATE_HZ 16000U
 #define I2S_DEFAULT_TIMEOUT_MS 1000U
@@ -38,6 +39,12 @@ typedef enum {
     ESP32_MQUICKJS_I2S_MODE_PDM,
 } esp32_mquickjs_i2s_mode_t;
 
+typedef enum {
+    ESP32_MQUICKJS_I2S_DIRECTION_RX = 1,
+    ESP32_MQUICKJS_I2S_DIRECTION_TX = 2,
+    ESP32_MQUICKJS_I2S_DIRECTION_DUPLEX = 3,
+} esp32_mquickjs_i2s_direction_t;
+
 typedef struct {
     int32_t port;
     uint32_t generation;
@@ -46,11 +53,15 @@ typedef struct {
 typedef struct {
     bool allocated;
     bool running;
-    bool busy;
+    bool rx_busy;
+    bool tx_busy;
+    bool rx_cancel_requested;
+    bool tx_cancel_requested;
     bool release_pending;
     int32_t port;
     uint32_t generation;
     esp32_mquickjs_i2s_mode_t mode;
+    esp32_mquickjs_i2s_direction_t direction;
     uint32_t sample_rate_hz;
     uint8_t data_bits;
     uint8_t slot_bits;
@@ -59,10 +70,14 @@ typedef struct {
     uint32_t dma_frames_per_descriptor;
     uint32_t timeout_ms;
     volatile uint32_t overruns;
+    volatile uint32_t underruns;
     uint32_t sequence;
     i2s_chan_handle_t rx_handle;
-    esp32_mquickjs_runtime_t *runtime;
-    esp32_mquickjs_future_token_t token;
+    i2s_chan_handle_t tx_handle;
+    esp32_mquickjs_runtime_t *rx_runtime;
+    esp32_mquickjs_runtime_t *tx_runtime;
+    esp32_mquickjs_future_token_t rx_token;
+    esp32_mquickjs_future_token_t tx_token;
     esp32_mquickjs_peripheral_lease_t lease;
 } esp32_mquickjs_i2s_slot_t;
 
@@ -72,13 +87,13 @@ static uint32_t s_i2s_next_generation = 1;
 struct esp32_mquickjs_future_driver_state {
     JSContext *ctx;
     JSGCRef owner_ref;
-    esp32_mquickjs_i2s_ref_t input_ref;
+    esp32_mquickjs_i2s_ref_t channel_ref;
     esp32_mquickjs_runtime_t *runtime;
     esp32_mquickjs_future_token_t token;
     esp_timer_handle_t timeout_timer;
     uint8_t *data;
     size_t requested_bytes;
-    size_t received_bytes;
+    size_t transferred_bytes;
     uint32_t frame_count;
     uint32_t timeout_ms;
     uint64_t deadline_us;
@@ -89,6 +104,23 @@ struct esp32_mquickjs_future_driver_state {
     bool cancelled;
     bool timed_out;
 };
+
+static bool i2s_has_rx(const esp32_mquickjs_i2s_slot_t *slot)
+{
+    return slot != NULL &&
+           (slot->direction & ESP32_MQUICKJS_I2S_DIRECTION_RX) != 0;
+}
+
+static bool i2s_has_tx(const esp32_mquickjs_i2s_slot_t *slot)
+{
+    return slot != NULL &&
+           (slot->direction & ESP32_MQUICKJS_I2S_DIRECTION_TX) != 0;
+}
+
+static bool i2s_slot_busy(const esp32_mquickjs_i2s_slot_t *slot)
+{
+    return slot != NULL && (slot->rx_busy || slot->tx_busy);
+}
 
 static uint32_t i2s_take_generation(void)
 {
@@ -166,19 +198,52 @@ static void i2s_cleanup_slot(esp32_mquickjs_i2s_slot_t *slot)
 {
     int32_t port;
 
-    if (slot == NULL || !slot->allocated || slot->busy) {
+    if (slot == NULL || !slot->allocated || i2s_slot_busy(slot)) {
         return;
     }
     port = slot->port;
-    if (slot->running && slot->rx_handle != NULL) {
-        (void)i2s_channel_disable(slot->rx_handle);
+    if (slot->running) {
+        if (slot->rx_handle != NULL) {
+            (void)i2s_channel_disable(slot->rx_handle);
+        }
+        if (slot->tx_handle != NULL) {
+            (void)i2s_channel_disable(slot->tx_handle);
+        }
     }
     if (slot->rx_handle != NULL) {
         (void)i2s_del_channel(slot->rx_handle);
     }
+    if (slot->tx_handle != NULL) {
+        (void)i2s_del_channel(slot->tx_handle);
+    }
     esp32_mquickjs_peripheral_lease_release(&slot->lease);
     memset(slot, 0, sizeof(*slot));
     slot->port = port;
+}
+
+static void i2s_request_close(esp32_mquickjs_i2s_slot_t *slot)
+{
+    if (slot == NULL || !slot->allocated) {
+        return;
+    }
+    slot->release_pending = true;
+    if (slot->rx_busy) {
+        slot->rx_cancel_requested = true;
+        if (slot->rx_runtime != NULL) {
+            (void)esp32_mquickjs_future_wake(slot->rx_runtime,
+                                             slot->rx_token);
+        }
+    }
+    if (slot->tx_busy) {
+        slot->tx_cancel_requested = true;
+        if (slot->tx_runtime != NULL) {
+            (void)esp32_mquickjs_future_wake(slot->tx_runtime,
+                                             slot->tx_token);
+        }
+    }
+    if (!i2s_slot_busy(slot)) {
+        i2s_cleanup_slot(slot);
+    }
 }
 
 static int i2s_ref_from_value(JSContext *ctx, JSValue value,
@@ -189,14 +254,14 @@ static int i2s_ref_from_value(JSContext *ctx, JSValue value,
     esp32_mquickjs_i2s_ref_t *ref;
     esp32_mquickjs_i2s_slot_t *slot;
 
-    if (JS_GetClassID(ctx, value) != JS_CLASS_I2S_INPUT ||
+    if (JS_GetClassID(ctx, value) != JS_CLASS_I2S_CHANNEL ||
         (ref = JS_GetOpaque(ctx, value)) == NULL) {
-        JS_ThrowTypeError(ctx, "%s expects an I2SInput", api_name);
+        JS_ThrowTypeError(ctx, "%s expects an I2SChannel", api_name);
         return -1;
     }
     slot = i2s_get_slot(ref);
     if (slot == NULL) {
-        JS_ThrowReferenceError(ctx, "%s failed because the I2S input is closed",
+        JS_ThrowReferenceError(ctx, "%s failed because the I2S channel is closed",
                                api_name);
         return -1;
     }
@@ -209,14 +274,14 @@ static int i2s_ref_from_value(JSContext *ctx, JSValue value,
     return 0;
 }
 
-static JSValue i2s_make_input(JSContext *ctx,
+static JSValue i2s_make_channel(JSContext *ctx,
                               const esp32_mquickjs_i2s_slot_t *slot)
 {
     JSGCRef object_ref;
     JSValue *object = JS_PushGCRef(ctx, &object_ref);
     esp32_mquickjs_i2s_ref_t *ref;
 
-    *object = JS_NewObjectClassUser(ctx, JS_CLASS_I2S_INPUT);
+    *object = JS_NewObjectClassUser(ctx, JS_CLASS_I2S_CHANNEL);
     if (JS_IsException(*object)) {
         JS_PopGCRef(ctx, &object_ref);
         return JS_EXCEPTION;
@@ -241,8 +306,9 @@ static bool IRAM_ATTR i2s_on_receive(i2s_chan_handle_t handle,
 
     (void)handle;
     (void)event;
-    if (slot != NULL && slot->busy && slot->runtime != NULL) {
-        (void)esp32_mquickjs_future_wake_from_isr(slot->runtime, slot->token,
+    if (slot != NULL && slot->rx_busy && slot->rx_runtime != NULL) {
+        (void)esp32_mquickjs_future_wake_from_isr(slot->rx_runtime,
+                                                 slot->rx_token,
                                                  &task_woken);
     }
     return task_woken == pdTRUE;
@@ -259,9 +325,45 @@ static bool IRAM_ATTR i2s_on_overflow(i2s_chan_handle_t handle,
     (void)event;
     if (slot != NULL) {
         slot->overruns++;
-        if (slot->busy && slot->runtime != NULL) {
+        if (slot->rx_busy && slot->rx_runtime != NULL) {
             (void)esp32_mquickjs_future_wake_from_isr(
-                slot->runtime, slot->token, &task_woken);
+                slot->rx_runtime, slot->rx_token, &task_woken);
+        }
+    }
+    return task_woken == pdTRUE;
+}
+
+static bool IRAM_ATTR i2s_on_sent(i2s_chan_handle_t handle,
+                                  i2s_event_data_t *event,
+                                  void *user_ctx)
+{
+    esp32_mquickjs_i2s_slot_t *slot = user_ctx;
+    int task_woken = pdFALSE;
+
+    (void)handle;
+    (void)event;
+    if (slot != NULL && slot->tx_busy && slot->tx_runtime != NULL) {
+        (void)esp32_mquickjs_future_wake_from_isr(slot->tx_runtime,
+                                                 slot->tx_token,
+                                                 &task_woken);
+    }
+    return task_woken == pdTRUE;
+}
+
+static bool IRAM_ATTR i2s_on_send_overflow(i2s_chan_handle_t handle,
+                                           i2s_event_data_t *event,
+                                           void *user_ctx)
+{
+    esp32_mquickjs_i2s_slot_t *slot = user_ctx;
+    int task_woken = pdFALSE;
+
+    (void)handle;
+    (void)event;
+    if (slot != NULL) {
+        slot->underruns++;
+        if (slot->tx_busy && slot->tx_runtime != NULL) {
+            (void)esp32_mquickjs_future_wake_from_isr(
+                slot->tx_runtime, slot->tx_token, &task_woken);
         }
     }
     return task_woken == pdTRUE;
@@ -287,11 +389,26 @@ static JSValue i2s_status_object(JSContext *ctx,
         !esp32_mquickjs_set_property_ref(ctx, result, "running",
                                          JS_NewBool(slot->running)) ||
         !esp32_mquickjs_set_property_ref(
+            ctx, result, "direction",
+            JS_NewString(
+                ctx,
+                slot->direction == ESP32_MQUICKJS_I2S_DIRECTION_DUPLEX
+                    ? "duplex"
+                    : slot->direction == ESP32_MQUICKJS_I2S_DIRECTION_TX
+                          ? "tx"
+                          : "rx")) ||
+        !esp32_mquickjs_set_property_ref(
             ctx, result, "mode",
             JS_NewString(ctx, slot->mode == ESP32_MQUICKJS_I2S_MODE_PDM
                                   ? "pdm" : "standard")) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "overruns",
                                          JS_NewUint32(ctx, slot->overruns)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "underruns",
+                                         JS_NewUint32(ctx, slot->underruns)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "readBusy",
+                                         JS_NewBool(slot->rx_busy)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "writeBusy",
+                                         JS_NewBool(slot->tx_busy)) ||
         !esp32_mquickjs_set_property_ref(ctx, pcm, "sampleRateHz",
                                          JS_NewUint32(ctx, slot->sample_rate_hz)) ||
         !esp32_mquickjs_set_property_ref(ctx, pcm, "dataBits",
@@ -347,10 +464,10 @@ static bool i2s_read_prepare(
     if (out_state == NULL || argc < 1 || argc > 2 ||
         !i2s_to_u32(ctx, argv[0].val, &frame_count) || frame_count == 0) {
         JS_ThrowTypeError(ctx,
-                          "I2SInput.read(frameCount, timeoutMs?) expects a positive frame count");
+                          "I2SChannel.read(frameCount, timeoutMs?) expects a positive frame count");
         return false;
     }
-    if (i2s_ref_from_value(ctx, this_ref->val, "I2SInput.read()", NULL,
+    if (i2s_ref_from_value(ctx, this_ref->val, "I2SChannel.read()", NULL,
                            &slot) != 0) {
         return false;
     }
@@ -358,21 +475,26 @@ static bool i2s_read_prepare(
     if (argc == 2 && !JS_IsUndefined(argv[1].val) &&
         !i2s_to_u32(ctx, argv[1].val, &timeout_ms)) {
         JS_ThrowTypeError(ctx,
-                          "I2SInput.read(frameCount, timeoutMs?) expects a non-negative timeout");
+                          "I2SChannel.read(frameCount, timeoutMs?) expects a non-negative timeout");
+        return false;
+    }
+    if (!i2s_has_rx(slot)) {
+        JS_ThrowTypeError(ctx,
+                          "I2SChannel.read() requires an rx or duplex channel");
         return false;
     }
     if (!slot->running) {
-        JS_ThrowInternalError(ctx, "I2SInput.read() requires start() first");
+        JS_ThrowInternalError(ctx, "I2SChannel.read() requires start() first");
         return false;
     }
-    if (slot->busy) {
-        JS_ThrowInternalError(ctx, "I2S input already has a pending read");
+    if (slot->rx_busy) {
+        JS_ThrowInternalError(ctx, "I2S channel already has a pending read");
         return false;
     }
     bytes_per_frame = ((size_t)slot->slot_bits / 8U) * slot->channels;
     if (frame_count > I2S_MAX_READ_BYTES / bytes_per_frame) {
         JS_ThrowRangeError(ctx,
-                           "I2SInput.read() output exceeds the 64 KiB limit");
+                           "I2SChannel.read() output exceeds the 64 KiB limit");
         return false;
     }
     state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
@@ -388,8 +510,8 @@ static bool i2s_read_prepare(
         return false;
     }
     state->ctx = ctx;
-    state->input_ref.port = slot->port;
-    state->input_ref.generation = slot->generation;
+    state->channel_ref.port = slot->port;
+    state->channel_ref.generation = slot->generation;
     state->requested_bytes = (size_t)frame_count * bytes_per_frame;
     state->frame_count = frame_count;
     state->timeout_ms = timeout_ms;
@@ -403,10 +525,15 @@ static bool i2s_read_prepare(
 static void i2s_read_step(esp32_mquickjs_future_driver_state_t *state)
 {
     esp32_mquickjs_i2s_slot_t *slot =
-        state != NULL ? i2s_get_slot(&state->input_ref) : NULL;
+        state != NULL ? i2s_get_slot(&state->channel_ref) : NULL;
     size_t read_bytes = 0;
 
     if (state == NULL || state->completed || state->cancelled) {
+        return;
+    }
+    if (slot != NULL && slot->rx_cancel_requested) {
+        state->cancelled = true;
+        state->completed = true;
         return;
     }
     if (slot == NULL || !slot->running) {
@@ -415,8 +542,8 @@ static void i2s_read_step(esp32_mquickjs_future_driver_state_t *state)
         return;
     }
     state->err = i2s_channel_read(
-        slot->rx_handle, state->data + state->received_bytes,
-        state->requested_bytes - state->received_bytes, &read_bytes, 0);
+        slot->rx_handle, state->data + state->transferred_bytes,
+        state->requested_bytes - state->transferred_bytes, &read_bytes, 0);
     /*
      * ESP-IDF reports ESP_ERR_TIMEOUT when a zero-wait read consumes the
      * currently available DMA bytes but cannot fill the complete request.
@@ -425,8 +552,8 @@ static void i2s_read_step(esp32_mquickjs_future_driver_state_t *state)
      * time out while continuously draining the driver's queue.
      */
     if (state->err == ESP_OK || state->err == ESP_ERR_TIMEOUT) {
-        state->received_bytes += read_bytes;
-        if (state->received_bytes >= state->requested_bytes) {
+        state->transferred_bytes += read_bytes;
+        if (state->transferred_bytes >= state->requested_bytes) {
             state->err = ESP_OK;
             state->completed = true;
             return;
@@ -441,7 +568,7 @@ static void i2s_read_step(esp32_mquickjs_future_driver_state_t *state)
     if (state->timeout_ms == 0 ||
         (state->deadline_us > 0 &&
          (uint64_t)esp_timer_get_time() >= state->deadline_us)) {
-        state->timed_out = state->received_bytes == 0;
+        state->timed_out = state->transferred_bytes == 0;
         state->completed = true;
     }
 }
@@ -452,19 +579,20 @@ static bool i2s_read_start(JSContext *ctx,
                            esp32_mquickjs_future_driver_state_t *state)
 {
     esp32_mquickjs_i2s_slot_t *slot =
-        state != NULL ? i2s_get_slot(&state->input_ref) : NULL;
+        state != NULL ? i2s_get_slot(&state->channel_ref) : NULL;
 
     if (state == NULL || slot == NULL || !slot->running) {
-        JS_ThrowReferenceError(ctx, "I2S input closed before read started");
+        JS_ThrowReferenceError(ctx, "I2S channel closed before read started");
         return false;
     }
-    if (slot->busy) {
-        JS_ThrowInternalError(ctx, "I2S input already has a pending read");
+    if (slot->rx_busy) {
+        JS_ThrowInternalError(ctx, "I2S channel already has a pending read");
         return false;
     }
-    slot->busy = true;
-    slot->runtime = runtime;
-    slot->token = token;
+    slot->rx_busy = true;
+    slot->rx_cancel_requested = false;
+    slot->rx_runtime = runtime;
+    slot->rx_token = token;
     state->runtime = runtime;
     state->token = token;
     state->started = true;
@@ -505,7 +633,7 @@ static JSValue i2s_read_finish(JSContext *ctx,
                                esp32_mquickjs_future_driver_state_t *state)
 {
     esp32_mquickjs_i2s_slot_t *slot =
-        state != NULL ? i2s_get_slot(&state->input_ref) : NULL;
+        state != NULL ? i2s_get_slot(&state->channel_ref) : NULL;
     JSGCRef result_ref;
     JSGCRef data_ref;
     JSValue *result;
@@ -517,25 +645,25 @@ static JSValue i2s_read_finish(JSContext *ctx,
         return JS_ThrowInternalError(ctx, "I2S read cancelled");
     }
     if (state->err != ESP_OK) {
-        return JS_ThrowInternalError(ctx, "I2SInput.read() failed: %s",
+        return JS_ThrowInternalError(ctx, "I2SChannel.read() failed: %s",
                                      esp_err_to_name(state->err));
     }
-    if (state->timed_out || state->received_bytes == 0) {
+    if (state->timed_out || state->transferred_bytes == 0) {
         return JS_NULL;
     }
     if (slot == NULL) {
-        return JS_ThrowReferenceError(ctx, "I2S input closed during read");
+        return JS_ThrowReferenceError(ctx, "I2S channel closed during read");
     }
     bytes_per_frame = ((size_t)slot->slot_bits / 8U) * slot->channels;
-    frames = (uint32_t)(state->received_bytes / bytes_per_frame);
-    state->received_bytes = (size_t)frames * bytes_per_frame;
+    frames = (uint32_t)(state->transferred_bytes / bytes_per_frame);
+    state->transferred_bytes = (size_t)frames * bytes_per_frame;
     result = JS_PushGCRef(ctx, &result_ref);
     data = JS_PushGCRef(ctx, &data_ref);
     *result = JS_NewObject(ctx);
     *data = JS_IsException(*result)
                 ? JS_EXCEPTION
                 : esp32_mquickjs_new_owned_byte_view(
-                      ctx, state->data, state->received_bytes);
+                      ctx, state->data, state->transferred_bytes);
     if (!JS_IsException(*data)) {
         state->data = NULL;
     }
@@ -545,7 +673,7 @@ static JSValue i2s_read_finish(JSContext *ctx,
                                          JS_NewUint32(ctx, frames)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, result, "byteLength",
-            JS_NewInt64(ctx, (int64_t)state->received_bytes)) ||
+            JS_NewInt64(ctx, (int64_t)state->transferred_bytes)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, result, "timestampUs",
             JS_NewInt64(ctx, (int64_t)esp_timer_get_time())) ||
@@ -578,7 +706,7 @@ static bool i2s_read_cancel(esp32_mquickjs_future_driver_state_t *state)
 static void i2s_read_destroy(esp32_mquickjs_future_driver_state_t *state)
 {
     esp32_mquickjs_i2s_slot_t *slot =
-        state != NULL ? i2s_get_slot(&state->input_ref) : NULL;
+        state != NULL ? i2s_get_slot(&state->channel_ref) : NULL;
 
     if (state == NULL) {
         return;
@@ -588,8 +716,9 @@ static void i2s_read_destroy(esp32_mquickjs_future_driver_state_t *state)
         (void)esp_timer_delete(state->timeout_timer);
     }
     if (slot != NULL && state->started) {
-        slot->busy = false;
-        slot->runtime = NULL;
+        slot->rx_busy = false;
+        slot->rx_cancel_requested = false;
+        slot->rx_runtime = NULL;
         if (slot->release_pending) {
             i2s_cleanup_slot(slot);
         }
@@ -610,25 +739,396 @@ static const esp32_mquickjs_future_driver_t s_i2s_read_driver = {
     .destroy = i2s_read_destroy,
 };
 
+static bool i2s_append_write_bytes(JSContext *ctx, uint8_t **buffer,
+                                   size_t *length, size_t *capacity,
+                                   const uint8_t *data, size_t data_length)
+{
+    size_t required;
+    size_t next_capacity;
+    uint8_t *next;
+
+    if (data_length == 0) {
+        return true;
+    }
+    if (data == NULL || *length > I2S_MAX_WRITE_BYTES - data_length) {
+        JS_ThrowRangeError(ctx,
+                           "I2SChannel.write() exceeds the 64 KiB limit");
+        return false;
+    }
+    required = *length + data_length;
+    if (required > *capacity) {
+        next_capacity = *capacity == 0 ? 256U : *capacity;
+        while (next_capacity < required) {
+            if (next_capacity >= I2S_MAX_WRITE_BYTES / 2U) {
+                next_capacity = I2S_MAX_WRITE_BYTES;
+                break;
+            }
+            next_capacity *= 2U;
+        }
+        next = heap_caps_realloc(*buffer, next_capacity, MALLOC_CAP_8BIT);
+        if (next == NULL) {
+            JS_ThrowOutOfMemory(ctx);
+            return false;
+        }
+        *buffer = next;
+        *capacity = next_capacity;
+    }
+    memcpy(*buffer + *length, data, data_length);
+    *length = required;
+    return true;
+}
+
+static bool i2s_load_write_data(JSContext *ctx, JSValue value,
+                                uint8_t **out_data, size_t *out_length)
+{
+    int class_id = JS_GetClassID(ctx, value);
+    uint8_t *data = NULL;
+    size_t length = 0;
+    size_t capacity = 0;
+
+    if (class_id == JS_CLASS_BYTE_SPAN_SOURCE ||
+        class_id == JS_CLASS_BITMAP_SPAN_SOURCE) {
+        esp32_mquickjs_byte_span_source_t source;
+        JSValue error = JS_UNDEFINED;
+
+        if (!esp32_mquickjs_open_byte_span_source(
+                ctx, value, "I2SChannel.write(data)", &source, &error)) {
+            return false;
+        }
+        while (true) {
+            esp32_mquickjs_byte_span_t span;
+
+            if (!esp32_mquickjs_byte_span_source_next(ctx, &source, &span)) {
+                if (JS_HasException(ctx)) {
+                    esp32_mquickjs_byte_span_source_close(ctx, &source);
+                    heap_caps_free(data);
+                    return false;
+                }
+                break;
+            }
+            if (!i2s_append_write_bytes(ctx, &data, &length, &capacity,
+                                        span.data, span.length)) {
+                esp32_mquickjs_byte_span_source_close(ctx, &source);
+                heap_caps_free(data);
+                return false;
+            }
+        }
+        esp32_mquickjs_byte_span_source_close(ctx, &source);
+    } else {
+        esp32_mquickjs_byte_source_t source;
+        uint8_t *owned = NULL;
+        JSValue error = JS_UNDEFINED;
+
+        if (!esp32_mquickjs_get_byte_source(
+                ctx, value, "I2SChannel.write(data)", &source, &owned,
+                &error)) {
+            return false;
+        }
+        if (!i2s_append_write_bytes(ctx, &data, &length, &capacity,
+                                    source.data, source.length)) {
+            esp32_mquickjs_release_byte_source(owned);
+            heap_caps_free(data);
+            return false;
+        }
+        esp32_mquickjs_release_byte_source(owned);
+    }
+    *out_data = data;
+    *out_length = length;
+    return true;
+}
+
+static bool i2s_write_prepare(
+    JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    esp32_mquickjs_i2s_slot_t *slot;
+    esp32_mquickjs_future_driver_state_t *state;
+    uint32_t timeout_ms;
+    size_t bytes_per_frame;
+    JSValue *owner;
+
+    if (out_state == NULL || argc < 1 || argc > 2) {
+        JS_ThrowTypeError(
+            ctx,
+            "I2SChannel.write(data, timeoutMs?) expects a ByteSource or ByteSpanSource");
+        return false;
+    }
+    if (i2s_ref_from_value(ctx, this_ref->val, "I2SChannel.write()", NULL,
+                           &slot) != 0) {
+        return false;
+    }
+    if (!i2s_has_tx(slot)) {
+        JS_ThrowTypeError(ctx,
+                          "I2SChannel.write() requires a tx or duplex channel");
+        return false;
+    }
+    if (!slot->running) {
+        JS_ThrowInternalError(ctx, "I2SChannel.write() requires start() first");
+        return false;
+    }
+    if (slot->tx_busy) {
+        JS_ThrowInternalError(ctx, "I2S channel already has a pending write");
+        return false;
+    }
+    timeout_ms = slot->timeout_ms;
+    if (argc == 2 && !JS_IsUndefined(argv[1].val) &&
+        !i2s_to_u32(ctx, argv[1].val, &timeout_ms)) {
+        JS_ThrowTypeError(
+            ctx,
+            "I2SChannel.write(data, timeoutMs?) expects a non-negative timeout");
+        return false;
+    }
+    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    if (state == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        return false;
+    }
+    if (!i2s_load_write_data(ctx, argv[0].val, &state->data,
+                             &state->requested_bytes)) {
+        heap_caps_free(state);
+        return false;
+    }
+    bytes_per_frame = ((size_t)slot->slot_bits / 8U) * slot->channels;
+    if (state->requested_bytes % bytes_per_frame != 0) {
+        heap_caps_free(state->data);
+        heap_caps_free(state);
+        JS_ThrowRangeError(
+            ctx, "I2SChannel.write() byte length must align to a PCM frame");
+        return false;
+    }
+    state->ctx = ctx;
+    state->channel_ref.port = slot->port;
+    state->channel_ref.generation = slot->generation;
+    state->frame_count =
+        (uint32_t)(state->requested_bytes / bytes_per_frame);
+    state->timeout_ms = timeout_ms;
+    owner = JS_AddGCRef(ctx, &state->owner_ref);
+    *owner = this_ref->val;
+    state->owner_retained = true;
+    *out_state = state;
+    return true;
+}
+
+static void i2s_write_step(esp32_mquickjs_future_driver_state_t *state)
+{
+    esp32_mquickjs_i2s_slot_t *slot =
+        state != NULL ? i2s_get_slot(&state->channel_ref) : NULL;
+    size_t written_bytes = 0;
+
+    if (state == NULL || state->completed || state->cancelled) {
+        return;
+    }
+    if (slot != NULL && slot->tx_cancel_requested) {
+        state->cancelled = true;
+        state->completed = true;
+        return;
+    }
+    if (slot == NULL || !slot->running) {
+        state->err = ESP_ERR_INVALID_STATE;
+        state->completed = true;
+        return;
+    }
+    if (state->requested_bytes == 0) {
+        state->err = ESP_OK;
+        state->completed = true;
+        return;
+    }
+    state->err = i2s_channel_write(
+        slot->tx_handle, state->data + state->transferred_bytes,
+        state->requested_bytes - state->transferred_bytes, &written_bytes, 0);
+    if (state->err == ESP_OK || state->err == ESP_ERR_TIMEOUT) {
+        state->transferred_bytes += written_bytes;
+        if (state->transferred_bytes >= state->requested_bytes) {
+            state->err = ESP_OK;
+            state->completed = true;
+            return;
+        }
+        if (state->err == ESP_ERR_TIMEOUT) {
+            state->err = ESP_OK;
+        }
+    } else {
+        state->completed = true;
+        return;
+    }
+    if (state->timeout_ms == 0 ||
+        (state->deadline_us > 0 &&
+         (uint64_t)esp_timer_get_time() >= state->deadline_us)) {
+        state->timed_out = true;
+        state->completed = true;
+    }
+}
+
+static bool i2s_write_start(JSContext *ctx,
+                            esp32_mquickjs_runtime_t *runtime,
+                            esp32_mquickjs_future_token_t token,
+                            esp32_mquickjs_future_driver_state_t *state)
+{
+    esp32_mquickjs_i2s_slot_t *slot =
+        state != NULL ? i2s_get_slot(&state->channel_ref) : NULL;
+
+    if (state == NULL || slot == NULL || !slot->running) {
+        JS_ThrowReferenceError(ctx,
+                               "I2S channel closed before write started");
+        return false;
+    }
+    if (slot->tx_busy) {
+        JS_ThrowInternalError(ctx,
+                              "I2S channel already has a pending write");
+        return false;
+    }
+    slot->tx_busy = true;
+    slot->tx_cancel_requested = false;
+    slot->tx_runtime = runtime;
+    slot->tx_token = token;
+    state->runtime = runtime;
+    state->token = token;
+    state->started = true;
+    if (state->timeout_ms > 0) {
+        esp_timer_create_args_t args = {
+            .callback = i2s_timeout_timer,
+            .arg = state,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "mqjs_i2s_tx",
+            .skip_unhandled_events = true,
+        };
+
+        state->deadline_us = (uint64_t)esp_timer_get_time() +
+                             (uint64_t)state->timeout_ms * 1000ULL;
+        if (esp_timer_create(&args, &state->timeout_timer) != ESP_OK ||
+            esp_timer_start_once(state->timeout_timer,
+                                 (uint64_t)state->timeout_ms * 1000ULL) !=
+                ESP_OK) {
+            JS_ThrowInternalError(ctx, "failed to start I2S write timeout");
+            return false;
+        }
+    }
+    i2s_write_step(state);
+    (void)esp32_mquickjs_future_wake(runtime, token);
+    return true;
+}
+
+static esp32_mquickjs_future_poll_t i2s_write_poll(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    i2s_write_step(state);
+    return state != NULL && state->completed
+               ? ESP32_MQUICKJS_FUTURE_READY
+               : ESP32_MQUICKJS_FUTURE_PENDING;
+}
+
+static JSValue i2s_write_finish(
+    JSContext *ctx, esp32_mquickjs_future_driver_state_t *state)
+{
+    JSGCRef result_ref;
+    JSValue *result = JS_PushGCRef(ctx, &result_ref);
+
+    if (state == NULL || state->cancelled) {
+        JS_PopGCRef(ctx, &result_ref);
+        return JS_ThrowInternalError(ctx, "I2S write cancelled");
+    }
+    if (state->timed_out) {
+        JS_PopGCRef(ctx, &result_ref);
+        return JS_ThrowInternalError(
+            ctx, "I2SChannel.write() timed out after %u bytes",
+            (unsigned)state->transferred_bytes);
+    }
+    if (state->err != ESP_OK) {
+        JS_PopGCRef(ctx, &result_ref);
+        return JS_ThrowInternalError(ctx, "I2SChannel.write() failed: %s",
+                                     esp_err_to_name(state->err));
+    }
+    *result = JS_NewObject(ctx);
+    if (JS_IsException(*result) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "frames", JS_NewUint32(ctx, state->frame_count)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "byteLength",
+            JS_NewInt64(ctx, (int64_t)state->transferred_bytes)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "timestampUs",
+            JS_NewInt64(ctx, (int64_t)esp_timer_get_time()))) {
+        JS_PopGCRef(ctx, &result_ref);
+        return JS_EXCEPTION;
+    }
+    return JS_PopGCRef(ctx, &result_ref);
+}
+
+static bool i2s_write_cancel(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || state->completed || state->cancelled) {
+        return false;
+    }
+    state->cancelled = true;
+    state->completed = true;
+    if (state->runtime != NULL) {
+        (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+    }
+    return true;
+}
+
+static void i2s_write_destroy(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    esp32_mquickjs_i2s_slot_t *slot =
+        state != NULL ? i2s_get_slot(&state->channel_ref) : NULL;
+
+    if (state == NULL) {
+        return;
+    }
+    if (state->timeout_timer != NULL) {
+        (void)esp_timer_stop(state->timeout_timer);
+        (void)esp_timer_delete(state->timeout_timer);
+    }
+    if (slot != NULL && state->started) {
+        slot->tx_busy = false;
+        slot->tx_cancel_requested = false;
+        slot->tx_runtime = NULL;
+        if (slot->release_pending) {
+            i2s_cleanup_slot(slot);
+        }
+    }
+    if (state->owner_retained) {
+        JS_DeleteGCRef(state->ctx, &state->owner_ref);
+    }
+    heap_caps_free(state->data);
+    heap_caps_free(state);
+}
+
+static const esp32_mquickjs_future_driver_t s_i2s_write_driver = {
+    .prepare = i2s_write_prepare,
+    .start = i2s_write_start,
+    .poll = i2s_write_poll,
+    .finish = i2s_write_finish,
+    .cancel = i2s_write_cancel,
+    .destroy = i2s_write_destroy,
+};
+
 static bool i2s_register_future_driver(JSContext *ctx,
                                        esp32_mquickjs_runtime_t *runtime)
 {
     JSGCRef object_ref;
-    JSGCRef read_ref;
+    JSGCRef method_ref;
     JSValue *object = JS_PushGCRef(ctx, &object_ref);
-    JSValue *read = JS_PushGCRef(ctx, &read_ref);
+    JSValue *method = JS_PushGCRef(ctx, &method_ref);
     bool result;
 
-    *object = JS_NewObjectClassUser(ctx, JS_CLASS_I2S_INPUT);
-    *read = JS_IsException(*object) ? JS_EXCEPTION
-                                    : JS_GetPropertyStr(ctx, *object, "read");
-    result = !JS_IsException(*read) &&
-             esp32_mquickjs_future_register_driver(ctx, runtime, *read,
+    *object = JS_NewObjectClassUser(ctx, JS_CLASS_I2S_CHANNEL);
+    *method = JS_IsException(*object) ? JS_EXCEPTION
+                                      : JS_GetPropertyStr(ctx, *object, "read");
+    result = !JS_IsException(*method) &&
+             esp32_mquickjs_future_register_driver(ctx, runtime, *method,
                                                     &s_i2s_read_driver);
+    if (result) {
+        *method = JS_GetPropertyStr(ctx, *object, "write");
+        result = !JS_IsException(*method) &&
+                 esp32_mquickjs_future_register_driver(
+                     ctx, runtime, *method, &s_i2s_write_driver);
+    }
     if (!result && !JS_IsException(*object)) {
         JS_ThrowInternalError(ctx, "failed to register I2S Future driver");
     }
-    JS_PopGCRef(ctx, &read_ref);
+    JS_PopGCRef(ctx, &method_ref);
     JS_PopGCRef(ctx, &object_ref);
     return result;
 }
@@ -639,7 +1139,7 @@ bool esp32_mquickjs_init_i2s_runtime(JSContext *ctx,
     int i;
 
     for (i = 0; i < I2S_LL_GET(INST_NUM); ++i) {
-        if (s_i2s_slots[i].allocated && !s_i2s_slots[i].busy) {
+        if (s_i2s_slots[i].allocated && !i2s_slot_busy(&s_i2s_slots[i])) {
             i2s_cleanup_slot(&s_i2s_slots[i]);
         }
         memset(&s_i2s_slots[i], 0, sizeof(s_i2s_slots[i]));
@@ -654,40 +1154,33 @@ void esp32_mquickjs_deinit_i2s_runtime(void)
 
     for (i = 0; i < I2S_LL_GET(INST_NUM); ++i) {
         if (s_i2s_slots[i].allocated) {
-            s_i2s_slots[i].release_pending = true;
-            if (!s_i2s_slots[i].busy) {
-                i2s_cleanup_slot(&s_i2s_slots[i]);
-            }
+            i2s_request_close(&s_i2s_slots[i]);
         }
     }
 }
 
-JSValue js_i2s_input_constructor(JSContext *ctx, JSValue *this_val,
+JSValue js_i2s_channel_constructor(JSContext *ctx, JSValue *this_val,
                                  int argc, JSValue *argv)
 {
     (void)this_val;
     (void)argc;
     (void)argv;
-    return JS_ThrowTypeError(ctx, "I2SInput cannot be constructed directly");
+    return JS_ThrowTypeError(ctx, "I2SChannel cannot be constructed directly");
 }
 
-void js_i2s_input_finalizer(JSContext *ctx, void *opaque)
+void js_i2s_channel_finalizer(JSContext *ctx, void *opaque)
 {
     esp32_mquickjs_i2s_ref_t *ref = opaque;
     esp32_mquickjs_i2s_slot_t *slot = i2s_get_slot(ref);
 
     (void)ctx;
     if (slot != NULL) {
-        if (slot->busy) {
-            slot->release_pending = true;
-        } else {
-            i2s_cleanup_slot(slot);
-        }
+        i2s_request_close(slot);
     }
     heap_caps_free(ref);
 }
 
-JSValue js_i2s_input_start(JSContext *ctx, JSValue *this_val,
+JSValue js_i2s_channel_start(JSContext *ctx, JSValue *this_val,
                            int argc, JSValue *argv)
 {
     esp32_mquickjs_i2s_slot_t *slot;
@@ -695,23 +1188,30 @@ JSValue js_i2s_input_start(JSContext *ctx, JSValue *this_val,
 
     (void)argc;
     (void)argv;
-    if (i2s_ref_from_value(ctx, *this_val, "I2SInput.start()", NULL,
+    if (i2s_ref_from_value(ctx, *this_val, "I2SChannel.start()", NULL,
                            &slot) != 0) {
         return JS_EXCEPTION;
     }
     if (slot->running) {
         return JS_TRUE;
     }
-    err = i2s_channel_enable(slot->rx_handle);
+    err = slot->tx_handle != NULL ? i2s_channel_enable(slot->tx_handle)
+                                  : ESP_OK;
+    if (err == ESP_OK && slot->rx_handle != NULL) {
+        err = i2s_channel_enable(slot->rx_handle);
+        if (err != ESP_OK && slot->tx_handle != NULL) {
+            (void)i2s_channel_disable(slot->tx_handle);
+        }
+    }
     if (err != ESP_OK) {
-        return JS_ThrowInternalError(ctx, "I2SInput.start() failed: %s",
+        return JS_ThrowInternalError(ctx, "I2SChannel.start() failed: %s",
                                      esp_err_to_name(err));
     }
     slot->running = true;
     return JS_TRUE;
 }
 
-JSValue js_i2s_input_stop(JSContext *ctx, JSValue *this_val,
+JSValue js_i2s_channel_stop(JSContext *ctx, JSValue *this_val,
                           int argc, JSValue *argv)
 {
     esp32_mquickjs_i2s_slot_t *slot;
@@ -719,27 +1219,34 @@ JSValue js_i2s_input_stop(JSContext *ctx, JSValue *this_val,
 
     (void)argc;
     (void)argv;
-    if (i2s_ref_from_value(ctx, *this_val, "I2SInput.stop()", NULL,
+    if (i2s_ref_from_value(ctx, *this_val, "I2SChannel.stop()", NULL,
                            &slot) != 0) {
         return JS_EXCEPTION;
     }
     if (!slot->running) {
         return JS_TRUE;
     }
-    if (slot->busy) {
+    if (i2s_slot_busy(slot)) {
         return JS_ThrowInternalError(ctx,
-                                     "I2SInput.stop() refused while a read is pending");
+                                     "I2SChannel.stop() refused while I/O is pending");
     }
-    err = i2s_channel_disable(slot->rx_handle);
+    err = slot->rx_handle != NULL ? i2s_channel_disable(slot->rx_handle)
+                                  : ESP_OK;
+    if (slot->tx_handle != NULL) {
+        esp_err_t tx_err = i2s_channel_disable(slot->tx_handle);
+        if (err == ESP_OK) {
+            err = tx_err;
+        }
+    }
     if (err != ESP_OK) {
-        return JS_ThrowInternalError(ctx, "I2SInput.stop() failed: %s",
+        return JS_ThrowInternalError(ctx, "I2SChannel.stop() failed: %s",
                                      esp_err_to_name(err));
     }
     slot->running = false;
     return JS_TRUE;
 }
 
-JSValue js_i2s_input_read(JSContext *ctx, JSValue *this_val,
+JSValue js_i2s_channel_read(JSContext *ctx, JSValue *this_val,
                           int argc, JSValue *argv)
 {
     JSGCRef method_ref;
@@ -756,21 +1263,38 @@ JSValue js_i2s_input_read(JSContext *ctx, JSValue *this_val,
     return result;
 }
 
-JSValue js_i2s_input_status(JSContext *ctx, JSValue *this_val,
+JSValue js_i2s_channel_write(JSContext *ctx, JSValue *this_val,
+                             int argc, JSValue *argv)
+{
+    JSGCRef method_ref;
+    JSValue *method = JS_PushGCRef(ctx, &method_ref);
+    JSValue result;
+
+    *method = JS_GetPropertyStr(ctx, *this_val, "write");
+    result = JS_IsException(*method)
+                 ? JS_EXCEPTION
+                 : esp32_mquickjs_future_call_and_wait(
+                       ctx, esp32_mquickjs_get_active_runtime(), *method,
+                       *this_val, argc, argv);
+    JS_PopGCRef(ctx, &method_ref);
+    return result;
+}
+
+JSValue js_i2s_channel_status(JSContext *ctx, JSValue *this_val,
                             int argc, JSValue *argv)
 {
     esp32_mquickjs_i2s_slot_t *slot;
 
     (void)argc;
     (void)argv;
-    if (i2s_ref_from_value(ctx, *this_val, "I2SInput.status()", NULL,
+    if (i2s_ref_from_value(ctx, *this_val, "I2SChannel.status()", NULL,
                            &slot) != 0) {
         return JS_EXCEPTION;
     }
     return i2s_status_object(ctx, slot);
 }
 
-JSValue js_i2s_input_close(JSContext *ctx, JSValue *this_val,
+JSValue js_i2s_channel_close(JSContext *ctx, JSValue *this_val,
                            int argc, JSValue *argv)
 {
     esp32_mquickjs_i2s_ref_t *ref;
@@ -778,25 +1302,18 @@ JSValue js_i2s_input_close(JSContext *ctx, JSValue *this_val,
 
     (void)argc;
     (void)argv;
-    if (JS_GetClassID(ctx, *this_val) != JS_CLASS_I2S_INPUT) {
-        return JS_ThrowTypeError(ctx, "I2SInput.close() expects an I2SInput");
+    if (JS_GetClassID(ctx, *this_val) != JS_CLASS_I2S_CHANNEL) {
+        return JS_ThrowTypeError(ctx, "I2SChannel.close() expects an I2SChannel");
     }
     ref = JS_GetOpaque(ctx, *this_val);
     if (ref == NULL) {
         return JS_TRUE;
     }
-    slot = i2s_get_slot(ref);
-    if (slot == NULL) {
-        JS_SetOpaque(ctx, *this_val, NULL);
-        heap_caps_free(ref);
-        return JS_TRUE;
-    }
-    if (slot->busy) {
-        return JS_ThrowInternalError(ctx,
-                                     "I2SInput.close() refused while a read is pending");
-    }
-    i2s_cleanup_slot(slot);
     JS_SetOpaque(ctx, *this_val, NULL);
+    slot = i2s_get_slot(ref);
+    if (slot != NULL) {
+        i2s_request_close(slot);
+    }
     heap_caps_free(ref);
     return JS_TRUE;
 }
@@ -843,8 +1360,14 @@ JSValue js_i2s_capabilities(JSContext *ctx, JSValue *this_val,
                                          JS_NewUint32(ctx, I2S_DMA_MAX_DESCRIPTOR_BYTES)) ||
         !esp32_mquickjs_set_property_ref(ctx, limits, "maxReadBytes",
                                          JS_NewUint32(ctx, I2S_MAX_READ_BYTES)) ||
+        !esp32_mquickjs_set_property_ref(ctx, limits, "maxWriteBytes",
+                                         JS_NewUint32(ctx, I2S_MAX_WRITE_BYTES)) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "ports", *ports) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "standard", JS_TRUE) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "standardRx", JS_TRUE) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "standardTx", JS_TRUE) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "standardDuplex",
+                                         JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(
             ctx, result, "pdm",
 #if SOC_I2S_SUPPORTS_PDM_RX && SOC_I2S_SUPPORTS_PDM2PCM
@@ -885,6 +1408,8 @@ JSValue js_i2s_open(JSContext *ctx, JSValue *this_val, int argc,
                     JSValue *argv)
 {
     esp32_mquickjs_i2s_mode_t mode = ESP32_MQUICKJS_I2S_MODE_STANDARD;
+    esp32_mquickjs_i2s_direction_t direction =
+        ESP32_MQUICKJS_I2S_DIRECTION_RX;
     uint32_t sample_rate = I2S_DEFAULT_SAMPLE_RATE_HZ;
     uint32_t data_bits = 16;
     uint32_t slot_bits = 16;
@@ -898,6 +1423,7 @@ JSValue js_i2s_open(JSContext *ctx, JSValue *this_val, int argc,
     int bclk = -1;
     int ws = -1;
     int din = -1;
+    int dout = -1;
     int mclk = I2S_GPIO_UNUSED;
     int pdm_clk = esp32_mquickjs_profile_int_or("ESP32QJS_I2S_PDM_CLK", -2);
     int pdm_din = esp32_mquickjs_profile_int_or("ESP32QJS_I2S_PDM_DIN", -2);
@@ -907,6 +1433,8 @@ JSValue js_i2s_open(JSContext *ctx, JSValue *this_val, int argc,
     i2s_event_callbacks_t callbacks = {
         .on_recv = i2s_on_receive,
         .on_recv_q_ovf = i2s_on_overflow,
+        .on_sent = i2s_on_sent,
+        .on_send_q_ovf = i2s_on_send_overflow,
     };
     esp_err_t err;
     JSValue result;
@@ -928,8 +1456,19 @@ JSValue js_i2s_open(JSContext *ctx, JSValue *this_val, int argc,
         const char *text;
 
         *property = JS_GetPropertyStr(ctx, argv[0], "direction");
-        if (JS_IsException(*property) || !i2s_string_equals(ctx, *property, "rx")) {
-            JS_ThrowTypeError(ctx, "i2s.open({ direction }) only accepts \"rx\"");
+        if (JS_IsException(*property)) {
+            goto parse_fail;
+        }
+        if (i2s_string_equals(ctx, *property, "rx")) {
+            direction = ESP32_MQUICKJS_I2S_DIRECTION_RX;
+        } else if (i2s_string_equals(ctx, *property, "tx")) {
+            direction = ESP32_MQUICKJS_I2S_DIRECTION_TX;
+        } else if (i2s_string_equals(ctx, *property, "duplex")) {
+            direction = ESP32_MQUICKJS_I2S_DIRECTION_DUPLEX;
+        } else {
+            JS_ThrowTypeError(
+                ctx,
+                "i2s.open({ direction }) expects \"rx\", \"tx\", or \"duplex\"");
             goto parse_fail;
         }
         *property = JS_GetPropertyStr(ctx, argv[0], "mode");
@@ -1089,7 +1628,12 @@ JSValue js_i2s_open(JSContext *ctx, JSValue *this_val, int argc,
 } while (0)
             READ_STD_PIN("bclk", &bclk, true);
             READ_STD_PIN("ws", &ws, true);
-            READ_STD_PIN("din", &din, false);
+            if ((direction & ESP32_MQUICKJS_I2S_DIRECTION_RX) != 0) {
+                READ_STD_PIN("din", &din, false);
+            }
+            if ((direction & ESP32_MQUICKJS_I2S_DIRECTION_TX) != 0) {
+                READ_STD_PIN("dout", &dout, true);
+            }
 #undef READ_STD_PIN
             *property = JS_GetPropertyStr(ctx, *pins, "mclk");
             if (JS_IsException(*property) ||
@@ -1113,6 +1657,10 @@ parse_fail:
 
 parsed:
     if (mode == ESP32_MQUICKJS_I2S_MODE_PDM) {
+        if (direction != ESP32_MQUICKJS_I2S_DIRECTION_RX) {
+            return JS_ThrowTypeError(
+                ctx, "i2s.open(pdm) only accepts direction \"rx\"");
+        }
         if (pdm_clk >= 0 && pdm_clk == pdm_din) {
             return JS_ThrowRangeError(
                 ctx, "i2s.open(pdm) requires distinct clk and din GPIOs");
@@ -1141,9 +1689,12 @@ parsed:
                 ctx,
                 "standard I2S dataBits/slotBits must be 8, 16, 24, or 32 with dataBits <= slotBits");
         }
-        if (bclk == ws || bclk == din || ws == din ||
+        if (bclk == ws || (din >= 0 && (bclk == din || ws == din)) ||
+            (dout >= 0 &&
+             (bclk == dout || ws == dout || dout == din)) ||
             (mclk != I2S_GPIO_UNUSED &&
-             (mclk == bclk || mclk == ws || mclk == din))) {
+             (mclk == bclk || mclk == ws || mclk == din ||
+              mclk == dout))) {
             return JS_ThrowRangeError(
                 ctx, "i2s.open(standard) requires distinct GPIOs");
         }
@@ -1182,6 +1733,7 @@ parsed:
     slot->allocated = true;
     slot->generation = i2s_take_generation();
     slot->mode = mode;
+    slot->direction = direction;
     slot->sample_rate_hz = sample_rate;
     slot->data_bits = (uint8_t)data_bits;
     slot->slot_bits = (uint8_t)slot_bits;
@@ -1192,7 +1744,14 @@ parsed:
     channel_config.id = slot->port;
     channel_config.dma_desc_num = dma_descriptors;
     channel_config.dma_frame_num = dma_frames;
-    err = i2s_new_channel(&channel_config, NULL, &slot->rx_handle);
+    err = i2s_new_channel(
+        &channel_config,
+        (direction & ESP32_MQUICKJS_I2S_DIRECTION_TX) != 0
+            ? &slot->tx_handle
+            : NULL,
+        (direction & ESP32_MQUICKJS_I2S_DIRECTION_RX) != 0
+            ? &slot->rx_handle
+            : NULL);
     if (err != ESP_OK) {
         i2s_cleanup_slot(slot);
         return JS_ThrowInternalError(ctx, "i2s.open() failed to allocate channel: %s",
@@ -1207,8 +1766,8 @@ parsed:
                 .mclk = (gpio_num_t)mclk,
                 .bclk = (gpio_num_t)bclk,
                 .ws = (gpio_num_t)ws,
-                .dout = I2S_GPIO_UNUSED,
-                .din = (gpio_num_t)din,
+                .dout = dout >= 0 ? (gpio_num_t)dout : I2S_GPIO_UNUSED,
+                .din = din >= 0 ? (gpio_num_t)din : I2S_GPIO_UNUSED,
             },
         };
 
@@ -1227,7 +1786,12 @@ parsed:
         }
         config.slot_cfg.slot_bit_width = (i2s_slot_bit_width_t)slot_bits;
         config.slot_cfg.slot_mask = slot_mask;
-        err = i2s_channel_init_std_mode(slot->rx_handle, &config);
+        err = slot->tx_handle != NULL
+                  ? i2s_channel_init_std_mode(slot->tx_handle, &config)
+                  : ESP_OK;
+        if (err == ESP_OK && slot->rx_handle != NULL) {
+            err = i2s_channel_init_std_mode(slot->rx_handle, &config);
+        }
     } else {
 #if SOC_I2S_SUPPORTS_PDM_RX && SOC_I2S_SUPPORTS_PDM2PCM
         i2s_pdm_rx_config_t config = {
@@ -1244,16 +1808,20 @@ parsed:
         err = ESP_ERR_NOT_SUPPORTED;
 #endif
     }
-    if (err == ESP_OK) {
+    if (err == ESP_OK && slot->rx_handle != NULL) {
         err = i2s_channel_register_event_callback(slot->rx_handle,
+                                                  &callbacks, slot);
+    }
+    if (err == ESP_OK && slot->tx_handle != NULL) {
+        err = i2s_channel_register_event_callback(slot->tx_handle,
                                                   &callbacks, slot);
     }
     if (err != ESP_OK) {
         i2s_cleanup_slot(slot);
-        return JS_ThrowInternalError(ctx, "i2s.open() failed to initialize RX: %s",
+        return JS_ThrowInternalError(ctx, "i2s.open() failed to initialize channel: %s",
                                      esp_err_to_name(err));
     }
-    result = i2s_make_input(ctx, slot);
+    result = i2s_make_channel(ctx, slot);
     if (JS_IsException(result)) {
         i2s_cleanup_slot(slot);
     }

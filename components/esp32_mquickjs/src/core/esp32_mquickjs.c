@@ -11,6 +11,7 @@
 #include "esp32_mquickjs_http_server.h"
 #include "esp32_mquickjs_i2c.h"
 #include "esp32_mquickjs_i2s.h"
+#include "esp32_mquickjs_rmt.h"
 #include "esp32_mquickjs_camera.h"
 #include "esp32_mquickjs_bitmap.h"
 #include "esp32_mquickjs_ledc.h"
@@ -1123,6 +1124,9 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
 #if CONFIG_ESP32_MQUICKJS_FEATURE_I2S
     esp32_mquickjs_deinit_i2s_runtime();
 #endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RMT
+    esp32_mquickjs_deinit_rmt_runtime();
+#endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_GPIO
     esp32_mquickjs_deinit_gpio_runtime(ctx);
 #endif
@@ -1351,6 +1355,12 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_I2S
     if (!esp32_mquickjs_init_i2s_runtime(ctx, runtime)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RMT
+    if (!esp32_mquickjs_init_rmt_runtime(ctx, runtime)) {
         esp32_mquickjs_print_exception(ctx);
         return false;
     }

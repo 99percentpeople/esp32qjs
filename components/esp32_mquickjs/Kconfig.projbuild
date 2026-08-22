@@ -84,14 +84,22 @@ config ESP32_MQUICKJS_FEATURE_UART
         Enable synchronous UART port bindings such as uart.open(),
         UARTPort.write(), and UARTPort.read().
 
+config ESP32_MQUICKJS_FEATURE_RMT
+    bool "Enable rmt module"
+    default n
+    depends on SOC_RMT_SUPPORTED
+    help
+        Enable generic bounded RMT receive/transmit channels and native symbol
+        buffers. Protocol decoders and board-specific waveform policy remain
+        application responsibilities.
+
 config ESP32_MQUICKJS_FEATURE_I2S
-    bool "Enable I2S receive module"
+    bool "Enable I2S module"
     default n
     depends on SOC_I2S_SUPPORTED
     help
-        Enable bounded receive-only standard I2S and hardware PDM-to-PCM
-        bindings. Version 1 intentionally does not expose transmit or duplex
-        operation.
+        Enable bounded standard I2S receive, transmit, and duplex bindings,
+        plus receive-only hardware PDM-to-PCM.
 
 config ESP32_MQUICKJS_FEATURE_CAMERA
     bool "Enable camera capture module"

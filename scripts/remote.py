@@ -118,6 +118,11 @@ JS_TEST_MODULES = (
         required_features=("uart",),
     ),
     JsTestModule(
+        "rmt",
+        (JsTestCase("modules/rmt/offline.js"),),
+        required_features=("rmt",),
+    ),
+    JsTestModule(
         "i2s",
         (JsTestCase("modules/i2s/offline.js"),),
         required_features=("i2s",),

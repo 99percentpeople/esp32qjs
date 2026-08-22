@@ -21,10 +21,12 @@
 #define JS_CLASS_DISPLAY_COMMAND_BUFFER (JS_CLASS_USER + 16)
 #define JS_CLASS_FUTURE (JS_CLASS_USER + 17)
 #define JS_CLASS_EVENT_QUEUE (JS_CLASS_USER + 18)
-#define JS_CLASS_I2S_INPUT (JS_CLASS_USER + 19)
+#define JS_CLASS_I2S_CHANNEL (JS_CLASS_USER + 19)
 #define JS_CLASS_CAMERA (JS_CLASS_USER + 20)
 #define JS_CLASS_CAMERA_FRAME (JS_CLASS_USER + 21)
-#define JS_CLASS_COUNT (JS_CLASS_USER + 22)
+#define JS_CLASS_RMT_SYMBOL_BUFFER (JS_CLASS_USER + 22)
+#define JS_CLASS_RMT_CHANNEL (JS_CLASS_USER + 23)
+#define JS_CLASS_COUNT (JS_CLASS_USER + 24)
 
 #define js_global_object js_global_object_base
 #define js_c_function_decl js_c_function_decl_base
@@ -470,6 +472,7 @@ static const JSPropDef js_sys_info_features[] = {
     JS_CGETSET_MAGIC_DEF("i2s", js_sys_feature_get, NULL, 17),
     JS_CGETSET_MAGIC_DEF("camera", js_sys_feature_get, NULL, 18),
     JS_CGETSET_MAGIC_DEF("rpc", js_sys_feature_get, NULL, 19),
+    JS_CGETSET_MAGIC_DEF("rmt", js_sys_feature_get, NULL, 20),
     JS_PROP_END,
 };
 
@@ -721,20 +724,64 @@ static const JSClassDef js_uart_obj =
     JS_OBJECT_DEF("uart", js_uart);
 #endif
 
-#if CONFIG_ESP32_MQUICKJS_FEATURE_I2S
-static const JSPropDef js_i2s_input_proto[] = {
-    JS_CFUNC_DEF("start", 0, js_i2s_input_start),
-    JS_CFUNC_DEF("stop", 0, js_i2s_input_stop),
-    JS_CFUNC_DEF("read", 2, js_i2s_input_read),
-    JS_CFUNC_DEF("status", 0, js_i2s_input_status),
-    JS_CFUNC_DEF("close", 0, js_i2s_input_close),
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RMT
+static const JSPropDef js_rmt_symbol_buffer_proto[] = {
+    JS_CGETSET_DEF("capacity", js_rmt_symbol_buffer_get_capacity, NULL),
+    JS_CGETSET_DEF("length", js_rmt_symbol_buffer_get_length, NULL),
+    JS_CFUNC_DEF("push", 4, js_rmt_symbol_buffer_push),
+    JS_CFUNC_DEF("get", 1, js_rmt_symbol_buffer_get),
+    JS_CFUNC_DEF("set", 5, js_rmt_symbol_buffer_set),
+    JS_CFUNC_DEF("clear", 0, js_rmt_symbol_buffer_clear),
+    JS_CFUNC_DEF("close", 0, js_rmt_symbol_buffer_close),
     JS_PROP_END,
 };
 
-static const JSClassDef js_i2s_input_class =
-    JS_CLASS_DEF("I2SInput", 0, js_i2s_input_constructor,
-                 JS_CLASS_I2S_INPUT, NULL, js_i2s_input_proto, NULL,
-                 js_i2s_input_finalizer);
+static const JSClassDef js_rmt_symbol_buffer_class =
+    JS_CLASS_DEF("RMTSymbolBuffer", 0, js_rmt_symbol_buffer_constructor,
+                 JS_CLASS_RMT_SYMBOL_BUFFER, NULL,
+                 js_rmt_symbol_buffer_proto, NULL,
+                 js_rmt_symbol_buffer_finalizer);
+
+static const JSPropDef js_rmt_channel_proto[] = {
+    JS_CFUNC_DEF("start", 0, js_rmt_channel_start),
+    JS_CFUNC_DEF("stop", 0, js_rmt_channel_stop),
+    JS_CFUNC_DEF("transmit", 2, js_rmt_channel_transmit),
+    JS_CFUNC_DEF("receive", 2, js_rmt_channel_receive),
+    JS_CFUNC_DEF("status", 0, js_rmt_channel_status),
+    JS_CFUNC_DEF("close", 0, js_rmt_channel_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_rmt_channel_class =
+    JS_CLASS_DEF("RMTChannel", 0, js_rmt_channel_constructor,
+                 JS_CLASS_RMT_CHANNEL, NULL, js_rmt_channel_proto, NULL,
+                 js_rmt_channel_finalizer);
+
+static const JSPropDef js_rmt[] = {
+    JS_CFUNC_DEF("capabilities", 0, js_rmt_capabilities),
+    JS_CFUNC_DEF("createSymbols", 1, js_rmt_create_symbols),
+    JS_CFUNC_DEF("open", 1, js_rmt_open),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_rmt_obj = JS_OBJECT_DEF("rmt", js_rmt);
+#endif
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_I2S
+static const JSPropDef js_i2s_channel_proto[] = {
+    JS_CFUNC_DEF("start", 0, js_i2s_channel_start),
+    JS_CFUNC_DEF("stop", 0, js_i2s_channel_stop),
+    JS_CFUNC_DEF("read", 2, js_i2s_channel_read),
+    JS_CFUNC_DEF("write", 2, js_i2s_channel_write),
+    JS_CFUNC_DEF("status", 0, js_i2s_channel_status),
+    JS_CFUNC_DEF("close", 0, js_i2s_channel_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_i2s_channel_class =
+    JS_CLASS_DEF("I2SChannel", 0, js_i2s_channel_constructor,
+                 JS_CLASS_I2S_CHANNEL, NULL, js_i2s_channel_proto, NULL,
+                 js_i2s_channel_finalizer);
 
 static const JSPropDef js_i2s[] = {
     JS_CFUNC_DEF("capabilities", 0, js_i2s_capabilities),
@@ -977,9 +1024,14 @@ static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("uart", &js_uart_obj),
     JS_PROP_CLASS_DEF("UARTPort", &js_uart_port_class),
 #endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RMT
+    JS_PROP_CLASS_DEF("rmt", &js_rmt_obj),
+    JS_PROP_CLASS_DEF("RMTSymbolBuffer", &js_rmt_symbol_buffer_class),
+    JS_PROP_CLASS_DEF("RMTChannel", &js_rmt_channel_class),
+#endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_I2S
     JS_PROP_CLASS_DEF("i2s", &js_i2s_obj),
-    JS_PROP_CLASS_DEF("I2SInput", &js_i2s_input_class),
+    JS_PROP_CLASS_DEF("I2SChannel", &js_i2s_channel_class),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA
     JS_PROP_CLASS_DEF("camera", &js_camera_obj),

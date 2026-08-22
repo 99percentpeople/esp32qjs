@@ -12,6 +12,7 @@
 #include "esp32_mquickjs_http_server.h"
 #include "esp32_mquickjs_i2c.h"
 #include "esp32_mquickjs_i2s.h"
+#include "esp32_mquickjs_rmt.h"
 #include "esp32_mquickjs_camera.h"
 #include "esp32_mquickjs_ledc.h"
 #include "esp32_mquickjs_nvs.h"

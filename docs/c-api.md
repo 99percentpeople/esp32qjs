@@ -524,44 +524,106 @@ TEST_JS_CONFIG='{"uartLoopback":{"port":1,"tx":43,"rx":44}}' \
 python scripts/remote.py test --scope js --module uart --loopback
 ```
 
+## `rmt` Module
+
+`rmt` is exposed when `sys.info.features.rmt` is true. It provides bounded
+hardware pulse symbols and RX/TX channel lifecycle only. Protocols such as NEC,
+device-specific pulse interpretation, and board policy remain in application
+JavaScript.
+
+- `rmt.capabilities()`
+  Return target-dependent DMA support, the minimum hardware memory block, the
+  4096-symbol logical-buffer limit, the 32767-tick duration limit, and explicit
+  finite-loop support.
+- `rmt.createSymbols(capacity)`
+  Allocate a native `RMTSymbolBuffer`. Its `capacity` is fixed and its `length`
+  is the logical number of symbols.
+- `rmt.open({ direction, pin, resolutionHz, memorySymbols?, dma?, invert? })`
+  Open one `"rx"` or `"tx"` channel. `resolutionHz` is required so tick units
+  are never inferred. `memorySymbols` controls the ESP-IDF hardware block; it is
+  not a chunk size exposed to JavaScript.
+
+`RMTSymbolBuffer` provides `push(duration0Ticks, level0, duration1Ticks,
+level1)`, `get(index)`, `set(index, ...)`, `clear()`, and idempotent `close()`.
+Durations must fit the native 15-bit fields. A buffer is leased while an RMT
+operation is pending and cannot be changed during that lease.
+
+`RMTChannel` provides `start()`, `stop()`, `status()`, and idempotent `close()`.
+TX uses `transmit(symbols, { loopCount?, endLevel?, timeoutMs? })`; loop counts
+must be finite. RX uses
+`receive(symbols, { minPulseNs?, idleThresholdNs, timeoutMs? })`, fills the
+caller's buffer, updates its logical length, and returns `{ length, truncated }`
+or `null` at timeout. Only one operation may be pending per channel. Use
+`Future.call()` for non-blocking composition; timeout, cancellation, close, and
+runtime teardown cancel the whole hardware operation.
+
+```js
+var symbols = rmt.createSymbols(2);
+var channel = rmt.open({
+  direction: "tx",
+  pin: 4,
+  resolutionHz: 1000000
+});
+try {
+  symbols.push(560, 1, 560, 0);
+  symbols.push(560, 1, 1690, 0);
+  channel.start();
+  channel.transmit(symbols, { loopCount: 0, timeoutMs: 100 });
+  channel.stop();
+} finally {
+  channel.close();
+  symbols.close();
+}
+```
+
 ## `i2s` Module
 
-`i2s` is exposed when `sys.info.features.i2s` is true. Version 1 implements
-receive channels only; it does not reserve API shapes for TX or duplex audio.
+`i2s` is exposed when `sys.info.features.i2s` is true. Standard I2S supports
+`direction: "rx" | "tx" | "duplex"`; PDM remains receive-only.
 
 - `i2s.capabilities()`
-  Return `{ ports, standard, pdm, dataBits, limits }`. Limits include the ESP-IDF
-  4092-byte maximum for one DMA descriptor and the 65536-byte maximum for one
-  JavaScript read result.
+  Return `{ ports, standard, standardRx, standardTx, standardDuplex, pdm,
+  dataBits, limits }`. Limits include the ESP-IDF 4092-byte maximum for one DMA
+  descriptor and 65536-byte bounds for one JavaScript read or write.
 - `i2s.open(options)`
-  Open one generation-checked channel without starting DMA. Required options
-  are `direction: "rx"` and `mode: "standard" | "pdm"`; `port` is a number or
-  `"auto"`. Common options include `sampleRateHz`, `timeoutMs`, and
+  Open one generation-checked `I2SChannel` without starting DMA. `port` is a
+  number or `"auto"`. Common options include `sampleRateHz`, `timeoutMs`, and
   `dma: { descriptorCount, framesPerDescriptor }`.
 
 Standard mode accepts `dataBits`, `slotBits`, `slotMode`, `slotMask`, `format`,
-and `pins: { bclk, ws, din, mclk? }`. Formats are `philips`, `msb`, `pcmShort`,
-and `pcmLong`. PDM accepts `pins: { clk, din }`, or uses the explicitly selected
-hardware constants. PDM output is always signed 16-bit little-endian mono PCM;
-raw PDM is not exposed.
+and `pins: { bclk, ws, din?, dout?, mclk? }`. RX requires `din`, TX requires
+`dout`, and duplex requires both; a duplex pair is allocated on one I2S port.
+Formats are `philips`, `msb`, `pcmShort`, and `pcmLong`. PDM accepts only
+`direction: "rx"` with `pins: { clk, din }`, or uses explicitly selected
+hardware constants. PDM output is signed 16-bit little-endian mono PCM; raw PDM
+is not exposed.
 
-`I2SInput` methods:
+`I2SChannel` methods:
 
-- `input.start()` / `input.stop()`
+- `channel.start()` / `channel.stop()`
   Explicit, idempotent DMA lifecycle operations.
-- `input.read(frameCount, timeoutMs?)`
-  Return `null` at timeout or
+- `channel.read(frameCount, timeoutMs?)`
+  RX/duplex only. Return `null` at timeout or
   `{ data, frames, byteLength, timestampUs, sequence, overruns }`, where `data`
-  is an owned `ByteView`. Only one read may be pending per input.
-- `input.status()`
-  Return the actual port, running state, mode, PCM layout, DMA configuration,
-  and cumulative overrun count.
-- `input.close()`
-  Release the channel. Close is idempotent after success and rejects while a
-  read Future is pending. Runtime teardown cancels pending work first.
+  is an owned `ByteView`.
+- `channel.write(data, timeoutMs?)`
+  TX/duplex only. Accept a `ByteSource` or `ByteSpanSource` and return
+  `{ frames, byteLength, timestampUs }`. The combined byte length must align to
+  the configured PCM frame, including when a frame crosses span boundaries.
+- `channel.status()`
+  Return direction, port, running/read/write state, PCM layout, DMA
+  configuration, overruns, and underruns.
+- `channel.close()`
+  Mark the channel closed immediately and idempotently. Pending reads and
+  writes are cancelled; native handles are released after their Future leases
+  finish. Runtime teardown uses the same path.
+
+Only one read and one write may be pending at a time. Duplex allows those two
+directions concurrently. Direct calls are synchronous; use `Future.call()` when
+the current runtime position must remain non-blocking.
 
 ```js
-var input = i2s.open({
+var channel = i2s.open({
   direction: "rx",
   mode: "pdm",
   port: "auto",
@@ -571,8 +633,8 @@ var input = i2s.open({
   timeoutMs: 1000
 });
 try {
-  input.start();
-  var chunk = input.read(320, 1000);
+  channel.start();
+  var chunk = channel.read(320, 1000);
   if (chunk !== null) {
     try {
       print(chunk.frames, chunk.byteLength, chunk.overruns);
@@ -581,8 +643,8 @@ try {
     }
   }
 } finally {
-  input.stop();
-  input.close();
+  channel.stop();
+  channel.close();
 }
 ```
 

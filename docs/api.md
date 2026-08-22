@@ -7,7 +7,7 @@ The API is split into two parts:
 - [docs/c-api.md](c-api.md)
   C-side host APIs exported by the firmware runtime, including global helpers,
   `fs`, `nvs`, `Stream`, `Request`, `Response`, `gpio`, `ledc`, `adc`, `dac`,
-  `i2c`, `spi`, `uart`, `i2s`, `camera`, `bitmap`, `sys`, `socket`,
+  `i2c`, `spi`, `uart`, `rmt`, `i2s`, `camera`, `bitmap`, `sys`, `socket`,
   `rpc`, `wifi`, and `http`.
 - [docs/js-api.md](js-api.md)
   JavaScript-side APIs loaded from LittleFS, currently including `display` and `ui`.

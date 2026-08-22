@@ -9,7 +9,7 @@ MQUICKJS = ROOT / "components" / "esp32_mquickjs"
 
 
 class MediaArchitectureTests(SourceContractTestCase):
-    def test_i2s_and_camera_are_independent_feature_gated_modules(self):
+    def test_rmt_i2s_and_camera_are_independent_feature_gated_modules(self):
         kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
         cmake = (MQUICKJS / "CMakeLists.txt").read_text(encoding="utf-8")
         manifest = (MQUICKJS / "idf_component.yml").read_text(encoding="utf-8")
@@ -22,9 +22,13 @@ class MediaArchitectureTests(SourceContractTestCase):
 
         self.assertIn("config ESP32_MQUICKJS_FEATURE_I2S", kconfig)
         self.assertIn("depends on SOC_I2S_SUPPORTED", kconfig)
+        self.assertIn("config ESP32_MQUICKJS_FEATURE_RMT", kconfig)
+        self.assertIn("depends on SOC_RMT_SUPPORTED", kconfig)
         self.assertIn("config ESP32_MQUICKJS_FEATURE_CAMERA", kconfig)
         self.assertIn("depends on IDF_TARGET_ESP32S3", kconfig)
         self.assertIn("src/modules/i2s/esp32_mquickjs_i2s.c", cmake)
+        self.assertIn("src/modules/rmt/esp32_mquickjs_rmt.c", cmake)
+        self.assertIn("esp_driver_rmt", cmake)
         self.assertIn("if(IDF_TARGET STREQUAL \"esp32s3\")", cmake)
         self.assertIn("src/modules/camera/esp32_mquickjs_camera.c", cmake)
         self.assertIn('version: "~2.1.7"', manifest)
@@ -32,6 +36,7 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertNotIn("CONFIG_CAMERA_PSRAM_DMA", s3_defaults)
         self.assertNotIn("CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA=y", s3_defaults)
         self.assertIn('JS_OBJECT_DEF("i2s", js_i2s)', stdlib)
+        self.assertIn('JS_OBJECT_DEF("rmt", js_rmt)', stdlib)
         self.assertIn('JS_OBJECT_DEF("camera", js_camera_module)', stdlib)
         self.assertNotIn("camera", (MQUICKJS / "src/modules/i2s/esp32_mquickjs_i2s.c").read_text(encoding="utf-8"))
 
@@ -63,6 +68,34 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertNotIn("heap_caps_", callbacks)
         self.assertNotIn("i2s_channel_read", callbacks)
 
+    def test_rmt_uses_native_symbols_and_bounded_future_drivers(self):
+        source = (MQUICKJS / "src/modules/rmt/esp32_mquickjs_rmt.c").read_text(
+            encoding="utf-8"
+        )
+        callbacks = source[
+            source.index("static bool IRAM_ATTR rmt_on_transmit_done(") : source.index(
+                "\nstatic bool rmt_parse_timeout_option", source.index("static bool IRAM_ATTR rmt_on_transmit_done(")
+            )
+        ]
+
+        self.assertIn("rmt_symbol_word_t *symbols;", source)
+        self.assertIn("RMT_MAX_DURATION_TICKS 32767U", source)
+        self.assertIn("RMT_MAX_SYMBOLS 4096U", source)
+        self.assertIn("SOC_RMT_SUPPORT_DMA", source)
+        self.assertIn("state->buffer->capacity * sizeof(rmt_symbol_word_t)", source)
+        self.assertIn("state->buffer->length * sizeof(rmt_symbol_word_t)", source)
+        self.assertIn("buffer->length == 0", source)
+        self.assertIn("state->truncated = true", source)
+        self.assertIn(".timeout_ms = rmt_operation_timeout_ms", source)
+        self.assertIn("rmt_abort_active(slot);", source)
+        self.assertIn("rmt_operation_cancel(slot->active)", source)
+        self.assertIn("s_rmt_channels[i].release_pending = true", source)
+        self.assertIn("loop_count > INT32_MAX", source)
+        self.assertNotIn("NEC", source)
+        self.assertIn("esp32_mquickjs_future_wake_from_isr", callbacks)
+        self.assertNotIn("JS_", callbacks)
+        self.assertNotIn("heap_caps_", callbacks)
+
     def test_i2s_read_retains_partial_dma_data_reported_with_timeout(self):
         source = (MQUICKJS / "src/modules/i2s/esp32_mquickjs_i2s.c").read_text(
             encoding="utf-8"
@@ -74,11 +107,40 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn(
             "state->err == ESP_OK || state->err == ESP_ERR_TIMEOUT", step
         )
-        self.assertIn("state->received_bytes += read_bytes;", step)
+        self.assertIn("state->transferred_bytes += read_bytes;", step)
         self.assertLess(
-            step.index("state->received_bytes += read_bytes;"),
-            step.index("state->err = ESP_OK;", step.index("state->received_bytes += read_bytes;")),
+            step.index("state->transferred_bytes += read_bytes;"),
+            step.index("state->err = ESP_OK;", step.index("state->transferred_bytes += read_bytes;")),
         )
+
+    def test_i2s_unifies_directional_io_and_delayed_close(self):
+        source = (MQUICKJS / "src/modules/i2s/esp32_mquickjs_i2s.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("ESP32_MQUICKJS_I2S_DIRECTION_DUPLEX", source)
+        self.assertIn("slot->rx_busy || slot->tx_busy", source)
+        self.assertIn("i2s_new_channel(", source)
+        self.assertIn("&slot->tx_handle", source)
+        self.assertIn("&slot->rx_handle", source)
+        self.assertIn("i2s_channel_init_std_mode(slot->tx_handle", source)
+        self.assertIn("i2s_channel_init_std_mode(slot->rx_handle", source)
+        self.assertIn("static const esp32_mquickjs_future_driver_t s_i2s_write_driver", source)
+        self.assertIn("JS_CLASS_BYTE_SPAN_SOURCE", source)
+        self.assertIn("JS_CLASS_BITMAP_SPAN_SOURCE", source)
+        self.assertIn("state->requested_bytes % bytes_per_frame != 0", source)
+        self.assertIn("i2s_channel_write(", source)
+        self.assertIn("i2s_channel_read(", source)
+        self.assertIn("static bool i2s_read_cancel", source)
+        self.assertIn("static bool i2s_write_cancel", source)
+        self.assertIn("state->timed_out = true;", source)
+        self.assertIn("I2SChannel.write() requires a tx or duplex channel", source)
+        self.assertIn("i2s.open(pdm) only accepts direction", source)
+        self.assertIn("static void i2s_request_close", source)
+        self.assertIn("slot->rx_cancel_requested = true;", source)
+        self.assertIn("slot->tx_cancel_requested = true;", source)
+        self.assertIn("i2s_request_close(&s_i2s_slots[i]);", source)
+        self.assertIn("slot->generation = i2s_take_generation();", source)
 
     def test_camera_capture_and_frame_lease_are_bounded(self):
         source = (MQUICKJS / "src/modules/camera/esp32_mquickjs_camera.c").read_text(
@@ -250,7 +312,7 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn("JS_SetOpaque(ctx, *this_val, NULL);", byte_source)
         self.assertIn("byte_view_release(view);", byte_source)
         self.assertIn("heap_caps_free(ref);", camera[camera.index("JSValue js_camera_frame_close"):])
-        self.assertIn("heap_caps_free(ref);", i2s[i2s.index("JSValue js_i2s_input_close"):])
+        self.assertIn("heap_caps_free(ref);", i2s[i2s.index("JSValue js_i2s_channel_close"):])
 
 
 if __name__ == "__main__":

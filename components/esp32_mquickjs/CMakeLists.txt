@@ -18,6 +18,7 @@ set(ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS
     CONFIG_ESP32_MQUICKJS_FEATURE_I2C
     CONFIG_ESP32_MQUICKJS_FEATURE_SPI
     CONFIG_ESP32_MQUICKJS_FEATURE_UART
+    CONFIG_ESP32_MQUICKJS_FEATURE_RMT
     CONFIG_ESP32_MQUICKJS_FEATURE_I2S
     CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
@@ -285,6 +286,7 @@ set(ESP32_MQUICKJS_PRIV_REQUIRES
     esp_driver_i2c
     esp_driver_spi
     esp_driver_uart
+    esp_driver_rmt
     esp_driver_i2s
     esp_http_client
     esp_http_server
@@ -375,6 +377,14 @@ esp32_mquickjs_append_feature_component(
     PRIV_REQUIRES
         esp_driver_gpio
         esp_driver_uart
+)
+
+esp32_mquickjs_append_feature_component(
+    CONFIG_ESP32_MQUICKJS_FEATURE_RMT
+    "src/modules/rmt/esp32_mquickjs_rmt.c"
+    PRIV_REQUIRES
+        esp_driver_gpio
+        esp_driver_rmt
 )
 
 esp32_mquickjs_append_feature_component(
