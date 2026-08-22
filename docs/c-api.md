@@ -365,6 +365,10 @@ print(headers.get("content-type"));
   Write an array-like sequence of bytes or native byte view and return the number of bytes written.
 - `bus.writeChunks(addr, chunks)`
   Write an array-like list of byte-source chunks to one I2C device while reusing the same device handle. This is intended for data already split by producers such as `bitmap.readRectChunks(...)`. It returns `{ chunks, bytes, totalUs }`.
+- `bus.writeSegments(addr, segments)`
+  Write byte-source segments as one I2C transaction without first joining them
+  into a JavaScript byte array. This is intended for protocols that prepend a
+  control byte to a native `ByteView`. It returns `{ chunks, bytes, totalUs }`.
 - `bus.read(addr, length)`
   Read `length` bytes and return them as a JavaScript array.
 - `bus.writeRead(addr, writeData, readLength)`

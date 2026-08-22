@@ -365,6 +365,32 @@ static bool source_luminance_range(
     uint8_t maximum = 0U;
     uint32_t y;
 
+    if (source->format == ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8) {
+        for (y = 0; y < options->source_height; ++y) {
+            const uint8_t *row = source->data +
+                (size_t)(options->source_y + y) * source->stride +
+                options->source_x;
+            uint32_t x;
+
+            if (cancel != NULL && cancel(cancel_opaque)) {
+                return false;
+            }
+            for (x = 0; x < options->source_width; ++x) {
+                uint8_t gray = row[x];
+
+                if (gray < minimum) {
+                    minimum = gray;
+                }
+                if (gray > maximum) {
+                    maximum = gray;
+                }
+            }
+        }
+        *out_minimum = minimum;
+        *out_maximum = maximum;
+        return true;
+    }
+
     for (y = 0; y < options->source_height; ++y) {
         uint32_t x;
 
@@ -387,6 +413,145 @@ static bool source_luminance_range(
     *out_minimum = minimum;
     *out_maximum = maximum;
     return true;
+}
+
+typedef struct {
+    uint32_t coordinate;
+    uint32_t quotient;
+    uint32_t remainder;
+    uint32_t error;
+    uint32_t divisor;
+} nearest_axis_t;
+
+static uint8_t normalize_gray(uint8_t gray,
+                              uint8_t minimum,
+                              uint8_t maximum);
+static bool dither_enabled(uint8_t gray,
+                           esp32_mquickjs_bitmap_dither_t dither,
+                           uint8_t threshold,
+                           uint32_t absolute_x,
+                           uint32_t absolute_y);
+
+static nearest_axis_t nearest_axis_start(uint32_t position,
+                                         uint32_t source_size,
+                                         uint32_t destination_size)
+{
+    uint64_t scaled = (uint64_t)position * source_size;
+    nearest_axis_t axis = {
+        .coordinate = (uint32_t)(scaled / destination_size),
+        .quotient = source_size / destination_size,
+        .remainder = source_size % destination_size,
+        .error = (uint32_t)(scaled % destination_size),
+        .divisor = destination_size,
+    };
+
+    return axis;
+}
+
+static void nearest_axis_advance(nearest_axis_t *axis)
+{
+    axis->coordinate += axis->quotient;
+    axis->error += axis->remainder;
+    if (axis->error >= axis->divisor) {
+        axis->error -= axis->divisor;
+        ++axis->coordinate;
+    }
+}
+
+static uint8_t sample_gray8_nearest(
+    const esp32_mquickjs_bitmap_view_t *source,
+    const esp32_mquickjs_bitmap_transform_options_t *options,
+    uint32_t rotated_width,
+    uint32_t rotated_height,
+    uint32_t rotated_x,
+    uint32_t rotated_y)
+{
+    uint32_t source_x;
+    uint32_t source_y;
+
+    if (options->flip_x) {
+        rotated_x = rotated_width - 1U - rotated_x;
+    }
+    if (options->flip_y) {
+        rotated_y = rotated_height - 1U - rotated_y;
+    }
+    inverse_rotate(options->rotation, options->source_width,
+                   options->source_height, rotated_x, rotated_y,
+                   &source_x, &source_y);
+    return source->data[
+        (size_t)(options->source_y + source_y) * source->stride +
+        options->source_x + source_x];
+}
+
+static esp32_mquickjs_bitmap_transform_result_t
+transform_gray8_to_page_mono1_nearest(
+    const esp32_mquickjs_bitmap_view_t *source,
+    const esp32_mquickjs_bitmap_target_t *target,
+    const esp32_mquickjs_bitmap_transform_options_t *options,
+    int32_t clipped_x0,
+    int32_t clipped_y0,
+    int32_t clipped_x1,
+    int32_t clipped_y1,
+    uint32_t rotated_width,
+    uint32_t rotated_height,
+    uint8_t minimum,
+    uint8_t maximum,
+    esp32_mquickjs_bitmap_cancel_fn_t cancel,
+    void *cancel_opaque,
+    uint32_t *out_rows_completed,
+    esp32_mquickjs_bitmap_dirty_rect_t *out_dirty)
+{
+    int32_t y;
+
+    for (y = clipped_y0; y < clipped_y1; ++y) {
+        uint32_t relative_y = (uint32_t)(
+            (int64_t)y - options->destination_y);
+        nearest_axis_t y_axis = nearest_axis_start(
+            relative_y, rotated_height, options->destination_height);
+        uint32_t relative_x = (uint32_t)(
+            (int64_t)clipped_x0 - options->destination_x);
+        nearest_axis_t x_axis = nearest_axis_start(
+            relative_x, rotated_width, options->destination_width);
+        int32_t x;
+
+        if (cancel != NULL && cancel(cancel_opaque)) {
+            return ESP32_MQUICKJS_BITMAP_TRANSFORM_CANCELLED;
+        }
+        for (x = clipped_x0; x < clipped_x1; ++x) {
+            uint8_t gray = sample_gray8_nearest(
+                source, options, rotated_width, rotated_height,
+                x_axis.coordinate, y_axis.coordinate);
+            size_t offset = ((size_t)(uint32_t)y >> 3U) * target->stride +
+                            (uint32_t)x;
+            uint8_t bit = (uint8_t)((uint32_t)y & 7U);
+            uint8_t mask;
+
+            if (options->normalize) {
+                gray = normalize_gray(gray, minimum, maximum);
+            }
+            if (target->bit_order == ESP32_MQUICKJS_BITMAP_BIT_ORDER_MSB) {
+                bit = (uint8_t)(7U - bit);
+            }
+            mask = (uint8_t)(1U << bit);
+            if (dither_enabled(gray, options->dither, options->threshold,
+                               (uint32_t)x, (uint32_t)y)) {
+                target->data[offset] |= mask;
+            } else {
+                target->data[offset] &= (uint8_t)~mask;
+            }
+            nearest_axis_advance(&x_axis);
+        }
+        if (out_rows_completed != NULL) {
+            ++*out_rows_completed;
+        }
+    }
+    if (out_dirty != NULL) {
+        out_dirty->x = clipped_x0;
+        out_dirty->y = clipped_y0;
+        out_dirty->width = (uint32_t)(clipped_x1 - clipped_x0);
+        out_dirty->height = (uint32_t)(clipped_y1 - clipped_y0);
+    }
+    return ESP32_MQUICKJS_BITMAP_TRANSFORM_OK;
 }
 
 static uint8_t normalize_gray(uint8_t gray,
@@ -583,6 +748,17 @@ esp32_mquickjs_bitmap_transform_result_t esp32_mquickjs_bitmap_transform(
                                     &minimum, &maximum)) {
             return ESP32_MQUICKJS_BITMAP_TRANSFORM_CANCELLED;
         }
+    }
+    if (source->format == ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8 &&
+        source->layout == ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR &&
+        target->format == ESP32_MQUICKJS_BITMAP_FORMAT_MONO1 &&
+        target->layout == ESP32_MQUICKJS_BITMAP_LAYOUT_PAGE_Y8 &&
+        options->filter == ESP32_MQUICKJS_BITMAP_FILTER_NEAREST) {
+        return transform_gray8_to_page_mono1_nearest(
+            source, target, options, clipped_x0, clipped_y0,
+            clipped_x1, clipped_y1, rotated_width, rotated_height,
+            minimum, maximum, cancel, cancel_opaque, out_rows_completed,
+            out_dirty);
     }
     for (y = clipped_y0; y < clipped_y1; ++y) {
         uint32_t relative_y;

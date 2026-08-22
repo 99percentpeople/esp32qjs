@@ -35,7 +35,8 @@ typedef struct {
     bool busy;
     bool release_pending;
     i2c_master_bus_handle_t bus_handle;
-    i2c_master_dev_handle_t cleanup_device_handle;
+    i2c_master_dev_handle_t cached_device_handle;
+    uint16_t cached_device_address;
     esp32_mquickjs_peripheral_lease_t lease;
 } esp32_mquickjs_i2c_slot_t;
 
@@ -158,12 +159,13 @@ static esp_err_t i2c_cleanup_slot(esp32_mquickjs_i2c_slot_t *slot)
     }
 
     bus_id = slot->bus_id;
-    if (slot->cleanup_device_handle != NULL) {
-        err = i2c_master_bus_rm_device(slot->cleanup_device_handle);
+    if (slot->cached_device_handle != NULL) {
+        err = i2c_master_bus_rm_device(slot->cached_device_handle);
         if (err != ESP_OK) {
             return err;
         }
-        slot->cleanup_device_handle = NULL;
+        slot->cached_device_handle = NULL;
+        slot->cached_device_address = 0;
     }
     if (slot->bus_handle != NULL) {
         err = i2c_del_master_bus(slot->bus_handle);
@@ -333,14 +335,29 @@ static JSValue js_bytes_to_array(JSContext *ctx, const uint8_t *bytes, size_t le
     return JS_PopGCRef(ctx, &array_ref);
 }
 
-static esp_err_t i2c_with_device(const esp32_mquickjs_i2c_slot_t *slot,
-                                 uint16_t address,
-                                 i2c_master_dev_handle_t *out_handle)
+static esp_err_t i2c_get_cached_device(esp32_mquickjs_i2c_slot_t *slot,
+                                       uint16_t address,
+                                       i2c_master_dev_handle_t *out_handle)
 {
     i2c_device_config_t device_config = {0};
+    esp_err_t err;
 
-    if (slot == NULL || !slot->allocated || slot->bus_handle == NULL) {
+    if (slot == NULL || !slot->allocated || slot->bus_handle == NULL ||
+        out_handle == NULL) {
         return ESP_ERR_INVALID_STATE;
+    }
+    if (slot->cached_device_handle != NULL &&
+        slot->cached_device_address == address) {
+        *out_handle = slot->cached_device_handle;
+        return ESP_OK;
+    }
+    if (slot->cached_device_handle != NULL) {
+        err = i2c_master_bus_rm_device(slot->cached_device_handle);
+        if (err != ESP_OK) {
+            return err;
+        }
+        slot->cached_device_handle = NULL;
+        slot->cached_device_address = 0;
     }
 
     device_config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
@@ -348,7 +365,14 @@ static esp_err_t i2c_with_device(const esp32_mquickjs_i2c_slot_t *slot,
     device_config.scl_speed_hz = slot->freq_hz;
     device_config.scl_wait_us = slot->timeout_ms * 1000U;
     device_config.flags.disable_ack_check = 0;
-    return i2c_master_bus_add_device(slot->bus_handle, &device_config, out_handle);
+    err = i2c_master_bus_add_device(slot->bus_handle, &device_config,
+                                    &slot->cached_device_handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+    slot->cached_device_address = address;
+    *out_handle = slot->cached_device_handle;
+    return ESP_OK;
 }
 
 static JSValue i2c_make_write_chunks_stats(JSContext *ctx,
@@ -597,6 +621,7 @@ typedef enum {
     I2C_FUTURE_SCAN,
     I2C_FUTURE_WRITE,
     I2C_FUTURE_WRITE_CHUNKS,
+    I2C_FUTURE_WRITE_SEGMENTS,
     I2C_FUTURE_READ,
     I2C_FUTURE_WRITE_READ,
 } i2c_future_kind_t;
@@ -612,8 +637,10 @@ struct esp32_mquickjs_future_driver_state {
     uint32_t timeout_ms;
     uint32_t chunk_count;
     uint32_t completed_chunks;
+    uint32_t segment_count;
     uint32_t scan_count;
     uint32_t *chunk_lengths;
+    i2c_master_transmit_multi_buffer_info_t *segment_buffers;
     uint8_t scan_addresses[0x78 - 0x03];
     uint8_t *write_data;
     size_t write_length;
@@ -660,6 +687,7 @@ static void i2c_future_release_prepare_state(
     }
     i2c_future_release_owner(state);
     heap_caps_free(state->chunk_lengths);
+    heap_caps_free(state->segment_buffers);
     heap_caps_free(state->write_data);
     heap_caps_free(state->read_data);
     heap_caps_free(state);
@@ -690,12 +718,6 @@ static esp32_mquickjs_future_driver_state_t *i2c_future_allocate(
     if (slot->busy) {
         heap_caps_free(state);
         JS_ThrowInternalError(ctx, "I2C bus is busy");
-        return NULL;
-    }
-    if (slot->cleanup_device_handle != NULL) {
-        heap_caps_free(state);
-        JS_ThrowInternalError(ctx,
-                              "I2C bus device cleanup failed; close the bus before reuse");
         return NULL;
     }
     state->kind = kind;
@@ -791,11 +813,13 @@ static bool i2c_write_future_prepare(
     return true;
 }
 
-static bool i2c_write_chunks_future_prepare(
+static bool i2c_write_sources_future_prepare(
     JSContext *ctx,
     JSGCRef *this_ref,
     int argc,
     JSGCRef *argv,
+    i2c_future_kind_t kind,
+    const char *api_name,
     esp32_mquickjs_future_driver_state_t **out_state)
 {
     esp32_mquickjs_future_driver_state_t *state;
@@ -805,21 +829,20 @@ static bool i2c_write_chunks_future_prepare(
 
     if (out_state == NULL || argc != 2 ||
         !js_value_to_i2c_address(ctx, argv[0].val, &(uint16_t){0})) {
-        JS_ThrowTypeError(ctx,
-                          "I2CBus.writeChunks(addr, chunks) expects a 7-bit address and byte-source chunks");
+        JS_ThrowTypeError(ctx, "%s expects a 7-bit address and byte-source chunks",
+                          api_name);
         return false;
     }
-    state = i2c_future_allocate(ctx, this_ref->val, I2C_FUTURE_WRITE_CHUNKS);
+    state = i2c_future_allocate(ctx, this_ref->val, kind);
     if (state == NULL) {
         return false;
     }
     (void)js_value_to_i2c_address(ctx, argv[0].val, &state->address);
     if (!esp32_mquickjs_get_byte_source_array_length(
-            ctx, argv[1].val, "I2CBus.writeChunks(addr, chunks)",
+            ctx, argv[1].val, api_name,
             &state->chunk_count, &error)) {
         if (JS_IsUndefined(error)) {
-            JS_ThrowTypeError(ctx,
-                              "I2CBus.writeChunks(addr, chunks) expects an array-like object");
+            JS_ThrowTypeError(ctx, "%s expects an array-like object", api_name);
         }
         i2c_future_release_prepare_state(state);
         return false;
@@ -839,7 +862,7 @@ static bool i2c_write_chunks_future_prepare(
         uint8_t *grown;
 
         if (!esp32_mquickjs_get_byte_source_chunk(
-                ctx, argv[1].val, index, "I2CBus.writeChunks(addr, chunks)",
+                ctx, argv[1].val, index, api_name,
                 &chunk, &error)) {
             i2c_future_release_prepare_state(state);
             return false;
@@ -847,7 +870,7 @@ static bool i2c_write_chunks_future_prepare(
         if (chunk.source.length > SIZE_MAX - total) {
             esp32_mquickjs_release_byte_source_chunk(ctx, &chunk);
             i2c_future_release_prepare_state(state);
-            JS_ThrowRangeError(ctx, "I2CBus.writeChunks() byte length overflow");
+            JS_ThrowRangeError(ctx, "%s byte length overflow", api_name);
             return false;
         }
         state->chunk_lengths[index] = (uint32_t)chunk.source.length;
@@ -870,8 +893,48 @@ static bool i2c_write_chunks_future_prepare(
         esp32_mquickjs_release_byte_source_chunk(ctx, &chunk);
     }
     state->write_length = total;
+    if (kind == I2C_FUTURE_WRITE_SEGMENTS && state->chunk_count > 0) {
+        size_t offset = 0;
+
+        state->segment_buffers = heap_caps_calloc(
+            state->chunk_count, sizeof(*state->segment_buffers), MALLOC_CAP_8BIT);
+        if (state->segment_buffers == NULL) {
+            i2c_future_release_prepare_state(state);
+            JS_ThrowOutOfMemory(ctx);
+            return false;
+        }
+        for (index = 0; index < state->chunk_count; ++index) {
+            uint32_t length = state->chunk_lengths[index];
+
+            if (length > 0) {
+                state->segment_buffers[state->segment_count].write_buffer =
+                    state->write_data + offset;
+                state->segment_buffers[state->segment_count].buffer_size = length;
+                ++state->segment_count;
+            }
+            offset += length;
+        }
+    }
     *out_state = state;
     return true;
+}
+
+static bool i2c_write_chunks_future_prepare(
+    JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    return i2c_write_sources_future_prepare(
+        ctx, this_ref, argc, argv, I2C_FUTURE_WRITE_CHUNKS,
+        "I2CBus.writeChunks(addr, chunks)", out_state);
+}
+
+static bool i2c_write_segments_future_prepare(
+    JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    return i2c_write_sources_future_prepare(
+        ctx, this_ref, argc, argv, I2C_FUTURE_WRITE_SEGMENTS,
+        "I2CBus.writeSegments(addr, segments)", out_state);
 }
 
 static bool i2c_read_future_prepare(
@@ -980,7 +1043,7 @@ static void i2c_future_worker(void *opaque)
         state->completed = true;
         return;
     }
-    state->err = i2c_with_device(slot, state->address, &device);
+    state->err = i2c_get_cached_device(slot, state->address, &device);
     if (state->err != ESP_OK) {
         state->completed = true;
         return;
@@ -1010,6 +1073,15 @@ static void i2c_future_worker(void *opaque)
             state->completed_chunks++;
             offset += length;
         }
+    } else if (state->kind == I2C_FUTURE_WRITE_SEGMENTS) {
+        state->err = state->segment_count == 0
+                         ? ESP_OK
+                         : i2c_master_multi_buffer_transmit(
+                               device, state->segment_buffers,
+                               state->segment_count, (int)state->timeout_ms);
+        if (state->err == ESP_OK) {
+            state->completed_chunks = state->segment_count;
+        }
     } else if (state->kind == I2C_FUTURE_READ) {
         state->err = i2c_master_receive(device,
                                         state->read_data,
@@ -1022,14 +1094,6 @@ static void i2c_future_worker(void *opaque)
                                                  state->read_data,
                                                  state->read_length,
                                                  (int)state->timeout_ms);
-    }
-    {
-        esp_err_t remove_err = i2c_master_bus_rm_device(device);
-
-        if (remove_err != ESP_OK) {
-            slot->cleanup_device_handle = device;
-            state->err = remove_err;
-        }
     }
     state->total_us = (uint64_t)(esp_timer_get_time() - started_us);
     state->completed = true;
@@ -1099,7 +1163,8 @@ static JSValue i2c_future_finish(JSContext *ctx,
     if (state->kind == I2C_FUTURE_WRITE) {
         return JS_NewInt32(ctx, (int32_t)state->write_length);
     }
-    if (state->kind == I2C_FUTURE_WRITE_CHUNKS) {
+    if (state->kind == I2C_FUTURE_WRITE_CHUNKS ||
+        state->kind == I2C_FUTURE_WRITE_SEGMENTS) {
         return i2c_make_write_chunks_stats(ctx,
                                            state->completed_chunks,
                                            state->write_length,
@@ -1146,6 +1211,7 @@ static uint32_t i2c_future_timeout_ms(
 I2C_FUTURE_DRIVER(s_i2c_scan_driver, i2c_scan_future_prepare);
 I2C_FUTURE_DRIVER(s_i2c_write_driver, i2c_write_future_prepare);
 I2C_FUTURE_DRIVER(s_i2c_write_chunks_driver, i2c_write_chunks_future_prepare);
+I2C_FUTURE_DRIVER(s_i2c_write_segments_driver, i2c_write_segments_future_prepare);
 I2C_FUTURE_DRIVER(s_i2c_read_driver, i2c_read_future_prepare);
 I2C_FUTURE_DRIVER(s_i2c_write_read_driver, i2c_write_read_future_prepare);
 
@@ -1181,11 +1247,14 @@ static JSValue i2c_future_call_and_wait(JSContext *ctx,
 static bool i2c_register_future_drivers(JSContext *ctx,
                                         esp32_mquickjs_runtime_t *runtime)
 {
-    static const char *names[] = { "scan", "write", "writeChunks", "read", "writeRead" };
+    static const char *names[] = {
+        "scan", "write", "writeChunks", "writeSegments", "read", "writeRead"
+    };
     static const esp32_mquickjs_future_driver_t *drivers[] = {
         &s_i2c_scan_driver,
         &s_i2c_write_driver,
         &s_i2c_write_chunks_driver,
+        &s_i2c_write_segments_driver,
         &s_i2c_read_driver,
         &s_i2c_write_read_driver,
     };
@@ -1227,6 +1296,12 @@ JSValue js_i2c_bus_write(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
 JSValue js_i2c_bus_write_chunks(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     return i2c_future_call_and_wait(ctx, *this_val, "writeChunks", argc, argv);
+}
+
+JSValue js_i2c_bus_write_segments(JSContext *ctx, JSValue *this_val,
+                                  int argc, JSValue *argv)
+{
+    return i2c_future_call_and_wait(ctx, *this_val, "writeSegments", argc, argv);
 }
 
 JSValue js_i2c_bus_read(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

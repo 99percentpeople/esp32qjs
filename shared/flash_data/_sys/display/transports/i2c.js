@@ -140,13 +140,26 @@
 
   I2CTransport.prototype.write = function (data) {
     var bus = this.requireOpen("I2CTransport.write()");
-    var payload = bytesWithPrefix(this.dataPrefix, data);
+    var body = typeof data === "number" ? [data] : data;
+    var byteLength = body && typeof body.byteLength === "number"
+      ? body.byteLength : body.length;
+    var payload = null;
     var started = nowUs();
-    var result = bus.write(this.address, payload);
+    var result;
+
+    if (typeof bus.writeSegments === "function") {
+      result = bus.writeSegments(this.address, [[this.dataPrefix & 0xff], body]);
+    } else {
+      if (body && typeof body.toArray === "function") {
+        body = body.toArray();
+      }
+      payload = bytesWithPrefix(this.dataPrefix, body);
+      result = bus.write(this.address, payload);
+    }
 
     this._stats.writes += 1;
     this._stats.chunks += 1;
-    this._stats.bytes += payload.length;
+    this._stats.bytes += byteLength + 1;
     if (started !== 0) {
       this._stats.totalUs += nowUs() - started;
     }

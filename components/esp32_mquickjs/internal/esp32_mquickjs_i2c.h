@@ -15,6 +15,7 @@ JSValue js_i2c_bus_status(JSContext *ctx, JSValue *this_val, int argc, JSValue *
 JSValue js_i2c_bus_scan(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_i2c_bus_write(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_i2c_bus_write_chunks(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_i2c_bus_write_segments(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_i2c_bus_read(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_i2c_bus_writeRead(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 

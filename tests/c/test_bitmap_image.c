@@ -414,6 +414,98 @@ static void test_bayer_anchor_and_clipping(void)
            dirty.height == 4);
 }
 
+static bool mono_pixel(const uint8_t *pixels,
+                       uint32_t stride,
+                       esp32_mquickjs_bitmap_layout_t layout,
+                       esp32_mquickjs_bitmap_bit_order_t bit_order,
+                       uint32_t x,
+                       uint32_t y)
+{
+    size_t offset;
+    uint8_t bit;
+
+    if (layout == ESP32_MQUICKJS_BITMAP_LAYOUT_PAGE_Y8) {
+        offset = ((size_t)y >> 3U) * stride + x;
+        bit = (uint8_t)(y & 7U);
+    } else {
+        offset = (size_t)y * stride + (x >> 3U);
+        bit = (uint8_t)(x & 7U);
+    }
+    if (bit_order == ESP32_MQUICKJS_BITMAP_BIT_ORDER_MSB) {
+        bit = (uint8_t)(7U - bit);
+    }
+    return ((pixels[offset] >> bit) & 1U) != 0;
+}
+
+static void test_gray8_to_page_mono1_fast_path(void)
+{
+    static const uint8_t pixels[] = {
+        0, 31, 63, 95, 127, 159, 191,
+        223, 255, 17, 49, 81, 113, 145,
+        177, 209, 241, 7, 39, 71, 103,
+        135, 167, 199, 231, 23, 55, 87,
+        119, 151, 183, 215, 247, 15, 47,
+    };
+    static const uint16_t rotations[] = {0, 90, 180, 270};
+    esp32_mquickjs_bitmap_view_t source =
+        gray_source(pixels, sizeof(pixels), 7, 5, 7);
+    size_t rotation_index;
+    unsigned variant;
+
+    for (rotation_index = 0;
+         rotation_index < sizeof(rotations) / sizeof(rotations[0]);
+         ++rotation_index) {
+        for (variant = 0; variant < 8; ++variant) {
+            uint8_t linear[27];
+            uint8_t page[27];
+            esp32_mquickjs_bitmap_target_t linear_target;
+            esp32_mquickjs_bitmap_target_t page_target;
+            esp32_mquickjs_bitmap_transform_options_t options =
+                default_options(7, 5, 9, 9);
+            uint32_t y;
+
+            memset(linear, 0, sizeof(linear));
+            memset(page, 0, sizeof(page));
+            linear_target = target_for(
+                linear, sizeof(linear), 9, 9, 3,
+                ESP32_MQUICKJS_BITMAP_FORMAT_MONO1,
+                ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR);
+            page_target = target_for(
+                page, sizeof(page), 9, 9, 13,
+                ESP32_MQUICKJS_BITMAP_FORMAT_MONO1,
+                ESP32_MQUICKJS_BITMAP_LAYOUT_PAGE_Y8);
+            options.rotation = rotations[rotation_index];
+            options.flip_x = (variant & 1U) != 0;
+            options.flip_y = (variant & 2U) != 0;
+            options.normalize = (variant & 4U) != 0;
+            options.dither = (variant & 1U) != 0
+                                 ? ESP32_MQUICKJS_BITMAP_DITHER_BAYER_4X4
+                                 : ESP32_MQUICKJS_BITMAP_DITHER_NONE;
+            options.destination_x = -1;
+            options.destination_y = 1;
+            linear_target.bit_order = (variant & 2U) != 0
+                                          ? ESP32_MQUICKJS_BITMAP_BIT_ORDER_MSB
+                                          : ESP32_MQUICKJS_BITMAP_BIT_ORDER_LSB;
+            page_target.bit_order = linear_target.bit_order;
+
+            run_ok(&source, &linear_target, &options);
+            run_ok(&source, &page_target, &options);
+            for (y = 0; y < 9; ++y) {
+                uint32_t x;
+
+                for (x = 0; x < 9; ++x) {
+                    assert(mono_pixel(linear, linear_target.stride,
+                                      linear_target.layout,
+                                      linear_target.bit_order, x, y) ==
+                           mono_pixel(page, page_target.stride,
+                                      page_target.layout,
+                                      page_target.bit_order, x, y));
+                }
+            }
+        }
+    }
+}
+
 typedef struct {
     unsigned checks;
 } cancel_state_t;
@@ -469,6 +561,7 @@ int main(void)
     test_all_rotations_and_flips();
     test_crop_resize_bilinear_and_normalize();
     test_bayer_anchor_and_clipping();
+    test_gray8_to_page_mono1_fast_path();
     test_cancellation_and_invalid_memory_bounds();
     puts("bitmap image tests passed");
     return 0;

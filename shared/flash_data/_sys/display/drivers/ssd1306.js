@@ -159,10 +159,14 @@
         0x21, rect.x, rect.x + rect.width - 1,
         0x22, page0, page1
       ]);
-      payload = frame.readRect(rect.x, y0, rect.width, y1 - y0).toArray();
-      this.transport.write(payload);
-      pixels += rect.width * (y1 - y0);
-      bytes += payload.length;
+      payload = frame.readRect(rect.x, y0, rect.width, y1 - y0);
+      try {
+        this.transport.write(payload);
+        pixels += rect.width * (y1 - y0);
+        bytes += payload.byteLength;
+      } finally {
+        payload.close();
+      }
     }
     if (started !== 0) {
       totalUs = nowUs() - started;

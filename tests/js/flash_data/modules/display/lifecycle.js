@@ -13,6 +13,7 @@ test("display/lifecycle", function () {
   var failPresent = false;
   var borrowedCloseCount = 0;
   var borrowedWrites = 0;
+  var borrowedSegments = 0;
   var borrowedBus;
   var borrowedTransport;
   var failedOpenCloseCount = 0;
@@ -149,6 +150,11 @@ test("display/lifecycle", function () {
       borrowedWrites += 1;
       return { chunks: chunks.length, bytes: chunks.length };
     },
+    writeSegments: function (address, segments) {
+      borrowedWrites += 1;
+      borrowedSegments = segments.length;
+      return { chunks: segments.length, bytes: 2 };
+    },
     close: function () {
       borrowedCloseCount += 1;
       return true;
@@ -162,6 +168,8 @@ test("display/lifecycle", function () {
   borrowedTransport.write([0]);
   borrowedTransport.close();
   test.equal(borrowedWrites, 2, "borrowed I2C transport should perform framed writes");
+  test.equal(borrowedSegments, 2,
+    "I2C data writes should keep the prefix and payload as native segments");
   test.equal(borrowedCloseCount, 0, "transport close should preserve a borrowed bus");
 
   test.equal(screen.close(), true, "close should release the display");

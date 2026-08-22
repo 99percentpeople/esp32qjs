@@ -53,6 +53,21 @@ class DisplayArchitectureTests(SourceContractTestCase):
         for name in expected:
             self.assertTrue((DISPLAY_DIR / name).is_file(), name)
 
+    def test_ssd1306_keeps_frame_bytes_native_through_i2c(self):
+        driver = (DISPLAY_DIR / "drivers" / "ssd1306.js").read_text(
+            encoding="utf-8"
+        )
+        transport = (DISPLAY_DIR / "transports" / "i2c.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("payload = frame.readRect", driver)
+        self.assertIn("this.transport.write(payload)", driver)
+        self.assertIn("payload.close()", driver)
+        self.assertNotIn("frame.readRect(rect.x, y0, rect.width, y1 - y0).toArray()", driver)
+        self.assertIn("bus.writeSegments", transport)
+        self.assertIn("[[this.dataPrefix & 0xff], body]", transport)
+
 
 if __name__ == "__main__":
     unittest.main()

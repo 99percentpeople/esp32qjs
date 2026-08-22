@@ -125,6 +125,23 @@ class TransportArchitectureTests(SourceContractTestCase):
             self.assertNotIn("JS_Call(", text, source)
             self.assertNotIn("JSGCRef callback", text, source)
 
+    def test_i2c_reuses_the_active_address_handle(self):
+        source = (
+            MQUICKJS / "src" / "modules" / "i2c" / "esp32_mquickjs_i2c.c"
+        ).read_text(encoding="utf-8")
+        worker_start = source.index("static void i2c_future_worker(")
+        worker_end = source.index("\nstatic bool i2c_future_start(", worker_start)
+        worker = source[worker_start:worker_end]
+
+        self.assertIn("cached_device_handle", source)
+        self.assertIn("cached_device_address", source)
+        self.assertIn("i2c_get_cached_device", worker)
+        self.assertNotIn("i2c_master_bus_add_device", worker)
+        self.assertNotIn("i2c_master_bus_rm_device", worker)
+        self.assertIn(
+            "i2c_master_bus_rm_device(slot->cached_device_handle)", source
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

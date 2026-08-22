@@ -620,6 +620,7 @@ static const JSPropDef js_i2c_bus_proto[] = {
     JS_CFUNC_DEF("scan", 0, js_i2c_bus_scan),
     JS_CFUNC_DEF("write", 2, js_i2c_bus_write),
     JS_CFUNC_DEF("writeChunks", 2, js_i2c_bus_write_chunks),
+    JS_CFUNC_DEF("writeSegments", 2, js_i2c_bus_write_segments),
     JS_CFUNC_DEF("read", 2, js_i2c_bus_read),
     JS_CFUNC_DEF("writeRead", 3, js_i2c_bus_writeRead),
     JS_PROP_END,
