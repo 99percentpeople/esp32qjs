@@ -34,6 +34,8 @@ set(ESP32QJS_SHARED_FLASH_DATA_DIR "${CMAKE_SOURCE_DIR}/shared/flash_data" CACHE
     "Shared files copied into every application LittleFS image")
 set(ESP32QJS_APP_FLASH_DATA_DIR "${ESP32QJS_APP_PROFILE_DIR}/flash_data" CACHE PATH
     "Selected application files overlaid onto the LittleFS image")
+set(ESP32QJS_BOARD_FLASH_DATA_DIR "" CACHE PATH
+    "Optional board support files overlaid onto the LittleFS image")
 set(ESP32QJS_FLASH_DATA_DIR "" CACHE PATH
     "Optional LittleFS source override (used by tests and compatibility workflows)")
 set(ESP32QJS_FLASH_DATA_INCLUDE_SHARED OFF CACHE BOOL
@@ -50,6 +52,7 @@ set(_esp32qjs_flash_data_files)
 foreach(_esp32qjs_flash_data_dir
         "${ESP32QJS_SHARED_FLASH_DATA_DIR}"
         "${ESP32QJS_APP_FLASH_DATA_DIR}"
+        "${ESP32QJS_BOARD_FLASH_DATA_DIR}"
         "${ESP32QJS_FLASH_DATA_DIR}")
     if(IS_DIRECTORY "${_esp32qjs_flash_data_dir}")
         file(GLOB_RECURSE _esp32qjs_flash_data_dir_files CONFIGURE_DEPENDS

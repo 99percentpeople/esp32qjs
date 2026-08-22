@@ -50,6 +50,14 @@ else()
          DESTINATION "${_esp32qjs_effective_flash_data_dir}")
     file(COPY "${ESP32QJS_APP_FLASH_DATA_DIR}/"
          DESTINATION "${_esp32qjs_effective_flash_data_dir}")
+    if(NOT "${ESP32QJS_BOARD_FLASH_DATA_DIR}" STREQUAL "")
+        if(NOT IS_DIRECTORY "${ESP32QJS_BOARD_FLASH_DATA_DIR}")
+            message(FATAL_ERROR
+                "ESP32QJS_BOARD_FLASH_DATA_DIR does not exist: ${ESP32QJS_BOARD_FLASH_DATA_DIR}")
+        endif()
+        file(COPY "${ESP32QJS_BOARD_FLASH_DATA_DIR}/"
+             DESTINATION "${_esp32qjs_effective_flash_data_dir}")
+    endif()
 endif()
 
 set(_esp32qjs_startup_manifest

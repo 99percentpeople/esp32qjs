@@ -27,10 +27,22 @@ class DisplayArchitectureTests(SourceContractTestCase):
             self.assertIn("display.drivers.register", source)
             self.assertIn("prototype.present", source)
 
-    def test_wlk_module_is_a_profile_not_driver_alias(self):
-        source = (DISPLAY_DIR / "profiles" / "wlk1501spi8p.js").read_text(
-            encoding="utf-8"
+    def test_shared_display_tree_contains_no_board_profiles(self):
+        self.assertFalse((DISPLAY_DIR / "profiles").exists())
+        for name in ("wlk1501spi8p.js", "m5sticks3.js"):
+            self.assertFalse((DISPLAY_DIR / name).exists(), name)
+        all_js = (DISPLAY_DIR / "all.js").read_text(encoding="utf-8")
+        self.assertIn('load("_sys/display/ssd1306.js")', all_js)
+        self.assertIn('load("_sys/display/st7789.js")', all_js)
+        self.assertNotIn("wlk1501spi8p", all_js)
+        self.assertNotIn("m5sticks3", all_js)
+
+    def test_demo_app_overlays_its_own_board_profile(self):
+        profile = (
+            ROOT / "apps" / "demo" / "flash_data" / "_sys" / "display"
+            / "profiles" / "wlk1501spi8p.js"
         )
+        source = profile.read_text(encoding="utf-8")
         self.assertIn('display.profiles.register("wlk1501spi8p"', source)
         self.assertNotIn('display.drivers.register("wlk1501spi8p"', source)
 
@@ -47,7 +59,6 @@ class DisplayArchitectureTests(SourceContractTestCase):
         expected = (
             "ssd1306.js",
             "st7789.js",
-            "wlk1501spi8p.js",
             "all.js",
         )
         for name in expected:

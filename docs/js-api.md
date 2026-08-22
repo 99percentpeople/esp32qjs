@@ -7,7 +7,7 @@ This document covers APIs implemented in JavaScript on top of the built-in C hos
 Load the entry point for the panel in use, then load any application-owned UI:
 
 ```js
-framework.load("display/wlk1501spi8p.js");
+framework.load("display/st7789.js");
 load("ui.js");
 ```
 
@@ -15,11 +15,15 @@ load("ui.js");
 ship `_sys/ui`; layout, controls, and rendering policy are application code.
 
 `_sys/display.js` loads only the display facade, surface, fonts, and registries.
-Use `_sys/display/ssd1306.js`, `_sys/display/st7789.js`, or
-`_sys/display/wlk1501spi8p.js` to load one hardware stack, and
-`_sys/display/all.js` only when every built-in is needed. An application entry
-point may do this from `/littlefs/index.js`; the default `minimal` app
-intentionally loads nothing.
+Use `_sys/display/ssd1306.js` or `_sys/display/st7789.js` to load one hardware
+stack, and `_sys/display/all.js` only when every built-in is needed. An
+application entry point may do this from `/littlefs/index.js`; the default
+`minimal` app intentionally loads nothing.
+
+Development-board profiles are not framework content. They are built as board
+packs on the host (under `web/backend/boards/<board-model>/`) and overlaid onto
+the LittleFS image through `ESP32QJS_BOARD_FLASH_DATA_DIR` at build time; see
+[Board Profiles](#board-profiles).
 
 ## `display` Helpers
 
@@ -41,8 +45,8 @@ Display facade -> Surface -> bitmap
 - `display.drivers`
   Registry for panel-controller drivers. Built-ins are `ssd1306` and `st7789`.
 - `display.profiles`
-  Registry for complete hardware presets. `wlk1501spi8p` is a profile, not a
-  panel driver.
+  Registry for complete hardware presets. Board profiles are overlays supplied
+  by board packs or application flash data, not framework content.
 - `display.create(driver, options?)`
   Create a `Display` without opening panel hardware. Drawing is allowed before
   `open()`.
@@ -130,27 +134,53 @@ oled.drawRect(0, 10, 64, 18, display.mono1(1));
 oled.present();
 ```
 
-### WLK1501SPI8P Profile
+### Board Profiles
 
-```js
-load("_sys/display/wlk1501spi8p.js");
+A board profile registers a complete preset (transport wiring, panel driver,
+fixed offsets, board power sequencing) under `display.profiles`. The framework
+ships none; each comes from one of two overlay sources:
 
-var screen = display.profiles.open("wlk1501spi8p", {
-  transport: {
-    deviceOptions: { freqHz: 80000000 }
-  },
-  surface: {
-    chunkBytes: 32768
-  },
-  display: {
-    metrics: true
-  }
-});
-```
+- Host board packs under `web/backend/boards/<board-model>/` are injected into
+  the LittleFS image via `ESP32QJS_BOARD_FLASH_DATA_DIR` when the backend builds
+  firmware for a hardware template that sets `APP_BOARD_MODEL` and
+  `APP_DISPLAY_PROFILE`. The pack entry file lands at
+  `_sys/boards/<board-model>.js`:
 
-The profile creates the normal `SPI4Wire` transport, ST7789 driver, Surface,
-and Display objects. `screen.driver.name` remains `"st7789"`, while
-`screen.profileName` is `"wlk1501spi8p"`.
+  ```js
+  framework.load("boards/m5stack-sticks3.js");
+
+  var screen = display.profiles.open("m5sticks3", {
+    display: { metrics: true }
+  });
+  ```
+
+  `framework.load` keeps working after the agent switches `fs.setRoot()` to the
+  workspace because it always resolves against `/littlefs/_sys`.
+
+- Application overlays, such as the `wlk1501spi8p` profile carried by the
+  bundled `demo` app under `apps/demo/flash_data/_sys/display/`:
+
+  ```js
+  load("_sys/display/wlk1501spi8p.js");
+
+  var screen = display.profiles.open("wlk1501spi8p", {
+    transport: {
+      deviceOptions: { freqHz: 80000000 }
+    },
+    surface: {
+      chunkBytes: 32768
+    },
+    display: {
+      metrics: true
+    }
+  });
+  ```
+
+A profile creates the normal `SPI4Wire` transport, ST7789 driver, Surface, and
+Display objects. `screen.driver.name` remains `"st7789"`, while
+`screen.profileName` is the profile name. Opening the M5StickS3 profile first
+enables the LCD rail through the M5PM1 on the internal I2C bus; merely loading
+or creating a profile does not access hardware.
 
 ### Display Drawing and Presentation
 

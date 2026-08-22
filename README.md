@@ -154,10 +154,12 @@ in `.env` for a persistent direct path. Shared libraries remain available
 under `_sys/`, for example:
 
 ```js
-load("_sys/display/wlk1501spi8p.js");
+framework.load("display/st7789.js");
 ```
 
-The framework intentionally ships display primitives rather than a shared UI
+Development-board profiles are host-side board packs overlaid through
+`ESP32QJS_BOARD_FLASH_DATA_DIR`; the framework itself ships none. The
+framework intentionally ships display primitives rather than a shared UI
 framework. Application layout, controls, and rendering policy belong under
 `apps/<app>/flash_data/`.
 
