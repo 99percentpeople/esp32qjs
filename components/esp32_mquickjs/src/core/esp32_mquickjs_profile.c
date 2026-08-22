@@ -21,6 +21,33 @@ static const esp32_mquickjs_profile_entry_t s_profile_entries[] = {
     { NULL, { ESP32_MQUICKJS_PROFILE_VALUE_INTEGER, { .integer = 0 } } },
 };
 
+#define ESP32_MQUICKJS_PROFILE_ENTRY_COUNT \
+    ((sizeof(s_profile_entries) / sizeof(s_profile_entries[0])) - 1U)
+
+size_t esp32_mquickjs_profile_count(void)
+{
+    return ESP32_MQUICKJS_PROFILE_ENTRY_COUNT;
+}
+
+bool esp32_mquickjs_profile_get_at(size_t index,
+                                   const char **out_key,
+                                   esp32_mquickjs_profile_value_t *out_value)
+{
+    size_t current;
+
+    if (out_key == NULL || out_value == NULL) {
+        return false;
+    }
+    for (current = 0; s_profile_entries[current].key != NULL; ++current) {
+        if (current == index) {
+            *out_key = s_profile_entries[current].key;
+            *out_value = s_profile_entries[current].value;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool esp32_mquickjs_profile_get(const char *key,
                                 esp32_mquickjs_profile_value_t *out_value)
 {

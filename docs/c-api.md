@@ -1301,11 +1301,13 @@ if (ref) {
   1–64-byte reason and `delayMs` from 0 through 60000. The returned
   `{ action, reason, generation, requestedAtMs, dueAtMs }` value is an
   acceptance receipt, not completion proof. Only one request may be pending.
-- `sys.config(key)` reads one immutable hardware-profile constant. Registered
-  `ESP32QJS_*` values supply defaults to their matching framework driver;
-  application-owned keys should use an `APP_*` prefix. Missing keys return
-  `undefined`. Explicit driver options still take precedence over profile
-  constants, which in turn take precedence over safe Kconfig defaults.
+- `sys.config()` returns a fresh object containing every immutable value from
+  the selected hardware profile. Use it to inspect the complete configured
+  wiring without guessing constant names. `sys.config(key)` reads one value;
+  missing keys return `undefined`. Registered `ESP32QJS_*` values supply
+  defaults to matching framework drivers, while application-owned keys should
+  use an `APP_*` prefix. Explicit driver options still take precedence over
+  profile constants, which in turn take precedence over safe Kconfig defaults.
 - `sys.millis()`
   Return monotonic milliseconds from `esp_timer`.
 - `sys.micros()`

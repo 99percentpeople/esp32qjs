@@ -26,7 +26,7 @@ lifecycle. Peripheral operations remain in literal modules such as `gpio`,
   observation.
 - `sys.restartRuntime(options?)` restarts only the JavaScript runtime generation.
 - `sys.reboot(options?)` performs a full software reboot.
-- `sys.config(key)`, `millis()`, `micros()`, `freeHeap()`, `randomHex()`, and
+- `sys.config()`, `sys.config(key)`, `millis()`, `micros()`, `freeHeap()`, `randomHex()`, and
   `withTimeout()` remain lightweight operations. `freeHeap()` is explicitly the
   low-allocation convenience form of `sys.status.memory.default.freeBytes`.
 - All public sizes carry a `Bytes` suffix, frequencies carry a `Hz` suffix, and
@@ -478,10 +478,10 @@ Targeted inspection uses only the required branches:
 - `psram` always has one shape. An unavailable or uninitialized device returns
   `{ enabled: false, sizeBytes: 0, mode: "none" }`.
 
-Board wiring does not belong here. Applications read immutable profile values
-through `sys.config(key)` and use module constants such as
-`gpio.USER_LED_PIN`. The redesign removes `userLedPin` and
-`userLedActiveLow` from system information.
+Board wiring does not belong in system identity. Applications enumerate the
+selected immutable profile with `sys.config()`, read individual values through
+`sys.config(key)`, and use module constants such as `gpio.USER_LED_PIN`. The
+redesign removes `userLedPin` and `userLedActiveLow` from system information.
 
 ### Compiled Features
 

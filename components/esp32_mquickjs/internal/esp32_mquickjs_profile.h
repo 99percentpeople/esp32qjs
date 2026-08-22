@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 typedef enum {
@@ -20,6 +21,10 @@ typedef struct {
 
 bool esp32_mquickjs_profile_get(const char *key,
                                 esp32_mquickjs_profile_value_t *out_value);
+size_t esp32_mquickjs_profile_count(void);
+bool esp32_mquickjs_profile_get_at(size_t index,
+                                   const char **out_key,
+                                   esp32_mquickjs_profile_value_t *out_value);
 bool esp32_mquickjs_profile_get_int(const char *key, int32_t *out_value);
 bool esp32_mquickjs_profile_get_bool(const char *key, bool *out_value);
 int32_t esp32_mquickjs_profile_int_or(const char *key, int32_t fallback);

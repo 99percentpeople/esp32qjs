@@ -120,15 +120,65 @@ static bool esp32_hardware_id(char output[16])
     return true;
 }
 
+static JSValue sys_profile_js_value(JSContext *ctx,
+                                    const esp32_mquickjs_profile_value_t *value)
+{
+    switch (value->type) {
+    case ESP32_MQUICKJS_PROFILE_VALUE_INTEGER:
+        return JS_NewInt32(ctx, value->value.integer);
+    case ESP32_MQUICKJS_PROFILE_VALUE_BOOLEAN:
+        return JS_NewBool(value->value.boolean);
+    case ESP32_MQUICKJS_PROFILE_VALUE_STRING:
+        return JS_NewString(ctx,
+                            value->value.string != NULL ? value->value.string : "");
+    default:
+        return JS_ThrowInternalError(ctx, "hardware profile contains an unsupported value type");
+    }
+}
+
+static JSValue sys_profile_snapshot(JSContext *ctx)
+{
+    JSGCRef object_ref;
+    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    size_t count = esp32_mquickjs_profile_count();
+    size_t index;
+
+    *object = JS_NewObject(ctx);
+    if (JS_IsException(*object)) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_EXCEPTION;
+    }
+    for (index = 0; index < count; ++index) {
+        esp32_mquickjs_profile_value_t value;
+        const char *key;
+        JSValue property;
+
+        if (!esp32_mquickjs_profile_get_at(index, &key, &value)) {
+            JS_ThrowInternalError(ctx, "hardware profile enumeration failed");
+            JS_PopGCRef(ctx, &object_ref);
+            return JS_EXCEPTION;
+        }
+        property = sys_profile_js_value(ctx, &value);
+        if (JS_IsException(property) ||
+            !esp32_mquickjs_set_property_ref(ctx, object, key, property)) {
+            JS_PopGCRef(ctx, &object_ref);
+            return JS_EXCEPTION;
+        }
+    }
+    return JS_PopGCRef(ctx, &object_ref);
+}
+
 JSValue js_sys_config(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     esp32_mquickjs_profile_value_t value;
     JSCStringBuf key_buf;
     const char *key;
-    JSValue result;
 
     (void)this_val;
-    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
+    if (argc == 0) {
+        return sys_profile_snapshot(ctx);
+    }
+    if (!JS_IsString(ctx, argv[0])) {
         return JS_ThrowTypeError(ctx, "sys.config(key) expects a string key");
     }
     key = JS_ToCString(ctx, argv[0], &key_buf);
@@ -138,17 +188,7 @@ JSValue js_sys_config(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
     if (!esp32_mquickjs_profile_get(key, &value)) {
         return JS_UNDEFINED;
     }
-    switch (value.type) {
-    case ESP32_MQUICKJS_PROFILE_VALUE_INTEGER:
-        return JS_NewInt32(ctx, value.value.integer);
-    case ESP32_MQUICKJS_PROFILE_VALUE_BOOLEAN:
-        return JS_NewBool(value.value.boolean);
-    case ESP32_MQUICKJS_PROFILE_VALUE_STRING:
-        result = JS_NewString(ctx, value.value.string != NULL ? value.value.string : "");
-        return result;
-    default:
-        return JS_ThrowInternalError(ctx, "hardware profile contains an unsupported value type");
-    }
+    return sys_profile_js_value(ctx, &value);
 }
 
 static const char *sys_runtime_state_name(esp32_mquickjs_runtime_state_t state)

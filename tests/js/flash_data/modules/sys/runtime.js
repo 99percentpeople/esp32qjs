@@ -11,6 +11,11 @@ test("sys/runtime", function () {
   var resources = runtimeStatus.resources;
   var rtos = status.rtos;
   var taskSnapshot = sys.tasks({ limit: 2 });
+  var profile = sys.config();
+  var profileAgain = sys.config();
+  var profileCount = 0;
+  var profileKey;
+  var configKeyError = "";
   var millisBefore = sys.millis();
   var microsBefore = sys.micros();
   var heap = sys.freeHeap();
@@ -47,6 +52,16 @@ test("sys/runtime", function () {
     sys.randomHex(65);
   } catch (randomError) {
     randomLimitError = String(randomError);
+  }
+  for (profileKey in profile) {
+    profileCount++;
+    test.equal(profile[profileKey], sys.config(profileKey),
+      "enumerated profile values should match keyed lookup");
+  }
+  try {
+    sys.config(null);
+  } catch (profileKeyError) {
+    configKeyError = String(profileKeyError);
   }
   try {
     sys.tasks({ limit: 0 });
@@ -125,7 +140,18 @@ test("sys/runtime", function () {
   test.ok(typeof info.version.espIdf === "string" && info.version.espIdf.length > 0,
     "ESP-IDF version should be present");
   test.equal(sys.config("APP_TEST_MISSING"), undefined,
-    "sys.config() should return undefined for an unconfigured constant");
+    "sys.config(key) should return undefined for an unconfigured constant");
+  test.equal(typeof profile, "object",
+    "sys.config() without a key should return a profile snapshot");
+  test.ok(profile !== profileAgain,
+    "sys.config() should return a fresh profile snapshot");
+  test.ok(profileCount <= 64,
+    "sys.config() should honor the bounded hardware-profile size");
+  profile.APP_TEST_MISSING = 1;
+  test.equal(sys.config("APP_TEST_MISSING"), undefined,
+    "mutating a profile snapshot should not change the native registry");
+  test.ok(configKeyError.indexOf("string key") >= 0,
+    "sys.config(key) should reject a non-string key");
   test.ok(/^hw-[0-9a-f]{12}$/.test(info.hardware.hardwareId),
     "hardware ID should derive from the factory Base MAC");
   test.ok(typeof info.hardware.target === "string" && info.hardware.target.length > 0,

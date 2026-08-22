@@ -1347,6 +1347,8 @@ namespace ESP32QJS {
   interface SysModule {
     readonly info: SysInfo;
     readonly status: SysStatus;
+    /** Return a fresh snapshot of every immutable selected hardware-profile value. */
+    config(): { [key: string]: string | number | boolean };
     /**
      * Read an immutable value from the selected hardware profile. Returns
      * `undefined` when the key is not present.
