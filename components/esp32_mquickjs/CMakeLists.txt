@@ -237,6 +237,7 @@ set(ESP32_MQUICKJS_SRCS
     "src/core/esp32_mquickjs.c"
     "src/core/esp32_mquickjs_future.c"
     "src/core/esp32_mquickjs_event_queue.c"
+    "src/core/esp32_mquickjs_event_queue_drain.c"
     "src/core/esp32_mquickjs_byte_span.c"
     "src/core/esp32_mquickjs_byte_source.c"
     "src/core/esp32_mquickjs_memory.c"

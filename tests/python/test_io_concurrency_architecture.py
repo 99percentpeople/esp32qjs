@@ -238,6 +238,60 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             "completed or cancelled native drivers must be reaped at each safe point",
         )
 
+    def test_future_combinators_observe_every_attached_input_rejection(self):
+        future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
+            encoding="utf-8"
+        )
+        observe_start = future.index("static void future_observe_inputs(")
+        observe_end = future.index(
+            "\nstatic const esp32_mquickjs_future_driver_t", observe_start
+        )
+        observe_inputs = future[observe_start:observe_end]
+        copy_start = future.index("static void future_copy_terminal(")
+        copy_end = future.index("\nstatic void future_advance_all(", copy_start)
+        copy_terminal = future[copy_start:copy_end]
+        runner = (ROOT / "scripts/remote.py").read_text(encoding="utf-8")
+        runtime_test = (
+            ROOT / "tests/js/flash_data/modules/timers/runtime.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("future_mark_observed", observe_inputs)
+        self.assertEqual(future.count("future_observe_inputs(ctx, slot);"), 3)
+        self.assertIn("future_mark_observed(source)", copy_terminal)
+        self.assertIn("slot->observed = true", future)
+        self.assertIn("!slot->observed", future)
+        self.assertIn("JS_TEST_FORBIDDEN_OUTPUT_MARKER", runner)
+        for scenario in ("all", "race-winner", "timeout-input", "race-loser"):
+            self.assertIn(
+                f"__ESP32QJS_HANDLED_FUTURE_REJECTION__:{scenario}",
+                runtime_test,
+            )
+
+    def test_event_queue_finalizer_drains_without_allocating(self):
+        event_queue = (
+            MQUICKJS / "src/core/esp32_mquickjs_event_queue.c"
+        ).read_text(encoding="utf-8")
+        create_start = event_queue.index("JSValue esp32_mquickjs_event_queue_new(")
+        create_end = event_queue.index(
+            "\nJSValue js_event_queue_constructor(", create_start
+        )
+        create = event_queue[create_start:create_end]
+        finalizer_start = event_queue.index("void js_event_queue_finalizer(")
+        finalizer_end = event_queue.index(
+            "\nJSValue js_event_queue_receive(", finalizer_start
+        )
+        finalizer = event_queue[finalizer_start:finalizer_end]
+        c_test = (ROOT / "tests/c/test_event_queue_drain.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("queue->drain_scratch = heap_caps_malloc", create)
+        self.assertIn("esp32_mquickjs_event_queue_drain(", finalizer)
+        self.assertNotIn("heap_caps_malloc", finalizer)
+        self.assertIn("queue.allocations_allowed = false", c_test)
+        self.assertIn("assert(queue.drop_calls == 2)", c_test)
+        self.assertIn("assert(queue.live_payloads == 0)", c_test)
+
     def test_uart_write_backpressure_and_read_readiness_are_cooperative(self):
         uart = (
             MQUICKJS / "src/modules/uart/esp32_mquickjs_uart.c"

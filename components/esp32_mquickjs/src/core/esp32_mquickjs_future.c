@@ -64,6 +64,7 @@ typedef struct {
     bool result_retained;
     bool input_refs_retained;
     bool driver_active;
+    bool observed;
     future_state_t state;
     future_kind_t kind;
     uint64_t submitted_us;
@@ -315,13 +316,15 @@ static void future_publish_terminal(JSContext *ctx, future_slot_t *slot)
     }
     handle = slot->handle;
     if (handle == NULL) {
-        if (slot->state == FUTURE_STATE_REJECTED && slot->result_retained) {
+        if (slot->state == FUTURE_STATE_REJECTED && !slot->observed &&
+            slot->result_retained) {
             (void)JS_Throw(ctx, slot->result.val);
             esp32_mquickjs_print_exception(ctx);
         }
         return;
     }
     handle->terminal = true;
+    handle->observed = handle->observed || slot->observed;
     handle->state = slot->state;
     if (slot->result_retained) {
         *JS_AddGCRef(ctx, &handle->result) = slot->result.val;
@@ -533,6 +536,20 @@ static future_slot_t *future_handle_slot(future_handle_t *handle)
                                 });
 }
 
+static void future_mark_observed(future_handle_t *handle)
+{
+    future_slot_t *slot;
+
+    if (handle == NULL) {
+        return;
+    }
+    handle->observed = true;
+    slot = future_handle_slot(handle);
+    if (slot != NULL) {
+        slot->observed = true;
+    }
+}
+
 static future_handle_t *future_this_handle(JSContext *ctx,
                                            JSValue *this_val,
                                            const char *api_name)
@@ -720,6 +737,19 @@ static bool future_retain_continuation(JSContext *ctx,
     *rooted = JS_UNDEFINED;
     slot->call_refs_retained = true;
     return true;
+}
+
+static void future_observe_inputs(JSContext *ctx, future_slot_t *slot)
+{
+    uint16_t i;
+
+    if (slot == NULL) {
+        return;
+    }
+    /* Promise-style combinators attach a rejection handler to every input. */
+    for (i = 0; i < slot->input_count; ++i) {
+        future_mark_observed(future_handle_from_value(ctx, slot->inputs[i].val));
+    }
 }
 
 static const esp32_mquickjs_future_driver_t *future_find_driver(future_runtime_t *state,
@@ -931,6 +961,9 @@ static void future_copy_terminal(JSContext *ctx,
 {
     future_state_t state = future_handle_state(source);
 
+    if (source != NULL) {
+        future_mark_observed(source);
+    }
     if (state == FUTURE_STATE_FULFILLED) {
         future_settle(ctx, target, FUTURE_STATE_FULFILLED, future_handle_result(source));
     } else if (state == FUTURE_STATE_REJECTED) {
@@ -1065,7 +1098,7 @@ static void future_advance_timeout(JSContext *ctx, future_slot_t *slot, uint64_t
 
         input_slot = future_handle_slot(input);
         if (input_slot != NULL) {
-            input->observed = true;
+            future_mark_observed(input);
             (void)future_cancel_slot(ctx, input_slot);
         }
         snprintf(message, sizeof(message), "Future.timeout() expired after %" PRIu32 " ms", timeout_ms);
@@ -1095,7 +1128,7 @@ static void future_advance_continuation(JSContext *ctx,
     if (!future_is_terminal(input_state)) {
         return;
     }
-    input->observed = true;
+    future_mark_observed(input);
     if (input_state != FUTURE_STATE_FULFILLED) {
         future_copy_terminal(ctx, slot, input);
         return;
@@ -1134,6 +1167,7 @@ static void future_advance_continuation(JSContext *ctx,
     }
     JS_DeleteGCRef(ctx, &slot->inputs[0]);
     *JS_AddGCRef(ctx, &slot->inputs[0]) = result;
+    future_mark_observed(input);
 }
 
 static bool future_advance_combinators(JSContext *ctx,
@@ -1736,6 +1770,8 @@ static JSValue future_make_combinator(JSContext *ctx,
         future_abandon_handle(slot);
         future_clear_slot(ctx, slot);
         result = JS_ThrowInternalError(ctx, "Future submission queue is full");
+    } else {
+        future_observe_inputs(ctx, slot);
     }
 
 done:
@@ -1826,6 +1862,7 @@ JSValue js_future_timeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *
         future_clear_slot(ctx, slot);
         return JS_ThrowInternalError(ctx, "Future submission queue is full");
     }
+    future_observe_inputs(ctx, slot);
     return result;
 }
 
@@ -1864,6 +1901,7 @@ static JSValue future_make_continuation(JSContext *ctx,
         future_clear_slot(ctx, slot);
         return JS_ThrowInternalError(ctx, "Future submission queue is full");
     }
+    future_observe_inputs(ctx, slot);
     return result;
 }
 
@@ -1910,7 +1948,7 @@ JSValue js_future_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
         wait_deadline_us = (uint64_t)esp_timer_get_time() +
                            ((uint64_t)(uint32_t)timeout_ms * 1000ULL);
     }
-    handle->observed = true;
+    future_mark_observed(handle);
     esp32_mquickjs_native_wait_begin(runtime, &native_wait);
     while (!handle->terminal) {
         esp32_mquickjs_poll_result_t poll_result;
@@ -1977,7 +2015,7 @@ JSValue js_future_cancel(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
     if (handle == NULL) {
         return JS_EXCEPTION;
     }
-    handle->observed = true;
+    future_mark_observed(handle);
     slot = future_handle_slot(handle);
     return JS_NewBool(slot != NULL && future_cancel_slot(ctx, slot));
 }

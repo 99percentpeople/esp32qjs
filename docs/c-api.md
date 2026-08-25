@@ -62,12 +62,16 @@ sys.time.sync({ servers: ["pool.ntp.org"], timeoutMs: 10000 });
   scheduler idle point and remains runtime-owned through settlement.
 - `Future.all(futures)`
   Fulfill with results in input order. Other inputs are not cancelled when one fails.
+  The combinator handles rejection from every attached input.
 - `Future.race(futures)`
   Settle as `{ index, value }` from the first input without cancelling the rest.
+  All inputs retain a rejection handler after the race settles, so a losing
+  input that rejects later is not reported as unobserved.
 - `Future.sleep(ms)`
   Return a timer-backed Future.
 - `Future.timeout(future, timeoutMs)`
-  Apply an operation deadline and cancel the input if it expires.
+  Apply an operation deadline and cancel the input if it expires. Input
+  rejection is handled by the timeout wrapper even when it settles first.
 - `future.status()` / `future.wait(timeoutMs?)` / `future.cancel()`
   Inspect, cooperatively wait for, or cancel a Future. A wait timeout does not
   cancel the operation.

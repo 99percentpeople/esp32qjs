@@ -65,6 +65,7 @@ JS_TEST_FEATURES_PREFIX = "__ESP32QJS_TEST_FEATURES__:"
 JS_TEST_PASS_PREFIX = "__TEST_PASS__:"
 JS_TEST_SKIP_PREFIX = "__TEST_SKIP__:"
 JS_TEST_FAIL_PREFIX = "__TEST_FAIL__:"
+JS_TEST_FORBIDDEN_OUTPUT_MARKER = "__ESP32QJS_HANDLED_FUTURE_REJECTION__"
 JS_REPL_BANNER_MARKER = "Run help() for usage."
 MONITOR_READY_MARKER = "--- Quit:"
 ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])")
@@ -2172,6 +2173,15 @@ def run_js_test_case(session: MonitorSession, case: JsTestCase) -> JsCaseResult:
             status="failed",
             error="timed out waiting for a structured result",
         )
+
+    if JS_TEST_FORBIDDEN_OUTPUT_MARKER in normalize_serial_output(output):
+        message = "a handled Future rejection was reported again during finalization"
+        print(
+            f"FAIL {case.path}: {message}\n"
+            f"Last serial output:\n{format_output_tail(output)}",
+            flush=True,
+        )
+        return JsCaseResult(case=case, case_name=case.path, status="failed", error=message)
 
     if result_line.startswith(JS_TEST_FAIL_PREFIX):
         try:

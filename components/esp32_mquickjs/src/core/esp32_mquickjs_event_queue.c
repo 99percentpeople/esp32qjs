@@ -1,6 +1,7 @@
 #include "esp32_mquickjs_event_queue.h"
 
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_event_queue_drain.h"
 
 #include <string.h>
 
@@ -18,6 +19,7 @@ struct esp32_mquickjs_event_queue {
     esp32_mquickjs_event_queue_drop_fn drop;
     esp32_mquickjs_event_queue_close_fn close;
     void *opaque;
+    void *drain_scratch;
     portMUX_TYPE lock;
     esp32_mquickjs_future_token_t receiver;
     uint32_t dropped;
@@ -96,6 +98,11 @@ static void event_queue_unregister(esp32_mquickjs_event_queue_t *queue)
         }
         cursor = &(*cursor)->next;
     }
+}
+
+static bool event_queue_drain_receive(void *source, void *event)
+{
+    return xQueueReceive((QueueHandle_t)source, event, 0) == pdTRUE;
 }
 
 esp32_mquickjs_event_queue_t *esp32_mquickjs_event_queue_from_value(
@@ -523,8 +530,14 @@ JSValue esp32_mquickjs_event_queue_new(JSContext *ctx,
     if (queue == NULL) {
         return JS_ThrowOutOfMemory(ctx);
     }
+    queue->drain_scratch = heap_caps_malloc(event_size, MALLOC_CAP_8BIT);
+    if (queue->drain_scratch == NULL) {
+        heap_caps_free(queue);
+        return JS_ThrowOutOfMemory(ctx);
+    }
     queue->events = xQueueCreate(capacity, event_size);
     if (queue->events == NULL) {
+        heap_caps_free(queue->drain_scratch);
         heap_caps_free(queue);
         return JS_ThrowOutOfMemory(ctx);
     }
@@ -539,6 +552,7 @@ JSValue esp32_mquickjs_event_queue_new(JSContext *ctx,
     object = JS_NewObjectClassUser(ctx, JS_CLASS_EVENT_QUEUE);
     if (JS_IsException(object)) {
         vQueueDelete(queue->events);
+        heap_caps_free(queue->drain_scratch);
         heap_caps_free(queue);
         return object;
     }
@@ -558,7 +572,6 @@ JSValue js_event_queue_constructor(JSContext *ctx, JSValue *this_val, int argc, 
 void js_event_queue_finalizer(JSContext *ctx, void *opaque)
 {
     esp32_mquickjs_event_queue_t *queue = opaque;
-    void *event;
 
     (void)ctx;
     if (queue == NULL) {
@@ -566,16 +579,11 @@ void js_event_queue_finalizer(JSContext *ctx, void *opaque)
     }
     event_queue_unregister(queue);
     (void)esp32_mquickjs_event_queue_close(queue);
-    event = heap_caps_malloc(queue->event_size, MALLOC_CAP_8BIT);
-    if (event != NULL) {
-        while (xQueueReceive(queue->events, event, 0) == pdTRUE) {
-            if (queue->drop != NULL) {
-                queue->drop(event, queue->opaque);
-            }
-        }
-        heap_caps_free(event);
-    }
+    (void)esp32_mquickjs_event_queue_drain(
+        queue->events, queue->drain_scratch, event_queue_drain_receive,
+        queue->drop, queue->opaque);
     vQueueDelete(queue->events);
+    heap_caps_free(queue->drain_scratch);
     heap_caps_free(queue);
 }
 

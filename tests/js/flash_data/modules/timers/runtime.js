@@ -44,6 +44,11 @@ test("timers/runtime", function () {
   var cancelledContinuation;
   var nestedWaitMapCalls = 0;
   var nestedWaitMapped;
+  var handledSource;
+  var handledCombined;
+  var handledCaught;
+  var raceLoser;
+  var raceWinner;
 
   test.ok(typeof Future === "function", "Future factory should exist");
   test.ok(typeof EventQueue === "function", "EventQueue class should exist");
@@ -166,6 +171,66 @@ test("timers/runtime", function () {
   raced = Future.race([Future.sleep(10), Future.sleep(80)]);
   test.equal(raced.wait(1000).index, 0, "Future.race should report the first input");
   raced = null;
+  gc();
+
+  handledCaught = false;
+  handledSource = Future.call(function () {
+    throw "__ESP32QJS_HANDLED_FUTURE_REJECTION__:all";
+  });
+  handledCombined = Future.all([handledSource]);
+  try {
+    handledCombined.wait(1000);
+  } catch (handledAllError) {
+    handledCaught = String(handledAllError).indexOf(":all") >= 0;
+  }
+  test.ok(handledCaught, "Future.all should propagate an input rejection");
+  handledSource = null;
+  handledCombined = null;
+  gc();
+
+  handledCaught = false;
+  handledSource = Future.call(function () {
+    throw "__ESP32QJS_HANDLED_FUTURE_REJECTION__:race-winner";
+  });
+  handledCombined = Future.race([handledSource, Future.sleep(80)]);
+  try {
+    handledCombined.wait(1000);
+  } catch (handledRaceError) {
+    handledCaught = String(handledRaceError).indexOf(":race-winner") >= 0;
+  }
+  test.ok(handledCaught, "Future.race should propagate a winning rejection");
+  handledSource = null;
+  handledCombined = null;
+  gc();
+
+  handledCaught = false;
+  handledSource = Future.call(function () {
+    throw "__ESP32QJS_HANDLED_FUTURE_REJECTION__:timeout-input";
+  });
+  handledCombined = Future.timeout(handledSource, 100);
+  try {
+    handledCombined.wait(1000);
+  } catch (handledTimeoutError) {
+    handledCaught = String(handledTimeoutError).indexOf(":timeout-input") >= 0;
+  }
+  test.ok(handledCaught,
+    "Future.timeout should propagate an input rejection before its deadline");
+  handledSource = null;
+  handledCombined = null;
+  gc();
+
+  raceWinner = Future.call(function () { return "winner"; });
+  raceLoser = Future.sleep(20).map(function () {
+    throw "__ESP32QJS_HANDLED_FUTURE_REJECTION__:race-loser";
+  });
+  handledCombined = Future.race([raceWinner, raceLoser]);
+  raceWinner = null;
+  raceLoser = null;
+  test.equal(handledCombined.wait(1000).value, "winner",
+    "Future.race should preserve the winning fulfillment");
+  gc();
+  Future.sleep(60).wait(1000);
+  handledCombined = null;
   gc();
 
   rejected = Future.call(function () { throw "future-fail"; });

@@ -69,3 +69,10 @@ add_executable(test_log_ring
 )
 target_include_directories(test_log_ring PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_log_ring COMMAND test_log_ring)
+
+add_executable(test_event_queue_drain
+    test_event_queue_drain.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_event_queue_drain.c
+)
+target_include_directories(test_event_queue_drain PRIVATE ../../components/esp32_mquickjs/internal)
+add_test(NAME test_event_queue_drain COMMAND test_event_queue_drain)
