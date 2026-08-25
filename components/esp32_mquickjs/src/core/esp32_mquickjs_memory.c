@@ -683,6 +683,33 @@ void esp32_mquickjs_memory_maintain(void)
     taskEXIT_CRITICAL(&s_memory.lock);
 }
 
+void esp32_mquickjs_memory_release_generation(void)
+{
+    esp32_mquickjs_memory_block_t *blocks;
+
+    taskENTER_CRITICAL(&s_memory.lock);
+    blocks = s_memory.blocks;
+    s_memory.blocks = NULL;
+    s_memory.managed_internal_bytes = 0;
+    s_memory.managed_psram_bytes = 0;
+    s_memory.pinned_bytes = 0;
+    taskEXIT_CRITICAL(&s_memory.lock);
+
+    /*
+     * JavaScript finalizers normally unregister their blocks first. MQuickJS
+     * may still leave unreachable user objects until context teardown, so the
+     * manager owns this final backstop after JS_FreeContext has invalidated
+     * every owner and relocation callback.
+     */
+    while (blocks != NULL) {
+        esp32_mquickjs_memory_block_t *next = blocks->next;
+
+        heap_caps_free(blocks->data);
+        heap_caps_free(blocks);
+        blocks = next;
+    }
+}
+
 bool esp32_mquickjs_memory_prepare_internal_dma(size_t total_bytes,
                                                 size_t largest_block_bytes)
 {

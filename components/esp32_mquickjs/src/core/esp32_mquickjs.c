@@ -1273,6 +1273,7 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
     esp32_mquickjs_deinit_timer_state(ctx, runtime);
     if (ctx != NULL) {
         JS_FreeContext(ctx);
+        esp32_mquickjs_memory_release_generation();
     }
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
     esp32_mquickjs_deinit_fs_runtime(runtime);

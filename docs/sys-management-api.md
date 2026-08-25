@@ -620,7 +620,9 @@ Framework payloads declare their memory class. File, network, serial, font,
 bitmap, and media payloads prefer PSRAM when it is available. ISR state, task
 state, I2S DMA descriptors, and driver-owned objects remain pinned in internal
 memory. Movable buffers use stable native handles and are relocated only at a
-runtime safe point while no borrow is active. The managed-byte and
+runtime safe point while no borrow is active. Generation teardown releases any
+stable blocks left after JavaScript finalizers, so a runtime restart cannot
+retain ownerless buffers from the previous generation. The managed-byte and
 `movableIdleBytes` counters cover stable managed blocks; allocation-failure
 counts cover all classified payload and block requests. None of these counters
 claim ownership of opaque ESP-IDF or third-party allocations.

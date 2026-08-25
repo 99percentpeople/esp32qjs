@@ -24,6 +24,8 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
         self.assertIn("memory_migrate_one", source)
         self.assertIn("memory_evict_one", source)
         self.assertIn("esp32_mquickjs_memory_maintain();", runtime)
+        self.assertIn("JS_FreeContext(ctx);\n        esp32_mquickjs_memory_release_generation();", runtime)
+        self.assertIn("void esp32_mquickjs_memory_release_generation(void)", source)
         self.assertNotIn("esp32_mquickjs_memory_maintain();", source.split(
             "void esp32_mquickjs_memory_maintain(void)", 1
         )[0])

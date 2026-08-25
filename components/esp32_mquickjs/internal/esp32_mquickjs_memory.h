@@ -50,6 +50,9 @@ void esp32_mquickjs_memory_init(void);
  */
 void esp32_mquickjs_memory_maintain(void);
 
+/* Release any generation-scoped stable blocks left after JS_FreeContext(). */
+void esp32_mquickjs_memory_release_generation(void);
+
 /*
  * Reserve-check an internal-only DMA allocation set before entering a driver.
  * `total_bytes` covers aggregate heap pressure while `largest_block_bytes`
