@@ -88,6 +88,7 @@ typedef struct {
 } esp32_mquickjs_async_poller_entry_t;
 
 #define ESP32_MQUICKJS_IDLE_JOB_CAPACITY 8
+#define ESP32_MQUICKJS_NATIVE_GC_DEBT_BYTES 2048U
 
 typedef struct {
     JSGCRef callback;
@@ -103,6 +104,9 @@ typedef struct {
     uint8_t idle_tail;
     uint8_t idle_count;
     uint32_t execution_depth;
+    size_t js_owned_native_bytes;
+    size_t native_gc_debt_bytes;
+    bool native_gc_pending;
 } esp32_mquickjs_async_state_t;
 
 static esp32_mquickjs_timer_state_t *esp32_mquickjs_timer_state(
@@ -125,13 +129,6 @@ struct esp32_mquickjs_timer_slot {
 #define ESP32_MQUICKJS_TIMER_HANDLE_MAX \
     (((uint64_t)UINT32_MAX << ESP32_MQUICKJS_TIMER_HANDLE_ID_BITS) | \
      ESP32_MQUICKJS_TIMER_HANDLE_ID_MASK)
-
-static void run_pending_external_gc(JSContext *ctx)
-{
-    if (ctx != NULL && esp32_mquickjs_byte_source_take_gc_request()) {
-        JS_GC(ctx);
-    }
-}
 
 static void note_console_output(void)
 {
@@ -172,6 +169,102 @@ static bool esp32_mquickjs_execution_active(
     esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
 
     return state != NULL && state->execution_depth != 0;
+}
+
+void esp32_mquickjs_native_gc_alloc(esp32_mquickjs_runtime_t *runtime,
+                                    size_t size)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+
+    if (state == NULL || size == 0) {
+        return;
+    }
+    if (SIZE_MAX - state->js_owned_native_bytes < size) {
+        state->js_owned_native_bytes = SIZE_MAX;
+    } else {
+        state->js_owned_native_bytes += size;
+    }
+    if (SIZE_MAX - state->native_gc_debt_bytes < size) {
+        state->native_gc_debt_bytes = SIZE_MAX;
+    } else {
+        state->native_gc_debt_bytes += size;
+    }
+}
+
+void esp32_mquickjs_native_gc_free(esp32_mquickjs_runtime_t *runtime,
+                                   size_t size)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+
+    if (state == NULL || size == 0) {
+        return;
+    }
+    state->js_owned_native_bytes =
+        size < state->js_owned_native_bytes
+            ? state->js_owned_native_bytes - size
+            : 0;
+}
+
+void esp32_mquickjs_native_gc_reclaimable(
+    esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+
+    if (state != NULL) {
+        state->native_gc_pending = true;
+    }
+}
+
+static bool native_gc_due(esp32_mquickjs_runtime_t *runtime,
+                          esp32_mquickjs_async_state_t *state)
+{
+    esp32_mquickjs_memory_status_t memory_status;
+
+    if (state == NULL || !state->native_gc_pending) {
+        return false;
+    }
+    if (!esp32_mquickjs_execution_active(runtime) ||
+        state->native_gc_debt_bytes >= ESP32_MQUICKJS_NATIVE_GC_DEBT_BYTES) {
+        return true;
+    }
+    esp32_mquickjs_memory_get_status(&memory_status);
+    return memory_status.pressure != ESP32_MQUICKJS_MEMORY_PRESSURE_NORMAL;
+}
+
+static void run_pending_gc(JSContext *ctx,
+                           esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+    bool requested;
+    bool native_due;
+
+    if (ctx == NULL) {
+        return;
+    }
+    requested = esp32_mquickjs_byte_source_take_gc_request();
+    native_due = native_gc_due(runtime, state);
+    if (!requested && !native_due) {
+        return;
+    }
+    if (state != NULL) {
+        state->native_gc_pending = false;
+        state->native_gc_debt_bytes = 0;
+    }
+    JS_GC(ctx);
+}
+
+static JSValue esp32_mquickjs_finish_execution(
+    JSContext *ctx,
+    esp32_mquickjs_runtime_t *runtime,
+    JSValue result)
+{
+    JSGCRef result_ref;
+    JSValue *rooted_result = JS_PushGCRef(ctx, &result_ref);
+
+    *rooted_result = result;
+    esp32_mquickjs_execution_leave(runtime);
+    run_pending_gc(ctx, runtime);
+    return JS_PopGCRef(ctx, &result_ref);
 }
 
 static void esp32_mquickjs_clear_idle_jobs(JSContext *ctx,
@@ -661,7 +754,7 @@ JSValue esp32_mquickjs_call(JSContext *ctx,
     JS_PushArg(ctx, *rooted_this);
     esp32_mquickjs_execution_enter(runtime);
     result = JS_Call(ctx, argc);
-    esp32_mquickjs_execution_leave(runtime);
+    result = esp32_mquickjs_finish_execution(ctx, runtime, result);
 
     if (runtime != NULL) {
         runtime->deadline_us = previous_deadline;
@@ -1385,7 +1478,7 @@ JSValue esp32_mquickjs_eval(JSContext *ctx,
 
     esp32_mquickjs_execution_enter(runtime);
     result = JS_Eval(ctx, source, strlen(source), filename, eval_flags);
-    esp32_mquickjs_execution_leave(runtime);
+    result = esp32_mquickjs_finish_execution(ctx, runtime, result);
 
     if (runtime != NULL) {
         runtime->deadline_us = previous_deadline;
@@ -1411,7 +1504,7 @@ JSValue esp32_mquickjs_run(JSContext *ctx,
 
     esp32_mquickjs_execution_enter(runtime);
     result = JS_Run(ctx, compiled_code);
-    esp32_mquickjs_execution_leave(runtime);
+    result = esp32_mquickjs_finish_execution(ctx, runtime, result);
 
     if (runtime != NULL) {
         runtime->deadline_us = previous_deadline;
@@ -1581,13 +1674,21 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
     if (ctx == NULL || runtime == NULL) {
         return ESP32_MQUICKJS_POLL_NONE;
     }
+    /*
+     * Consume requests left by an earlier JavaScript turn before advancing
+     * the Future that caused this poll. A long-running application can stay
+     * inside its initial JS_Eval() forever while cooperatively waiting, so
+     * execution_depth == 0 is not a prerequisite for a scheduler safe point.
+     * Running here also leaves requests raised during this poll pending until
+     * the next turn, after the settling Future has left the JavaScript stack.
+     */
+    run_pending_gc(ctx, runtime);
     output_generation = runtime->output_generation;
     if (esp32_mquickjs_future_poll(ctx, runtime)) {
         core_async_handled = true;
     }
     if (state == NULL || state->queue == NULL || state->slots == NULL) {
         async_handled = esp32_mquickjs_poll_registered(ctx, runtime);
-        run_pending_external_gc(ctx);
         core_async_handled = esp32_mquickjs_poll_idle_job(ctx, runtime) ||
                              core_async_handled;
         if (core_async_handled || async_handled) {
@@ -1656,7 +1757,6 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
     }
 
     async_handled = esp32_mquickjs_poll_registered(ctx, runtime);
-    run_pending_external_gc(ctx);
     core_async_handled = esp32_mquickjs_poll_idle_job(ctx, runtime) ||
                          core_async_handled;
     if (core_async_handled || async_handled) {
@@ -1701,9 +1801,17 @@ JSValue js_print(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 
 JSValue js_gc(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
+    esp32_mquickjs_async_state_t *state =
+        esp32_mquickjs_async_state(s_active_runtime);
+
     (void)this_val;
     (void)argc;
     (void)argv;
+    (void)esp32_mquickjs_byte_source_take_gc_request();
+    if (state != NULL) {
+        state->native_gc_pending = false;
+        state->native_gc_debt_bytes = 0;
+    }
     JS_GC(ctx);
     return JS_UNDEFINED;
 }

@@ -211,7 +211,11 @@ JS_TEST_MODULES = (
     ),
     JsTestModule(
         "future",
-        (JsTestCase("modules/timers/capacity.js", reset_before=True, reset_after=True),),
+        (
+            JsTestCase("modules/timers/capacity.js", reset_before=True, reset_after=True),
+            JsTestCase("modules/timers/gc-pressure-setup.js", reset_before=True),
+            JsTestCase("modules/timers/gc-pressure-verify.js", reset_after=True),
+        ),
     ),
 )
 JS_TEST_MODULE_MAP = {module.name: module for module in JS_TEST_MODULES}

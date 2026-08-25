@@ -77,6 +77,8 @@ JSValue esp32_mquickjs_future_call_and_wait(JSContext *ctx,
 
 JSValue js_future_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 void js_future_finalizer(JSContext *ctx, void *opaque);
+void js_future_gc_trace(JSContext *ctx, void *opaque,
+                        JSCGCVisitor visit, void *visitor_opaque);
 JSValue js_future_call(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_future_all(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_future_race(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

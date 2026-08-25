@@ -46,8 +46,9 @@ typedef struct {
     bool observed;
     bool rejection_reported;
     bool result_retained;
+    bool native_bytes_accounted;
     future_state_t state;
-    JSGCRef result;
+    JSValue result;
 } future_handle_t;
 
 typedef struct {
@@ -295,7 +296,7 @@ static void future_report_unobserved(JSContext *ctx, future_handle_t *handle)
         return;
     }
     handle->rejection_reported = true;
-    (void)JS_Throw(ctx, handle->result.val);
+    (void)JS_Throw(ctx, handle->result);
     esp32_mquickjs_print_exception(ctx);
 }
 
@@ -328,10 +329,11 @@ static void future_publish_terminal(JSContext *ctx, future_slot_t *slot)
     handle->observed = handle->observed || slot->observed;
     handle->state = slot->state;
     if (slot->result_retained) {
-        *JS_AddGCRef(ctx, &handle->result) = slot->result.val;
+        handle->result = slot->result.val;
         handle->result_retained = true;
     }
     slot->handle = NULL;
+    esp32_mquickjs_native_gc_reclaimable(slot->runtime);
 }
 
 static void future_store_result(JSContext *ctx, future_slot_t *slot, JSValue value)
@@ -443,25 +445,36 @@ static future_slot_t *future_allocate_slot(JSContext *ctx,
 static JSValue future_make_handle(JSContext *ctx, future_slot_t *slot)
 {
     future_handle_t *handle;
-    JSValue object;
+    JSGCRef object_ref;
+    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    JSValue result;
 
-    object = JS_NewObjectClassUser(ctx, JS_CLASS_FUTURE);
-    if (JS_IsException(object)) {
+    *object = JS_NewObjectClassUser(ctx, JS_CLASS_FUTURE);
+    if (JS_IsException(*object)) {
         future_clear_slot(ctx, slot);
-        return object;
+        return JS_PopGCRef(ctx, &object_ref);
     }
     handle = heap_caps_calloc(1, sizeof(*handle), MALLOC_CAP_8BIT);
     if (handle == NULL) {
+        JS_GC(ctx);
+        handle = heap_caps_calloc(1, sizeof(*handle), MALLOC_CAP_8BIT);
+    }
+    if (handle == NULL) {
         future_clear_slot(ctx, slot);
-        return JS_ThrowOutOfMemory(ctx);
+        result = JS_ThrowOutOfMemory(ctx);
+        JS_PopGCRef(ctx, &object_ref);
+        return result;
     }
     handle->runtime = slot->runtime;
     handle->slot = slot->slot_id;
     handle->generation = slot->generation;
     handle->state = slot->state;
+    handle->result = JS_UNDEFINED;
+    handle->native_bytes_accounted = true;
+    esp32_mquickjs_native_gc_alloc(slot->runtime, sizeof(*handle));
     slot->handle = handle;
-    JS_SetOpaque(ctx, object, handle);
-    return object;
+    JS_SetOpaque(ctx, *object, handle);
+    return JS_PopGCRef(ctx, &object_ref);
 }
 
 static void future_abandon_handle(future_slot_t *slot)
@@ -469,7 +482,12 @@ static void future_abandon_handle(future_slot_t *slot)
     if (slot == NULL || slot->handle == NULL) {
         return;
     }
-    slot->handle->runtime = NULL;
+    /*
+     * The JS object still owns the handle until its finalizer runs. Keep the
+     * allocation accounted and request a safe-point collection; clearing the
+     * slot is sufficient to make the stale token unresolvable.
+     */
+    esp32_mquickjs_native_gc_reclaimable(slot->runtime);
     slot->handle = NULL;
 }
 
@@ -949,7 +967,7 @@ static JSValue future_handle_result(future_handle_t *handle)
         return JS_UNDEFINED;
     }
     if (handle->terminal) {
-        return handle->result_retained ? handle->result.val : JS_UNDEFINED;
+        return handle->result_retained ? handle->result : JS_UNDEFINED;
     }
     slot = future_handle_slot(handle);
     return slot != NULL && slot->result_retained ? slot->result.val : JS_UNDEFINED;
@@ -1683,11 +1701,24 @@ void js_future_finalizer(JSContext *ctx, void *opaque)
         future_release_if_terminal(ctx, slot);
     }
     future_report_unobserved(ctx, handle);
-    if (handle->result_retained) {
-        JS_DeleteGCRef(ctx, &handle->result);
-        handle->result_retained = false;
+    handle->result = JS_UNDEFINED;
+    handle->result_retained = false;
+    if (handle->native_bytes_accounted) {
+        esp32_mquickjs_native_gc_free(handle->runtime, sizeof(*handle));
+        handle->native_bytes_accounted = false;
     }
     heap_caps_free(handle);
+}
+
+void js_future_gc_trace(JSContext *ctx, void *opaque,
+                        JSCGCVisitor visit, void *visitor_opaque)
+{
+    future_handle_t *handle = opaque;
+
+    (void)ctx;
+    if (handle != NULL && handle->result_retained) {
+        visit(visitor_opaque, &handle->result);
+    }
 }
 
 JSValue js_future_call(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -1995,9 +2026,9 @@ JSValue js_future_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
         (void)esp32_mquickjs_wait_for_activity(runtime, wait_ms);
     }
     if (handle->state == FUTURE_STATE_FULFILLED) {
-        result = handle->result.val;
+        result = handle->result;
     } else if (handle->state == FUTURE_STATE_REJECTED) {
-        result = JS_Throw(ctx, handle->result.val);
+        result = JS_Throw(ctx, handle->result);
     } else {
         result = JS_ThrowInternalError(ctx, "future.wait() was cancelled");
     }

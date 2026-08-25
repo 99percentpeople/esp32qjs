@@ -72,5 +72,142 @@ class GcArchitectureTests(SourceContractTestCase):
         self.assertIn("esp32_mquickjs_set_property_ref(ctx, result,", gateway)
         self.assertNotIn("esp32_mquickjs_set_property(ctx, result,", gateway)
 
+    def test_deferred_gc_roots_result_before_execution_safe_point(self):
+        core = (MQUICKJS / "src" / "core" / "esp32_mquickjs.c").read_text(
+            encoding="utf-8"
+        )
+        finish_start = core.index("static JSValue esp32_mquickjs_finish_execution(")
+        finish_end = core.index("\nstatic void esp32_mquickjs_clear_idle_jobs(", finish_start)
+        finish = core[finish_start:finish_end]
+
+        self.assertIn("*rooted_result = result;", finish)
+        self.assertLess(
+            finish.index("*rooted_result = result;"),
+            finish.index("esp32_mquickjs_execution_leave(runtime);"),
+        )
+        self.assertLess(
+            finish.index("esp32_mquickjs_execution_leave(runtime);"),
+            finish.index("run_pending_gc(ctx, runtime);"),
+        )
+        self.assertIn("return JS_PopGCRef(ctx, &result_ref);", finish)
+
+    def test_terminal_futures_use_native_pressure_instead_of_a_fixed_batch(self):
+        future = (
+            MQUICKJS / "src" / "core" / "esp32_mquickjs_future.c"
+        ).read_text(encoding="utf-8")
+        publish_start = future.index("static void future_publish_terminal(")
+        publish_end = future.index("\nstatic void future_store_result(", publish_start)
+        publish = future[publish_start:publish_end]
+
+        self.assertIn("esp32_mquickjs_native_gc_reclaimable(slot->runtime);", publish)
+        self.assertNotIn("FUTURE_GC_BATCH", future)
+        self.assertNotIn("terminal_handles_since_gc", future)
+
+    def test_explicit_gc_remains_a_diagnostic_single_collection(self):
+        core = (MQUICKJS / "src" / "core" / "esp32_mquickjs.c").read_text(
+            encoding="utf-8"
+        )
+        gc_start = core.index("JSValue js_gc(")
+        gc_end = core.index("\nJSValue js_load(", gc_start)
+        gc_function = core[gc_start:gc_end]
+
+        self.assertEqual(gc_function.count("JS_GC(ctx);"), 1)
+        self.assertNotIn("request_gc", gc_function)
+        self.assertIn("state->native_gc_pending = false;", gc_function)
+        self.assertIn("state->native_gc_debt_bytes = 0;", gc_function)
+
+    def test_terminal_future_result_is_a_traced_child_not_a_context_root(self):
+        future = (
+            MQUICKJS / "src" / "core" / "esp32_mquickjs_future.c"
+        ).read_text(encoding="utf-8")
+        stdlib = (
+            MQUICKJS / "src" / "core" / "mqjs_stdlib_esp32.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("JSValue result;", future)
+        self.assertIn("visit(visitor_opaque, &handle->result);", future)
+        self.assertNotIn("JS_AddGCRef(ctx, &handle->result)", future)
+        self.assertNotIn("JS_DeleteGCRef(ctx, &handle->result)", future)
+        self.assertIn("JS_CLASS_TRACE_DEF(\"Future\"", stdlib)
+
+    def test_abandoned_future_handle_remains_accounted_until_finalization(self):
+        future = (
+            MQUICKJS / "src" / "core" / "esp32_mquickjs_future.c"
+        ).read_text(encoding="utf-8")
+        abandon_start = future.index("static void future_abandon_handle(")
+        abandon_end = future.index("\nstatic future_handle_t *future_handle_from_value(", abandon_start)
+        abandon = future[abandon_start:abandon_end]
+
+        self.assertIn("esp32_mquickjs_native_gc_reclaimable(slot->runtime);", abandon)
+        self.assertNotIn("esp32_mquickjs_native_gc_free", abandon)
+        self.assertNotIn("->runtime = NULL", abandon)
+
+    def test_user_gc_trace_participates_in_mark_and_compaction(self):
+        engine = (
+            MQUICKJS / "vendor" / "mquickjs" / "mquickjs.c"
+        ).read_text(encoding="utf-8")
+        builder = (
+            MQUICKJS / "vendor" / "mquickjs" / "mquickjs_build.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("gc_trace_user_object(s->ctx", engine)
+        self.assertIn("gc_mark_native_value", engine)
+        self.assertIn("gc_trace_user_object(ctx, p, gc_thread_native_value", engine)
+        self.assertIn("static void dump_c_gc_traces", builder)
+        self.assertIn("js_c_gc_trace_table", builder)
+
+    def test_upstream_gc_regression_uses_a_dedicated_probe(self):
+        example = (
+            MQUICKJS / "vendor" / "mquickjs" / "example.c"
+        ).read_text(encoding="utf-8")
+        rectangle_start = example.index("typedef struct {\n    int x;")
+        rectangle_end = example.index("} RectangleData;", rectangle_start)
+        rectangle = example[rectangle_start:rectangle_end]
+        gc_test = (
+            MQUICKJS / "vendor" / "mquickjs" / "tests" / "test_gc.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("JSValue", rectangle)
+        self.assertIn("new GCProbe()", gc_test)
+        self.assertIn("baseline + 2", gc_test)
+        self.assertIn("probe.child = probe", gc_test)
+
+    def test_scheduler_consumes_gc_before_advancing_futures(self):
+        core = (MQUICKJS / "src" / "core" / "esp32_mquickjs.c").read_text(
+            encoding="utf-8"
+        )
+        poll_start = core.index("esp32_mquickjs_poll_result_t esp32_mquickjs_poll(")
+        poll_end = core.index("\nJSValue js_print(", poll_start)
+        poll = core[poll_start:poll_end]
+
+        self.assertLess(
+            poll.index("run_pending_gc(ctx, runtime);"),
+            poll.index("esp32_mquickjs_future_poll(ctx, runtime)"),
+        )
+        self.assertEqual(poll.count("run_pending_gc(ctx, runtime);"), 1)
+
+    def test_compacting_gc_finalizes_every_coalesced_user_object(self):
+        engine = (
+            MQUICKJS / "vendor" / "mquickjs" / "mquickjs.c"
+        ).read_text(encoding="utf-8")
+        sweep_start = engine.index("/* reset the gc marks")
+        sweep_end = engine.index("\nstatic JSValue js_value_from_pval", sweep_start)
+        sweep = engine[sweep_start:sweep_end]
+        finalize_start = sweep.index("/* call every user finalizer")
+        merge_start = sweep.index("/* merge all the consecutive free blocks */")
+        finalize = sweep[finalize_start:merge_start]
+
+        self.assertIn("ptr1 = ptr;", finalize)
+        self.assertIn("do {", finalize)
+        self.assertIn("ctx->c_finalizer_table[p->class_id - JS_CLASS_USER](", finalize)
+        self.assertIn("ptr1 += get_mblock_size(ptr1);", finalize)
+        self.assertLess(
+            finalize_start, merge_start,
+        )
+        self.assertLess(
+            merge_start,
+            sweep.index("set_free_block(b, size);"),
+        )
+
 if __name__ == "__main__":
     unittest.main()

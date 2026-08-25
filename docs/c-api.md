@@ -11,7 +11,11 @@ This document covers the APIs exported directly by the firmware runtime.
   serial console; the headless Agent profile forwards a bounded copy to its
   host diagnostics cache so protocol byte streams are not polluted.
 - `gc()`
-  Run the JavaScript garbage collector.
+  Run the JavaScript garbage collector explicitly for diagnostics. Normal
+  applications do not need to call it: the runtime accounts for JavaScript-owned
+  native allocations and collects them at scheduler safe points when an
+  execution turn completes, native allocation debt grows, or internal memory is
+  under pressure.
 - `fetch(input, options?)`
   Run an HTTP request through a hidden native Future and return a `Response`.
 - `load(path)`

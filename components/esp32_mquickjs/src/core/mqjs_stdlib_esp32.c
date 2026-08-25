@@ -96,7 +96,7 @@ static const JSPropDef js_future_proto[] = {
 };
 
 static const JSClassDef js_future_class =
-    JS_CLASS_DEF("Future", 0, js_future_constructor, JS_CLASS_FUTURE, js_future, js_future_proto, NULL, js_future_finalizer);
+    JS_CLASS_TRACE_DEF("Future", 0, js_future_constructor, JS_CLASS_FUTURE, js_future, js_future_proto, NULL, js_future_finalizer, js_future_gc_trace);
 
 static const JSPropDef js_event_queue_proto[] = {
     JS_CFUNC_DEF("receive", 1, js_event_queue_receive),
