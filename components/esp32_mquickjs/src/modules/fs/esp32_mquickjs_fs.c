@@ -3,6 +3,7 @@
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
 
 #include "esp32_mquickjs_fs.h"
+#include "esp32_mquickjs_memory.h"
 
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_event_queue.h"
@@ -321,7 +322,8 @@ static uint8_t *load_script_file(const char *path, size_t *out_len)
         return NULL;
     }
 
-    buf = heap_caps_malloc((size_t)file_size + 1, MALLOC_CAP_8BIT);
+    buf = esp32_mquickjs_memory_payload_alloc(
+        (size_t)file_size + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (buf == NULL) {
         fclose(file);
         return NULL;
@@ -935,7 +937,8 @@ static bool fs_future_prepare_common(
             fs_future_release(state);
             return false;
         }
-        state->data = heap_caps_malloc(state->data_length + 1U, MALLOC_CAP_8BIT);
+        state->data = esp32_mquickjs_memory_payload_alloc(
+            state->data_length + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (state->data == NULL) {
             fs_future_release(state);
             JS_ThrowOutOfMemory(ctx);
@@ -998,9 +1001,10 @@ static void fs_future_worker(void *opaque)
                     state->error_number = E2BIG;
                     break;
                 }
-                grown = heap_caps_realloc(state->entries,
-                                          (state->entry_count + 1U) * sizeof(*state->entries),
-                                          MALLOC_CAP_8BIT);
+                grown = esp32_mquickjs_memory_payload_realloc(
+                    state->entries,
+                    (state->entry_count + 1U) * sizeof(*state->entries),
+                    ESP32_MQUICKJS_MEMORY_EXTERNAL);
                 if (grown == NULL) {
                     state->error_number = ENOMEM;
                     break;

@@ -1,5 +1,6 @@
 #include "esp32_mquickjs_sys.h"
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_memory.h"
 #include "esp32_mquickjs_version.h"
 
 #include <limits.h>
@@ -1024,6 +1025,61 @@ JSValue js_sys_memory_get(JSContext *ctx,
     default:
         return JS_ThrowInternalError(ctx, "invalid sys.status.memory getter");
     }
+}
+
+JSValue js_sys_memory_manager(JSContext *ctx,
+                              JSValue *this_val,
+                              int argc,
+                              JSValue *argv)
+{
+    esp32_mquickjs_memory_status_t status;
+    JSGCRef object_ref;
+    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    esp32_mquickjs_memory_get_status(&status);
+    *object = JS_NewObject(ctx);
+    if (JS_IsException(*object) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "pressure",
+            JS_NewString(ctx,
+                         esp32_mquickjs_memory_pressure_name(status.pressure))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "internalReserveBytes",
+            JS_NewUint32(ctx, (uint32_t)status.internal_reserve_bytes)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "dmaLargestReserveBytes",
+            JS_NewUint32(ctx, (uint32_t)status.dma_largest_reserve_bytes)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "managedInternalBytes",
+            JS_NewUint32(ctx, (uint32_t)status.managed_internal_bytes)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "managedPsramBytes",
+            JS_NewUint32(ctx, (uint32_t)status.managed_psram_bytes)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "pinnedBytes",
+            JS_NewUint32(ctx, (uint32_t)status.pinned_bytes)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "movableIdleBytes",
+            JS_NewUint32(ctx, (uint32_t)status.movable_idle_bytes)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "migrationCount",
+            JS_NewUint32(ctx, status.migration_count)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "migrationBytes",
+            JS_NewUint32(ctx, (uint32_t)status.migration_bytes)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "evictionCount",
+            JS_NewUint32(ctx, status.eviction_count)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "allocationFailures",
+            JS_NewUint32(ctx, status.allocation_failures))) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_EXCEPTION;
+    }
+    return JS_PopGCRef(ctx, &object_ref);
 }
 
 JSValue js_sys_rtos_get(JSContext *ctx,

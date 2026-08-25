@@ -4,6 +4,7 @@
 
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_memory.h"
 #include "esp32_mquickjs_peripheral_lease.h"
 #include "utils/esp32_mquickjs_byte_source.h"
 
@@ -151,24 +152,16 @@ static bool i2s_to_u32(JSContext *ctx, JSValue value, uint32_t *out)
     return true;
 }
 
-static uint32_t i2s_operation_buffer_caps(void)
-{
-    /* Keep transient PCM payloads out of the internal/DMA heap on boards
-     * with PSRAM. Do not fall back to internal memory after a PSRAM failure:
-     * a failed operation must not consume the reserve needed by DMA rings. */
-    return heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0
-               ? MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
-               : MALLOC_CAP_8BIT;
-}
-
 static void *i2s_operation_buffer_malloc(size_t size)
 {
-    return heap_caps_malloc(size, i2s_operation_buffer_caps());
+    return esp32_mquickjs_memory_payload_alloc(
+        size, ESP32_MQUICKJS_MEMORY_EXTERNAL);
 }
 
 static void *i2s_operation_buffer_realloc(void *buffer, size_t size)
 {
-    return heap_caps_realloc(buffer, size, i2s_operation_buffer_caps());
+    return esp32_mquickjs_memory_payload_realloc(
+        buffer, size, ESP32_MQUICKJS_MEMORY_EXTERNAL);
 }
 
 static JSValue i2s_throw_no_memory(JSContext *ctx, const char *operation)
@@ -1735,6 +1728,21 @@ parsed:
     }
     if (mode == ESP32_MQUICKJS_I2S_MODE_PDM) {
         requested_port = I2S_NUM_0;
+    }
+    {
+        size_t directions = direction == ESP32_MQUICKJS_I2S_DIRECTION_DUPLEX
+                                ? 2U
+                                : 1U;
+        size_t bytes_per_frame = ((size_t)slot_bits / 8U) *
+                                 (slot_mode == I2S_SLOT_MODE_MONO ? 1U : 2U);
+        size_t dma_buffer_bytes = (size_t)dma_frames * bytes_per_frame;
+        size_t dma_request = directions * (size_t)dma_descriptors *
+                             (dma_buffer_bytes + 32U);
+
+        if (!esp32_mquickjs_memory_prepare_internal_dma(
+                dma_request, dma_buffer_bytes)) {
+            return i2s_throw_no_memory(ctx, "i2s.open()");
+        }
     }
     if (requested_port == I2S_NUM_AUTO) {
         for (i = 0; i < I2S_LL_GET(INST_NUM); ++i) {

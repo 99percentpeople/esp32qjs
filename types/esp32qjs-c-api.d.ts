@@ -1225,11 +1225,28 @@ namespace ESP32QJS {
     totalBlocks: number;
   }
 
+  type SysMemoryPressure = "normal" | "guarded" | "critical";
+
+  interface SysMemoryManagerStatus {
+    pressure: SysMemoryPressure;
+    internalReserveBytes: number;
+    dmaLargestReserveBytes: number;
+    managedInternalBytes: number;
+    managedPsramBytes: number;
+    pinnedBytes: number;
+    movableIdleBytes: number;
+    migrationCount: number;
+    migrationBytes: number;
+    evictionCount: number;
+    allocationFailures: number;
+  }
+
   interface SysMemoryStatus {
     readonly default: SysHeapStatus;
     readonly internal: SysHeapStatus;
     readonly dma: SysHeapStatus;
     readonly psram: SysHeapStatus | null;
+    readonly manager: SysMemoryManagerStatus;
   }
 
   interface SysRuntimeTaskStatus {

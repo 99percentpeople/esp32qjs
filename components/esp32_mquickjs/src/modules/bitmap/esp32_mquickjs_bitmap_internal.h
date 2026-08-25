@@ -1,6 +1,7 @@
 #pragma once
 
 #include "esp32_mquickjs_bitmap.h"
+#include "esp32_mquickjs_memory.h"
 #include "esp32_mquickjs_bitmap_image.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
@@ -57,6 +58,7 @@ struct esp32_mquickjs_bitmap {
 typedef struct {
     esp32_mquickjs_bitmap_font_t font;
     uint8_t *glyphs;
+    esp32_mquickjs_memory_block_t *glyphs_block;
     char *name;
 } esp32_mquickjs_display_font_t;
 

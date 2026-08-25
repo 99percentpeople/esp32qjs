@@ -1,4 +1,5 @@
 #include "esp32_mquickjs_websocket.h"
+#include "esp32_mquickjs_memory.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
 
@@ -195,7 +196,8 @@ static void websocket_handle_data(const esp_websocket_event_data_t *data)
             }
         } else {
             s_websocket_state.fragment =
-                heap_caps_malloc(payload_len + 1U, MALLOC_CAP_8BIT);
+                esp32_mquickjs_memory_payload_alloc(
+                    payload_len + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
             if (s_websocket_state.fragment == NULL) {
                 s_websocket_state.fragment_dropping = true;
                 websocket_enqueue_error("out of memory while receiving WebSocket message", 0);

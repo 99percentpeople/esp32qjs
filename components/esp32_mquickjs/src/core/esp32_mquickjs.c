@@ -6,6 +6,7 @@
 #include "esp32_mquickjs_fs.h"
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_event_queue.h"
+#include "esp32_mquickjs_memory.h"
 #include "esp32_mquickjs_gpio.h"
 #include "esp32_mquickjs_http.h"
 #include "esp32_mquickjs_http_server.h"
@@ -1434,6 +1435,7 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
         return false;
     }
 
+    esp32_mquickjs_memory_init();
     if (!esp32_mquickjs_init_secure_random(ctx)) {
         esp32_mquickjs_print_exception(ctx);
         return false;
@@ -1569,6 +1571,7 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
         if (runtime->output_generation != output_generation) {
             result |= ESP32_MQUICKJS_POLL_OUTPUT;
         }
+        esp32_mquickjs_memory_maintain();
         return result;
     }
 
@@ -1635,6 +1638,7 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
     if (runtime->output_generation != output_generation) {
         result |= ESP32_MQUICKJS_POLL_OUTPUT;
     }
+    esp32_mquickjs_memory_maintain();
     return result;
 }
 

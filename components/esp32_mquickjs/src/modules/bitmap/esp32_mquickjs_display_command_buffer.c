@@ -1,4 +1,5 @@
 #include "esp32_mquickjs_bitmap_internal.h"
+#include "esp32_mquickjs_memory.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
 
@@ -49,10 +50,12 @@ typedef struct {
 
 typedef struct {
     display_command_t *commands;
+    esp32_mquickjs_memory_block_t *commands_block;
     size_t count;
     size_t capacity;
     size_t default_capacity;
     char *text;
+    esp32_mquickjs_memory_block_t *text_block;
     size_t text_length;
     size_t text_capacity;
     size_t default_text_capacity;
@@ -62,6 +65,28 @@ typedef struct {
     size_t font_ref_count;
     bool closed;
 } display_command_buffer_t;
+
+static void display_commands_relocated(void *opaque, void *data, size_t size)
+{
+    display_command_buffer_t *command_buffer = opaque;
+
+    if (command_buffer == NULL) {
+        return;
+    }
+    command_buffer->commands = data;
+    command_buffer->capacity = size / sizeof(*command_buffer->commands);
+}
+
+static void display_text_relocated(void *opaque, void *data, size_t size)
+{
+    display_command_buffer_t *command_buffer = opaque;
+
+    if (command_buffer == NULL) {
+        return;
+    }
+    command_buffer->text = data;
+    command_buffer->text_capacity = size;
+}
 
 static uint32_t abs_i32_to_u32_local(int32_t value)
 {
@@ -121,8 +146,10 @@ static void display_command_buffer_close_internal(JSContext *ctx, display_comman
         return;
     }
     display_command_buffer_reset_internal(ctx, command_buffer);
-    heap_caps_free(command_buffer->commands);
-    heap_caps_free(command_buffer->text);
+    (void)esp32_mquickjs_memory_block_free(command_buffer->commands_block);
+    (void)esp32_mquickjs_memory_block_free(command_buffer->text_block);
+    command_buffer->commands_block = NULL;
+    command_buffer->text_block = NULL;
     command_buffer->commands = NULL;
     command_buffer->text = NULL;
     command_buffer->capacity = 0;
@@ -159,17 +186,22 @@ static bool reserve_commands(JSContext *ctx, display_command_buffer_t *command_b
         JS_ThrowOutOfMemory(ctx);
         return false;
     }
-    next = heap_caps_malloc(next_capacity * sizeof(*next), MALLOC_CAP_8BIT);
-    if (next == NULL) {
+    if (command_buffer->commands_block == NULL) {
+        command_buffer->commands_block = esp32_mquickjs_memory_block_alloc(
+            next_capacity * sizeof(*next),
+            ESP32_MQUICKJS_MEMORY_HOT_MOVABLE,
+            display_commands_relocated,
+            command_buffer);
+        if (command_buffer->commands_block == NULL) {
+            JS_ThrowOutOfMemory(ctx);
+            return false;
+        }
+    } else if (!esp32_mquickjs_memory_block_resize(
+                   command_buffer->commands_block,
+                   next_capacity * sizeof(*next))) {
         JS_ThrowOutOfMemory(ctx);
         return false;
     }
-    if (command_buffer->commands != NULL && command_buffer->count > 0) {
-        memcpy(next, command_buffer->commands, command_buffer->count * sizeof(*next));
-    }
-    heap_caps_free(command_buffer->commands);
-    command_buffer->commands = next;
-    command_buffer->capacity = next_capacity;
     return true;
 }
 
@@ -200,17 +232,21 @@ static bool reserve_text(JSContext *ctx, display_command_buffer_t *command_buffe
         }
         next_capacity *= 2U;
     }
-    next = heap_caps_malloc(next_capacity, MALLOC_CAP_8BIT);
-    if (next == NULL) {
+    if (command_buffer->text_block == NULL) {
+        command_buffer->text_block = esp32_mquickjs_memory_block_alloc(
+            next_capacity,
+            ESP32_MQUICKJS_MEMORY_HOT_MOVABLE,
+            display_text_relocated,
+            command_buffer);
+        if (command_buffer->text_block == NULL) {
+            JS_ThrowOutOfMemory(ctx);
+            return false;
+        }
+    } else if (!esp32_mquickjs_memory_block_resize(
+                   command_buffer->text_block, next_capacity)) {
         JS_ThrowOutOfMemory(ctx);
         return false;
     }
-    if (command_buffer->text != NULL && command_buffer->text_length > 0) {
-        memcpy(next, command_buffer->text, command_buffer->text_length);
-    }
-    heap_caps_free(command_buffer->text);
-    command_buffer->text = next;
-    command_buffer->text_capacity = next_capacity;
     return true;
 }
 
@@ -1220,6 +1256,15 @@ JSValue js_display_command_buffer_replay(JSContext *ctx, JSValue *this_val, int 
     if (buffer->format != command_buffer->format) {
         return JS_ThrowTypeError(ctx, "DisplayCommandBuffer.replay(target) requires a target with the same pixel format");
     }
+    if (command_buffer->commands_block != NULL &&
+        esp32_mquickjs_memory_block_borrow(command_buffer->commands_block) == NULL) {
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    if (command_buffer->text_block != NULL &&
+        esp32_mquickjs_memory_block_borrow(command_buffer->text_block) == NULL) {
+        esp32_mquickjs_memory_block_release(command_buffer->commands_block);
+        return JS_ThrowOutOfMemory(ctx);
+    }
     for (i = 0; i < command_buffer->count; ++i) {
         display_command_t *command = &command_buffer->commands[i];
 
@@ -1262,6 +1307,13 @@ JSValue js_display_command_buffer_replay(JSContext *ctx, JSValue *this_val, int 
                                 command->color);
             break;
         case DISPLAY_COMMAND_DRAW_TEXT:
+            if (esp32_mquickjs_memory_block_borrow(
+                    ((esp32_mquickjs_display_font_t *)command->font)
+                        ->glyphs_block) == NULL) {
+                esp32_mquickjs_memory_block_release(command_buffer->text_block);
+                esp32_mquickjs_memory_block_release(command_buffer->commands_block);
+                return JS_ThrowOutOfMemory(ctx);
+            }
             bitmap_draw_text_raw(buffer,
                                          command->x,
                                          command->y,
@@ -1271,11 +1323,15 @@ JSValue js_display_command_buffer_replay(JSContext *ctx, JSValue *this_val, int 
                                          command->color,
                                          (command->flags & DISPLAY_COMMAND_TEXT_HAS_BACKGROUND) != 0,
                                          command->background);
+            esp32_mquickjs_memory_block_release(
+                ((esp32_mquickjs_display_font_t *)command->font)->glyphs_block);
             break;
         default:
             break;
         }
     }
+    esp32_mquickjs_memory_block_release(command_buffer->text_block);
+    esp32_mquickjs_memory_block_release(command_buffer->commands_block);
     return *this_val;
 }
 

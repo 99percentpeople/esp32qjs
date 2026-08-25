@@ -1,4 +1,5 @@
 #include "esp32_mquickjs_stream.h"
+#include "esp32_mquickjs_memory.h"
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_fs_events.h"
 
@@ -640,7 +641,8 @@ JSValue esp32_mquickjs_stream_open_bytes_copy(JSContext *ctx,
         return JS_IsUndefined(error) ? JS_EXCEPTION : error;
     }
     if (source.length > 0) {
-        copy = heap_caps_malloc(source.length, MALLOC_CAP_8BIT);
+        copy = esp32_mquickjs_memory_payload_alloc(
+            source.length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (copy == NULL) {
             esp32_mquickjs_release_byte_source(converted);
             return JS_ThrowOutOfMemory(ctx);
@@ -766,17 +768,28 @@ int esp32_mquickjs_stream_read_all_text(JSContext *ctx,
         if (read_len == 0) {
             break;
         }
+        if (read_len > SIZE_MAX - length - 1U) {
+            JS_ThrowOutOfMemory(ctx);
+            goto done;
+        }
         if (capacity < length + read_len + 1) {
             size_t new_capacity = capacity == 0 ? 1024 : capacity;
+            char *grown;
 
             while (new_capacity < length + read_len + 1) {
-                new_capacity *= 2;
+                if (new_capacity > SIZE_MAX / 2U) {
+                    new_capacity = length + read_len + 1U;
+                    break;
+                }
+                new_capacity *= 2U;
             }
-            buffer = heap_caps_realloc(buffer, new_capacity, MALLOC_CAP_8BIT);
-            if (buffer == NULL) {
+            grown = esp32_mquickjs_memory_payload_realloc(
+                buffer, new_capacity, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+            if (grown == NULL) {
                 JS_ThrowOutOfMemory(ctx);
                 goto done;
             }
+            buffer = grown;
             capacity = new_capacity;
         }
         memcpy(buffer + length, chunk, read_len);
@@ -784,7 +797,8 @@ int esp32_mquickjs_stream_read_all_text(JSContext *ctx,
     }
 
     if (buffer == NULL) {
-        buffer = heap_caps_malloc(1, MALLOC_CAP_8BIT);
+        buffer = esp32_mquickjs_memory_payload_alloc(
+            1, ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (buffer == NULL) {
             JS_ThrowOutOfMemory(ctx);
             goto done;
@@ -855,12 +869,8 @@ int esp32_mquickjs_stream_read_all_bytes(JSContext *ctx,
                                      : new_capacity * 2;
                 new_capacity = doubled > max_bytes ? max_bytes : doubled;
             }
-            grown = heap_caps_realloc(buffer, new_capacity,
-                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-            if (grown == NULL) {
-                grown = heap_caps_realloc(buffer, new_capacity,
-                                          MALLOC_CAP_8BIT);
-            }
+            grown = esp32_mquickjs_memory_payload_realloc(
+                buffer, new_capacity, ESP32_MQUICKJS_MEMORY_EXTERNAL);
             if (grown == NULL) {
                 JS_ThrowOutOfMemory(ctx);
                 goto fail;
@@ -1088,7 +1098,9 @@ JSValue js_stream_read(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
     if (chunk_size <= 0) {
         return JS_ThrowTypeError(ctx, "stream.read(size) expects a positive integer");
     }
-    buf = heap_caps_malloc((size_t)chunk_size + (slot->binary ? 0 : 1), MALLOC_CAP_8BIT);
+    buf = esp32_mquickjs_memory_payload_alloc(
+        (size_t)chunk_size + (slot->binary ? 0U : 1U),
+        ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (buf == NULL) {
         return JS_ThrowOutOfMemory(ctx);
     }

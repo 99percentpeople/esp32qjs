@@ -1,4 +1,5 @@
 #include "esp32_mquickjs_camera.h"
+#include "esp32_mquickjs_memory.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA
 
@@ -1458,7 +1459,8 @@ JSValue js_camera_frame_read(JSContext *ctx, JSValue *this_val,
         length = limit;
     }
     if (length > 0) {
-        copy = heap_caps_malloc(length, MALLOC_CAP_8BIT);
+        copy = esp32_mquickjs_memory_payload_alloc(
+            length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (copy == NULL) {
             return JS_ThrowOutOfMemory(ctx);
         }

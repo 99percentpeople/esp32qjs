@@ -1,4 +1,5 @@
 #include "esp32_mquickjs_socket.h"
+#include "esp32_mquickjs_memory.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
 
@@ -713,7 +714,8 @@ static bool socket_future_copy_source(JSContext *ctx,
         return false;
     }
     if (source.length > 0) {
-        state->data = heap_caps_malloc(source.length, MALLOC_CAP_8BIT);
+        state->data = esp32_mquickjs_memory_payload_alloc(
+            source.length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (state->data == NULL) {
             esp32_mquickjs_release_byte_source(owned);
             JS_ThrowOutOfMemory(ctx);
@@ -1011,7 +1013,8 @@ static bool socket_receive_future_prepare(
         return false;
     }
     state->length = (size_t)max_bytes;
-    state->data = heap_caps_malloc(state->length, MALLOC_CAP_8BIT);
+    state->data = esp32_mquickjs_memory_payload_alloc(
+        state->length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (state->data == NULL) {
         heap_caps_free(state);
         JS_ThrowOutOfMemory(ctx);

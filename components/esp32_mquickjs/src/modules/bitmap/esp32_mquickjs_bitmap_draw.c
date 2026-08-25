@@ -1,4 +1,5 @@
 #include "esp32_mquickjs_bitmap_internal.h"
+#include "esp32_mquickjs_memory.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
 
@@ -778,7 +779,8 @@ static bool parse_point_list(JSContext *ctx,
             JS_ThrowOutOfMemory(ctx);
             goto fail;
         }
-        points = heap_caps_malloc((size_t)count * sizeof(*points), MALLOC_CAP_8BIT);
+        points = esp32_mquickjs_memory_payload_alloc(
+            (size_t)count * sizeof(*points), ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (points == NULL) {
             JS_ThrowOutOfMemory(ctx);
             goto fail;
@@ -891,7 +893,9 @@ static bool fill_polygon_raw(esp32_mquickjs_bitmap_t *buffer,
         if (count > SIZE_MAX / sizeof(*intersections)) {
             return false;
         }
-        intersections = heap_caps_malloc((size_t)count * sizeof(*intersections), MALLOC_CAP_8BIT);
+        intersections = esp32_mquickjs_memory_payload_alloc(
+            (size_t)count * sizeof(*intersections),
+            ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (intersections == NULL) {
             return false;
         }

@@ -1,4 +1,5 @@
 #include "esp32_mquickjs_uart.h"
+#include "esp32_mquickjs_memory.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_UART
 
@@ -1555,7 +1556,8 @@ static bool uart_read_future_prepare(
         return false;
     }
     if (state->length > 0) {
-        state->data = heap_caps_malloc(state->length, MALLOC_CAP_8BIT);
+        state->data = esp32_mquickjs_memory_payload_alloc(
+            state->length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (state->data == NULL) {
             uart_future_release(state);
             JS_ThrowOutOfMemory(ctx);

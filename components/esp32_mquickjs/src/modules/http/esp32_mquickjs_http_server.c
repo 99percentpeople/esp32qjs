@@ -1,4 +1,5 @@
 #include "esp32_mquickjs_http_server.h"
+#include "esp32_mquickjs_memory.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
 
@@ -664,7 +665,8 @@ static uint8_t *http_server_recv_body(httpd_req_t *req,
         return NULL;
     }
 
-    body = heap_caps_malloc(req->content_len, MALLOC_CAP_8BIT);
+    body = esp32_mquickjs_memory_payload_alloc(
+        req->content_len, ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (body == NULL) {
         *out_err = ESP_ERR_NO_MEM;
         return NULL;
@@ -1424,8 +1426,9 @@ static esp_err_t http_server_send_known_length_response(
         return http_server_close_response_body(response);
     }
 
-    chunk_buffer = heap_caps_malloc(
-        ESP32_MQUICKJS_HTTP_SERVER_STREAM_CHUNK_SIZE, MALLOC_CAP_8BIT);
+    chunk_buffer = esp32_mquickjs_memory_payload_alloc(
+        ESP32_MQUICKJS_HTTP_SERVER_STREAM_CHUNK_SIZE,
+        ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (chunk_buffer == NULL) {
         return ESP_ERR_NO_MEM;
     }
@@ -1512,7 +1515,9 @@ static esp_err_t http_server_send_response(httpd_req_t *req,
             }
             return httpd_resp_send_chunk(req, NULL, 0);
         }
-        chunk_buffer = heap_caps_malloc(ESP32_MQUICKJS_HTTP_SERVER_STREAM_CHUNK_SIZE, MALLOC_CAP_8BIT);
+        chunk_buffer = esp32_mquickjs_memory_payload_alloc(
+            ESP32_MQUICKJS_HTTP_SERVER_STREAM_CHUNK_SIZE,
+            ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (chunk_buffer == NULL) {
             return ESP_ERR_NO_MEM;
         }

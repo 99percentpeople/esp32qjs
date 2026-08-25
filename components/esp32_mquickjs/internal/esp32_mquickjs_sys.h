@@ -22,6 +22,7 @@ JSValue js_sys_boot_reset(JSContext *ctx, JSValue *this_val, int argc, JSValue *
 JSValue js_sys_boot_wakeup(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_sys_cpu_frequency(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_sys_memory_get(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv, int magic);
+JSValue js_sys_memory_manager(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_sys_rtos_get(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv, int magic);
 JSValue js_sys_rtos_runtime_task(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_sys_runtime_status_get(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv, int magic);

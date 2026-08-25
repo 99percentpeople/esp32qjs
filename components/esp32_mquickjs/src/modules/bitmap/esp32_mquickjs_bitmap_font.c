@@ -36,7 +36,8 @@ static char *display_font_copy_name(const char *name)
         name = "font";
     }
     length = strlen(name);
-    copy = heap_caps_malloc(length + 1, MALLOC_CAP_8BIT);
+    copy = esp32_mquickjs_memory_payload_alloc(
+        length + 1, ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (copy == NULL) {
         return NULL;
     }
@@ -49,9 +50,25 @@ static void display_font_free(esp32_mquickjs_display_font_t *font)
     if (font == NULL) {
         return;
     }
-    heap_caps_free(font->glyphs);
+    (void)esp32_mquickjs_memory_block_free(font->glyphs_block);
+    font->glyphs_block = NULL;
+    font->glyphs = NULL;
     heap_caps_free(font->name);
     heap_caps_free(font);
+}
+
+static void display_font_glyphs_relocated(void *opaque,
+                                          void *data,
+                                          size_t size)
+{
+    esp32_mquickjs_display_font_t *font = opaque;
+
+    (void)size;
+    if (font == NULL) {
+        return;
+    }
+    font->glyphs = data;
+    font->font.glyphs = data;
 }
 
 esp32_mquickjs_display_font_t *display_font_from_value(JSContext *ctx,
@@ -88,6 +105,7 @@ static JSValue display_font_make(JSContext *ctx,
     size_t glyph_count;
     size_t glyph_stride;
     esp32_mquickjs_display_font_t *font = NULL;
+    void *glyphs;
     JSGCRef object_ref;
     JSValue *object;
 
@@ -127,12 +145,22 @@ static JSValue display_font_make(JSContext *ctx,
     }
     memset(font, 0, sizeof(*font));
     font->name = display_font_copy_name(name);
-    font->glyphs = heap_caps_malloc(glyph_length == 0 ? 1U : (size_t)glyph_length, MALLOC_CAP_8BIT);
-    if (font->name == NULL || font->glyphs == NULL) {
+    font->glyphs_block = esp32_mquickjs_memory_block_alloc(
+        glyph_length == 0 ? 1U : (size_t)glyph_length,
+        ESP32_MQUICKJS_MEMORY_COLD_MOVABLE,
+        display_font_glyphs_relocated,
+        font);
+    if (font->name == NULL || font->glyphs_block == NULL) {
         display_font_free(font);
         return JS_ThrowOutOfMemory(ctx);
     }
-    memcpy(font->glyphs, bytes + DISPLAY_FONT_HEADER_SIZE, glyph_length);
+    glyphs = esp32_mquickjs_memory_block_borrow(font->glyphs_block);
+    if (glyphs == NULL) {
+        display_font_free(font);
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    memcpy(glyphs, bytes + DISPLAY_FONT_HEADER_SIZE, glyph_length);
+    esp32_mquickjs_memory_block_release(font->glyphs_block);
     font->font.name = font->name;
     font->font.glyphs = font->glyphs;
     font->font.first = first;
@@ -200,7 +228,8 @@ static uint8_t *display_font_read_file(JSContext *ctx,
         return NULL;
     }
 
-    bytes = heap_caps_malloc((size_t)file_size, MALLOC_CAP_8BIT);
+    bytes = esp32_mquickjs_memory_payload_alloc(
+        (size_t)file_size, ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (bytes == NULL) {
         fclose(file);
         JS_ThrowOutOfMemory(ctx);

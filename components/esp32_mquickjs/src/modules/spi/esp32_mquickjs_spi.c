@@ -1,4 +1,5 @@
 #include "esp32_mquickjs_spi.h"
+#include "esp32_mquickjs_memory.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_SPI
 
@@ -17,6 +18,7 @@
 #include "esp_memory_utils.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "soc/soc_caps.h"
 
 #define ESP32_MQUICKJS_SPI_DEFAULT_HOST_NUMBER \
     esp32_mquickjs_profile_int_or("ESP32QJS_SPI_HOST", 2)
@@ -706,6 +708,19 @@ static bool spi_byte_span_can_dma(const esp32_mquickjs_byte_span_t *span)
            (span->length & 3U) == 0U;
 }
 
+static void spi_mark_external_dma(spi_transaction_t *transaction)
+{
+#if SOC_PSRAM_DMA_CAPABLE
+    if (transaction != NULL &&
+        (esp_ptr_external_ram(transaction->tx_buffer) ||
+         esp_ptr_external_ram(transaction->rx_buffer))) {
+        transaction->flags |= SPI_TRANS_DMA_USE_PSRAM;
+    }
+#else
+    (void)transaction;
+#endif
+}
+
 typedef struct {
     JSGCRef owner_ref;
     bool rooted;
@@ -746,7 +761,8 @@ static bool spi_ensure_tx_dma_buffer(esp32_mquickjs_spi_device_slot_t *device_sl
         return true;
     }
 
-    buffer = heap_caps_malloc(length, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    buffer = esp32_mquickjs_memory_payload_alloc(
+        length, ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL);
     if (buffer == NULL) {
         return false;
     }
@@ -936,6 +952,7 @@ static JSValue spi_write_span_source(JSContext *ctx,
             transactions[slot_index].tx_buffer = device_slot->tx_dma_buffers[slot_index];
             direct = false;
         }
+        spi_mark_external_dma(&transactions[slot_index]);
 
         step_start = esp_timer_get_time();
         err = spi_queue_transaction_cooperatively(device_slot->handle, &transactions[slot_index]);
@@ -1522,7 +1539,8 @@ static bool spi_future_allocate_buffers(
     if (length == 0) {
         return true;
     }
-    state->tx_data = heap_caps_malloc(length, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    state->tx_data = esp32_mquickjs_memory_payload_alloc(
+        length, ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL);
     if (state->tx_data == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -1533,8 +1551,8 @@ static bool spi_future_allocate_buffers(
         memset(state->tx_data, fill_byte, length);
     }
     if (receive) {
-        state->rx_data = heap_caps_malloc(length,
-                                          MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+        state->rx_data = esp32_mquickjs_memory_payload_alloc(
+            length, ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL);
         if (state->rx_data == NULL) {
             JS_ThrowOutOfMemory(ctx);
             return false;
@@ -1544,6 +1562,7 @@ static bool spi_future_allocate_buffers(
     state->transaction.rxlength = receive ? length * 8U : 0;
     state->transaction.tx_buffer = state->tx_data;
     state->transaction.rx_buffer = state->rx_data;
+    spi_mark_external_dma(&state->transaction);
     return true;
 }
 
@@ -1990,6 +2009,7 @@ JSValue js_spi_device_write_chunks(JSContext *ctx, JSValue *this_val, int argc, 
             active_direct[slot_index] = false;
             direct = false;
         }
+        spi_mark_external_dma(&transactions[slot_index]);
 
         step_start = esp_timer_get_time();
         err = spi_queue_transaction_cooperatively(device_slot->handle, &transactions[slot_index]);

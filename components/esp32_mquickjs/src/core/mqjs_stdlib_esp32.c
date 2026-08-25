@@ -545,6 +545,7 @@ static const JSPropDef js_sys_status_memory[] = {
     JS_CGETSET_MAGIC_DEF("internal", js_sys_memory_get, NULL, 1),
     JS_CGETSET_MAGIC_DEF("dma", js_sys_memory_get, NULL, 2),
     JS_CGETSET_MAGIC_DEF("psram", js_sys_memory_get, NULL, 3),
+    JS_CGETSET_DEF("manager", js_sys_memory_manager, NULL),
     JS_PROP_END,
 };
 

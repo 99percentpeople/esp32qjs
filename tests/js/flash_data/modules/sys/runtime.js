@@ -7,6 +7,7 @@ test("sys/runtime", function () {
   var boot = status.boot;
   var internalHeap = status.memory.internal;
   var internalHeapAgain = status.memory.internal;
+  var memoryManager = status.memory.manager;
   var runtimeStatus = status.runtime;
   var resources = runtimeStatus.resources;
   var watchdogStatus = runtimeStatus.watchdog;
@@ -174,6 +175,21 @@ test("sys/runtime", function () {
   test.ok(internalHeap !== internalHeapAgain, "structured getters should return detached fresh objects");
   test.ok(internalHeap.totalBytes >= internalHeap.freeBytes,
     "heap totals should be internally coherent");
+  test.ok(memoryManager.pressure === "normal" ||
+      memoryManager.pressure === "guarded" ||
+      memoryManager.pressure === "critical",
+    "memory manager pressure should use the stable v1 states");
+  test.ok(memoryManager.internalReserveBytes > 0 &&
+      memoryManager.dmaLargestReserveBytes > 0,
+    "memory manager should publish non-zero internal and DMA reserves");
+  test.ok(memoryManager.managedInternalBytes >= 0 &&
+      memoryManager.managedPsramBytes >= 0 &&
+      memoryManager.movableIdleBytes >= 0,
+    "memory manager byte counters should be non-negative");
+  test.ok(memoryManager.migrationCount >= 0 &&
+      memoryManager.evictionCount >= 0 &&
+      memoryManager.allocationFailures >= 0,
+    "memory manager operation counters should be non-negative");
   test.ok(typeof heap === "number" && heap >= 0, "sys.freeHeap() should be numeric");
   test.equal(rtos.name, "FreeRTOS", "RTOS name should be stable");
   test.equal(rtos.schedulerState, "running", "scheduler should be running in a JS test");

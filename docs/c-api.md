@@ -1466,6 +1466,12 @@ if (ref) {
   whether a TLS handshake or DMA allocation is possible. Diagnose memory with
   `sys.status.memory.internal`, `.dma`, and `.psram`, especially each view's
   `largestFreeBlockBytes` and `minimumFreeBytes`.
+- `sys.status.memory.manager`
+  Reports the framework-wide allocation pressure state, startup-derived
+  internal/DMA reserves, managed internal/PSRAM byte counts, idle movable
+  bytes, migration/eviction counters, and classified allocation failures.
+  Driver-owned DMA descriptors and other opaque ESP-IDF allocations are not
+  included in the managed byte counters.
 - `sys.randomHex(byteLength)`
   Return 1–64 cryptographically strong random bytes as two lowercase
   hexadecimal characters per byte. Before JavaScript-visible RF or ADC modules

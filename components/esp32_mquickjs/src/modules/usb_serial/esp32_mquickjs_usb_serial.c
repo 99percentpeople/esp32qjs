@@ -1,4 +1,5 @@
 #include "esp32_mquickjs_usb_serial.h"
+#include "esp32_mquickjs_memory.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
 
@@ -260,7 +261,8 @@ static void usb_serial_emit_frame(void *opaque,
     }
 
     if (frame_len > 0) {
-        event.data = heap_caps_malloc(frame_len, MALLOC_CAP_8BIT);
+        event.data = esp32_mquickjs_memory_payload_alloc(
+            frame_len, ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (event.data == NULL) {
             s_usb_serial_state.overflow_frames++;
             return;
@@ -489,7 +491,8 @@ JSValue js_usb_serial_open(JSContext *ctx,
 
     if (!binary) {
         s_usb_serial_state.line_buffer =
-            heap_caps_malloc(max_frame_bytes, MALLOC_CAP_8BIT);
+            esp32_mquickjs_memory_payload_alloc(
+                max_frame_bytes, ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (s_usb_serial_state.line_buffer == NULL) {
             return JS_ThrowOutOfMemory(ctx);
         }
@@ -672,7 +675,8 @@ JSValue js_usb_serial_send(JSContext *ctx,
     }
 
     {
-        uint8_t *frame = heap_caps_malloc(text_len + 1U, MALLOC_CAP_8BIT);
+        uint8_t *frame = esp32_mquickjs_memory_payload_alloc(
+            text_len + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
 
         if (frame == NULL) {
             return JS_ThrowOutOfMemory(ctx);
@@ -856,7 +860,8 @@ static bool usb_serial_future_prepare(
                 "usbSerial.send() text must contain exactly one line");
             return false;
         }
-        state->owned = heap_caps_malloc(text_length + 1U, MALLOC_CAP_8BIT);
+        state->owned = esp32_mquickjs_memory_payload_alloc(
+            text_length + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (state->owned == NULL) {
             usb_serial_future_release(state);
             JS_ThrowOutOfMemory(ctx);

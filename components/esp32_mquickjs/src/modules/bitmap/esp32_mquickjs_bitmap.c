@@ -1,4 +1,5 @@
 #include "esp32_mquickjs_bitmap_internal.h"
+#include "esp32_mquickjs_memory.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
 
@@ -337,12 +338,8 @@ static uint32_t allocation_caps(uint8_t storage, size_t byte_length)
 
 static uint8_t *alloc_export_bytes(size_t length)
 {
-    uint8_t *data = heap_caps_malloc(length, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
-
-    if (data != NULL) {
-        return data;
-    }
-    return heap_caps_malloc(length, MALLOC_CAP_8BIT);
+    return esp32_mquickjs_memory_payload_alloc(
+        length, ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL);
 }
 
 static uint8_t *ensure_export_chunk(esp32_mquickjs_bitmap_t *buffer, size_t length)
@@ -414,10 +411,11 @@ esp32_mquickjs_bitmap_t *bitmap_allocate(JSContext *ctx,
         JS_ThrowRangeError(ctx, "Bitmap allocation received invalid dimensions, layout, or stride");
         return NULL;
     }
-    data = heap_caps_malloc(byte_length, allocation_caps(storage, byte_length));
-    if (data == NULL && storage == BITMAP_STORAGE_AUTO) {
-        data = heap_caps_malloc(byte_length, MALLOC_CAP_8BIT);
-    }
+    data = storage == BITMAP_STORAGE_AUTO
+               ? esp32_mquickjs_memory_payload_alloc(
+                     byte_length, ESP32_MQUICKJS_MEMORY_DEFAULT)
+               : heap_caps_malloc(byte_length,
+                                  allocation_caps(storage, byte_length));
     if (data == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return NULL;
@@ -1911,10 +1909,11 @@ JSValue js_bitmap_create(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
         JS_PopGCRef(ctx, &property_ref);
     }
 
-    data = heap_caps_malloc(byte_length, allocation_caps(storage, byte_length));
-    if (data == NULL && storage == BITMAP_STORAGE_AUTO) {
-        data = heap_caps_malloc(byte_length, MALLOC_CAP_8BIT);
-    }
+    data = storage == BITMAP_STORAGE_AUTO
+               ? esp32_mquickjs_memory_payload_alloc(
+                     byte_length, ESP32_MQUICKJS_MEMORY_DEFAULT)
+               : heap_caps_malloc(byte_length,
+                                  allocation_caps(storage, byte_length));
     if (data == NULL) {
         return JS_ThrowOutOfMemory(ctx);
     }

@@ -183,6 +183,7 @@ JSValue js_bitmap_draw_text(JSContext *ctx, JSValue *this_val, int argc, JSValue
     const char *text;
     int spacing;
     const esp32_mquickjs_bitmap_font_t *font;
+    esp32_mquickjs_display_font_t *font_owner;
     bool font_ok;
     JSGCRef property_ref;
     JSValue *property;
@@ -232,7 +233,12 @@ JSValue js_bitmap_draw_text(JSContext *ctx, JSValue *this_val, int argc, JSValue
     if (text == NULL) {
         return JS_EXCEPTION;
     }
+    font_owner = (esp32_mquickjs_display_font_t *)font;
+    if (esp32_mquickjs_memory_block_borrow(font_owner->glyphs_block) == NULL) {
+        return JS_ThrowOutOfMemory(ctx);
+    }
     bitmap_draw_text_raw(buffer, x, y, text, font, spacing, color, has_background, background);
+    esp32_mquickjs_memory_block_release(font_owner->glyphs_block);
     return *this_val;
 }
 

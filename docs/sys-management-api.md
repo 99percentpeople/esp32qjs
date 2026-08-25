@@ -256,11 +256,28 @@ declare namespace ESP32QJS {
     totalBlocks: number;
   }
 
+  type SysMemoryPressure = "normal" | "guarded" | "critical";
+
+  interface SysMemoryManagerStatus {
+    pressure: SysMemoryPressure;
+    internalReserveBytes: number;
+    dmaLargestReserveBytes: number;
+    managedInternalBytes: number;
+    managedPsramBytes: number;
+    pinnedBytes: number;
+    movableIdleBytes: number;
+    migrationCount: number;
+    migrationBytes: number;
+    evictionCount: number;
+    allocationFailures: number;
+  }
+
   interface SysMemoryStatus {
     readonly default: SysHeapStatus;
     readonly internal: SysHeapStatus;
     readonly dma: SysHeapStatus;
     readonly psram: SysHeapStatus | null;
+    readonly manager: SysMemoryManagerStatus;
   }
 
   interface SysRuntimeTaskStatus {
@@ -590,6 +607,29 @@ dominated by external memory, so it is not a TLS- or DMA-capacity signal. Use
 the `internal`, `dma`, and `psram` views' `largestFreeBlockBytes` and
 `minimumFreeBytes` values when diagnosing allocation failures or a downward
 fragmentation trend.
+
+`sys.status.memory.manager` reports the framework allocator rather than another
+heap capability view. At runtime startup it derives an internal-free reserve
+and an internal-DMA largest-block reserve from the available heaps. `guarded`
+means either reserve has been crossed; `critical` means a reserve has fallen
+below half its startup-derived value. The policy uses internal/DMA metrics and
+never treats aggregate `freeHeap()` as proof that a driver allocation can
+succeed.
+
+Framework payloads declare their memory class. File, network, serial, font,
+bitmap, and media payloads prefer PSRAM when it is available. ISR state, task
+state, I2S DMA descriptors, and driver-owned objects remain pinned in internal
+memory. Movable buffers use stable native handles and are relocated only at a
+runtime safe point while no borrow is active. The managed-byte and
+`movableIdleBytes` counters cover stable managed blocks; allocation-failure
+counts cover all classified payload and block requests. None of these counters
+claim ownership of opaque ESP-IDF or third-party allocations.
+
+On targets without PSRAM the same classification and reserve checks remain in
+force, but migration is disabled. Pressure maintenance runs only at a
+JavaScript runtime safe point; driver-task allocation helpers never relocate
+blocks. A failed classified allocation returns the operation's normal
+out-of-memory error instead of trying progressively smaller driver layouts.
 
 ### RTOS
 
