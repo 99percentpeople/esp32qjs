@@ -238,6 +238,41 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             "completed or cancelled native drivers must be reaped at each safe point",
         )
 
+    def test_http_and_websocket_workers_publish_results_with_c11_atomics(self):
+        http = (
+            MQUICKJS / "src/modules/http/esp32_mquickjs_http_future.c"
+        ).read_text(encoding="utf-8")
+        websocket = (
+            MQUICKJS / "src/modules/websocket/esp32_mquickjs_websocket.c"
+        ).read_text(encoding="utf-8")
+
+        for source in (http, websocket):
+            self.assertIn("#include <stdatomic.h>", source)
+            self.assertIn("memory_order_release", source)
+            self.assertIn("memory_order_acquire", source)
+
+        self.assertIn("_Atomic bool completed;", http)
+        self.assertIn(
+            "atomic_store_explicit(&state->completed, true, memory_order_release)",
+            http,
+        )
+        self.assertIn(
+            "atomic_load_explicit(&state->completed, memory_order_acquire)",
+            http,
+        )
+        self.assertNotIn("volatile bool completed;", http)
+
+        self.assertIn("_Atomic bool worker_completed;", websocket)
+        self.assertIn("_Atomic bool cancelled;", websocket)
+        self.assertIn("&state->worker_completed, true, memory_order_release", websocket)
+        self.assertIn(
+            "&state->worker_completed, memory_order_acquire", websocket
+        )
+        self.assertIn("&state->cancelled, true, memory_order_release", websocket)
+        self.assertIn("&state->cancelled, memory_order_acquire", websocket)
+        self.assertNotIn("volatile bool worker_completed;", websocket)
+        self.assertNotIn("volatile int sent;", websocket)
+
     def test_future_combinators_observe_every_attached_input_rejection(self):
         future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
             encoding="utf-8"

@@ -5,6 +5,7 @@
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_future.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -28,7 +29,7 @@ struct esp32_mquickjs_future_driver_state {
     esp_err_t err;
     esp32_mquickjs_tls_error_t tls_error;
     char error_text[ESP32_MQUICKJS_HTTP_ERROR_TEXT_LEN];
-    volatile bool completed;
+    _Atomic bool completed;
     bool started;
     bool cancel_requested;
     bool worker_uses_caps;
@@ -128,7 +129,7 @@ static void http_future_worker(void *opaque)
                  sizeof(state->error_text),
                  "fetch worker returned no response");
     }
-    state->completed = true;
+    atomic_store_explicit(&state->completed, true, memory_order_release);
     (void)esp32_mquickjs_future_wake(state->runtime, state->token);
     http_future_delete_worker(worker_uses_caps);
 }
@@ -176,6 +177,7 @@ static bool http_future_prepare(JSContext *ctx,
         JS_ThrowOutOfMemory(ctx);
         return false;
     }
+    atomic_init(&state->completed, false);
     if (esp32_mquickjs_http_build_request_from_args(ctx,
                                                     argc,
                                                     argv,
@@ -219,9 +221,11 @@ static bool http_future_start(JSContext *ctx,
 static esp32_mquickjs_future_poll_t http_future_poll(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    return state != NULL && state->completed
-        ? ESP32_MQUICKJS_FUTURE_READY
-        : ESP32_MQUICKJS_FUTURE_PENDING;
+    if (state != NULL &&
+        atomic_load_explicit(&state->completed, memory_order_acquire)) {
+        return ESP32_MQUICKJS_FUTURE_READY;
+    }
+    return ESP32_MQUICKJS_FUTURE_PENDING;
 }
 
 static JSValue http_future_finish(JSContext *ctx,
@@ -251,7 +255,9 @@ static JSValue http_future_finish(JSContext *ctx,
 
 static bool http_future_cancel(esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL || state->completed || state->cancel_requested) {
+    if (state == NULL ||
+        atomic_load_explicit(&state->completed, memory_order_acquire) ||
+        state->cancel_requested) {
         return false;
     }
     state->cancel_requested = true;

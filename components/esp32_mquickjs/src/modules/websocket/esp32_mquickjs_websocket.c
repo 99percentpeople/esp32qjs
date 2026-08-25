@@ -8,6 +8,7 @@
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_wifi.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -847,10 +848,10 @@ struct esp32_mquickjs_future_driver_state {
     size_t text_length;
     uint32_t generation;
     uint32_t timeout_ms;
-    volatile int sent;
-    volatile bool worker_completed;
+    int sent;
+    _Atomic bool worker_completed;
     bool started;
-    bool cancelled;
+    _Atomic bool cancelled;
 };
 
 static void websocket_send_future_release(
@@ -907,6 +908,8 @@ static bool websocket_send_future_prepare(
         JS_ThrowOutOfMemory(ctx);
         return false;
     }
+    atomic_init(&state->worker_completed, false);
+    atomic_init(&state->cancelled, false);
     state->text = heap_caps_malloc(text_length + 1U, MALLOC_CAP_8BIT);
     if (state->text == NULL) {
         websocket_send_future_release(state);
@@ -931,12 +934,13 @@ static void websocket_send_future_worker(void *opaque)
     if (state == NULL) {
         return;
     }
-    if (!state->cancelled) {
+    if (!atomic_load_explicit(&state->cancelled, memory_order_acquire)) {
         state->sent = esp_websocket_client_send_text(
             state->client, state->text, (int)state->text_length,
             pdMS_TO_TICKS(state->timeout_ms));
     }
-    state->worker_completed = true;
+    atomic_store_explicit(
+        &state->worker_completed, true, memory_order_release);
     (void)esp32_mquickjs_future_wake(state->runtime, state->token);
 }
 
@@ -971,16 +975,19 @@ static bool websocket_send_future_start(
 static esp32_mquickjs_future_poll_t websocket_send_future_poll(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    return state != NULL && state->worker_completed
-               ? ESP32_MQUICKJS_FUTURE_READY
-               : ESP32_MQUICKJS_FUTURE_PENDING;
+    if (state != NULL && atomic_load_explicit(
+                             &state->worker_completed, memory_order_acquire)) {
+        return ESP32_MQUICKJS_FUTURE_READY;
+    }
+    return ESP32_MQUICKJS_FUTURE_PENDING;
 }
 
 static JSValue websocket_send_future_finish(
     JSContext *ctx,
     esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL || state->cancelled) {
+    if (state == NULL ||
+        atomic_load_explicit(&state->cancelled, memory_order_acquire)) {
         return JS_ThrowInternalError(
             ctx, "websocketClient.send() was cancelled");
     }
@@ -995,10 +1002,12 @@ static JSValue websocket_send_future_finish(
 static bool websocket_send_future_cancel(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL || state->worker_completed || state->cancelled) {
+    if (state == NULL ||
+        atomic_load_explicit(&state->worker_completed, memory_order_acquire) ||
+        atomic_load_explicit(&state->cancelled, memory_order_acquire)) {
         return false;
     }
-    state->cancelled = true;
+    atomic_store_explicit(&state->cancelled, true, memory_order_release);
     return true;
 }
 
