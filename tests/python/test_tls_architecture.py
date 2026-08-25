@@ -63,14 +63,21 @@ class TlsArchitectureTests(SourceContractTestCase):
         self.assertIn("esp_tls_get_and_clear_last_error", helper)
         self.assertIn("esp_crt_verify_callback", helper)
         self.assertIn("tls_verify_capture_take", helper)
-        self.assertIn("tls_crt_is_synthetic_bundle_anchor", helper)
-        self.assertIn("crt->raw.p == NULL", helper)
-        self.assertIn("crt->valid_from.year == 0", helper)
-        self.assertIn("crt->valid_to.year == 0", helper)
+        self.assertIn("without changing ESP-IDF's trust decision", helper)
+        self.assertNotIn("tls_crt_is_synthetic_bundle_anchor", helper)
         self.assertIn("esp32_mquickjs_tls_crt_bundle_attach", http)
         self.assertIn("esp32_mquickjs_tls_crt_bundle_attach", socket)
         self.assertIn("esp32_mquickjs_tls_error_capture", socket)
         self.assertIn("esp_http_client_get_and_clear_last_tls_error", http)
+
+    def test_tls_uses_full_bundle_without_optional_cross_signed_callback(self):
+        remote = (ROOT / "scripts/remote.py").read_text(encoding="utf-8")
+        kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
+
+        self.assertIn('CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y', remote)
+        self.assertIn('CONFIG_MBEDTLS_X509_TRUSTED_CERT_CALLBACK=n', remote)
+        self.assertIn('CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=n', remote)
+        self.assertNotIn("select MBEDTLS_X509_TRUSTED_CERT_CALLBACK", kconfig)
 
     def test_tls_terminal_paths_release_native_contexts(self):
         socket = (

@@ -81,23 +81,6 @@ static uint32_t tls_verify_capture_take(void)
     return flags;
 }
 
-static bool tls_crt_is_synthetic_bundle_anchor(const mbedtls_x509_crt *crt)
-{
-#if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY
-    /* ESP-IDF's cross-signed bundle callback creates a trust anchor from the
-     * bundled subject and public key. It deliberately has no raw certificate
-     * or validity interval, so HAVE_TIME_DATE otherwise treats year zero as an
-     * expired peer certificate. Parsed peer certificates always retain raw. */
-    return crt != NULL &&
-           crt->raw.p == NULL && crt->raw.len == 0 &&
-           crt->subject_raw.p != NULL && crt->subject_raw.len != 0 &&
-           crt->valid_from.year == 0 && crt->valid_to.year == 0;
-#else
-    (void)crt;
-    return false;
-#endif
-}
-
 static int tls_crt_verify_callback(void *buf, mbedtls_x509_crt *crt,
                                    int depth, uint32_t *flags)
 {
@@ -105,10 +88,7 @@ static int tls_crt_verify_callback(void *buf, mbedtls_x509_crt *crt,
     TaskHandle_t task = xTaskGetCurrentTaskHandle();
     int result = esp_crt_verify_callback(buf, crt, depth, flags);
 
-    if (flags != NULL && tls_crt_is_synthetic_bundle_anchor(crt)) {
-        *flags &= ~(MBEDTLS_X509_BADCERT_EXPIRED |
-                    MBEDTLS_X509_BADCERT_FUTURE);
-    }
+    /* Observe the final flags without changing ESP-IDF's trust decision. */
     if (flags != NULL && *flags != 0) {
         taskENTER_CRITICAL(&s_tls_verify_lock);
         capture = tls_verify_capture_slot_locked(task, true);

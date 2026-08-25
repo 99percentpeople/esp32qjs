@@ -502,6 +502,16 @@ class RemoteConfigTests(unittest.TestCase):
             )
             self.assertIn("CONFIG_MBEDTLS_HAVE_TIME_DATE=y", tls_defaults)
             self.assertIn("CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y", tls_defaults)
+            self.assertIn(
+                "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y", tls_defaults
+            )
+            self.assertIn(
+                "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=n",
+                tls_defaults,
+            )
+            self.assertIn(
+                "CONFIG_MBEDTLS_X509_TRUSTED_CERT_CALLBACK=n", tls_defaults
+            )
             self.assertIn("CONFIG_ESP_TLS_USING_MBEDTLS=y", tls_defaults)
             self.assertIn("CONFIG_ESP_TLS_CUSTOM_STACK=n", tls_defaults)
             self.assertIn("CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=y", tls_defaults)
