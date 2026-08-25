@@ -22,6 +22,7 @@
 #endif
 #include "esp32_mquickjs_spi.h"
 #include "esp32_mquickjs_socket.h"
+#include "esp32_mquickjs_time.h"
 #include "esp32_mquickjs_uart.h"
 #include "esp32_mquickjs_usb_serial.h"
 #include "esp32_mquickjs_websocket.h"

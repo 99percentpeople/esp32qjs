@@ -595,9 +595,21 @@ static const JSPropDef js_sys_status[] = {
 static const JSClassDef js_sys_status_obj =
     JS_OBJECT_DEF("status", js_sys_status);
 
+static const JSPropDef js_sys_time[] = {
+    JS_CFUNC_DEF("status", 0, js_sys_time_status),
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
+    JS_CFUNC_DEF("sync", 1, js_sys_time_sync),
+#endif
+    JS_PROP_END,
+};
+
+static const JSClassDef js_sys_time_obj =
+    JS_OBJECT_DEF("time", js_sys_time);
+
 static const JSPropDef js_sys[] = {
     JS_PROP_CLASS_DEF("info", &js_sys_info_obj),
     JS_PROP_CLASS_DEF("status", &js_sys_status_obj),
+    JS_PROP_CLASS_DEF("time", &js_sys_time_obj),
     JS_CGETSET_DEF("safeMode", js_sys_safe_mode_get, js_sys_safe_mode_set),
     JS_CFUNC_DEF("config", 1, js_sys_config),
     JS_CFUNC_DEF("tasks", 1, js_sys_tasks),
@@ -937,7 +949,6 @@ static const JSPropDef js_wifi[] = {
     JS_CFUNC_DEF("disconnect", 0, js_wifi_disconnect),
     JS_CFUNC_DEF("status", 0, js_wifi_status),
     JS_CFUNC_DEF("scan", 0, js_wifi_scan),
-    JS_CFUNC_DEF("syncTime", 1, js_wifi_sync_time),
     JS_PROP_END,
 };
 

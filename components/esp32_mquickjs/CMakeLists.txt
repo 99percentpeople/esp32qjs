@@ -245,6 +245,7 @@ set(ESP32_MQUICKJS_SRCS
     "src/core/esp32_mquickjs_sys.c"
     "src/core/esp32_mquickjs_stream.c"
     "src/core/esp32_mquickjs_request_response.c"
+    "src/modules/time/esp32_mquickjs_time.c"
     "src/core/js_stdlib.c"
     "${MQUICKJS_DIR}/cutils.c"
     "${MQUICKJS_DIR}/dtoa.c"

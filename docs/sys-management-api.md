@@ -19,6 +19,8 @@ lifecycle. Peripheral operations remain in literal modules such as `gpio`,
   stable for a runtime configuration or physical boot.
 - `sys.status` is a read-only, lazily evaluated property tree for live system
   state.
+- `sys.time` owns transport-neutral wall-clock status and synchronization.
+  Network modules only establish connectivity; they do not own system time.
 - Namespace objects are created once when globals are installed. Reading a leaf
   getter creates only that scalar or small detached snapshot.
 - `sys.tasks(options?)` remains an explicit diagnostic operation because a full
@@ -54,8 +56,9 @@ lifecycle. Peripheral operations remain in literal modules such as `gpio`,
 
 ## Non-goals
 
-- GPIO, bus, radio, display, storage, or network operations duplicated under
-  `sys`.
+- GPIO, bus, radio, display, storage, or transport operations duplicated under
+  `sys`. System wall-clock management remains under `sys.time` and uses an
+  already active network interface.
 - A JavaScript API for creating arbitrary FreeRTOS tasks.
 - Killing, suspending, resuming, pinning, or reprioritizing native tasks.
 - CPU-frequency mutation, light sleep, deep sleep, wake-source configuration,
@@ -416,9 +419,31 @@ declare namespace ESP32QJS {
     dueAtMs: number;
   }
 
+  interface SysTimeSyncOptions {
+    servers: string[];
+    timeoutMs?: number;
+  }
+
+  interface SysTimeSyncResult {
+    synchronized: true;
+    unixTimeMs: number;
+  }
+
+  interface SysTimeStatus {
+    synchronized: boolean;
+    synchronizing: boolean;
+    unixTimeMs: number | null;
+  }
+
+  interface SysTimeModule {
+    status(): SysTimeStatus;
+    sync(options: SysTimeSyncOptions): SysTimeSyncResult;
+  }
+
   interface SysModule {
     readonly info: SysInfo;
     readonly status: SysStatus;
+    readonly time: SysTimeModule;
     safeMode: boolean;
 
     config(key: string): string | number | boolean | undefined;
@@ -448,18 +473,19 @@ The global remains:
 declare var sys: ESP32QJS.SysModule;
 ```
 
-`SysInfo` and `SysStatus` are TypeScript interface names only. They are not
-additional runtime constructors, functions, or global objects. The only runtime
-entry points are the `sys.info` and `sys.status` namespace properties, so there
-is no duplicate `SysInfo`/`info` or `SysStatus`/`status` API.
+`SysInfo`, `SysStatus`, and `SysTimeModule` are TypeScript interface names only.
+They are not additional runtime constructors or globals. Their runtime entry
+points are the `sys.info`, `sys.status`, and `sys.time` namespace properties.
 
 ## Lazy Getter Semantics
 
 `sys`, `sys.info`, `sys.info.version`, `sys.info.hardware`,
 `sys.info.features`, `sys.info.runtime`, `sys.status`, `sys.status.boot`,
 `sys.status.cpu`, `sys.status.memory`, `sys.status.rtos`, and
-`sys.status.runtime` are singleton native namespace objects installed with the
-standard globals.
+`sys.status.runtime`, plus `sys.time`, are singleton native namespace objects
+installed with the standard globals. `sys.time` uses explicit methods because
+status collection and network synchronization are operations rather than lazy
+property reads.
 
 Their public data properties are enumerable getter-only properties:
 

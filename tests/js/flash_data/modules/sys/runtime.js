@@ -1,6 +1,7 @@
 test("sys/runtime", function () {
   var info = sys.info;
   var status = sys.status;
+  var timeStatus = sys.time.status();
   var features = info.features;
   var chip = info.hardware.chip;
   var runtimeInfo = info.runtime;
@@ -135,6 +136,16 @@ test("sys/runtime", function () {
 
   test.equal(typeof sys.info, "object", "sys.info should be a namespace object");
   test.equal(typeof sys.status, "object", "sys.status should be a namespace object");
+  test.equal(typeof sys.time, "object", "sys.time should be a namespace object");
+  test.equal(typeof sys.time.status, "function", "sys.time.status should exist");
+  test.equal(typeof timeStatus.synchronized, "boolean",
+    "time synchronization status should be boolean");
+  test.equal(typeof timeStatus.synchronizing, "boolean",
+    "time in-progress status should be boolean");
+  test.ok(timeStatus.unixTimeMs === null || typeof timeStatus.unixTimeMs === "number",
+    "wall clock should be a Unix timestamp or null before synchronization");
+  test.equal(typeof sys.time.sync, features.wifi ? "function" : "undefined",
+    "time synchronization should follow the networking feature");
   test.ok(typeof sys.info !== "function", "the removed sys.info() function should stay absent");
   test.equal(info.version.framework, "0.1.0", "framework version should match the release");
   test.equal(info.version.mquickjs, "2025-12-22",

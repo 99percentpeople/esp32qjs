@@ -13,7 +13,8 @@ test("wifi/offline", function () {
   test.ok(typeof wifi.connectAsync === "undefined", "wifi.connectAsync should not exist");
   test.ok(typeof wifi.disconnect === "function", "wifi.disconnect should exist");
   test.ok(typeof wifi.scan === "function", "wifi.scan should exist");
-  test.ok(typeof wifi.syncTime === "function", "wifi.syncTime should exist");
+  test.ok(typeof wifi.syncTime === "undefined", "wifi.syncTime should be removed");
+  test.ok(typeof sys.time.sync === "function", "sys.time.sync should exist");
   test.ok(typeof wifi.scanAsync === "undefined", "wifi.scanAsync should not exist");
   test.ok(typeof wifi.async === "undefined", "wifi.async should be removed");
   test.ok(typeof status.initialized === "boolean", "initialized should be boolean");
@@ -40,22 +41,22 @@ test("wifi/offline", function () {
   test.ok(connectError.indexOf("timeout") >= 0, "wifi.connect should reject callback overloads");
 
   try {
-    wifi.syncTime();
+    sys.time.sync();
   } catch (syncOptionsFailure) {
     syncOptionsError = String(syncOptionsFailure && syncOptionsFailure.message
       ? syncOptionsFailure.message : syncOptionsFailure);
   }
   test.ok(syncOptionsError.indexOf("options object") >= 0,
-    "wifi.syncTime should require an options object");
+    "sys.time.sync should require an options object");
 
   try {
-    Future.call(wifi.syncTime, wifi, [{ servers: [] }]).wait(1000);
+    Future.call(sys.time.sync, sys.time, [{ servers: [] }]).wait(1000);
   } catch (syncServersFailure) {
     syncServersError = String(syncServersFailure && syncServersFailure.message
       ? syncServersFailure.message : syncServersFailure);
   }
   test.ok(syncServersError.indexOf("1..") >= 0,
-    "wifi.syncTime should require at least one server");
+    "sys.time.sync should require at least one server");
 
   disconnected = wifi.disconnect();
   test.ok(disconnected && typeof disconnected === "object", "wifi.disconnect should return a status object");

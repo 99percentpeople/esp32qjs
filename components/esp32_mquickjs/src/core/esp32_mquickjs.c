@@ -27,6 +27,7 @@
 #endif
 #include "esp32_mquickjs_spi.h"
 #include "esp32_mquickjs_stream.h"
+#include "esp32_mquickjs_time.h"
 #include "esp32_mquickjs_socket.h"
 #include "esp32_mquickjs_uart.h"
 #include "esp32_mquickjs_usb_serial.h"
@@ -38,6 +39,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -1240,6 +1242,7 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
     esp32_mquickjs_deinit_http_server_runtime(ctx);
 #endif
+    esp32_mquickjs_deinit_time_runtime();
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     esp32_mquickjs_deinit_wifi_runtime(ctx);
 #endif
@@ -1518,6 +1521,10 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
         return false;
     }
 #endif
+    if (!esp32_mquickjs_init_time_runtime(ctx, runtime)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     if (!esp32_mquickjs_init_wifi_runtime(ctx, runtime)) {
         esp32_mquickjs_print_exception(ctx);
@@ -1812,7 +1819,10 @@ JSValue js_date_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue
     (void)this_val;
     argc &= ~FRAME_CF_CTOR;
     if (argc == 0) {
-        value = (double)(esp_timer_get_time() / 1000);
+        struct timeval now = {0};
+
+        gettimeofday(&now, NULL);
+        value = (double)now.tv_sec * 1000.0 + (double)now.tv_usec / 1000.0;
     } else if (argc == 1 && JS_IsNumber(ctx, argv[0])) {
         if (JS_ToNumber(ctx, &value, argv[0]) != 0) {
             return JS_EXCEPTION;
@@ -1825,10 +1835,15 @@ JSValue js_date_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue
 
 JSValue js_date_now(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
+    struct timeval now = {0};
+
     (void)this_val;
     (void)argc;
     (void)argv;
-    return JS_NewInt64(ctx, esp_timer_get_time() / 1000);
+    gettimeofday(&now, NULL);
+    return JS_NewInt64(ctx,
+                       (int64_t)now.tv_sec * 1000LL +
+                           (int64_t)now.tv_usec / 1000LL);
 }
 
 JSValue js_performance_now(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

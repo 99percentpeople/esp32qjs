@@ -39,7 +39,7 @@ print("hello");
 gc();
 sleep(50);
 wifi.connect("your-ssid", "your-password", 10000);
-wifi.syncTime({ servers: ["pool.ntp.org"], timeoutMs: 10000 });
+sys.time.sync({ servers: ["pool.ntp.org"], timeoutMs: 10000 });
 print(fetch("https://example.com").status);
 load("demo/display_perf.js");
 print(Future.call(function () { return 123; }).wait(1000));
@@ -52,7 +52,7 @@ print("[startup] boot script running");
 framework.load("display/st7789.js");
 framework.load("ui.js");
 wifi.connect("your-ssid", "your-password", 10000);
-wifi.syncTime({ servers: ["pool.ntp.org"], timeoutMs: 10000 });
+sys.time.sync({ servers: ["pool.ntp.org"], timeoutMs: 10000 });
 ```
 
 ## Futures
@@ -1486,6 +1486,18 @@ if (ref) {
   budget. The deadline remains active across cooperative native waits. A
   timeout is normalized after restoring the outer deadline and becomes the
   catchable `InternalError: sys.withTimeout() deadline exceeded`.
+- `sys.time.status()`
+  Return `{ synchronized, synchronizing, unixTimeMs }`. `unixTimeMs` is `null`
+  until the wall clock is valid for certificate-date checks.
+- `sys.time.sync({ servers, timeoutMs? })`
+  When networking is selected, synchronize the system wall clock from one to
+  four caller-selected SNTP server names and return
+  `{ synchronized: true, unixTimeMs }`. An already valid clock returns
+  immediately. Concurrent calls join the active round; the first caller
+  supplies its servers. Cancellation removes only that waiter and stops SNTP
+  when the last waiter leaves. The operation uses whichever ESP network
+  interface currently has an IP address; it does not own Wi-Fi connection
+  policy.
 
 Example:
 
@@ -1499,6 +1511,7 @@ if (sys.info.features.fs) {
 print(sys.millis());
 print(sys.freeHeap());
 print(sys.randomHex(16));
+print(JSON.stringify(sys.time.status()));
 var answer = sys.withTimeout(100, function () {
   return 42;
 });
@@ -1518,12 +1531,6 @@ Wi-Fi credentials are kept in RAM. Rebooting the board clears the active station
   Return `{ initialized, started, connected, scanning, ssid, hostname, ip, netmask, gateway, lastDisconnectReason, lastDisconnectReasonName }`.
 - `wifi.connect(ssid, password, timeoutMs = wifi.DEFAULT_TIMEOUT_MS)`
   Start station mode through the native Future driver and return the updated status object.
-- `wifi.syncTime({ servers, timeoutMs? })`
-  Synchronize the system clock from one to four caller-selected SNTP server
-  names and return `{ synchronized: true, unixTimeMs }`. An already valid clock
-  returns immediately. Concurrent calls join the active synchronization round;
-  the first caller supplies that round's servers. Cancellation removes only
-  that waiter and stops SNTP when the last waiter leaves.
 - `wifi.disconnect()`
   Disconnect the station and return the updated status object.
 - `wifi.scan()`
@@ -1536,7 +1543,7 @@ print(JSON.stringify(wifi.status()));
 var aps = wifi.scan();
 print(aps.length);
 wifi.connect("your-ssid", "your-password");
-var clock = wifi.syncTime({
+var clock = sys.time.sync({
   servers: ["pool.ntp.org", "time.cloudflare.com"],
   timeoutMs: 10000
 });
@@ -1548,11 +1555,14 @@ wifi.disconnect();
 ```
 
 The firmware does not embed a time provider; Agent/workspace policy supplies
-the server list. Complete `wifi.syncTime(...)` after connecting and before any
+the server list. Complete `sys.time.sync(...)` after connecting and before any
 public HTTPS, TLS, or secure WebSocket operation so certificate validity dates
 are checked against a current clock. SNTP provides ordinary wall-clock setup,
 not authenticated time: it does not defend against an active network attacker
 who can tamper with both DNS/network traffic and time synchronization.
+After synchronization, `Date.now()` and `new Date()` use the same wall clock;
+`sys.millis()`, `sys.micros()`, and `performance.now()` remain monotonic uptime
+clocks and are not affected by SNTP adjustments.
 
 ## `socket` Module
 
@@ -1759,7 +1769,8 @@ The HTTP client remains available without TLS for `http://` URLs. An
 `https://` URL is rejected before its worker starts when
 `sys.info.features.tls` is false; there is no insecure fallback.
 
-Call `wifi.syncTime(...)` once after Wi-Fi connects and before public HTTPS.
+Call `sys.time.sync(...)` once after a network interface connects and before
+public HTTPS.
 HTTPS uses the same TLS verification and structured error categories described
 in the socket section; it has no insecure or skip-verification option.
 - `http.server(options?)`

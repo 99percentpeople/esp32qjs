@@ -93,23 +93,24 @@ class TlsArchitectureTests(SourceContractTestCase):
         self.assertIn("esp_http_client_cleanup(client)", http)
         self.assertIn("esp32_mquickjs_http_operation_is_cancelled", http)
 
-    def test_wifi_time_sync_is_future_driven_and_provider_neutral(self):
+    def test_system_time_sync_is_future_driven_and_provider_neutral(self):
         source = (
-            MQUICKJS / "src/modules/wifi/esp32_mquickjs_wifi_future.c"
+            MQUICKJS / "src/modules/time/esp32_mquickjs_time.c"
         ).read_text(encoding="utf-8")
         stdlib = (
             MQUICKJS / "src/core/mqjs_stdlib_esp32.c"
         ).read_text(encoding="utf-8")
 
-        self.assertIn('JS_CFUNC_DEF("syncTime", 1, js_wifi_sync_time)', stdlib)
+        self.assertIn('JS_CFUNC_DEF("sync", 1, js_sys_time_sync)', stdlib)
+        self.assertNotIn('JS_CFUNC_DEF("syncTime", 1, js_wifi_sync_time)', stdlib)
         self.assertIn("esp_netif_sntp_init", source)
         self.assertIn("esp_netif_sntp_deinit", source)
-        self.assertIn("WIFI_FUTURE_SYNC_TIME", source)
-        self.assertIn("wifi_time_add_waiter", source)
-        self.assertIn("wifi_time_remove_waiter", source)
-        self.assertIn("s_wifi_time.in_progress", source)
-        self.assertIn("s_wifi_time.completed_generation", source)
-        self.assertIn("s_wifi_time_future_driver", source)
+        self.assertIn("time_add_waiter_locked", source)
+        self.assertIn("time_remove_waiter", source)
+        self.assertIn("s_time.in_progress", source)
+        self.assertIn("s_time.completed_generation", source)
+        self.assertIn("s_time_future_driver", source)
+        self.assertIn("esp_netif_find_if", source)
         self.assertNotIn('"pool.ntp.org"', source)
         self.assertNotIn('"time.google.com"', source)
 
@@ -119,9 +120,10 @@ class TlsArchitectureTests(SourceContractTestCase):
         )
         docs = (ROOT / "docs/c-api.md").read_text(encoding="utf-8")
 
-        self.assertIn("interface WiFiTimeSyncOptions", declarations)
-        self.assertIn("interface WiFiTimeStatus", declarations)
-        self.assertIn("syncTime(options: WiFiTimeSyncOptions)", declarations)
+        self.assertIn("interface SysTimeSyncOptions", declarations)
+        self.assertIn("interface SysTimeStatus", declarations)
+        self.assertIn("sync(options: SysTimeSyncOptions)", declarations)
+        self.assertNotIn("interface WiFiTimeSyncOptions", declarations)
         self.assertIn("largestFreeBlockBytes", docs)
         self.assertIn("minimumFreeBytes", docs)
         self.assertIn("active network attacker", docs)

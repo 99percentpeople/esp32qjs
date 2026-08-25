@@ -14,7 +14,7 @@ test("socket/network", function () {
       [cfg.wifiSsid, cfg.wifiPassword, 15000]).wait(20000);
   }
   test.ok(status.connected, "wifi should be connected before raw TLS");
-  test.equal(wifi.syncTime(timeOptions).synchronized, true,
+  test.equal(sys.time.sync(timeOptions).synchronized, true,
     "time should be synchronized before raw TLS");
 
   function connectAndClose() {

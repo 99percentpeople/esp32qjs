@@ -21,7 +21,7 @@ test("http/network", function () {
 
   test.ok(wifiStatus.connected, "wifi should be connected before fetch");
 
-  test.equal(wifi.syncTime({
+  test.equal(sys.time.sync({
     servers: ["pool.ntp.org", "time.cloudflare.com"],
     timeoutMs: 15000
   }).synchronized, true, "time should be synchronized before public fetch");

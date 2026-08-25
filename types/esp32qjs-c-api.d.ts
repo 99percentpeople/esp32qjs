@@ -1385,6 +1385,35 @@ namespace ESP32QJS {
     dueAtMs: number;
   }
 
+  interface SysTimeSyncOptions {
+    /** Caller-owned SNTP server names. Firmware does not select a provider. */
+    servers: string[];
+    timeoutMs?: number;
+  }
+
+  interface SysTimeSyncResult {
+    synchronized: true;
+    unixTimeMs: number;
+  }
+
+  interface SysTimeStatus {
+    /** Whether the wall clock is valid for certificate-date checks. */
+    synchronized: boolean;
+    /** Whether an SNTP round currently has one or more waiters. */
+    synchronizing: boolean;
+    /** Current Unix epoch in milliseconds, or null before the clock is valid. */
+    unixTimeMs: number | null;
+  }
+
+  interface SysTimeModule {
+    status(): SysTimeStatus;
+    /**
+     * Synchronize the system wall clock over the active network interface.
+     * Available when the selected firmware includes networking support.
+     */
+    sync(options: SysTimeSyncOptions): SysTimeSyncResult;
+  }
+
   /**
    * Lazy system information, live status, diagnostics, and lifecycle controls.
    *
@@ -1397,6 +1426,7 @@ namespace ESP32QJS {
   interface SysModule {
     readonly info: SysInfo;
     readonly status: SysStatus;
+    readonly time: SysTimeModule;
     /** Persistent boot choice. Assignment affects the next startup only. */
     safeMode: boolean;
     /** Return a fresh snapshot of every immutable selected hardware-profile value. */
@@ -2206,17 +2236,6 @@ namespace ESP32QJS {
     hidden: boolean;
   }
 
-  interface WiFiTimeSyncOptions {
-    /** Caller-owned SNTP server names. Firmware does not select a provider. */
-    servers: string[];
-    timeoutMs?: number;
-  }
-
-  interface WiFiTimeStatus {
-    synchronized: true;
-    unixTimeMs: number;
-  }
-
   type TlsErrorCode =
     | "TLS_ALLOC_FAILED"
     | "TLS_TIME_INVALID"
@@ -2272,7 +2291,6 @@ namespace ESP32QJS {
     readonly DEFAULT_TIMEOUT_MS: number;
     status(): WiFiStatus;
     connect(ssid: string, password: string, timeoutMs?: number): WiFiStatus;
-    syncTime(options: WiFiTimeSyncOptions): WiFiTimeStatus;
     disconnect(): WiFiStatus;
     scan(): WiFiScanResult[];
   }
