@@ -163,6 +163,14 @@ static void esp32_mquickjs_execution_leave(esp32_mquickjs_runtime_t *runtime)
     }
 }
 
+static bool esp32_mquickjs_execution_active(
+    esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+
+    return state != NULL && state->execution_depth != 0;
+}
+
 static void esp32_mquickjs_clear_idle_jobs(JSContext *ctx,
                                            esp32_mquickjs_runtime_t *runtime)
 {
@@ -1572,7 +1580,9 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
         if (runtime->output_generation != output_generation) {
             result |= ESP32_MQUICKJS_POLL_OUTPUT;
         }
-        esp32_mquickjs_memory_maintain();
+        if (!esp32_mquickjs_execution_active(runtime)) {
+            esp32_mquickjs_memory_maintain();
+        }
         return result;
     }
 
@@ -1639,7 +1649,9 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
     if (runtime->output_generation != output_generation) {
         result |= ESP32_MQUICKJS_POLL_OUTPUT;
     }
-    esp32_mquickjs_memory_maintain();
+    if (!esp32_mquickjs_execution_active(runtime)) {
+        esp32_mquickjs_memory_maintain();
+    }
     return result;
 }
 

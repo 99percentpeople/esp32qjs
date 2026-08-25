@@ -718,7 +718,6 @@ bool esp32_mquickjs_memory_prepare_internal_dma(size_t total_bytes,
     size_t reserve;
 
     esp32_mquickjs_memory_init();
-    esp32_mquickjs_memory_maintain();
     memory_heap_info(&internal, &dma);
     taskENTER_CRITICAL(&s_memory.lock);
     reserve = s_memory.internal_reserve_bytes;

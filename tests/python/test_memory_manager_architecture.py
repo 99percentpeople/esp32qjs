@@ -24,11 +24,16 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
         self.assertIn("memory_migrate_one", source)
         self.assertIn("memory_evict_one", source)
         self.assertIn("esp32_mquickjs_memory_maintain();", runtime)
+        self.assertIn("if (!esp32_mquickjs_execution_active(runtime))", runtime)
         self.assertIn("JS_FreeContext(ctx);\n        esp32_mquickjs_memory_release_generation();", runtime)
         self.assertIn("void esp32_mquickjs_memory_release_generation(void)", source)
         self.assertNotIn("esp32_mquickjs_memory_maintain();", source.split(
             "void esp32_mquickjs_memory_maintain(void)", 1
         )[0])
+        dma_preflight = source.split(
+            "bool esp32_mquickjs_memory_prepare_internal_dma", 1
+        )[1].split("void esp32_mquickjs_memory_get_status", 1)[0]
+        self.assertNotIn("esp32_mquickjs_memory_maintain();", dma_preflight)
         self.assertNotIn("M5", source)
         self.assertNotIn("StickS3", source)
 

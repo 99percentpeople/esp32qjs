@@ -628,10 +628,12 @@ counts cover all classified payload and block requests. None of these counters
 claim ownership of opaque ESP-IDF or third-party allocations.
 
 On targets without PSRAM the same classification and reserve checks remain in
-force, but migration is disabled. Pressure maintenance runs only at a
-JavaScript runtime safe point; driver-task allocation helpers never relocate
-blocks. A failed classified allocation returns the operation's normal
-out-of-memory error instead of trying progressively smaller driver layouts.
+force, but migration is disabled. Pressure maintenance runs only after active
+JavaScript execution has unwound; recursive scheduler polls used by cooperative
+USB, UART, and Future waits do not relocate blocks. Driver-task and DMA
+preflight allocation helpers never relocate blocks. A failed classified
+allocation returns the operation's normal out-of-memory error instead of trying
+progressively smaller driver layouts.
 
 ### RTOS
 
