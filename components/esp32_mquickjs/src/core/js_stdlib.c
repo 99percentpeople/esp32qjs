@@ -16,6 +16,7 @@
 #include "esp32_mquickjs_camera.h"
 #include "esp32_mquickjs_ledc.h"
 #include "esp32_mquickjs_nvs.h"
+#include "esp32_mquickjs_net.h"
 #include "esp32_mquickjs_rpc.h"
 #if CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
 #include "esp32_mquickjs_runtime_logs.h"

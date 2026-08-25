@@ -75,6 +75,7 @@ Recommended feature symbols:
 - `CONFIG_ESP32_MQUICKJS_FEATURE_SPI`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_UART`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL`
+- `CONFIG_ESP32_MQUICKJS_FEATURE_NET`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET`
 - `CONFIG_ESP32_MQUICKJS_FEATURE_WIFI`
@@ -92,11 +93,10 @@ Recommended dependency rules:
 - `FEATURE_SPI` depends on `SOC_GPSPI_SUPPORTED`
 - `FEATURE_UART` depends on `SOC_UART_SUPPORTED`
 - `FEATURE_USB_SERIAL` depends on `SOC_USB_SERIAL_JTAG_SUPPORTED` and conflicts with the REPL frontend
-- `FEATURE_SOCKET` has no application-protocol dependency and can use any initialized network interface
-- `FEATURE_WEBSOCKET` depends on `FEATURE_WIFI`
-- `FEATURE_WIFI` depends on `SOC_WIFI_SUPPORTED`
-- `FEATURE_HTTP` depends on `FEATURE_WIFI` in the current firmware, unless another network backend is introduced later
-- `FEATURE_HTTP_SERVER` depends on `FEATURE_WIFI` in the current firmware
+- `FEATURE_NET` has no radio or board dependency and observes every registered ESP-NETIF interface
+- `FEATURE_SOCKET`, `FEATURE_TLS`, `FEATURE_HTTP`, and `FEATURE_HTTP_SERVER` depend on `FEATURE_NET`
+- `FEATURE_WEBSOCKET` depends on `FEATURE_NET && FEATURE_TLS`
+- `FEATURE_WIFI` depends on `FEATURE_NET && SOC_WIFI_SUPPORTED`
 - `FEATURE_BITMAP` has no direct peripheral dependency, but full-frame RGB buffers should be enabled only by a measured PSRAM profile with a sufficient memory budget
 - `staticFileHandler` is a composite capability that depends on `FEATURE_HTTP_SERVER && FEATURE_FS`
 - Applications using `load(...)`, LittleFS startup, or static file serving must explicitly select `FEATURE_FS`
@@ -166,11 +166,11 @@ Built-in modules and types currently in scope:
 - Filesystem/runtime modules: `fs`, `nvs`, `sys`
 - Peripheral modules: `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`
 - Low-level graphics buffer modules: `bitmap`
-- Transport/connectivity modules: `usbSerial`, `socket`, `websocketClient`, `wifi`, `http`, `HttpServer`, `StaticFileHandler`
+- Transport/connectivity modules: `net`, `usbSerial`, `socket`, `websocketClient`, `wifi`, `http`, `HttpServer`, `StaticFileHandler`
 - Generic concurrency types: planned `Future` and `EventQueue`
 - JS-side libraries outside the firmware ABI: `display`, `ui`
 
-In the long-term plan, `nvs`, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `usbSerial`, `socket`, `websocketClient`, `bitmap`, `wifi`, `http`, and `httpServer` should all be treated as optional host features rather than unconditional globals.
+In the long-term plan, `nvs`, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`, `net`, `usbSerial`, `socket`, `websocketClient`, `bitmap`, `wifi`, `http`, and `httpServer` should all be treated as optional host features rather than unconditional globals.
 
 ## Freeze Principles By Area
 

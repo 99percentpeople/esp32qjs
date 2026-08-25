@@ -1081,6 +1081,7 @@ namespace ESP32QJS {
     readonly rmt: boolean;
     readonly i2s: boolean;
     readonly camera: boolean;
+    readonly net: boolean;
     readonly usbSerial: boolean;
     readonly socket: boolean;
     readonly websocket: boolean;
@@ -1233,6 +1234,7 @@ namespace ESP32QJS {
     dmaLargestReserveBytes: number;
     managedInternalBytes: number;
     managedPsramBytes: number;
+    /** Internal stable managed bytes whose memory class is non-movable. */
     pinnedBytes: number;
     movableIdleBytes: number;
     migrationCount: number;
@@ -1388,6 +1390,7 @@ namespace ESP32QJS {
   interface SysTimeSyncOptions {
     /** Caller-owned SNTP server names. Firmware does not select a provider. */
     servers: string[];
+    /** Integer timeout from 1 through 60000 milliseconds. Defaults to 15000. */
     timeoutMs?: number;
   }
 
@@ -1399,7 +1402,7 @@ namespace ESP32QJS {
   interface SysTimeStatus {
     /** Whether the wall clock is valid for certificate-date checks. */
     synchronized: boolean;
-    /** Whether an SNTP round currently has one or more waiters. */
+    /** Whether the single native SNTP operation is currently active. */
     synchronizing: boolean;
     /** Current Unix epoch in milliseconds, or null before the clock is valid. */
     unixTimeMs: number | null;
@@ -1410,6 +1413,7 @@ namespace ESP32QJS {
     /**
      * Synchronize the system wall clock over the active network interface.
      * Available when the selected firmware includes networking support.
+     * Rejects with error code TIME_SYNC_BUSY if another operation is active.
      */
     sync(options: SysTimeSyncOptions): SysTimeSyncResult;
   }
@@ -2207,6 +2211,48 @@ namespace ESP32QJS {
     status(): WebSocketClientStatus;
   }
 
+  interface NetIPv4Status {
+    address: string;
+    netmask: string;
+    gateway: string;
+  }
+
+  interface NetInterfaceStatus {
+    /** Stable esp-netif configuration key while the interface exists. */
+    key: string;
+    description: string;
+    /** Underlying TCP/IP implementation name, such as an lwIP interface name. */
+    name: string;
+    up: boolean;
+    /** Up with at least one IPv4 or preferred IPv6 address. */
+    ready: boolean;
+    defaultRoute: boolean;
+    routePriority: number;
+    ipv4: NetIPv4Status | null;
+    ipv6: string[];
+  }
+
+  interface NetStatus {
+    /** At least one interface is ready; this is not an Internet reachability probe. */
+    ready: boolean;
+    primaryInterface: string | null;
+    interfaces: NetInterfaceStatus[];
+    /** More interfaces existed than the configured native snapshot limit. */
+    truncated: boolean;
+  }
+
+  interface NetStatusEvent {
+    type: "status";
+    /** Current convergent snapshot, not a raw driver event. */
+    status: NetStatus;
+  }
+
+  interface NetModule {
+    status(): NetStatus;
+    /** Emits one initial snapshot and later IP/default-route changes. */
+    watch(): EventQueue<NetStatusEvent>;
+  }
+
   /**
    * Current Wi-Fi station status.
    */
@@ -2475,6 +2521,8 @@ namespace ESP32QJS {
   var i2s: ESP32QJS.I2SModule;
   /** Explicit single-frame camera capture. Available only on supported targets. */
   var camera: ESP32QJS.CameraModule;
+  /** Transport-neutral status for every registered ESP-NETIF interface. */
+  var net: ESP32QJS.NetModule;
   /** Headless USB Serial/JTAG framed transport; unavailable when the REPL is compiled in. */
   var usbSerial: ESP32QJS.USBSerialModule;
   /** Generic TCP and UDP socket namespace. */

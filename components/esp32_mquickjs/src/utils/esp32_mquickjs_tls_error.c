@@ -81,14 +81,38 @@ static uint32_t tls_verify_capture_take(void)
     return flags;
 }
 
+static bool tls_crt_is_synthetic_bundle_anchor(const mbedtls_x509_crt *crt)
+{
+#if defined(CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY) && \
+    CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY
+    /* ESP-IDF reconstructs a trusted bundle key for cross-signed chains rather
+     * than parsing a root certificate. That synthetic anchor intentionally has
+     * no raw certificate or validity dates, so MBEDTLS_HAVE_TIME_DATE otherwise
+     * treats its zero valid_to field as an expired certificate. Real peer and
+     * intermediate certificates always retain raw DER and remain date-checked. */
+    return crt != NULL && crt->version == 3 &&
+           crt->raw.p == NULL && crt->raw.len == 0 &&
+           crt->valid_from.year == 0 && crt->valid_to.year == 0;
+#else
+    (void)crt;
+    return false;
+#endif
+}
+
 static int tls_crt_verify_callback(void *buf, mbedtls_x509_crt *crt,
                                    int depth, uint32_t *flags)
 {
     tls_verify_capture_t *capture;
     TaskHandle_t task = xTaskGetCurrentTaskHandle();
-    int result = esp_crt_verify_callback(buf, crt, depth, flags);
+    int result;
 
-    /* Observe the final flags without changing ESP-IDF's trust decision. */
+    if (flags != NULL &&
+        tls_crt_is_synthetic_bundle_anchor(crt)) {
+        *flags &= ~MBEDTLS_X509_BADCERT_EXPIRED;
+    }
+    result = esp_crt_verify_callback(buf, crt, depth, flags);
+
+    /* Observe the final flags after ESP-IDF's bundle trust decision. */
     if (flags != NULL && *flags != 0) {
         taskENTER_CRITICAL(&s_tls_verify_lock);
         capture = tls_verify_capture_slot_locked(task, true);

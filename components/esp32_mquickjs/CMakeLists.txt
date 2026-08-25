@@ -21,6 +21,7 @@ set(ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS
     CONFIG_ESP32_MQUICKJS_FEATURE_RMT
     CONFIG_ESP32_MQUICKJS_FEATURE_I2S
     CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA
+    CONFIG_ESP32_MQUICKJS_FEATURE_NET
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     CONFIG_ESP32_MQUICKJS_FEATURE_TLS
     CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
@@ -236,6 +237,7 @@ endif()
 set(ESP32_MQUICKJS_SRCS
     "src/core/esp32_mquickjs.c"
     "src/core/esp32_mquickjs_future.c"
+    "src/core/esp32_mquickjs_future_timeout.c"
     "src/core/esp32_mquickjs_event_queue.c"
     "src/core/esp32_mquickjs_event_queue_drain.c"
     "src/core/esp32_mquickjs_byte_span.c"
@@ -414,6 +416,14 @@ endif()
 if(DEFINED CONFIG_ESP32_MQUICKJS_FEATURE_UART AND CONFIG_ESP32_MQUICKJS_FEATURE_UART)
     list(APPEND ESP32_MQUICKJS_PRIV_REQUIRES esp_driver_gpio esp_driver_uart)
 endif()
+
+esp32_mquickjs_append_feature_component(
+    CONFIG_ESP32_MQUICKJS_FEATURE_NET
+    "src/modules/net/esp32_mquickjs_net.c"
+    PRIV_REQUIRES
+        esp_event
+        esp_netif
+)
 
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP

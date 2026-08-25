@@ -190,8 +190,7 @@ static void *memory_alloc_once(size_t size,
             data = heap_caps_malloc(
                 size, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
         }
-        if (data == NULL && !has_external_dma &&
-            memory_internal_dma_can_fit(size)) {
+        if (data == NULL && memory_internal_dma_can_fit(size)) {
             data = heap_caps_malloc(
                 size, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
         }
@@ -310,10 +309,26 @@ void *esp32_mquickjs_memory_payload_realloc(
 {
     void *next;
     uint32_t caps;
+    bool external_dma_class;
+    bool retry_internal_dma;
 
     esp32_mquickjs_memory_init();
+    external_dma_class =
+        memory_class == ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL;
+    retry_internal_dma = external_dma_class && memory_has_external_dma();
+    if (external_dma_class && !retry_internal_dma && size != 0 &&
+        !memory_internal_dma_can_fit(size)) {
+        memory_note_failure();
+        return NULL;
+    }
     caps = memory_realloc_caps(memory_class, size);
     next = heap_caps_realloc(data, size, caps);
+    if (next == NULL && size != 0 && retry_internal_dma &&
+        memory_internal_dma_can_fit(size)) {
+        next = heap_caps_realloc(
+            data, size,
+            MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    }
     if (next == NULL && size != 0) {
         memory_note_failure();
     }
@@ -335,7 +350,8 @@ static esp32_mquickjs_memory_block_t *memory_block_metadata_alloc(void)
     return block;
 }
 
-static bool memory_class_is_pinned(esp32_mquickjs_memory_class_t memory_class)
+static bool memory_class_is_explicitly_pinned(
+    esp32_mquickjs_memory_class_t memory_class)
 {
     return memory_class == ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL ||
            memory_class == ESP32_MQUICKJS_MEMORY_DMA_INTERNAL;
@@ -348,6 +364,12 @@ static bool memory_class_is_movable(esp32_mquickjs_memory_class_t memory_class)
            memory_class == ESP32_MQUICKJS_MEMORY_CACHE_EVICTABLE;
 }
 
+static bool memory_class_counts_as_pinned(
+    esp32_mquickjs_memory_class_t memory_class)
+{
+    return !memory_class_is_movable(memory_class);
+}
+
 static void memory_add_block(esp32_mquickjs_memory_block_t *block)
 {
     taskENTER_CRITICAL(&s_memory.lock);
@@ -358,7 +380,7 @@ static void memory_add_block(esp32_mquickjs_memory_block_t *block)
         s_memory.managed_psram_bytes += block->size;
     } else {
         s_memory.managed_internal_bytes += block->size;
-        if (memory_class_is_pinned(block->memory_class)) {
+        if (memory_class_counts_as_pinned(block->memory_class)) {
             s_memory.pinned_bytes += block->size;
         }
     }
@@ -375,7 +397,7 @@ esp32_mquickjs_memory_block_t *esp32_mquickjs_memory_block_alloc(
     void *data;
 
     if (!memory_class_is_movable(memory_class) &&
-        !memory_class_is_pinned(memory_class) &&
+        !memory_class_is_explicitly_pinned(memory_class) &&
         memory_class != ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL &&
         memory_class != ESP32_MQUICKJS_MEMORY_EXTERNAL &&
         memory_class != ESP32_MQUICKJS_MEMORY_DEFAULT) {
@@ -441,7 +463,7 @@ bool esp32_mquickjs_memory_block_resize(esp32_mquickjs_memory_block_t *block,
         s_memory.managed_psram_bytes -= old_size;
     } else {
         s_memory.managed_internal_bytes -= old_size;
-        if (memory_class_is_pinned(block->memory_class)) {
+        if (memory_class_counts_as_pinned(block->memory_class)) {
             s_memory.pinned_bytes -= old_size;
         }
     }
@@ -452,7 +474,7 @@ bool esp32_mquickjs_memory_block_resize(esp32_mquickjs_memory_block_t *block,
         s_memory.managed_psram_bytes += block->size;
     } else {
         s_memory.managed_internal_bytes += block->size;
-        if (memory_class_is_pinned(block->memory_class)) {
+        if (memory_class_counts_as_pinned(block->memory_class)) {
             s_memory.pinned_bytes += block->size;
         }
     }
@@ -539,7 +561,7 @@ bool esp32_mquickjs_memory_block_free(esp32_mquickjs_memory_block_t *block)
         s_memory.managed_psram_bytes -= block->size;
     } else {
         s_memory.managed_internal_bytes -= block->size;
-        if (memory_class_is_pinned(block->memory_class)) {
+        if (memory_class_counts_as_pinned(block->memory_class)) {
             s_memory.pinned_bytes -= block->size;
         }
     }

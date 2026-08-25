@@ -477,6 +477,7 @@ static const JSPropDef js_sys_info_features[] = {
     JS_CGETSET_MAGIC_DEF("rpc", js_sys_feature_get, NULL, 19),
     JS_CGETSET_MAGIC_DEF("rmt", js_sys_feature_get, NULL, 20),
     JS_CGETSET_MAGIC_DEF("tls", js_sys_feature_get, NULL, 21),
+    JS_CGETSET_MAGIC_DEF("net", js_sys_feature_get, NULL, 22),
     JS_PROP_END,
 };
 
@@ -597,7 +598,7 @@ static const JSClassDef js_sys_status_obj =
 
 static const JSPropDef js_sys_time[] = {
     JS_CFUNC_DEF("status", 0, js_sys_time_status),
-#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
+#if CONFIG_ESP32_MQUICKJS_FEATURE_NET
     JS_CFUNC_DEF("sync", 1, js_sys_time_sync),
 #endif
     JS_PROP_END,
@@ -956,6 +957,17 @@ static const JSClassDef js_wifi_obj =
     JS_OBJECT_DEF("wifi", js_wifi);
 #endif
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_NET
+static const JSPropDef js_net[] = {
+    JS_CFUNC_DEF("status", 0, js_net_status),
+    JS_CFUNC_DEF("watch", 0, js_net_watch),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_net_obj =
+    JS_OBJECT_DEF("net", js_net);
+#endif
+
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP || CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
 static const JSPropDef js_http[] = {
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
@@ -1061,6 +1073,9 @@ static const JSPropDef js_global_object_extra[] = {
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     JS_PROP_CLASS_DEF("wifi", &js_wifi_obj),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_NET
+    JS_PROP_CLASS_DEF("net", &js_net_obj),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
     JS_PROP_CLASS_DEF("usbSerial", &js_usb_serial_obj),

@@ -8,7 +8,7 @@ test("wifi/network", function () {
   };
   var firstClock;
   var secondClock;
-  var joined;
+  var busyCode = "";
   var immediateClock;
   var failed = false;
 
@@ -22,14 +22,23 @@ test("wifi/network", function () {
   test.ok(status.connected, "wifi should connect");
   test.ok(typeof status.ip === "string" && status.ip.length > 0, "wifi ip should be present");
 
-  firstClock = Future.call(sys.time.sync, sys.time, [timeOptions]);
-  secondClock = Future.call(sys.time.sync, sys.time, [timeOptions]);
-  joined = Future.all([firstClock, secondClock]).wait(20000);
-  test.equal(joined[0].synchronized, true,
-    "first time waiter should synchronize");
-  test.equal(joined[1].synchronized, true,
-    "concurrent time waiter should join the active round");
-  test.ok(joined[0].unixTimeMs > 1577836800000,
+  if (!sys.time.status().synchronized) {
+    firstClock = Future.call(sys.time.sync, sys.time, [timeOptions]);
+    secondClock = Future.call(sys.time.sync, sys.time, [timeOptions]);
+    try {
+      secondClock.wait(1000);
+    } catch (busyError) {
+      busyCode = busyError && busyError.code ? busyError.code : "";
+    }
+    test.equal(busyCode, "TIME_SYNC_BUSY",
+      "a concurrent time sync should fail instead of ignoring its options");
+    firstClock = firstClock.wait(20000);
+  } else {
+    firstClock = sys.time.sync(timeOptions);
+  }
+  test.equal(firstClock.synchronized, true,
+    "the active time operation should synchronize");
+  test.ok(firstClock.unixTimeMs > 1577836800000,
     "synchronized time should be recent enough for certificate validation");
   immediateClock = sys.time.sync(timeOptions);
   test.equal(immediateClock.synchronized, true,

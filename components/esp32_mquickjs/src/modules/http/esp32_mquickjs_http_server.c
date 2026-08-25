@@ -6,6 +6,7 @@
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_event_queue.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_net.h"
 #include "utils/esp32_mquickjs_request_response.h"
 #include "esp32_mquickjs_stream.h"
 
@@ -17,7 +18,6 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
-#include "esp_event.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -1563,15 +1563,9 @@ static bool http_server_start_slot(esp32_mquickjs_http_server_slot_t *server)
         return true;
     }
 
-    err = esp_netif_init();
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "esp_netif_init() failed before HTTP server start: %s",
-                 esp_err_to_name(err));
-        return false;
-    }
-    err = esp_event_loop_create_default();
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "esp_event_loop_create_default() failed before HTTP server start: %s",
+    err = esp32_mquickjs_net_ensure_initialized();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "network runtime initialization failed before HTTP server start: %s",
                  esp_err_to_name(err));
         return false;
     }

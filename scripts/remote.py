@@ -171,6 +171,11 @@ JS_TEST_MODULES = (
         required_features=("bitmap",),
     ),
     JsTestModule(
+        "net",
+        (JsTestCase("modules/net/offline.js"),),
+        required_features=("net",),
+    ),
+    JsTestModule(
         "wifi",
         (
             JsTestCase("modules/wifi/offline.js"),
@@ -2537,8 +2542,8 @@ def generated_hardware_defaults(
         f"CONFIG_MBEDTLS_CERTIFICATE_BUNDLE={'y' if tls_enabled else 'n'}",
         f"CONFIG_MBEDTLS_HAVE_TIME_DATE={'y' if tls_enabled else 'n'}",
         f"CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE={'y' if tls_enabled else 'n'}",
-        "CONFIG_MBEDTLS_X509_TRUSTED_CERT_CALLBACK=n",
-        "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=n",
+        f"CONFIG_MBEDTLS_X509_TRUSTED_CERT_CALLBACK={'y' if tls_enabled else 'n'}",
+        f"CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY={'y' if tls_enabled else 'n'}",
     ]
     if tls_enabled:
         lines.append("CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y")

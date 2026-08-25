@@ -12,8 +12,10 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,16 +25,26 @@
 #if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
 #include "esp_crt_bundle.h"
 #include "esp_tls.h"
+#include "freertos/FreeRTOS.h"
+#if defined(CONFIG_SPIRAM) && CONFIG_SPIRAM && \
+    defined(CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM) && \
+    CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+#include "freertos/idf_additions.h"
 #endif
+#include "freertos/task.h"
+#endif
+#include "lwip/dns.h"
 #include "lwip/inet.h"
-#include "lwip/netdb.h"
 #include "lwip/sockets.h"
+#include "lwip/tcpip.h"
 
 #define SOCKET_HOST_MAX_BYTES 253U
 #define SOCKET_POLL_INTERVAL_US 10000U
 #define SOCKET_DEFAULT_CONNECT_TIMEOUT_MS 5000
 #define SOCKET_MAX_TIMEOUT_MS 60000
 #define SOCKET_DEFAULT_LISTEN_BACKLOG 4
+#define SOCKET_TLS_WORKER_STACK_SIZE 8192U
+#define SOCKET_TLS_WORKER_POLL_MS 1U
 
 typedef enum {
     SOCKET_PROTOCOL_NONE = 0,
@@ -310,20 +322,6 @@ static int socket_poll_fd(int fd, bool writable)
                   writable ? &write_fds : NULL,
                   NULL,
                   &timeout);
-}
-
-static bool socket_resolve(const char *host,
-                           int port,
-                           int socktype,
-                           struct addrinfo **out_addresses)
-{
-    struct addrinfo hints = {0};
-    char service[6];
-
-    snprintf(service, sizeof(service), "%d", port);
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = socktype;
-    return getaddrinfo(host, service, &hints, out_addresses) == 0;
 }
 
 static bool socket_get_host(JSContext *ctx,
@@ -623,8 +621,46 @@ typedef enum {
     SOCKET_FUTURE_UDP_RECVFROM,
 } socket_future_kind_t;
 
+typedef enum {
+    SOCKET_CONNECT_NONE = 0,
+    SOCKET_CONNECT_RESOLVING,
+    SOCKET_CONNECT_CONNECTING,
+    SOCKET_CONNECT_TLS_HANDSHAKE,
+    SOCKET_CONNECT_READY,
+} socket_connect_phase_t;
+
+typedef struct {
+    _Atomic uint32_t references;
+    _Atomic bool completed;
+    struct sockaddr_storage address;
+    socklen_t address_len;
+    int port;
+    int error_code;
+    char *host;
+    char error_text[64];
+} socket_dns_request_t;
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+typedef struct {
+    _Atomic uint32_t references;
+    _Atomic bool completed;
+    _Atomic int phase;
+    esp_tls_cfg_t config;
+    esp_tls_t *tls;
+    esp32_mquickjs_tls_error_t error;
+    uint64_t deadline_us;
+    int port;
+    int result;
+    int fd;
+    bool worker_uses_caps;
+    char host[SOCKET_HOST_MAX_BYTES + 1U];
+    char resolved_host[INET_ADDRSTRLEN];
+} socket_tls_request_t;
+#endif
+
 struct esp32_mquickjs_future_driver_state {
     socket_future_kind_t kind;
+    socket_connect_phase_t connect_phase;
     JSContext *ctx;
     esp32_mquickjs_runtime_t *runtime;
     esp32_mquickjs_future_token_t token;
@@ -650,16 +686,19 @@ struct esp32_mquickjs_future_driver_state {
     struct sockaddr_storage address;
     socklen_t address_len;
     char host[SOCKET_HOST_MAX_BYTES + 1U];
+    char resolved_host[INET_ADDRSTRLEN];
     char error_text[96];
 #if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
-    esp_tls_cfg_t tls_config;
     esp32_mquickjs_tls_error_t tls_error;
+    socket_tls_request_t *tls_request;
 #endif
     bool started;
     bool issued;
     bool empty_result;
     bool completed;
     bool cancelled;
+    bool resolver_applied;
+    socket_dns_request_t *resolver;
     bool send_owner_rooted;
     bool send_source_open;
     bool send_is_span_source;
@@ -884,16 +923,7 @@ static bool socket_tcp_connect_future_prepare(
     if (argc < 4 || JS_IsUndefined(argv[3].val)) {
         state->timeout_ms = SOCKET_DEFAULT_CONNECT_TIMEOUT_MS;
     }
-#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
-    if (entry->secure) {
-        state->tls_config.non_block = true;
-        state->tls_config.timeout_ms = state->timeout_ms;
-#if defined(CONFIG_MBEDTLS_CERTIFICATE_BUNDLE) && CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
-        state->tls_config.crt_bundle_attach =
-            esp32_mquickjs_tls_crt_bundle_attach;
-#endif
-    }
-#endif
+    state->connect_phase = SOCKET_CONNECT_RESOLVING;
     *out_state = state;
     return true;
 }
@@ -1089,7 +1119,7 @@ static void socket_future_poll_timer(void *opaque)
 {
     esp32_mquickjs_future_driver_state_t *state = opaque;
 
-    if (state != NULL && !state->completed) {
+    if (state != NULL) {
         (void)esp32_mquickjs_future_wake(state->runtime, state->token);
     }
 }
@@ -1104,33 +1134,377 @@ static void socket_future_stop_timer(esp32_mquickjs_future_driver_state_t *state
     state->poll_timer = NULL;
 }
 
-static bool socket_future_resolve_address(esp32_mquickjs_future_driver_state_t *state,
-                                          int socktype)
+static bool socket_future_needs_resolution(
+    const esp32_mquickjs_future_driver_state_t *state)
 {
-    struct addrinfo *addresses = NULL;
-    struct addrinfo *address;
-    bool found = false;
+    return state != NULL &&
+           (state->kind == SOCKET_FUTURE_TCP_CONNECT ||
+            state->kind == SOCKET_FUTURE_UDP_SENDTO);
+}
 
-    if (!socket_resolve(state->host, state->port, socktype, &addresses)) {
-        socket_future_fail(state, EHOSTUNREACH, "could not resolve remoteHost");
+static void socket_dns_request_release(socket_dns_request_t *request)
+{
+    if (request != NULL &&
+        atomic_fetch_sub_explicit(&request->references,
+                                  1,
+                                  memory_order_acq_rel) == 1) {
+        heap_caps_free(request->host);
+        heap_caps_free(request);
+    }
+}
+
+static void socket_future_publish_resolution(
+    socket_dns_request_t *request,
+    const ip_addr_t *ip_address,
+    int error_code,
+    const char *error_text)
+{
+    if (request == NULL) {
+        return;
+    }
+    if (ip_address != NULL && IP_IS_V4(ip_address)) {
+        struct sockaddr_in *address =
+            (struct sockaddr_in *)&request->address;
+
+        memset(address, 0, sizeof(*address));
+        address->sin_family = AF_INET;
+        address->sin_port = htons((uint16_t)request->port);
+        address->sin_addr.s_addr = ip4_addr_get_u32(ip_2_ip4(ip_address));
+        request->address_len = sizeof(*address);
+        request->error_code = 0;
+        request->error_text[0] = '\0';
+    } else {
+        request->error_code = error_code != 0 ? error_code : EHOSTUNREACH;
+        snprintf(request->error_text,
+                 sizeof(request->error_text),
+                 "%s",
+                 error_text != NULL ? error_text : "could not resolve remoteHost");
+    }
+    atomic_store_explicit(
+        &request->completed, true, memory_order_release);
+    socket_dns_request_release(request);
+}
+
+static void socket_future_dns_found(const char *name,
+                                    const ip_addr_t *ip_address,
+                                    void *opaque)
+{
+    (void)name;
+    socket_future_publish_resolution(
+        opaque, ip_address, EHOSTUNREACH, "could not resolve remoteHost");
+}
+
+static void socket_future_dns_request(void *opaque)
+{
+    socket_dns_request_t *request = opaque;
+    ip_addr_t ip_address;
+    err_t result;
+
+    if (request == NULL) {
+        return;
+    }
+    result = dns_gethostbyname_addrtype(request->host,
+                                        &ip_address,
+                                        socket_future_dns_found,
+                                        request,
+                                        LWIP_DNS_ADDRTYPE_IPV4);
+    if (result == ERR_OK) {
+        socket_future_publish_resolution(request, &ip_address, 0, NULL);
+    } else if (result != ERR_INPROGRESS) {
+        socket_future_publish_resolution(
+            request,
+            NULL,
+            result == ERR_MEM ? ENOMEM : EHOSTUNREACH,
+            result == ERR_MEM ? "DNS resolver is out of memory"
+                              : "could not resolve remoteHost");
+    }
+}
+
+static bool socket_future_begin_resolution(
+    JSContext *ctx,
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    socket_dns_request_t *request;
+
+    if (state == NULL || state->resolver != NULL) {
         return false;
     }
-    for (address = addresses; address != NULL; address = address->ai_next) {
-        if (address->ai_family != AF_INET ||
-            address->ai_addrlen > sizeof(state->address)) {
-            continue;
-        }
-        memcpy(&state->address, address->ai_addr, address->ai_addrlen);
-        state->address_len = (socklen_t)address->ai_addrlen;
-        found = true;
-        break;
+    /* Atomic ownership metadata stays in internal RAM. The variable-sized
+     * hostname is ordinary immutable payload and may use PSRAM. */
+    request = heap_caps_calloc(
+        1, sizeof(*request), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (request == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        return false;
     }
-    freeaddrinfo(addresses);
-    if (!found) {
-        socket_future_fail(state, EAFNOSUPPORT, "remoteHost has no IPv4 address");
+    request->host = esp32_mquickjs_memory_payload_alloc(
+        strlen(state->host) + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+    if (request->host == NULL) {
+        heap_caps_free(request);
+        JS_ThrowOutOfMemory(ctx);
+        return false;
     }
-    return found;
+    atomic_init(&request->references, 2);
+    atomic_init(&request->completed, false);
+    request->port = state->port;
+    strcpy(request->host, state->host);
+    state->resolver = request;
+    if (tcpip_try_callback(socket_future_dns_request, request) != ERR_OK) {
+        state->resolver = NULL;
+        socket_dns_request_release(request);
+        socket_dns_request_release(request);
+        JS_ThrowInternalError(ctx, "socket DNS resolver queue is full");
+        return false;
+    }
+    return true;
 }
+
+static bool socket_future_apply_resolution(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    socket_dns_request_t *request;
+
+    if (state == NULL || state->resolver == NULL) {
+        return false;
+    }
+    request = state->resolver;
+    if (!atomic_load_explicit(&request->completed, memory_order_acquire)) {
+        return false;
+    }
+    if (state->resolver_applied) {
+        return true;
+    }
+    state->resolver_applied = true;
+    memcpy(&state->address, &request->address, sizeof(state->address));
+    state->address_len = request->address_len;
+    if (request->error_code != 0) {
+        socket_future_fail(state,
+                           request->error_code,
+                           request->error_text);
+        return true;
+    }
+    if (state->kind == SOCKET_FUTURE_TCP_CONNECT) {
+        const struct sockaddr_in *address =
+            (const struct sockaddr_in *)&state->address;
+
+        state->connect_phase = SOCKET_CONNECT_CONNECTING;
+        if (inet_ntop(AF_INET,
+                      &address->sin_addr,
+                      state->resolved_host,
+                      sizeof(state->resolved_host)) == NULL) {
+            socket_future_fail(state,
+                               EAFNOSUPPORT,
+                               "could not format resolved remoteHost");
+        }
+    }
+    return true;
+}
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+static void socket_tls_request_release(socket_tls_request_t *request)
+{
+    if (request != NULL &&
+        atomic_fetch_sub_explicit(&request->references,
+                                  1,
+                                  memory_order_acq_rel) == 1) {
+        if (request->tls != NULL) {
+            esp_tls_conn_destroy(request->tls);
+        }
+        heap_caps_free(request);
+    }
+}
+
+static void socket_tls_worker_delete(bool worker_uses_caps)
+{
+#if defined(CONFIG_SPIRAM) && CONFIG_SPIRAM && \
+    defined(CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM) && \
+    CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+    if (worker_uses_caps) {
+        vTaskDeleteWithCaps(NULL);
+        return;
+    }
+#else
+    (void)worker_uses_caps;
+#endif
+    vTaskDelete(NULL);
+}
+
+static void socket_tls_connect_worker(void *opaque)
+{
+    socket_tls_request_t *request = opaque;
+    bool worker_uses_caps;
+
+    if (request == NULL) {
+        vTaskDelete(NULL);
+        return;
+    }
+    worker_uses_caps = request->worker_uses_caps;
+    request->tls = esp_tls_init();
+    if (request->tls == NULL) {
+        esp32_mquickjs_tls_error_set(
+            &request->error, ESP_ERR_NO_MEM, ESP_OK, 0, 0);
+        request->result = -1;
+    } else {
+        for (;;) {
+            esp_tls_conn_state_t tls_state = ESP_TLS_INIT;
+            uint64_t now_us = (uint64_t)esp_timer_get_time();
+            uint64_t remaining_ms;
+
+            if (now_us >= request->deadline_us) {
+                esp32_mquickjs_tls_error_capture(
+                    &request->error, request->tls, ESP_ERR_TIMEOUT);
+                request->result = 0;
+                break;
+            }
+            remaining_ms =
+                (request->deadline_us - now_us + 999ULL) / 1000ULL;
+            request->config.timeout_ms =
+                remaining_ms > INT_MAX ? INT_MAX : (int)remaining_ms;
+            request->result = esp_tls_conn_new_async(
+                request->resolved_host,
+                (int)strlen(request->resolved_host),
+                request->port,
+                &request->config,
+                request->tls);
+            if (request->result != 0) {
+                break;
+            }
+            if (esp_tls_get_conn_state(request->tls, &tls_state) == ESP_OK &&
+                tls_state >= ESP_TLS_HANDSHAKE) {
+                atomic_store_explicit(&request->phase,
+                                      SOCKET_CONNECT_TLS_HANDSHAKE,
+                                      memory_order_release);
+            } else if ((uint64_t)esp_timer_get_time() >= request->deadline_us) {
+                esp32_mquickjs_tls_error_capture(
+                    &request->error, request->tls, ESP_ERR_TIMEOUT);
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(SOCKET_TLS_WORKER_POLL_MS));
+        }
+        if (request->result < 0) {
+            esp32_mquickjs_tls_error_capture(
+                &request->error, request->tls, ESP_FAIL);
+        } else if (request->result == 0) {
+            esp32_mquickjs_tls_error_capture(
+                &request->error, request->tls, ESP_ERR_TIMEOUT);
+        } else if (esp_tls_get_conn_sockfd(request->tls, &request->fd) != ESP_OK ||
+                   request->fd < 0) {
+            esp32_mquickjs_tls_error_set(
+                &request->error, ESP_FAIL, ESP_OK, 0, 0);
+            request->result = -1;
+        } else {
+            esp32_mquickjs_tls_error_merge_verify_flags(&request->error);
+            atomic_store_explicit(&request->phase,
+                                  SOCKET_CONNECT_READY,
+                                  memory_order_release);
+        }
+    }
+    atomic_store_explicit(&request->completed, true, memory_order_release);
+    socket_tls_request_release(request);
+    socket_tls_worker_delete(worker_uses_caps);
+}
+
+static BaseType_t socket_tls_create_worker(socket_tls_request_t *request)
+{
+#if defined(CONFIG_SPIRAM) && CONFIG_SPIRAM && \
+    defined(CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM) && \
+    CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+    request->worker_uses_caps = true;
+    if (xTaskCreateWithCaps(socket_tls_connect_worker,
+                            "socket_tls",
+                            SOCKET_TLS_WORKER_STACK_SIZE,
+                            request,
+                            tskIDLE_PRIORITY + 4,
+                            NULL,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS) {
+        return pdPASS;
+    }
+#endif
+    request->worker_uses_caps = false;
+    return xTaskCreate(socket_tls_connect_worker,
+                       "socket_tls",
+                       SOCKET_TLS_WORKER_STACK_SIZE,
+                       request,
+                       tskIDLE_PRIORITY + 4,
+                       NULL);
+}
+
+static bool socket_future_begin_tls_connect(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    socket_tls_request_t *request;
+
+    if (state == NULL || state->tls_request != NULL) {
+        return false;
+    }
+    request = heap_caps_calloc(
+        1, sizeof(*request), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (request == NULL) {
+        esp32_mquickjs_tls_error_set(
+            &state->tls_error, ESP_ERR_NO_MEM, ESP_OK, 0, 0);
+        socket_future_fail(state, ENOMEM, "could not allocate TLS worker state");
+        return false;
+    }
+    atomic_init(&request->references, 2);
+    atomic_init(&request->completed, false);
+    atomic_init(&request->phase, SOCKET_CONNECT_CONNECTING);
+    request->deadline_us = state->deadline_us;
+    request->port = state->port;
+    request->fd = -1;
+    snprintf(request->host, sizeof(request->host), "%s", state->host);
+    snprintf(request->resolved_host,
+             sizeof(request->resolved_host),
+             "%s",
+             state->resolved_host);
+    request->config.non_block = true;
+    request->config.common_name = request->host;
+#if defined(CONFIG_MBEDTLS_CERTIFICATE_BUNDLE) && CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+    request->config.crt_bundle_attach = esp32_mquickjs_tls_crt_bundle_attach;
+#endif
+    state->tls_request = request;
+    if (socket_tls_create_worker(request) != pdPASS) {
+        state->tls_request = NULL;
+        socket_tls_request_release(request);
+        socket_tls_request_release(request);
+        socket_future_fail(state, EAGAIN, "could not start TLS worker task");
+        return false;
+    }
+    return true;
+}
+
+static bool socket_future_apply_tls_connect(
+    esp32_mquickjs_future_driver_state_t *state,
+    socket_entry_t *entry)
+{
+    socket_tls_request_t *request;
+
+    if (state == NULL || entry == NULL || state->tls_request == NULL) {
+        return false;
+    }
+    request = state->tls_request;
+    state->connect_phase = (socket_connect_phase_t)atomic_load_explicit(
+        &request->phase, memory_order_acquire);
+    if (!atomic_load_explicit(&request->completed, memory_order_acquire)) {
+        return false;
+    }
+    if (request->result <= 0 || request->tls == NULL || request->fd < 0) {
+        state->tls_error = request->error;
+        socket_future_fail(state,
+                           request->result == 0 ? ETIMEDOUT : EIO,
+                           request->result == 0
+                               ? "TLS connection timed out"
+                               : "TLS handshake failed");
+        return true;
+    }
+    entry->tls = request->tls;
+    request->tls = NULL;
+    entry->fd = request->fd;
+    state->fd = request->fd;
+    state->connect_phase = SOCKET_CONNECT_READY;
+    state->completed = true;
+    return true;
+}
+#endif
 
 static void socket_future_step_connect(esp32_mquickjs_future_driver_state_t *state,
                                        socket_entry_t *entry)
@@ -1141,38 +1515,11 @@ static void socket_future_step_connect(esp32_mquickjs_future_driver_state_t *sta
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
     if (entry->secure) {
-        int result;
-        int fd = -1;
-
-        if (entry->tls == NULL) {
-            entry->tls = esp_tls_init();
-            if (entry->tls == NULL) {
-                esp32_mquickjs_tls_error_set(
-                    &state->tls_error, ESP_ERR_NO_MEM, ESP_OK, 0, 0);
-                socket_future_fail(state, ENOMEM, "could not allocate TLS context");
-                return;
-            }
+        if (state->tls_request == NULL) {
+            (void)socket_future_begin_tls_connect(state);
+            return;
         }
-        state->issued = true;
-        result = esp_tls_conn_new_async(state->host,
-                                        (int)strlen(state->host),
-                                        state->port,
-                                        &state->tls_config,
-                                        entry->tls);
-        if (result < 0) {
-            esp32_mquickjs_tls_error_capture(
-                &state->tls_error, entry->tls, ESP_FAIL);
-            socket_future_fail(state, EIO, "TLS handshake failed");
-        } else if (result > 0) {
-            esp32_mquickjs_tls_error_merge_verify_flags(&state->tls_error);
-            if (esp_tls_get_conn_sockfd(entry->tls, &fd) != ESP_OK || fd < 0) {
-                socket_future_fail(state, EIO, "TLS socket descriptor unavailable");
-                return;
-            }
-            entry->fd = fd;
-            state->fd = fd;
-            state->completed = true;
-        }
+        (void)socket_future_apply_tls_connect(state, entry);
         return;
     }
 #endif
@@ -1181,13 +1528,11 @@ static void socket_future_step_connect(esp32_mquickjs_future_driver_state_t *sta
         int result;
 
         state->issued = true;
-        if (!socket_future_resolve_address(state, SOCK_STREAM)) {
-            return;
-        }
         result = connect(entry->fd,
                          (struct sockaddr *)&state->address,
                          state->address_len);
         if (result == 0 || (result < 0 && errno == EISCONN)) {
+            state->connect_phase = SOCKET_CONNECT_READY;
             state->completed = true;
             return;
         }
@@ -1206,6 +1551,7 @@ static void socket_future_step_connect(esp32_mquickjs_future_driver_state_t *sta
                            connect_error != 0 ? connect_error : errno,
                            NULL);
     } else if (ready > 0) {
+        state->connect_phase = SOCKET_CONNECT_READY;
         state->completed = true;
     }
 }
@@ -1448,9 +1794,6 @@ static void socket_future_step_udp_sendto(
     ssize_t sent;
 
     state->issued = true;
-    if (!socket_future_resolve_address(state, SOCK_DGRAM)) {
-        return;
-    }
     sent = sendto(entry->fd,
                   state->data,
                   state->length,
@@ -1470,6 +1813,18 @@ static void socket_future_step(esp32_mquickjs_future_driver_state_t *state)
     socket_entry_t *entry;
 
     if (state == NULL || state->completed || state->cancelled) {
+        return;
+    }
+    if (socket_future_needs_resolution(state) &&
+        !socket_future_apply_resolution(state)) {
+        if (state->kind == SOCKET_FUTURE_TCP_CONNECT &&
+            state->deadline_us > 0 &&
+            (uint64_t)esp_timer_get_time() >= state->deadline_us) {
+            socket_future_fail(state, ETIMEDOUT, "timed out");
+        }
+        return;
+    }
+    if (state->completed) {
         return;
     }
     entry = socket_future_entry(state);
@@ -1541,6 +1896,7 @@ static bool socket_future_start(JSContext *ctx,
 {
     socket_entry_t *entry = socket_future_entry(state);
     esp_timer_create_args_t timer_args = {0};
+    bool needs_resolution;
 
     if (state == NULL || entry == NULL) {
         JS_ThrowReferenceError(ctx, "socket was closed before operation start");
@@ -1554,11 +1910,16 @@ static bool socket_future_start(JSContext *ctx,
     state->runtime = runtime;
     state->token = token;
     state->started = true;
+    needs_resolution = socket_future_needs_resolution(state);
     if (state->timeout_ms > 0) {
         state->deadline_us = (uint64_t)esp_timer_get_time() +
                              (uint64_t)state->timeout_ms * 1000ULL;
     }
-    socket_future_step(state);
+    if (state->kind == SOCKET_FUTURE_TCP_CONNECT && state->timeout_ms == 0) {
+        socket_future_complete_nonblocking(state);
+    } else if (!needs_resolution) {
+        socket_future_step(state);
+    }
     socket_future_complete_nonblocking(state);
     if (!state->completed) {
         timer_args.callback = socket_future_poll_timer;
@@ -1571,6 +1932,10 @@ static bool socket_future_start(JSContext *ctx,
                                      SOCKET_POLL_INTERVAL_US) != ESP_OK) {
             socket_future_stop_timer(state);
             JS_ThrowInternalError(ctx, "failed to start socket readiness poller");
+            return false;
+        }
+        if (needs_resolution && !socket_future_begin_resolution(ctx, state)) {
+            socket_future_stop_timer(state);
             return false;
         }
     }
@@ -1768,6 +2133,10 @@ static void socket_future_destroy(esp32_mquickjs_future_driver_state_t *state)
         close(state->client_fd);
     }
     socket_future_release_send_source(state);
+    socket_dns_request_release(state->resolver);
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+    socket_tls_request_release(state->tls_request);
+#endif
     heap_caps_free(state->data);
     heap_caps_free(state);
 }

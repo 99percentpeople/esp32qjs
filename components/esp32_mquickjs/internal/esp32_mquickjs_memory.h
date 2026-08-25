@@ -8,6 +8,10 @@ typedef enum {
     ESP32_MQUICKJS_MEMORY_DEFAULT,
     ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL,
     ESP32_MQUICKJS_MEMORY_DMA_INTERNAL,
+    /*
+     * Prefer external DMA when supported, then make one reserve-checked
+     * internal DMA attempt if external allocation or reallocation fails.
+     */
     ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL,
     ESP32_MQUICKJS_MEMORY_EXTERNAL,
     ESP32_MQUICKJS_MEMORY_HOT_MOVABLE,
@@ -33,6 +37,7 @@ typedef struct {
     size_t dma_largest_reserve_bytes;
     size_t managed_internal_bytes;
     size_t managed_psram_bytes;
+    /* Internal stable managed bytes whose memory class is non-movable. */
     size_t pinned_bytes;
     size_t movable_idle_bytes;
     uint32_t migration_count;

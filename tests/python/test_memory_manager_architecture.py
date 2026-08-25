@@ -23,6 +23,8 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
         self.assertIn("MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT", source)
         self.assertIn("memory_migrate_one", source)
         self.assertIn("memory_evict_one", source)
+        self.assertIn("memory_class_counts_as_pinned", source)
+        self.assertIn("return !memory_class_is_movable(memory_class);", source)
         self.assertIn("esp32_mquickjs_memory_maintain();", runtime)
         self.assertIn("if (!esp32_mquickjs_execution_active(runtime))", runtime)
         self.assertIn("JS_FreeContext(ctx);\n        esp32_mquickjs_memory_release_generation();", runtime)
@@ -63,6 +65,52 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
         )
         self.assertIn("ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL", spi)
         self.assertIn("SPI_TRANS_DMA_USE_PSRAM", spi)
+
+    def test_external_dma_class_falls_back_once_to_reserved_internal_dma(self):
+        declarations = (
+            MQUICKJS / "internal/esp32_mquickjs_memory.h"
+        ).read_text(encoding="utf-8")
+        source = (MQUICKJS / "src/core/esp32_mquickjs_memory.c").read_text(
+            encoding="utf-8"
+        )
+        docs = (ROOT / "docs/sys-management-api.md").read_text(
+            encoding="utf-8"
+        )
+        allocation_case = source.split(
+            "case ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL:", 1
+        )[1].split(
+            "case ESP32_MQUICKJS_MEMORY_EXTERNAL:", 1
+        )[0]
+        realloc_policy = source.split(
+            "static uint32_t memory_realloc_caps", 1
+        )[1].split(
+            "void *esp32_mquickjs_memory_payload_realloc", 1
+        )[0]
+        realloc_body = source.split(
+            "void *esp32_mquickjs_memory_payload_realloc", 1
+        )[1].split(
+            "static esp32_mquickjs_memory_block_t", 1
+        )[0]
+
+        self.assertIn("ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL,", declarations)
+        self.assertNotIn("DMA_EXTERNAL_IF_SUPPORTED", declarations)
+        self.assertIn("if (has_external_dma)", allocation_case)
+        self.assertIn(
+            "data == NULL && memory_internal_dma_can_fit(size)",
+            allocation_case,
+        )
+        self.assertNotIn("data == NULL && !has_external_dma", allocation_case)
+        self.assertIn("memory_has_external_dma()", realloc_policy)
+        self.assertIn("external_dma_class && !retry_internal_dma", realloc_body)
+        self.assertIn("retry_internal_dma", realloc_body)
+        self.assertIn("memory_internal_dma_can_fit(size)", realloc_body)
+        self.assertEqual(realloc_body.count("heap_caps_realloc("), 2)
+        self.assertIn('`DMA_EXTERNAL` class means "prefer external DMA"', docs)
+        self.assertIn("records one\nallocation failure", docs)
+        self.assertIn(
+            "`DMA_EXTERNAL` blocks that fell back to internal RAM",
+            docs,
+        )
 
     def test_status_and_movable_display_buffers_are_exposed(self):
         stdlib = (MQUICKJS / "src/core/mqjs_stdlib_esp32.c").read_text(

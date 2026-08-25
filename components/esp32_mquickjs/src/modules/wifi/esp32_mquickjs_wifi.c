@@ -3,6 +3,7 @@
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
 
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_net.h"
 #include "esp32_mquickjs_future.h"
 
 #include <stdio.h>
@@ -313,7 +314,6 @@ static esp_err_t wifi_init_nvs(void)
 static esp_err_t wifi_init_once(void)
 {
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    esp_err_t err;
 
     if (s_wifi_state.initialized) {
         return ESP_OK;
@@ -333,17 +333,8 @@ static esp_err_t wifi_init_once(void)
 
     ESP_RETURN_ON_ERROR(wifi_init_nvs(), TAG, "nvs_flash_init() failed");
 
-    err = esp_netif_init();
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "esp_netif_init() failed: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    err = esp_event_loop_create_default();
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "esp_event_loop_create_default() failed: %s", esp_err_to_name(err));
-        return err;
-    }
+    ESP_RETURN_ON_ERROR(esp32_mquickjs_net_ensure_initialized(), TAG,
+                        "network runtime initialization failed");
 
     s_wifi_state.sta_netif = esp_netif_create_default_wifi_sta();
     if (s_wifi_state.sta_netif == NULL) {

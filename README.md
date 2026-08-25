@@ -37,7 +37,7 @@ The optional modules cover:
 | Peripherals | GPIO, LEDC, ADC, DAC, I2C, SPI, UART, RMT |
 | Media | standard I2S RX/TX/duplex, PDM RX, ESP32-S3 still camera |
 | Graphics | native mono1/gray8/RGB565/RGB888 bitmaps and display transports |
-| Networking | Wi-Fi station, TCP/UDP sockets, HTTP client/server, WebSocket client |
+| Networking | transport-neutral ESP-NETIF status, Wi-Fi station, TCP/UDP sockets, HTTP client/server, WebSocket client |
 | Security | optional public-CA TLS with hostname and certificate-date validation |
 | Integration | USB Serial/JTAG frames and application-configured binary RPC codec |
 
@@ -142,13 +142,17 @@ select a capability required by that profile. Application defaults can include:
 
 ```text
 CONFIG_ESP32_MQUICKJS_FEATURE_FS=y
+CONFIG_ESP32_MQUICKJS_FEATURE_NET=y
 CONFIG_ESP32_MQUICKJS_FEATURE_WIFI=y
 CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET=y
 CONFIG_ESP32_MQUICKJS_FEATURE_HTTP=y
 CONFIG_ESP32_MQUICKJS_FEATURE_TLS=y
 ```
 
-TLS is an independent capability. Disabling it keeps plaintext HTTP and
+`net` is the transport-neutral ESP-NETIF capability used by Wi-Fi, Ethernet,
+PPP, HTTP, sockets, WebSocket, TLS, and network time synchronization. It
+observes interfaces; link drivers and applications still own connection and
+credential policy. TLS is an independent capability above `net`. Disabling TLS keeps plaintext HTTP and
 TCP/UDP available while removing the CA bundle and secure transport paths.
 WebSocket currently requires TLS because the ESP-IDF WebSocket component packages
 WS and WSS in one transport library. USB Serial/JTAG frames and the interactive
@@ -172,7 +176,10 @@ Hardware profiles determine where scarce memory is used:
 
 TLS retains standard 16 KiB RX and 4 KiB TX records. Public CA, hostname, and
 certificate dates are always verified; there is no insecure or
-skip-verification mode. After a network interface obtains an address, the
+skip-verification mode. The full ESP-IDF bundle enables verification of valid
+cross-signed public-CA chains. Peer and intermediate certificate dates remain
+verified; the bundle's synthetic trusted key has no certificate dates to check.
+After a network interface obtains an address, the
 application supplies its own SNTP servers and synchronizes the wall clock before
 public TLS:
 

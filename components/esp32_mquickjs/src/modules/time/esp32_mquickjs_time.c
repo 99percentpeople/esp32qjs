@@ -2,6 +2,7 @@
 
 #include "esp32_mquickjs_core.h"
 
+#include <math.h>
 #include <string.h>
 #include <sys/time.h>
 #include <time.h>
@@ -21,12 +22,12 @@ static bool time_is_valid(void)
     return time(NULL) >= (time_t)ESP32_MQUICKJS_TIME_VALID_AFTER_UNIX;
 }
 
-#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
+#if CONFIG_ESP32_MQUICKJS_FEATURE_NET
 
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_net.h"
 
 #include <stdint.h>
-#include <stdio.h>
 
 #include "esp_heap_caps.h"
 #include "esp_netif.h"
@@ -35,38 +36,21 @@ static bool time_is_valid(void)
 
 #define TIME_SERVER_MAX_BYTES 253U
 #define TIME_DEFAULT_TIMEOUT_MS 15000U
-#define TIME_MAX_WAITERS \
-    (CONFIG_ESP32_MQUICKJS_MAX_FUTURES + \
-     CONFIG_ESP32_MQUICKJS_INTERNAL_FUTURE_RESERVE)
-
-typedef struct {
-    bool active;
-    uint32_t generation;
-    esp32_mquickjs_runtime_t *runtime;
-    esp32_mquickjs_future_token_t token;
-} time_waiter_t;
+#define TIME_MIN_TIMEOUT_MS 1U
+#define TIME_MAX_TIMEOUT_MS 60000U
 
 typedef struct {
     bool in_progress;
     bool sntp_initialized;
     bool synchronized;
-    uint32_t generation;
-    uint32_t completed_generation;
-    esp_err_t completed_error;
-    int64_t unix_time_ms;
-    size_t waiter_count;
-    time_waiter_t waiters[TIME_MAX_WAITERS];
-    char servers[CONFIG_LWIP_SNTP_MAX_SERVERS][TIME_SERVER_MAX_BYTES + 1U];
-    size_t server_count;
+    esp32_mquickjs_future_driver_state_t *active;
 } time_sync_state_t;
 
 struct esp32_mquickjs_future_driver_state {
     esp32_mquickjs_runtime_t *runtime;
     esp32_mquickjs_future_token_t token;
-    uint32_t generation;
     uint32_t timeout_ms;
     size_t server_count;
-    int waiter_index;
     int64_t unix_time_ms;
     esp_err_t error;
     char servers[CONFIG_LWIP_SNTP_MAX_SERVERS][TIME_SERVER_MAX_BYTES + 1U];
@@ -88,97 +72,72 @@ static void time_unlock(void)
     portEXIT_CRITICAL(&s_time_lock);
 }
 
-static void time_wake_generation(uint32_t generation)
+static void time_throw_error(JSContext *ctx,
+                             const char *code,
+                             const char *message)
 {
-    esp32_mquickjs_runtime_t *runtimes[TIME_MAX_WAITERS];
-    esp32_mquickjs_future_token_t tokens[TIME_MAX_WAITERS];
-    size_t count = 0;
-    size_t i;
+    JSGCRef error_ref;
+    JSValue *error;
 
-    time_lock();
-    for (i = 0; i < TIME_MAX_WAITERS; ++i) {
-        time_waiter_t *waiter = &s_time.waiters[i];
-
-        if (waiter->active && waiter->generation == generation &&
-            waiter->runtime != NULL) {
-            runtimes[count] = waiter->runtime;
-            tokens[count] = waiter->token;
-            count++;
-        }
+    (void)JS_ThrowInternalError(ctx, "%s: %s", code, message);
+    if (!JS_HasException(ctx)) {
+        return;
     }
-    time_unlock();
-
-    for (i = 0; i < count; ++i) {
-        (void)esp32_mquickjs_future_wake(runtimes[i], tokens[i]);
+    error = JS_PushGCRef(ctx, &error_ref);
+    *error = JS_GetException(ctx);
+    if (JS_GetClassID(ctx, *error) >= 0 &&
+        JS_IsException(JS_SetPropertyStr(
+            ctx, *error, "code", JS_NewString(ctx, code)))) {
+        JS_PopGCRef(ctx, &error_ref);
+        return;
     }
+    (void)JS_Throw(ctx, JS_PopGCRef(ctx, &error_ref));
 }
 
 static void time_sync_callback(struct timeval *tv)
 {
-    uint32_t generation;
+    esp32_mquickjs_future_driver_state_t *state;
+    esp32_mquickjs_runtime_t *runtime = NULL;
+    esp32_mquickjs_future_token_t token = {0};
 
     time_lock();
-    if (!s_time.in_progress) {
+    state = s_time.active;
+    if (!s_time.in_progress || state == NULL) {
         time_unlock();
         return;
     }
-    generation = s_time.generation;
     s_time.in_progress = false;
     s_time.synchronized = true;
-    s_time.completed_generation = generation;
-    s_time.completed_error = ESP_OK;
-    s_time.unix_time_ms = tv != NULL
+    state->error = ESP_OK;
+    state->unix_time_ms = tv != NULL
         ? (int64_t)tv->tv_sec * 1000LL + (int64_t)tv->tv_usec / 1000LL
         : time_now_ms();
+    state->completed = true;
+    runtime = state->runtime;
+    token = state->token;
     time_unlock();
 
-    time_wake_generation(generation);
-}
-
-static int time_add_waiter_locked(esp32_mquickjs_runtime_t *runtime,
-                                  esp32_mquickjs_future_token_t token,
-                                  uint32_t generation)
-{
-    size_t i;
-
-    for (i = 0; i < TIME_MAX_WAITERS; ++i) {
-        time_waiter_t *waiter = &s_time.waiters[i];
-
-        if (waiter->active) {
-            continue;
-        }
-        waiter->active = true;
-        waiter->generation = generation;
-        waiter->runtime = runtime;
-        waiter->token = token;
-        s_time.waiter_count++;
-        return (int)i;
+    if (runtime != NULL) {
+        (void)esp32_mquickjs_future_wake(runtime, token);
     }
-    return -1;
 }
 
-static void time_remove_waiter(
+static void time_release_active(
     esp32_mquickjs_future_driver_state_t *state)
 {
     bool deinit_sntp = false;
 
-    if (state == NULL || state->waiter_index < 0 ||
-        state->waiter_index >= TIME_MAX_WAITERS) {
+    if (state == NULL) {
         return;
     }
     time_lock();
-    if (s_time.waiters[state->waiter_index].active) {
-        memset(&s_time.waiters[state->waiter_index], 0,
-               sizeof(s_time.waiters[state->waiter_index]));
-        if (s_time.waiter_count > 0) {
-            s_time.waiter_count--;
-        }
-    }
-    state->waiter_index = -1;
-    if (s_time.waiter_count == 0 && s_time.sntp_initialized) {
+    if (s_time.active == state) {
+        s_time.active = NULL;
         s_time.in_progress = false;
-        s_time.sntp_initialized = false;
-        deinit_sntp = true;
+        if (s_time.sntp_initialized) {
+            s_time.sntp_initialized = false;
+            deinit_sntp = true;
+        }
     }
     time_unlock();
     if (deinit_sntp) {
@@ -197,7 +156,7 @@ static bool time_parse_sync_options(
     JSValue *timeout;
     JSValue *item;
     int server_count = 0;
-    int timeout_ms = 0;
+    double timeout_ms = 0;
     bool valid = false;
     size_t i;
 
@@ -230,10 +189,18 @@ static bool time_parse_sync_options(
     state->timeout_ms = TIME_DEFAULT_TIMEOUT_MS;
     if (!JS_IsUndefined(*timeout)) {
         if (!JS_IsNumber(ctx, *timeout) ||
-            JS_ToInt32(ctx, &timeout_ms, *timeout) != 0 || timeout_ms < 0) {
+            JS_ToNumber(ctx, &timeout_ms, *timeout) != 0 ||
+            !isfinite(timeout_ms) || floor(timeout_ms) != timeout_ms) {
             JS_ThrowTypeError(
                 ctx,
-                "sys.time.sync({ timeoutMs }) expects a non-negative integer");
+                "sys.time.sync({ timeoutMs }) expects an integer between 1 and 60000");
+            goto done;
+        }
+        if (timeout_ms < (double)TIME_MIN_TIMEOUT_MS ||
+            timeout_ms > (double)TIME_MAX_TIMEOUT_MS) {
+            JS_ThrowRangeError(
+                ctx,
+                "sys.time.sync({ timeoutMs }) expects an integer between 1 and 60000");
             goto done;
         }
         state->timeout_ms = (uint32_t)timeout_ms;
@@ -286,7 +253,6 @@ static bool time_future_prepare(
         JS_ThrowOutOfMemory(ctx);
         return false;
     }
-    state->waiter_index = -1;
     if (!time_parse_sync_options(ctx, argc, argv, state)) {
         heap_caps_free(state);
         return false;
@@ -295,76 +261,48 @@ static bool time_future_prepare(
     return true;
 }
 
-static bool time_netif_has_address(esp_netif_t *netif, void *ctx)
-{
-    esp_netif_ip_info_t ip_info = {0};
-
-    (void)ctx;
-    return esp_netif_is_netif_up(netif) &&
-           esp_netif_get_ip_info(netif, &ip_info) == ESP_OK &&
-           ip_info.ip.addr != 0;
-}
-
 static bool time_future_start(
     JSContext *ctx, esp32_mquickjs_runtime_t *runtime,
     esp32_mquickjs_future_token_t token,
     esp32_mquickjs_future_driver_state_t *state)
 {
-    bool start_round = false;
     bool immediate = false;
-    uint32_t generation = 0;
     size_t i;
 
     if (state == NULL) {
         JS_ThrowInternalError(ctx, "time Future lost its driver state");
         return false;
     }
-    if (esp_netif_find_if(time_netif_has_address, NULL) == NULL) {
+    if (!esp32_mquickjs_net_is_ready()) {
         JS_ThrowInternalError(
             ctx,
             "sys.time.sync() requires an active network connection");
         return false;
     }
 
-    state->runtime = runtime;
-    state->token = token;
-    state->started = true;
-
     time_lock();
     if ((s_time.synchronized || time_is_valid()) && !s_time.in_progress) {
         s_time.synchronized = true;
+        state->runtime = runtime;
+        state->token = token;
+        state->started = true;
         state->unix_time_ms = time_now_ms();
         state->error = ESP_OK;
         state->completed = true;
         immediate = true;
+    } else if (s_time.active != NULL) {
+        time_unlock();
+        time_throw_error(
+            ctx, "TIME_SYNC_BUSY",
+            "sys.time.sync() already has an active SNTP operation");
+        return false;
     } else {
-        if (!s_time.in_progress) {
-            s_time.generation++;
-            if (s_time.generation == 0) {
-                s_time.generation++;
-            }
-            s_time.in_progress = true;
-            s_time.completed_error = ESP_OK;
-            s_time.server_count = state->server_count;
-            for (i = 0; i < state->server_count; ++i) {
-                snprintf(s_time.servers[i], sizeof(s_time.servers[i]), "%s",
-                         state->servers[i]);
-            }
-            start_round = true;
-        }
-        generation = s_time.generation;
-        state->generation = generation;
-        state->waiter_index = time_add_waiter_locked(runtime, token,
-                                                     generation);
-        if (state->waiter_index < 0) {
-            if (start_round) {
-                s_time.in_progress = false;
-            }
-            time_unlock();
-            JS_ThrowInternalError(
-                ctx, "sys.time.sync() has too many concurrent waiters");
-            return false;
-        }
+        state->runtime = runtime;
+        state->token = token;
+        state->started = true;
+        state->error = ESP_OK;
+        s_time.active = state;
+        s_time.in_progress = true;
     }
     time_unlock();
 
@@ -372,7 +310,7 @@ static bool time_future_start(
         (void)esp32_mquickjs_future_wake(runtime, token);
         return true;
     }
-    if (start_round) {
+    {
         esp_sntp_config_t config = {
             .smooth_sync = false,
             .server_from_dhcp = false,
@@ -380,27 +318,29 @@ static bool time_future_start(
             .start = true,
             .sync_cb = time_sync_callback,
             .renew_servers_after_new_IP = false,
-            .ip_event_to_renew = IP_EVENT_STA_GOT_IP,
             .index_of_first_server = 0,
             .num_of_servers = state->server_count,
         };
         esp_err_t err;
+        bool wake = false;
 
         for (i = 0; i < state->server_count; ++i) {
-            config.servers[i] = s_time.servers[i];
+            config.servers[i] = state->servers[i];
         }
         err = esp_netif_sntp_init(&config);
         time_lock();
-        if (err == ESP_OK) {
+        if (s_time.active == state && err == ESP_OK) {
             s_time.sntp_initialized = true;
-        } else if (s_time.generation == generation) {
+        } else if (s_time.active == state) {
+            s_time.active = NULL;
             s_time.in_progress = false;
-            s_time.completed_generation = generation;
-            s_time.completed_error = err;
+            state->error = err;
+            state->completed = true;
+            wake = true;
         }
         time_unlock();
-        if (err != ESP_OK) {
-            time_wake_generation(generation);
+        if (wake) {
+            (void)esp32_mquickjs_future_wake(runtime, token);
         }
     }
     return true;
@@ -409,17 +349,15 @@ static bool time_future_start(
 static esp32_mquickjs_future_poll_t time_future_poll(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL || state->completed) {
+    bool completed;
+
+    if (state == NULL) {
         return ESP32_MQUICKJS_FUTURE_READY;
     }
     time_lock();
-    if (s_time.completed_generation == state->generation) {
-        state->error = s_time.completed_error;
-        state->unix_time_ms = s_time.unix_time_ms;
-        state->completed = true;
-    }
+    completed = state->completed;
     time_unlock();
-    return state->completed
+    return completed
         ? ESP32_MQUICKJS_FUTURE_READY
         : ESP32_MQUICKJS_FUTURE_PENDING;
 }
@@ -455,12 +393,30 @@ static JSValue time_future_finish(
 static bool time_future_cancel(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL || state->completed || state->cancel_requested) {
+    bool deinit_sntp = false;
+
+    if (state == NULL) {
+        return false;
+    }
+    time_lock();
+    if (state->completed || state->cancel_requested) {
+        time_unlock();
         return false;
     }
     state->cancel_requested = true;
-    time_remove_waiter(state);
     state->completed = true;
+    if (s_time.active == state) {
+        s_time.active = NULL;
+        s_time.in_progress = false;
+        if (s_time.sntp_initialized) {
+            s_time.sntp_initialized = false;
+            deinit_sntp = true;
+        }
+    }
+    time_unlock();
+    if (deinit_sntp) {
+        esp_netif_sntp_deinit();
+    }
     (void)esp32_mquickjs_future_wake(state->runtime, state->token);
     return true;
 }
@@ -474,7 +430,7 @@ static void time_future_destroy(
     if (state->started && !state->completed) {
         (void)time_future_cancel(state);
     }
-    time_remove_waiter(state);
+    time_release_active(state);
     heap_caps_free(state);
 }
 
@@ -484,7 +440,7 @@ static uint32_t time_future_timeout_ms(
     if (state == NULL) {
         return 0;
     }
-    return state->timeout_ms == 0 ? 1 : state->timeout_ms;
+    return state->timeout_ms;
 }
 
 static const esp32_mquickjs_future_driver_t s_time_future_driver = {
@@ -554,7 +510,7 @@ JSValue js_sys_time_status(JSContext *ctx, JSValue *this_val, int argc,
     if (argc != 0) {
         return JS_ThrowTypeError(ctx, "sys.time.status() expects no arguments");
     }
-#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
+#if CONFIG_ESP32_MQUICKJS_FEATURE_NET
     time_lock();
     if (valid) {
         s_time.synchronized = true;
@@ -583,7 +539,7 @@ JSValue js_sys_time_status(JSContext *ctx, JSValue *this_val, int argc,
 bool esp32_mquickjs_init_time_runtime(JSContext *ctx,
                                       esp32_mquickjs_runtime_t *runtime)
 {
-#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
+#if CONFIG_ESP32_MQUICKJS_FEATURE_NET
     JSGCRef global_ref;
     JSGCRef sys_ref;
     JSGCRef time_ref;
@@ -628,7 +584,7 @@ bool esp32_mquickjs_init_time_runtime(JSContext *ctx,
 
 void esp32_mquickjs_deinit_time_runtime(void)
 {
-#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
+#if CONFIG_ESP32_MQUICKJS_FEATURE_NET
     bool deinit_sntp;
     bool synchronized;
 

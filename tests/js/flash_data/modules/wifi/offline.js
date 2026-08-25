@@ -6,6 +6,9 @@ test("wifi/offline", function () {
   var connectError = "";
   var syncOptionsError = "";
   var syncServersError = "";
+  var syncZeroTimeoutError = "";
+  var syncLargeTimeoutError = "";
+  var syncFractionalTimeoutError = "";
 
   test.ok(status && typeof status === "object", "wifi.status() should return an object");
   test.ok(typeof wifi.DEFAULT_TIMEOUT_MS === "number", "wifi timeout constant");
@@ -57,6 +60,43 @@ test("wifi/offline", function () {
   }
   test.ok(syncServersError.indexOf("1..") >= 0,
     "sys.time.sync should require at least one server");
+
+  try {
+    Future.call(sys.time.sync, sys.time, [{
+      servers: ["pool.ntp.org"],
+      timeoutMs: 0
+    }]).wait(1000);
+  } catch (syncZeroTimeoutFailure) {
+    syncZeroTimeoutError = String(syncZeroTimeoutFailure && syncZeroTimeoutFailure.message
+      ? syncZeroTimeoutFailure.message : syncZeroTimeoutFailure);
+  }
+  test.ok(syncZeroTimeoutError.indexOf("between 1 and 60000") >= 0,
+    "sys.time.sync should reject timeoutMs=0");
+
+  try {
+    Future.call(sys.time.sync, sys.time, [{
+      servers: ["pool.ntp.org"],
+      timeoutMs: 60001
+    }]).wait(1000);
+  } catch (syncLargeTimeoutFailure) {
+    syncLargeTimeoutError = String(syncLargeTimeoutFailure && syncLargeTimeoutFailure.message
+      ? syncLargeTimeoutFailure.message : syncLargeTimeoutFailure);
+  }
+  test.ok(syncLargeTimeoutError.indexOf("between 1 and 60000") >= 0,
+    "sys.time.sync should reject timeoutMs above 60000");
+
+  try {
+    Future.call(sys.time.sync, sys.time, [{
+      servers: ["pool.ntp.org"],
+      timeoutMs: 1.5
+    }]).wait(1000);
+  } catch (syncFractionalTimeoutFailure) {
+    syncFractionalTimeoutError = String(syncFractionalTimeoutFailure &&
+      syncFractionalTimeoutFailure.message
+      ? syncFractionalTimeoutFailure.message : syncFractionalTimeoutFailure);
+  }
+  test.ok(syncFractionalTimeoutError.indexOf("between 1 and 60000") >= 0,
+    "sys.time.sync should reject fractional timeoutMs");
 
   disconnected = wifi.disconnect();
   test.ok(disconnected && typeof disconnected === "object", "wifi.disconnect should return a status object");

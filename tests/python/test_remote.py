@@ -257,9 +257,11 @@ class RemoteConfigTests(unittest.TestCase):
         )
         test_defaults = REMOTE.JS_TEST_SDKCONFIG_DEFAULTS.read_text()
         self.assertIn("CONFIG_ESP32_MQUICKJS_DEBUG_GC=y", test_defaults)
+        self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_NET=y", test_defaults)
         self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET=y", test_defaults)
         self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET=y", test_defaults)
         self.assertIn("socket", REMOTE.JS_TEST_MODULE_MAP)
+        self.assertIn("net", REMOTE.JS_TEST_MODULE_MAP)
         self.assertIn("websocket", REMOTE.JS_TEST_MODULE_MAP)
         self.assertEqual(
             REMOTE.JS_TEST_MODULE_MAP["camera-bitmap"].required_features,
@@ -506,11 +508,11 @@ class RemoteConfigTests(unittest.TestCase):
                 "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y", tls_defaults
             )
             self.assertIn(
-                "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=n",
+                "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y",
                 tls_defaults,
             )
             self.assertIn(
-                "CONFIG_MBEDTLS_X509_TRUSTED_CERT_CALLBACK=n", tls_defaults
+                "CONFIG_MBEDTLS_X509_TRUSTED_CERT_CALLBACK=y", tls_defaults
             )
             self.assertIn("CONFIG_ESP_TLS_USING_MBEDTLS=y", tls_defaults)
             self.assertIn("CONFIG_ESP_TLS_CUSTOM_STACK=n", tls_defaults)

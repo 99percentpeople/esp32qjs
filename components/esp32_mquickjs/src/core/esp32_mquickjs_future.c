@@ -1,6 +1,7 @@
 #include "esp32_mquickjs_future.h"
 
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_future_timeout.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -730,7 +731,6 @@ static bool future_retain_continuation(JSContext *ctx,
     *rooted = input;
     slot->input_count = 1;
     slot->input_refs_retained = true;
-
     rooted = JS_AddGCRef(ctx, &slot->function);
     *rooted = callback;
     rooted = JS_AddGCRef(ctx, &slot->receiver);
@@ -1094,7 +1094,8 @@ static void future_advance_timeout(JSContext *ctx, future_slot_t *slot, uint64_t
         future_copy_terminal(ctx, slot, input);
     } else if (slot->deadline_us > 0 && now_us >= slot->deadline_us) {
         char message[96];
-        uint32_t timeout_ms = (uint32_t)((slot->deadline_us - slot->submitted_us) / 1000ULL);
+        uint32_t timeout_ms = esp32_mquickjs_future_elapsed_timeout_ms(
+            slot->submitted_us, slot->deadline_us);
 
         input_slot = future_handle_slot(input);
         if (input_slot != NULL) {
@@ -1219,7 +1220,8 @@ static bool future_expire_deadlines(JSContext *ctx,
             slot->deadline_us == 0 || now_us < slot->deadline_us) {
             continue;
         }
-        timeout_ms = (uint32_t)((slot->deadline_us - slot->submitted_us) / 1000ULL);
+        timeout_ms = esp32_mquickjs_future_elapsed_timeout_ms(
+            slot->submitted_us, slot->deadline_us);
         if (slot->driver_active && slot->driver != NULL && slot->driver->cancel != NULL) {
             (void)slot->driver->cancel(slot->driver_state);
         }

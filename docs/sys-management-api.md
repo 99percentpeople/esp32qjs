@@ -115,6 +115,7 @@ declare namespace ESP32QJS {
     readonly i2c: boolean;
     readonly spi: boolean;
     readonly uart: boolean;
+    readonly net: boolean;
     readonly usbSerial: boolean;
     readonly socket: boolean;
     readonly websocket: boolean;
@@ -267,6 +268,7 @@ declare namespace ESP32QJS {
     dmaLargestReserveBytes: number;
     managedInternalBytes: number;
     managedPsramBytes: number;
+    /** Internal stable managed bytes whose memory class is non-movable. */
     pinnedBytes: number;
     movableIdleBytes: number;
     migrationCount: number;
@@ -421,6 +423,7 @@ declare namespace ESP32QJS {
 
   interface SysTimeSyncOptions {
     servers: string[];
+    /** Integer timeout from 1 through 60000 milliseconds. Defaults to 15000. */
     timeoutMs?: number;
   }
 
@@ -437,6 +440,7 @@ declare namespace ESP32QJS {
 
   interface SysTimeModule {
     status(): SysTimeStatus;
+    /** Rejects with TIME_SYNC_BUSY while another SNTP operation is active. */
     sync(options: SysTimeSyncOptions): SysTimeSyncResult;
   }
 
@@ -653,6 +657,23 @@ retain ownerless buffers from the previous generation. The managed-byte and
 counts cover all classified payload and block requests. None of these counters
 claim ownership of opaque ESP-IDF or third-party allocations.
 
+The internal `DMA_EXTERNAL` class means "prefer external DMA". If the target
+exposes an external DMA-capable heap, allocation and reallocation try that heap
+first. If it is fragmented or exhausted, the manager makes one internal-DMA
+attempt only when the internal reserve check allows the full request. A target
+without external DMA goes directly to the same reserve-checked internal path.
+The manager never alternates repeatedly between heaps, and records one
+allocation failure only after both permitted attempts fail. Code that always
+requires internal DMA uses `DMA_INTERNAL` explicitly.
+
+`pinnedBytes` is based on the block's actual placement and mobility. It counts
+every internal stable managed block whose class is non-movable, including
+`DMA_EXTERNAL` blocks that fell back to internal RAM. Movable-class blocks are
+excluded even while temporarily borrowed; `movableIdleBytes` separately
+reports movable blocks that are currently idle. As with the other manager
+counters, raw payload helpers and opaque driver allocations are outside this
+value.
+
 On targets without PSRAM the same classification and reserve checks remain in
 force, but migration is disabled. Pressure maintenance runs only after active
 JavaScript execution has unwound; recursive scheduler polls used by cooperative
@@ -772,6 +793,10 @@ Both control methods accept the same exact options object:
 - `delayMs`: optional integer from `0` through `60000`; default `0`.
 - Unknown option keys are rejected so misspelled management settings cannot be
   silently ignored.
+
+Unknown-key validation enumerates the options object's own properties inside
+the native MQuickJS binding. Replacing the mutable global `Object` or
+`Object.keys` does not alter native `sys` argument validation.
 
 Success returns a receipt recording the current generation and absolute
 monotonic request/due times. A receipt means that the supervisor accepted the

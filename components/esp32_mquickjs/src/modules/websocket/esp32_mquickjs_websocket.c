@@ -6,7 +6,7 @@
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_event_queue.h"
 #include "esp32_mquickjs_future.h"
-#include "esp32_mquickjs_wifi.h"
+#include "esp32_mquickjs_net.h"
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -561,7 +561,6 @@ JSValue js_websocket_open(JSContext *ctx,
     int ping_interval_sec;
     int max_message_bytes;
     esp_websocket_client_config_t config = {0};
-    esp32_mquickjs_wifi_status_t wifi_status;
     esp_websocket_client_handle_t client;
     JSGCRef queue_ref;
     JSGCRef receive_ref;
@@ -682,13 +681,12 @@ JSValue js_websocket_open(JSContext *ctx,
         heap_caps_free(url_copy);
         return JS_ThrowRangeError(ctx, "invalid websocketClient.open() option");
     }
-    if (esp32_mquickjs_wifi_get_status(&wifi_status) != ESP_OK ||
-        !wifi_status.connected) {
+    if (!esp32_mquickjs_net_is_ready()) {
         heap_caps_free(subprotocol_copy);
         heap_caps_free(headers);
         heap_caps_free(url_copy);
-        return JS_ThrowInternalError(ctx,
-                                     "Wi-Fi must be connected before opening WebSocket");
+        return JS_ThrowInternalError(
+            ctx, "a network interface must be ready before opening WebSocket");
     }
 
     config.uri = url_copy;

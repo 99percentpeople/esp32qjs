@@ -76,3 +76,10 @@ add_executable(test_event_queue_drain
 )
 target_include_directories(test_event_queue_drain PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_event_queue_drain COMMAND test_event_queue_drain)
+
+add_executable(test_future_timeout
+    test_future_timeout.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_future_timeout.c
+)
+target_include_directories(test_future_timeout PRIVATE ../../components/esp32_mquickjs/internal)
+add_test(NAME test_future_timeout COMMAND test_future_timeout)

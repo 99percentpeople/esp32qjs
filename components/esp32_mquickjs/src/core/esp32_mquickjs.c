@@ -18,6 +18,7 @@
 #include "esp32_mquickjs_ledc.h"
 #include "esp32_mquickjs_log_ring.h"
 #include "esp32_mquickjs_nvs.h"
+#include "esp32_mquickjs_net.h"
 #include "esp32_mquickjs_peripheral_lease.h"
 #if CONFIG_ESP32_MQUICKJS_FEATURE_RPC
 #include "esp32_mquickjs_rpc.h"
@@ -1246,6 +1247,9 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     esp32_mquickjs_deinit_wifi_runtime(ctx);
 #endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_NET
+    esp32_mquickjs_deinit_net_runtime(runtime);
+#endif
     esp32_mquickjs_deinit_stream_runtime();
 #if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
     esp32_mquickjs_deinit_bitmap_runtime(ctx);
@@ -1517,6 +1521,12 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
     if (!esp32_mquickjs_init_usb_serial_runtime(ctx, runtime)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_NET
+    if (!esp32_mquickjs_init_net_runtime(ctx, runtime)) {
         esp32_mquickjs_print_exception(ctx);
         return false;
     }

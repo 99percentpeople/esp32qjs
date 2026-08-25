@@ -1497,11 +1497,14 @@ if (ref) {
   When networking is selected, synchronize the system wall clock from one to
   four caller-selected SNTP server names and return
   `{ synchronized: true, unixTimeMs }`. An already valid clock returns
-  immediately. Concurrent calls join the active round; the first caller
-  supplies its servers. Cancellation removes only that waiter and stops SNTP
-  when the last waiter leaves. The operation uses whichever ESP network
-  interface currently has an IP address; it does not own Wi-Fi connection
-  policy.
+  immediately. Only one SNTP operation may be active: a concurrent call is
+  rejected with `error.code === "TIME_SYNC_BUSY"`; calls are never merged or
+  queued, so an accepted call always uses its own server list. Cancellation or
+  timeout stops that call's SNTP operation. The operation uses whichever ESP
+  network interface currently has an IP address; it does not own link policy.
+  `timeoutMs` is an integer from 1 through 60000 milliseconds and defaults to
+  15000; zero is rejected rather than treated as an infinite or immediate-check
+  timeout.
 
 Example:
 
@@ -1524,6 +1527,33 @@ var answer = sys.withTimeout(100, function () {
 See [System Management API v1](sys-management-api.md) for exact getter shapes,
 nullability, lifecycle semantics, and the migration map from the removed flat
 `sys.info()` call.
+
+## `net` Module
+
+`net` is exposed when `sys.info.features.net` is enabled. It initializes the
+shared ESP-NETIF runtime and observes every interface registered by Wi-Fi,
+Ethernet, PPP, or an embedding application. It does not create link drivers,
+store credentials, connect an interface, or test Internet reachability.
+
+- `net.status()`
+  Return `{ ready, primaryInterface, interfaces, truncated }`. Each interface
+  contains `{ key, description, name, up, ready, defaultRoute, routePriority,
+  ipv4, ipv6 }`. `ready` means the interface is up and has a non-zero IPv4 or
+  preferred IPv6 address. Snapshots include at most the configured interface
+  limit, eight by default.
+- `net.watch()`
+  Return an independent bounded `EventQueue` of
+  `{ type: "status", status }`. The first event is an initial snapshot; later
+  events are convergent snapshots after IP or default-route changes. Close the
+  queue when finished.
+
+```js
+var changes = net.watch();
+print(JSON.stringify(changes.receive(0).status));
+var next = Future.call(changes.receive, changes, [10000]);
+print(JSON.stringify(next.wait().status));
+changes.close();
+```
 
 ## `wifi` Module
 
@@ -1591,8 +1621,13 @@ policy, authentication, or an application protocol.
 - `socket.get_max_message_bytes(socket_id)`
   Return the maximum bytes accepted by one send or receive call. For TCP this
   is a chunk limit, not a message boundary.
-- `socket.tcp.connect(socket_id, remote_ip, remote_port, timeout = 5000)`
-  Connect a TCP handle. The host string may be an IP address or DNS name.
+- `socket.tcp.connect(socket_id, remote_host, remote_port, timeout = 5000)`
+  Connect a TCP handle. The host string may be an IP address or DNS name. DNS
+  resolution is dispatched through the asynchronous lwIP resolver, so a slow
+  lookup does not stop JavaScript, timers, other Futures, or EventQueues. The
+  timeout covers resolution, TCP connect, and the TLS handshake when enabled.
+  TLS connection setup runs in a bounded worker so ESP-IDF network waits do not
+  block the JavaScript task; PSRAM profiles prefer external RAM for its stack.
 - `socket.tcp.listen(socket_id, backlog = 4)`
   Turn a bound TCP handle into a listener.
 - `socket.tcp.accept(socket_id, timeout = 0)`
@@ -1605,10 +1640,10 @@ policy, authentication, or an application protocol.
   default) without requiring a single contiguous copy.
 - `socket.tcp.recv(socket_id, max_bytes, timeout = 0)`
   Return one raw stream chunk or `null`. TCP has no message boundaries.
-- `socket.udp.sendto(socket_id, remote_ip, remote_port, data)`
-  Send one UDP datagram.
+- `socket.udp.sendto(socket_id, remote_host, remote_port, data)`
+  Send one UDP datagram. DNS names use the same asynchronous resolver path.
 - `socket.udp.recvfrom(socket_id, max_bytes, timeout = 0)`
-  Return `{ data, remoteIp, remotePort }` or `null`.
+  Return `{ data, remoteHost, remotePort }` or `null`.
 
 `accept`, `recv`, and `recvfrom` default to non-blocking operation. Their
 optional `timeout` is bounded to 60000 ms and remains subordinate to an outer
@@ -1642,7 +1677,11 @@ of `TLS_ALLOC_FAILED`, `TLS_TIME_INVALID`, `TLS_VERIFY_FAILED`,
 not included. Close or cancel always releases the per-connection TLS context.
 PSRAM profiles retain the standard 16 KiB RX and 4 KiB TX records while placing
 mbedTLS allocations in external RAM; non-PSRAM profiles continue to use
-internal memory. If external RAM encryption is not enabled, TLS session
+internal memory. The full ESP-IDF certificate bundle accepts valid
+cross-signed public-CA chains. Peer and intermediate certificate dates remain
+verified; a bundle-generated trust anchor has no encoded validity dates and is
+treated as the trusted public key it represents.
+If external RAM encryption is not enabled, TLS session
 material in PSRAM remains readable to an attacker with physical memory access.
 
 ## `rpc` Module

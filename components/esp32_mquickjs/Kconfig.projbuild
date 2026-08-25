@@ -110,10 +110,29 @@ config ESP32_MQUICKJS_FEATURE_CAMERA
         Version 1 is an ESP32-S3-only singleton and does not run a video
         encoder or streaming server.
 
+config ESP32_MQUICKJS_FEATURE_NET
+    bool "Enable generic network interface module"
+    default n
+    help
+        Enable the transport-neutral net.status() and net.watch() APIs over
+        every registered esp-netif interface. Link-specific modules and the
+        embedding application remain responsible for creating and controlling
+        Wi-Fi, Ethernet, PPP, or custom interfaces.
+
+config ESP32_MQUICKJS_NET_MAX_INTERFACES
+    int "Maximum interfaces in one net.status() snapshot"
+    range 1 16
+    default 8
+    depends on ESP32_MQUICKJS_FEATURE_NET
+    help
+        Bound native storage used while collecting one network-interface
+        snapshot. Additional interfaces are omitted and reported through the
+        snapshot's truncated flag.
+
 config ESP32_MQUICKJS_FEATURE_WIFI
     bool "Enable wifi module"
     default n
-    depends on SOC_WIFI_SUPPORTED
+    depends on ESP32_MQUICKJS_FEATURE_NET && SOC_WIFI_SUPPORTED
     help
         Enable Wi-Fi station bindings such as wifi.status(), wifi.scan(), and
         wifi.connect().
@@ -121,6 +140,7 @@ config ESP32_MQUICKJS_FEATURE_WIFI
 config ESP32_MQUICKJS_FEATURE_TLS
     bool "Enable public-CA TLS transport capability"
     default n
+    depends on ESP32_MQUICKJS_FEATURE_NET
     select MBEDTLS_CERTIFICATE_BUNDLE
     select MBEDTLS_HAVE_TIME_DATE
     select MBEDTLS_SSL_KEEP_PEER_CERTIFICATE
@@ -134,6 +154,7 @@ config ESP32_MQUICKJS_FEATURE_TLS
 config ESP32_MQUICKJS_FEATURE_SOCKET
     bool "Enable socket module"
     default n
+    depends on ESP32_MQUICKJS_FEATURE_NET
     help
         Enable generic handle-based socket APIs for TCP streams/listeners and
         UDP datagrams. Outbound TCP handles may use TLS only when the separate
@@ -153,15 +174,15 @@ config ESP32_MQUICKJS_FEATURE_RPC
 config ESP32_MQUICKJS_FEATURE_HTTP
     bool "Enable http module"
     default n
-    depends on ESP32_MQUICKJS_FEATURE_WIFI
+    depends on ESP32_MQUICKJS_FEATURE_NET
     help
-        Enable fetch(), http.fetch(), and related HTTP client helpers. In the
-        current firmware this depends on the Wi-Fi feature being enabled.
+        Enable fetch(), http.fetch(), and related HTTP client helpers over any
+        active esp-netif transport.
 
 config ESP32_MQUICKJS_FEATURE_HTTP_SERVER
     bool "Enable http_server feature"
     default n
-    depends on ESP32_MQUICKJS_FEATURE_WIFI
+    depends on ESP32_MQUICKJS_FEATURE_NET
     help
         Enable the declarative http.server() route/request EventQueue API.
 
@@ -177,13 +198,13 @@ config ESP32_MQUICKJS_FEATURE_USB_SERIAL
 config ESP32_MQUICKJS_FEATURE_WEBSOCKET
     bool "Enable WebSocket client module"
     default n
-    depends on ESP32_MQUICKJS_FEATURE_WIFI && ESP32_MQUICKJS_FEATURE_TLS
+    depends on ESP32_MQUICKJS_FEATURE_NET && ESP32_MQUICKJS_FEATURE_TLS
     help
         Enable the outbound websocketClient callback/send API. Applications
-        connect only after Wi-Fi is ready and remain responsible for pairing
-        and authorization policy. The current ESP-IDF WebSocket component
-        contains WS and WSS in one transport library, so selecting this module
-        also requires the TLS capability.
+        connect only after a network interface is ready and remain responsible
+        for pairing and authorization policy. The current ESP-IDF WebSocket
+        component contains WS and WSS in one transport library, so selecting
+        this module also requires the TLS capability.
 
 config ESP32_MQUICKJS_FEATURE_BITMAP
     bool "Enable bitmap module"

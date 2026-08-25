@@ -2,6 +2,7 @@
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_memory.h"
 #include "esp32_mquickjs_version.h"
+#include "mquickjs_priv.h"
 
 #include <limits.h>
 #include <math.h>
@@ -368,6 +369,11 @@ JSValue js_sys_feature_get(JSContext *ctx,
         false,
 #endif
 #if defined(CONFIG_ESP32_MQUICKJS_FEATURE_TLS) && CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+        true,
+#else
+        false,
+#endif
+#if defined(CONFIG_ESP32_MQUICKJS_FEATURE_NET) && CONFIG_ESP32_MQUICKJS_FEATURE_NET
         true,
 #else
         false,
@@ -1521,29 +1527,15 @@ static bool sys_validate_option_keys(JSContext *ctx,
                                      const char *first,
                                      const char *second)
 {
-    esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
-    JSGCRef global_ref;
-    JSGCRef object_ref;
-    JSGCRef keys_fn_ref;
     JSGCRef keys_ref;
     JSGCRef length_ref;
-    JSValue *global = JS_PushGCRef(ctx, &global_ref);
-    JSValue *object = JS_PushGCRef(ctx, &object_ref);
-    JSValue *keys_fn = JS_PushGCRef(ctx, &keys_fn_ref);
     JSValue *keys = JS_PushGCRef(ctx, &keys_ref);
     JSValue *length_value = JS_PushGCRef(ctx, &length_ref);
     int length = 0;
     int i;
     bool valid = false;
 
-    *global = JS_GetGlobalObject(ctx);
-    *object = JS_IsException(*global) ? JS_EXCEPTION
-                                      : JS_GetPropertyStr(ctx, *global, "Object");
-    *keys_fn = JS_IsException(*object) ? JS_EXCEPTION
-                                       : JS_GetPropertyStr(ctx, *object, "keys");
-    *keys = JS_IsException(*keys_fn)
-                ? JS_EXCEPTION
-                : esp32_mquickjs_call(ctx, runtime, *keys_fn, *object, 1, &options);
+    *keys = js_object_keys(ctx, NULL, 1, &options);
     *length_value = JS_IsException(*keys)
                         ? JS_EXCEPTION
                         : JS_GetPropertyStr(ctx, *keys, "length");
@@ -1579,9 +1571,6 @@ static bool sys_validate_option_keys(JSContext *ctx,
 done:
     JS_PopGCRef(ctx, &length_ref);
     JS_PopGCRef(ctx, &keys_ref);
-    JS_PopGCRef(ctx, &keys_fn_ref);
-    JS_PopGCRef(ctx, &object_ref);
-    JS_PopGCRef(ctx, &global_ref);
     return valid;
 }
 

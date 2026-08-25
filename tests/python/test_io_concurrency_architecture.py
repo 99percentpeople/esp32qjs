@@ -104,10 +104,12 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         function_end = server.index("\nstatic void http_server_stop_slot(", function_start)
         start = server[function_start:function_end]
 
-        self.assertLess(start.index("esp_netif_init()"), start.index("httpd_start("))
         self.assertLess(
-            start.index("esp_event_loop_create_default()"), start.index("httpd_start(")
+            start.index("esp32_mquickjs_net_ensure_initialized()"),
+            start.index("httpd_start("),
         )
+        self.assertNotIn("esp_netif_init()", start)
+        self.assertNotIn("esp_event_loop_create_default()", start)
 
     def test_storage_waits_use_the_bounded_future_worker_pool(self):
         filesystem = (
@@ -273,6 +275,55 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertNotIn("volatile bool worker_completed;", websocket)
         self.assertNotIn("volatile int sent;", websocket)
 
+    def test_socket_hostname_resolution_runs_in_the_lwip_task(self):
+        socket = (
+            MQUICKJS / "src/modules/socket/esp32_mquickjs_socket.c"
+        ).read_text(encoding="utf-8")
+        publish_start = socket.index("static void socket_future_publish_resolution(")
+        publish_end = socket.index("\nstatic void socket_future_dns_found(", publish_start)
+        publish = socket[publish_start:publish_end]
+        tls_worker_start = socket.index("static void socket_tls_connect_worker(")
+        tls_worker_end = socket.index("\nstatic BaseType_t socket_tls_create_worker(", tls_worker_start)
+        tls_worker = socket[tls_worker_start:tls_worker_end]
+
+        self.assertNotIn("getaddrinfo(", socket)
+        self.assertNotIn("socket_future_resolve_address", socket)
+        self.assertIn("tcpip_try_callback(socket_future_dns_request, request)", socket)
+        self.assertIn("dns_gethostbyname_addrtype(request->host", socket)
+        self.assertIn("LWIP_DNS_ADDRTYPE_IPV4", socket)
+        for phase in (
+            "SOCKET_CONNECT_RESOLVING",
+            "SOCKET_CONNECT_CONNECTING",
+            "SOCKET_CONNECT_TLS_HANDSHAKE",
+            "SOCKET_CONNECT_READY",
+        ):
+            self.assertIn(phase, socket)
+
+        self.assertIn("memory_order_release", publish)
+        self.assertIn("memory_order_acquire", socket)
+        release = publish.index("atomic_store_explicit(")
+        self.assertNotIn("esp32_mquickjs_future_wake", publish[release:])
+        self.assertIn("socket_dns_request_release(request);", publish[release:])
+        self.assertIn("atomic_init(&request->references, 2)", socket)
+        self.assertIn("socket_dns_request_release(state->resolver);", socket)
+        self.assertIn("MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT", socket)
+        self.assertIn("strlen(state->host) + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL", socket)
+        timer_start = socket.index("esp_timer_start_periodic(state->poll_timer")
+        resolver_start = socket.index(
+            "socket_future_begin_resolution(ctx, state)", timer_start
+        )
+        self.assertLess(timer_start, resolver_start)
+        self.assertIn("request->config.common_name = request->host", socket)
+        self.assertIn("esp_tls_conn_new_async(\n                request->resolved_host", tls_worker)
+        self.assertNotIn("SOCKET_TLS_CONNECT_POLL_TIMEOUT_MS", socket)
+        self.assertIn("request->config.timeout_ms =", tls_worker)
+        self.assertIn("atomic_init(&request->references, 2)", socket)
+        self.assertIn("memory_order_release", tls_worker)
+        self.assertIn("memory_order_acquire", socket)
+        self.assertIn("socket_tls_request_release(state->tls_request);", socket)
+        self.assertIn("xTaskCreateWithCaps(socket_tls_connect_worker", socket)
+        self.assertIn("MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT", socket)
+
     def test_future_combinators_observe_every_attached_input_rejection(self):
         future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
             encoding="utf-8"
@@ -301,6 +352,21 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
                 f"__ESP32QJS_HANDLED_FUTURE_REJECTION__:{scenario}",
                 runtime_test,
             )
+
+    def test_future_timeout_diagnostics_use_saturated_duration_math(self):
+        future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
+            encoding="utf-8"
+        )
+        timeout_math = (
+            MQUICKJS / "src/core/esp32_mquickjs_future_timeout.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            future.count("esp32_mquickjs_future_elapsed_timeout_ms("), 2
+        )
+        self.assertNotIn("slot->deadline_us - slot->submitted_us", future)
+        self.assertIn("deadline_us <= submitted_us", timeout_math)
+        self.assertIn("duration_ms > UINT32_MAX", timeout_math)
 
     def test_event_queue_finalizer_drains_without_allocating(self):
         event_queue = (

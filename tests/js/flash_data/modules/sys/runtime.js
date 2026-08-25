@@ -32,6 +32,7 @@ test("sys/runtime", function () {
   var taskLimitError = "";
   var taskShapeError = "";
   var taskUnknownOptionError = "";
+  var intrinsicOptionValidationError = "";
   var controlReasonError = "";
   var controlShapeError = "";
   var controlUnknownOptionError = "";
@@ -76,6 +77,19 @@ test("sys/runtime", function () {
     sys.tasks({ limt: 1 });
   } catch (optionError) {
     taskUnknownOptionError = String(optionError);
+  }
+  try {
+    var originalObjectKeys = Object.keys;
+    Object.keys = function () {
+      return [];
+    };
+    try {
+      sys.tasks({ limt: 1 });
+    } catch (intrinsicOptionError) {
+      intrinsicOptionValidationError = String(intrinsicOptionError);
+    }
+  } finally {
+    Object.keys = originalObjectKeys;
   }
   try {
     sys.tasks([]);
@@ -213,6 +227,8 @@ test("sys/runtime", function () {
   test.ok(taskLimitError.indexOf("1 through") >= 0, "task limit should be range checked");
   test.ok(taskUnknownOptionError.indexOf("unknown key") >= 0,
     "unknown task options should be rejected");
+  test.ok(intrinsicOptionValidationError.indexOf("unknown key 'limt'") >= 0,
+    "native option validation should not depend on mutable Object.keys");
   test.ok(taskShapeError.indexOf("expects an object") >= 0,
     "task options should reject arrays");
 
@@ -272,6 +288,7 @@ test("sys/runtime", function () {
   expectFeature("rmt", hasObject("rmt"));
   expectFeature("i2s", hasObject("i2s"));
   expectFeature("camera", hasObject("camera"));
+  expectFeature("net", hasObject("net"));
   expectFeature("usbSerial", hasObject("usbSerial"));
   expectFeature("socket", hasObject("socket") &&
     typeof globalThis.socket.tcp === "object" &&
