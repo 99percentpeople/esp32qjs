@@ -413,6 +413,15 @@ static const esp32_mquickjs_future_driver_t s_event_queue_future_driver = {
     .destroy = event_queue_future_destroy,
 };
 
+bool esp32_mquickjs_event_queue_register_receive_alias(
+    JSContext *ctx,
+    esp32_mquickjs_runtime_t *runtime,
+    JSValue function)
+{
+    return esp32_mquickjs_future_register_driver(
+        ctx, runtime, function, &s_event_queue_future_driver);
+}
+
 bool esp32_mquickjs_init_event_queue_runtime(JSContext *ctx,
                                               esp32_mquickjs_runtime_t *runtime)
 {
@@ -440,10 +449,8 @@ bool esp32_mquickjs_init_event_queue_runtime(JSContext *ctx,
         ? JS_EXCEPTION
         : JS_GetPropertyStr(ctx, *object, "receive");
     result = !JS_IsException(*object) && !JS_IsException(*receive) &&
-             esp32_mquickjs_future_register_driver(ctx,
-                                                   runtime,
-                                                   *receive,
-                                                   &s_event_queue_future_driver);
+             esp32_mquickjs_event_queue_register_receive_alias(
+                 ctx, runtime, *receive);
     if (!result && !JS_IsException(*object) && !JS_IsException(*receive)) {
         JS_ThrowInternalError(ctx, "failed to register EventQueue Future driver");
     }

@@ -61,12 +61,14 @@ bool esp32_mquickjs_init_wifi_runtime(JSContext *ctx,
                                       esp32_mquickjs_runtime_t *runtime);
 bool esp32_mquickjs_init_wifi_future_runtime(JSContext *ctx,
                                              esp32_mquickjs_runtime_t *runtime);
+void esp32_mquickjs_deinit_wifi_time_sync(void);
 void esp32_mquickjs_deinit_wifi_runtime(JSContext *ctx);
 
 JSValue js_wifi_connect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_wifi_disconnect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_wifi_status(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_wifi_scan(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_wifi_sync_time(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_wifi_get_default_timeout_ms(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 
 esp_err_t esp32_mquickjs_wifi_get_status(esp32_mquickjs_wifi_status_t *status);

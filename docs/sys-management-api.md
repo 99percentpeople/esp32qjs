@@ -117,6 +117,7 @@ declare namespace ESP32QJS {
     readonly websocket: boolean;
     readonly bitmap: boolean;
     readonly wifi: boolean;
+    readonly tls: boolean;
     readonly http: boolean;
     readonly httpServer: boolean;
     readonly runtimeLogs: boolean;
@@ -318,6 +319,25 @@ declare namespace ESP32QJS {
     secondaryMounted: boolean;
   }
 
+  interface SysRuntimeWatchdogStatus {
+    systemEnabled: boolean;
+    systemRegistered: boolean;
+    jsEnabled: boolean;
+    jsRegistered: boolean;
+    timeoutMs: number;
+    lastOuterHeartbeatAgeMs: number;
+  }
+
+  interface SysRuntimeStartupStatus {
+    phase: "armed" | "stabilizing" | "healthy" | "safe-mode";
+    safeModeActive: boolean;
+    safeModeRequested: boolean;
+    failureCount: number;
+    failureLimit: number;
+    healthyAfterMs: number;
+    lastFailureReason: string | null;
+  }
+
   interface SysPendingControl {
     action: SysControlAction;
     reason: string;
@@ -334,6 +354,8 @@ declare namespace ESP32QJS {
     readonly pendingControl: SysPendingControl | null;
     readonly filesystem: SysRuntimeFilesystemStatus;
     readonly resources: SysRuntimeResourcesStatus;
+    readonly watchdog: SysRuntimeWatchdogStatus;
+    readonly startup: SysRuntimeStartupStatus;
   }
 
   interface SysStatus {
@@ -380,6 +402,7 @@ declare namespace ESP32QJS {
   interface SysModule {
     readonly info: SysInfo;
     readonly status: SysStatus;
+    safeMode: boolean;
 
     config(key: string): string | number | boolean | undefined;
     tasks(options?: SysTaskOptions): SysTaskSnapshot;
@@ -392,8 +415,15 @@ declare namespace ESP32QJS {
     randomHex(byteLength: number): string;
     withTimeout<T>(timeoutMs: number, callback: () => T): T;
   }
-}
+  }
 ```
+
+`tls` is a build capability rather than a global JavaScript namespace. When it
+is false, HTTPS and secure TCP sockets are unavailable, the public CA bundle is
+not linked, and the HTTP client and Socket modules can still provide plaintext
+transports. The current WebSocket client module depends on TLS because its
+ESP-IDF transport component combines WS and WSS. Wi-Fi Enterprise EAP-TLS is
+also excluded; ordinary WPA2/WPA3 personal Wi-Fi remains available.
 
 The global remains:
 
@@ -555,7 +585,11 @@ allocation-capability differences.
 
 `sys.freeHeap()` and `sys.status.memory.default.freeBytes` call the same native
 helper and have identical meaning. The former exists for tight loops that should
-not allocate a `SysHeapStatus` object.
+not allocate a `SysHeapStatus` object. On PSRAM systems the default view may be
+dominated by external memory, so it is not a TLS- or DMA-capacity signal. Use
+the `internal`, `dma`, and `psram` views' `largestFreeBlockBytes` and
+`minimumFreeBytes` values when diagnosing allocation failures or a downward
+fragmentation trend.
 
 ### RTOS
 
@@ -571,6 +605,39 @@ The configured runtime-task stack size is supplied by the managed runtime host.
 It is `null` for an unmanaged low-level embedder. `watchdogEnabled` means policy
 requested subscription; `watchdogRegistered` reports whether registration
 actually succeeded for the running generation.
+
+### Watchdogs and Startup Recovery
+
+`sys.status.runtime.watchdog` distinguishes the ordinary runtime-task watchdog
+from the independent outer-JavaScript watchdog. VM interrupt checks may feed
+the former. A return to the outer scheduler or progress inside a
+framework-owned native wait feeds the latter, so legitimate `Future.wait()`
+and network deadlines may exceed the watchdog interval. Tight JavaScript that
+never enters a native wait still causes a reboot. The Agent profile configures
+both to 15 seconds.
+
+`sys.status.runtime.startup` reports the persisted startup guard. Before the
+startup script runs, `phase` is `armed`; after it returns, the runtime remains
+`stabilizing` for the configured 30-second healthy window. A watchdog/panic
+reset while armed or stabilizing, or an uncaught startup exception, increments
+`failureCount`. Two consecutive failures latch the next boot into `safe-mode`.
+The generic framework does not decide what application code safe mode skips.
+For a required secondary LittleFS partition, consecutive mount failures use the
+same counter; once latched, the runtime starts with `secondaryMounted: false`
+so application-owned recovery services can remain reachable.
+
+`sys.safeMode` is the persistent operator latch. Assigning `false` clears the
+failure count and latch for the next boot; it does not change which code was
+loaded in the current boot. Repair the workspace first, then use:
+
+```js
+sys.safeMode = false;
+sys.reboot({ reason: "safe-mode-repaired" });
+```
+
+Application startup code must not read or assign this recovery control. A host
+or system application owns the safe-mode policy. The ESP32QJS Agent exposes
+this through its reboot control only after the workspace mount is healthy.
 
 ### Runtime Generation
 

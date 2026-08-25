@@ -2,6 +2,14 @@ test("wifi/network", function () {
   var cfg = test.requireConfig("wifiSsid", "wifiPassword");
   var status;
   var disconnected;
+  var timeOptions = {
+    servers: ["pool.ntp.org", "time.cloudflare.com"],
+    timeoutMs: 15000
+  };
+  var firstClock;
+  var secondClock;
+  var joined;
+  var immediateClock;
   var failed = false;
 
   try {
@@ -13,6 +21,19 @@ test("wifi/network", function () {
 
   test.ok(status.connected, "wifi should connect");
   test.ok(typeof status.ip === "string" && status.ip.length > 0, "wifi ip should be present");
+
+  firstClock = Future.call(wifi.syncTime, wifi, [timeOptions]);
+  secondClock = Future.call(wifi.syncTime, wifi, [timeOptions]);
+  joined = Future.all([firstClock, secondClock]).wait(20000);
+  test.equal(joined[0].synchronized, true,
+    "first time waiter should synchronize");
+  test.equal(joined[1].synchronized, true,
+    "concurrent time waiter should join the active round");
+  test.ok(joined[0].unixTimeMs > 1577836800000,
+    "synchronized time should be recent enough for certificate validation");
+  immediateClock = wifi.syncTime(timeOptions);
+  test.equal(immediateClock.synchronized, true,
+    "subsequent time sync should return immediately for a valid clock");
 
   try {
     Future.call(wifi.connect, wifi,
@@ -29,5 +50,5 @@ test("wifi/network", function () {
   disconnected = wifi.disconnect();
   test.ok(!disconnected.connected, "wifi should disconnect");
 
-  return { ip: status.ip };
+  return { ip: status.ip, unixTimeMs: immediateClock.unixTimeMs };
 });

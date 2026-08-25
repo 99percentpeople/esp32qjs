@@ -38,6 +38,8 @@ Examples:
 print("hello");
 gc();
 sleep(50);
+wifi.connect("your-ssid", "your-password", 10000);
+wifi.syncTime({ servers: ["pool.ntp.org"], timeoutMs: 10000 });
 print(fetch("https://example.com").status);
 load("demo/display_perf.js");
 print(Future.call(function () { return 123; }).wait(1000));
@@ -50,6 +52,7 @@ print("[startup] boot script running");
 framework.load("display/st7789.js");
 framework.load("ui.js");
 wifi.connect("your-ssid", "your-password", 10000);
+wifi.syncTime({ servers: ["pool.ntp.org"], timeoutMs: 10000 });
 ```
 
 ## Futures
@@ -68,6 +71,12 @@ wifi.connect("your-ssid", "your-password", 10000);
 - `future.status()` / `future.wait(timeoutMs?)` / `future.cancel()`
   Inspect, cooperatively wait for, or cancel a Future. A wait timeout does not
   cancel the operation.
+- `future.map(fn)`
+  Transform a fulfilled value without flattening a returned Future. Rejections
+  and cancellations propagate without invoking `fn`.
+- `future.flatMap(fn)`
+  Chain an operation whose callback returns another Future. Returning any other
+  value rejects the chained Future.
 
 Queued and pending operations occupy the bounded public Future table. On
 settlement, status and result move to the JavaScript handle so the scheduler
@@ -125,6 +134,14 @@ All `fs` operations are restricted to the active filesystem root.
 - `fs.info()`
   Return live LittleFS capacity for the active root as
   `{ root, totalBytes, usedBytes, freeBytes }`.
+- `fs.watch()`
+  Return an `EventQueue` for filesystem changes under the active root. Events are
+  `{ type, path }`, with `toPath` on `rename`; `type` is `write`, `remove`,
+  `rename`, or `mkdir`. Paths are relative to the root captured when the queue
+  is created. Independent watchers may coexist; close each queue when it is no
+  longer needed. Use
+  `Future.call(changes.receive, changes, [timeoutMs])` to wait without blocking
+  the JavaScript runtime.
 - `fs.list(path = ".")`
   Return an array of entries for a directory.
 - `fs.stat(path)`
@@ -132,7 +149,9 @@ All `fs` operations are restricted to the active filesystem root.
 - `fs.exists(path)`
   Return `true` if the path exists.
 - `fs.readText(path)`
-  Read a UTF-8 text file.
+  Read a trusted text file. This low-level convenience does not validate file
+  encoding; applications that accept arbitrary bytes must use `"rb"` and own
+  their decoding policy.
 - `fs.open(path, mode?)`
   Open a file stream. Supported modes are `r`, `rb`, `w`, `wb`, `a`, `ab`, `r+`, `w+`, and `a+`.
 - `fs.writeText(path, text)`
@@ -149,13 +168,17 @@ All `fs` operations are restricted to the active filesystem root.
 Example:
 
 ```js
+var changes = fs.watch();
+var nextChange = Future.call(changes.receive, changes, [5000]);
 fs.writeText("notes.txt", "hello\n");
+print(JSON.stringify(nextChange.wait()));
 print(JSON.stringify(fs.info()));
 print(fs.readText("notes.txt"));
 print(fs.stat("notes.txt"));
 print(JSON.stringify(fs.list(".")));
 fs.rename("notes.txt", "notes-old.txt");
 fs.remove("notes-old.txt");
+changes.close();
 ```
 
 ## Secondary LittleFS
@@ -240,7 +263,12 @@ Stream instance shape:
 - `readable`
 - `writable`
 - `read(size?)`
-  Read up to `size` bytes. Text streams return a UTF-8 string, while streams opened with a binary mode such as `"rb"` return a native `ByteView`. Returns `null` at EOF. Default chunk size is `1024`. Use `typeof chunk === "string"` to distinguish text from binary chunks; call `toArray()` when JavaScript needs to inspect or parse `ByteView` bytes.
+  Read up to `size` bytes. Text modes are a trusted-text convenience and do not
+  validate encoding or preserve character boundaries. Use a binary mode such
+  as `"rb"` for arbitrary data and application-owned decoding; binary reads
+  return an owned native `ByteView`. Returns `null` at EOF. Default chunk size
+  is `1024`. Call `toArray()` only when JavaScript needs to inspect or parse a
+  `ByteView`, and close that view in `finally`.
 - `write(value)`
   Write and return the exact byte count. Text file modes accept strings.
   Binary file modes accept `ByteView`, array-like byte data, or a retained
@@ -517,7 +545,10 @@ This module exposes synchronous TTL UART ports. It is intended for bounded perip
 
 `write()`, `writeChunks()`, and `writeSource()` each use one operation-wide
 deadline; chunk or span boundaries do not restart it. Their operational errors
-all report the cumulative `bytesWritten` count.
+all report the cumulative `bytesWritten` count. Each method has a native Future
+driver, so `Future.call(port.write, port, [data])` snapshots or leases the input
+and returns before UART backpressure clears. Prefer this form in persistent
+applications so the current JavaScript call stack does not wait.
 
 - `port.read(length, timeoutMs = uart.DEFAULT_TIMEOUT_MS)`
   Read up to `length` bytes and return the bytes actually received as a
@@ -630,7 +661,8 @@ is not exposed.
 `I2SChannel` methods:
 
 - `channel.start()` / `channel.stop()`
-  Explicit, idempotent DMA lifecycle operations.
+  Explicit, idempotent DMA lifecycle operations. `stop()` disables the
+  channel but retains its native channel and DMA ring for the next `start()`.
 - `channel.read(frameCount, timeoutMs?)`
   RX/duplex only. Return `null` at timeout or
   `{ data, frames, byteLength, timestampUs, sequence, overruns }`, where `data`
@@ -641,7 +673,7 @@ is not exposed.
   the configured PCM frame, including when a frame crosses span boundaries.
 - `channel.status()`
   Return direction, port, running/read/write state, PCM layout, DMA
-  configuration, overruns, and underruns.
+  configuration, receive queue overruns, and `sendQueueOverflows`.
 - `channel.close()`
   Mark the channel closed immediately and idempotently. Pending reads and
   writes are cancelled; native handles are released after their Future leases
@@ -649,7 +681,17 @@ is not exposed.
 
 Only one read and one write may be pending at a time. Duplex allows those two
 directions concurrently. Direct calls are synchronous; use `Future.call()` when
-the current runtime position must remain non-blocking.
+the current runtime position must remain non-blocking. Open each long-lived
+audio channel once after Wi-Fi initialization, then reuse `start()` / `stop()`;
+do not close and reopen it for every recording or playback attempt. On PSRAM
+boards, transient PCM operation buffers are allocated from PSRAM so the
+internal DMA-capable heap remains available to the persistent DMA ring. A PSRAM
+allocation failure returns `I2S_NO_MEMORY` and does not fall back to internal
+memory or try alternate DMA layouts.
+
+Close every returned audio `ByteView` in a `finally` block after its consumer
+finishes. Producers of `ByteSpanSource` data must likewise close the source in
+`finally`; I2S closes a source it consumes on success and every failure path.
 
 ```js
 var channel = i2s.open({
@@ -790,6 +832,9 @@ consume the same USB input stream.
   backpressure waits cooperatively on the USB write-ready interrupt so timers
   and other ready runtime work continue to run. A physically disconnected USB
   link fails immediately, and only one send may be active at a time.
+  `Future.call(handle.send, handle, [value])` uses the native send driver and
+  returns before the write completes; this is the preferred form for a
+  long-running application.
 
 ```js
 var serial = usbSerial.open({ maxFrameBytes: 4096 });
@@ -1082,9 +1127,10 @@ try {
 - `gpio.PULLUP_PULLDOWN`
   Enable both internal pulls when supported by the pad.
 - `gpio.CHANGE`, `gpio.RISING`, `gpio.FALLING`
-  Edge-trigger constants accepted by `gpio.attachInterrupt(...)`.
+  Edge-trigger constants accepted by `gpio.watch(...)`.
 - `gpio.LOW`, `gpio.HIGH`
-  Numeric helpers (`0` / `1`) used both for output levels and level-trigger interrupt modes in `gpio.attachInterrupt(...)`.
+  Numeric helpers (`0` / `1`) used both for output levels and level-trigger
+  interrupt modes in `gpio.watch(...)`.
 - `gpio.DRIVE_0` .. `gpio.DRIVE_3`
   Drive-strength levels accepted by `gpio.setDriveStrength()` and `gpio.configure()`.
 - `gpio.LED_BUILTIN`
@@ -1118,10 +1164,11 @@ try {
   Update the pad drive strength and return the applied numeric value.
 - `gpio.hold(pin, enabled)`
   Enable or disable pad hold on output-capable GPIOs.
-- `gpio.attachInterrupt(pin, callback, mode = gpio.CHANGE)`
-  Attach an Arduino-style GPIO interrupt callback. The ESP-IDF ISR only queues an event; the JavaScript callback runs later on the JS thread and receives `{ pin, level, mode }`.
-- `gpio.detachInterrupt(pin)`
-  Remove the interrupt callback from a pin and return `gpio.status(pin)`.
+- `gpio.watch(pin, mode = gpio.CHANGE)`
+  Return a bounded `EventQueue` of `{ pin, level, mode }` interrupt events. The
+  ESP-IDF ISR only enqueues native records and never invokes JavaScript. Only one
+  watcher may own a pin; creating another closes and replaces the old watcher.
+  Closing the queue detaches the interrupt.
 - `gpio.reset(pin)`
   Reset the pad back to the ESP-IDF default GPIO state.
 - `gpio.led(value)`
@@ -1163,26 +1210,32 @@ print("button level:", gpio.digitalRead(buttonPin));
 print(JSON.stringify(gpio.status(buttonPin)));
 ```
 
-Attach an interrupt and handle it in JavaScript:
+Watch an interrupt without blocking the startup call stack:
 
 ```js
 var buttonPin = 9;
 var interruptCount = 0;
+var watching = true;
 
 gpio.pinMode(buttonPin, gpio.INPUT);
 gpio.setPull(buttonPin, gpio.PULLUP);
+var interrupts = gpio.watch(buttonPin, gpio.FALLING);
 
-// The callback runs on the JS thread, not directly inside the ISR.
-// You can ignore the event argument if you only want Arduino-style behavior.
-gpio.attachInterrupt(buttonPin, function (event) {
-  interruptCount++;
-  print("interrupt", interruptCount, event.pin, event.mode, event.level);
-}, gpio.FALLING);
+function armInterrupt() {
+  if (!watching) return;
+  Future.call(interrupts.receive, interrupts, []).map(function (event) {
+    if (!watching || event === null) return;
+    interruptCount++;
+    print("interrupt", interruptCount, event.pin, event.mode, event.level);
+    armInterrupt();
+  });
+}
 
-// ... your app logic here ...
+armInterrupt();
 
-// Detach when the pin is no longer needed.
-gpio.detachInterrupt(buttonPin);
+// Later, when the pin is no longer needed:
+watching = false;
+interrupts.close();
 ```
 
 Use level-triggered interrupts explicitly:
@@ -1193,10 +1246,11 @@ var pin = 9;
 gpio.pinMode(pin, gpio.INPUT);
 gpio.setPull(pin, gpio.PULLDOWN);
 
-// LOW/HIGH reuse the same 0/1 constants as digital levels.
-gpio.attachInterrupt(pin, function (event) {
-  print("level interrupt", event.mode, event.level);
-}, gpio.HIGH);
+// LOW/HIGH reuse the same 0/1 constants as digital levels. Level-triggered
+// sources can fill the bounded queue quickly, so consume or close it promptly.
+var levels = gpio.watch(pin, gpio.HIGH);
+// Consume it with Future.call(levels.receive, levels, []) as above, then close.
+levels.close();
 ```
 
 ## `ledc` Module
@@ -1407,7 +1461,11 @@ if (ref) {
 - `sys.micros()`
   Return monotonic microseconds from `esp_timer`.
 - `sys.freeHeap()`
-  Return current free heap in bytes.
+  Return current free default-capability heap in bytes. On PSRAM builds this
+  value can be dominated by external RAM and must not be used to decide
+  whether a TLS handshake or DMA allocation is possible. Diagnose memory with
+  `sys.status.memory.internal`, `.dma`, and `.psram`, especially each view's
+  `largestFreeBlockBytes` and `minimumFreeBytes`.
 - `sys.randomHex(byteLength)`
   Return 1–64 cryptographically strong random bytes as two lowercase
   hexadecimal characters per byte. Before JavaScript-visible RF or ADC modules
@@ -1454,6 +1512,12 @@ Wi-Fi credentials are kept in RAM. Rebooting the board clears the active station
   Return `{ initialized, started, connected, scanning, ssid, hostname, ip, netmask, gateway, lastDisconnectReason, lastDisconnectReasonName }`.
 - `wifi.connect(ssid, password, timeoutMs = wifi.DEFAULT_TIMEOUT_MS)`
   Start station mode through the native Future driver and return the updated status object.
+- `wifi.syncTime({ servers, timeoutMs? })`
+  Synchronize the system clock from one to four caller-selected SNTP server
+  names and return `{ synchronized: true, unixTimeMs }`. An already valid clock
+  returns immediately. Concurrent calls join the active synchronization round;
+  the first caller supplies that round's servers. Cancellation removes only
+  that waiter and stops SNTP when the last waiter leaves.
 - `wifi.disconnect()`
   Disconnect the station and return the updated status object.
 - `wifi.scan()`
@@ -1466,23 +1530,39 @@ print(JSON.stringify(wifi.status()));
 var aps = wifi.scan();
 print(aps.length);
 wifi.connect("your-ssid", "your-password");
+var clock = wifi.syncTime({
+  servers: ["pool.ntp.org", "time.cloudflare.com"],
+  timeoutMs: 10000
+});
+print(clock.unixTimeMs);
 var nextScan = Future.call(wifi.scan, wifi, []);
 print(nextScan.wait(10000).length);
 print(JSON.stringify(wifi.status()));
 wifi.disconnect();
 ```
 
+The firmware does not embed a time provider; Agent/workspace policy supplies
+the server list. Complete `wifi.syncTime(...)` after connecting and before any
+public HTTPS, TLS, or secure WebSocket operation so certificate validity dates
+are checked against a current clock. SNTP provides ordinary wall-clock setup,
+not authenticated time: it does not defend against an active network attacker
+who can tamper with both DNS/network traffic and time synchronization.
+
 ## `socket` Module
 
 `socket` is exposed when `sys.info.features.socket` is enabled. It provides
-bounded, handle-based TCP/UDP sockets and verified outbound TLS streams. The framework does not add line framing,
-reconnect policy, authentication, or an application protocol.
+bounded, handle-based TCP/UDP sockets. Verified outbound TLS streams are
+available only when the separately selectable `sys.info.features.tls` build
+capability is enabled. The framework does not add line framing, reconnect
+policy, authentication, or an application protocol.
 
 - `socket.open(protocol, options = {})`
   Open a `"tcp"` or `"udp"` socket and return its numeric handle.
   `options.localPort` binds the local port. For an outbound verified TLS client,
   use `socket.open("tcp", { tls: true })`; TLS uses the system CA certificate
-  bundle and does not support listening or a fixed local port.
+  bundle, verifies the DNS name and certificate validity dates, and does not
+  support listening or a fixed local port. When the TLS capability is omitted,
+  requesting `tls: true` fails before allocating a socket handle.
 - `socket.close(socket_id)`
   Close a handle. Closing an already closed handle returns `false`.
 - `socket.status(socket_id)`
@@ -1534,6 +1614,16 @@ socket.udp.sendto(udp, "192.0.2.10", 9001, "hello");
 print(JSON.stringify(socket.udp.recvfrom(udp, 1024, 100)));
 socket.close(udp);
 ```
+
+Verified TLS failures from raw sockets and HTTPS fetches carry a stable `code`
+of `TLS_ALLOC_FAILED`, `TLS_TIME_INVALID`, `TLS_VERIFY_FAILED`,
+`TLS_HANDSHAKE_FAILED`, or `TLS_TIMEOUT`, plus numeric `espTlsError`,
+`mbedtlsError`, and `verifyFlags` fields. Certificate contents and secrets are
+not included. Close or cancel always releases the per-connection TLS context.
+PSRAM profiles retain the standard 16 KiB RX and 4 KiB TX records while placing
+mbedTLS allocations in external RAM; non-PSRAM profiles continue to use
+internal memory. If external RAM encryption is not enabled, TLS session
+material in PSRAM remains readable to an attacker with physical memory access.
 
 ## `rpc` Module
 
@@ -1614,6 +1704,8 @@ layer without adopting the JavaScript Agent product.
 ## `websocketClient` Module
 
 `websocketClient` is exposed when `sys.info.features.websocket` is enabled.
+The current ESP-IDF WS/WSS transport is selected together with the TLS
+capability, so a WebSocket client build requires `sys.info.features.tls`.
 It uses a bounded `EventQueue` handle and does not invoke application callbacks.
 
 - `websocketClient.open(options)`
@@ -1624,7 +1716,9 @@ It uses a bounded `EventQueue` handle and does not invoke application callbacks.
   Return the next `{ type: "open" | "message" | "close" | "error", ... }`
   event, or `null` at the timeout.
 - `handle.send(text)` / `handle.status()` / `handle.close()`
-  Send text, inspect counters, or close the event source.
+  Send text, inspect counters, or close the event source. The send operation has
+  a native Future driver; use `Future.call(handle.send, handle, [text])` to
+  return before network backpressure clears. Only one send may be active.
 
 ```js
 var client = websocketClient.open({
@@ -1654,6 +1748,14 @@ The namespace is present when the HTTP client or server feature is enabled.
   binary input is materialized into a length-exact native PSRAM-first buffer,
   preserving embedded NUL bytes and enforcing a 1 MiB request-body default
   limit. A source is closed on all terminal paths.
+
+The HTTP client remains available without TLS for `http://` URLs. An
+`https://` URL is rejected before its worker starts when
+`sys.info.features.tls` is false; there is no insecure fallback.
+
+Call `wifi.syncTime(...)` once after Wi-Fi connects and before public HTTPS.
+HTTPS uses the same TLS verification and structured error categories described
+in the socket section; it has no insecure or skip-verification option.
 - `http.server(options?)`
   Create a low-level declarative server when
   `sys.info.features.httpServer` is enabled.

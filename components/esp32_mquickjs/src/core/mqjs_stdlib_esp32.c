@@ -90,6 +90,8 @@ static const JSPropDef js_future_proto[] = {
     JS_CFUNC_DEF("status", 0, js_future_status),
     JS_CFUNC_DEF("wait", 1, js_future_wait),
     JS_CFUNC_DEF("cancel", 0, js_future_cancel),
+    JS_CFUNC_DEF("map", 1, js_future_map),
+    JS_CFUNC_DEF("flatMap", 1, js_future_flat_map),
     JS_PROP_END,
 };
 
@@ -267,6 +269,7 @@ static const JSPropDef js_fs[] = {
     JS_CGETSET_DEF("ROOT", js_fs_get_root, NULL),
     JS_CFUNC_DEF("setRoot", 1, js_fs_set_root),
     JS_CFUNC_DEF("info", 0, js_fs_info),
+    JS_CFUNC_DEF("watch", 0, js_fs_watch),
     JS_CFUNC_DEF("open", 2, js_fs_open),
     JS_CFUNC_DEF("list", 1, js_fs_list),
     JS_CFUNC_DEF("stat", 1, js_fs_stat),
@@ -473,6 +476,7 @@ static const JSPropDef js_sys_info_features[] = {
     JS_CGETSET_MAGIC_DEF("camera", js_sys_feature_get, NULL, 18),
     JS_CGETSET_MAGIC_DEF("rpc", js_sys_feature_get, NULL, 19),
     JS_CGETSET_MAGIC_DEF("rmt", js_sys_feature_get, NULL, 20),
+    JS_CGETSET_MAGIC_DEF("tls", js_sys_feature_get, NULL, 21),
     JS_PROP_END,
 };
 
@@ -570,6 +574,8 @@ static const JSPropDef js_sys_status_runtime[] = {
     JS_CGETSET_MAGIC_DEF("pendingControl", js_sys_runtime_status_get, NULL, 5),
     JS_CGETSET_DEF("filesystem", js_sys_runtime_status_filesystem, NULL),
     JS_CGETSET_DEF("resources", js_sys_runtime_status_resources, NULL),
+    JS_CGETSET_DEF("watchdog", js_sys_runtime_status_watchdog, NULL),
+    JS_CGETSET_DEF("startup", js_sys_runtime_status_startup, NULL),
     JS_PROP_END,
 };
 
@@ -591,6 +597,7 @@ static const JSClassDef js_sys_status_obj =
 static const JSPropDef js_sys[] = {
     JS_PROP_CLASS_DEF("info", &js_sys_info_obj),
     JS_PROP_CLASS_DEF("status", &js_sys_status_obj),
+    JS_CGETSET_DEF("safeMode", js_sys_safe_mode_get, js_sys_safe_mode_set),
     JS_CFUNC_DEF("config", 1, js_sys_config),
     JS_CFUNC_DEF("tasks", 1, js_sys_tasks),
     JS_CFUNC_DEF("restartRuntime", 1, js_sys_restart_runtime),
@@ -929,6 +936,7 @@ static const JSPropDef js_wifi[] = {
     JS_CFUNC_DEF("disconnect", 0, js_wifi_disconnect),
     JS_CFUNC_DEF("status", 0, js_wifi_status),
     JS_CFUNC_DEF("scan", 0, js_wifi_scan),
+    JS_CFUNC_DEF("syncTime", 1, js_wifi_sync_time),
     JS_PROP_END,
 };
 

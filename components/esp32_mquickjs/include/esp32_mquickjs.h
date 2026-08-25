@@ -82,6 +82,10 @@ typedef struct {
     uint32_t task_priority;
     bool task_watchdog_enabled;
     bool task_watchdog_registered;
+    bool js_watchdog_enabled;
+    bool js_watchdog_registered;
+    uint32_t watchdog_timeout_ms;
+    uint64_t last_outer_heartbeat_us;
 
     char startup_script[ESP32_MQUICKJS_HOST_STARTUP_PATH_MAX];
     bool autorun_startup_script;
@@ -105,6 +109,15 @@ typedef struct {
 
     bool software_reason_available;
     char software_reason[ESP32_MQUICKJS_CONTROL_REASON_MAX + 1U];
+    bool safe_mode_available;
+    bool safe_mode_requested;
+    bool safe_mode_active;
+    uint32_t startup_failure_count;
+    uint32_t startup_failure_limit;
+    uint32_t startup_healthy_ms;
+    bool startup_pending;
+    bool startup_stabilizing;
+    char last_startup_failure_reason[ESP32_MQUICKJS_CONTROL_REASON_MAX + 1U];
 } esp32_mquickjs_host_status_t;
 
 typedef bool (*esp32_mquickjs_host_status_fn)(void *opaque,
@@ -115,6 +128,7 @@ typedef esp32_mquickjs_control_result_t (*esp32_mquickjs_system_control_fn)(
     const char *reason,
     uint32_t delay_ms,
     esp32_mquickjs_control_receipt_t *receipt);
+typedef bool (*esp32_mquickjs_safe_mode_control_fn)(void *opaque, bool enabled);
 
 typedef struct {
     uint32_t timers_active;
@@ -133,6 +147,7 @@ typedef struct {
 typedef struct {
     uint64_t saved_deadline_us;
     uint64_t started_us;
+    bool active;
 } esp32_mquickjs_native_wait_t;
 
 #define ESP32_MQUICKJS_POLL_NONE   ((esp32_mquickjs_poll_result_t)0U)
@@ -158,9 +173,11 @@ struct esp32_mquickjs_runtime {
     void *async_state;
     void *future_state;
     void *event_queue_state;
+    void *fs_state;
     void *runtime_log_state;
     void *startup_bytecode;
     uint64_t scoped_deadline_us;
+    uint16_t native_wait_depth;
     uint16_t load_root_depth;
     char fs_root[ESP32_MQUICKJS_FS_ROOT_MAX];
     char startup_fs_root[ESP32_MQUICKJS_FS_ROOT_MAX];
@@ -169,6 +186,7 @@ struct esp32_mquickjs_runtime {
     uint64_t context_started_us;
     esp32_mquickjs_host_status_fn host_status;
     esp32_mquickjs_system_control_fn system_control;
+    esp32_mquickjs_safe_mode_control_fn safe_mode_control;
     void *system_opaque;
 };
 
@@ -192,6 +210,13 @@ void esp32_mquickjs_set_system_hooks(esp32_mquickjs_runtime_t *runtime,
                                      esp32_mquickjs_host_status_fn status,
                                      esp32_mquickjs_system_control_fn control,
                                      void *opaque);
+
+void esp32_mquickjs_set_safe_mode_hook(
+    esp32_mquickjs_runtime_t *runtime,
+    esp32_mquickjs_safe_mode_control_fn control);
+
+bool esp32_mquickjs_set_safe_mode(esp32_mquickjs_runtime_t *runtime,
+                                  bool enabled);
 
 bool esp32_mquickjs_get_host_status(esp32_mquickjs_runtime_t *runtime,
                                     esp32_mquickjs_host_status_t *status);

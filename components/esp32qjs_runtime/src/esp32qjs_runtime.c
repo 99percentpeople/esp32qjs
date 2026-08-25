@@ -14,11 +14,16 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 #if CONFIG_ESP32QJS_ENABLE_REPL
 #include "esp32qjs_interactive.h"
 #endif
 
 #define ESP32QJS_REBOOT_MARKER_MAGIC UINT32_C(0x51534a52)
+#define ESP32QJS_BOOT_GUARD_NAMESPACE "qjs_rt"
+#define ESP32QJS_BOOT_GUARD_VERSION 1U
+#define ESP32QJS_OUTER_HEARTBEAT_WAIT_MS 250U
 
 typedef struct {
     uint32_t magic;
@@ -56,6 +61,17 @@ struct esp32qjs_runtime {
     bool littlefs_mounted;
     bool secondary_littlefs_mounted;
     bool watchdog_registered;
+    esp_task_wdt_user_handle_t js_watchdog_user;
+    bool js_watchdog_registered;
+    uint64_t last_outer_heartbeat_us;
+    bool boot_guard_ready;
+    bool safe_mode_requested;
+    bool safe_mode_active;
+    uint8_t startup_failure_count;
+    bool startup_pending;
+    bool startup_stabilizing;
+    uint64_t startup_returned_us;
+    char last_startup_failure_reason[ESP32_MQUICKJS_CONTROL_REASON_MAX + 1U];
     char startup_script[ESP32_MQUICKJS_HOST_STARTUP_PATH_MAX];
     char task_name[ESP32_MQUICKJS_HOST_TASK_NAME_MAX];
     char secondary_littlefs_partition_label[ESP32_MQUICKJS_HOST_PARTITION_LABEL_MAX];
@@ -67,6 +83,31 @@ struct esp32qjs_runtime {
 };
 
 static bool runtime_cooperate(void *opaque);
+static void runtime_feed_js_watchdog(esp32qjs_runtime_t *runtime);
+
+static bool runtime_reset_is_startup_failure(esp_reset_reason_t reason)
+{
+    return reason == ESP_RST_PANIC || reason == ESP_RST_INT_WDT ||
+           reason == ESP_RST_TASK_WDT || reason == ESP_RST_WDT ||
+           reason == ESP_RST_CPU_LOCKUP;
+}
+
+static const char *runtime_reset_failure_reason(esp_reset_reason_t reason)
+{
+    switch (reason) {
+    case ESP_RST_TASK_WDT:
+        return "task-watchdog";
+    case ESP_RST_INT_WDT:
+        return "interrupt-watchdog";
+    case ESP_RST_WDT:
+        return "watchdog";
+    case ESP_RST_CPU_LOCKUP:
+        return "cpu-lockup";
+    case ESP_RST_PANIC:
+    default:
+        return "panic";
+    }
+}
 
 static void runtime_copy_string(char *target,
                                 size_t target_size,
@@ -79,6 +120,231 @@ static void runtime_copy_string(char *target,
         return;
     }
     snprintf(target, target_size, "%s", value != NULL ? value : "");
+}
+
+static bool runtime_boot_guard_commit(esp32qjs_runtime_t *runtime)
+{
+    nvs_handle_t handle;
+    esp_err_t err;
+
+    if (runtime == NULL || !runtime->boot_guard_ready) {
+        return false;
+    }
+    err = nvs_open(ESP32QJS_BOOT_GUARD_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to open startup guard NVS: %s", esp_err_to_name(err));
+        return false;
+    }
+    err = nvs_set_u8(handle, "version", ESP32QJS_BOOT_GUARD_VERSION);
+    if (err == ESP_OK) {
+        err = nvs_set_u8(handle, "safe", runtime->safe_mode_requested ? 1U : 0U);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u8(handle, "failures", runtime->startup_failure_count);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u8(handle, "pending", runtime->startup_pending ? 1U : 0U);
+    }
+    if (err == ESP_OK) {
+        if (runtime->last_startup_failure_reason[0] != '\0') {
+            err = nvs_set_str(handle, "reason",
+                              runtime->last_startup_failure_reason);
+        } else {
+            esp_err_t erase_err = nvs_erase_key(handle, "reason");
+
+            if (erase_err != ESP_OK && erase_err != ESP_ERR_NVS_NOT_FOUND) {
+                err = erase_err;
+            }
+        }
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to persist startup guard: %s", esp_err_to_name(err));
+        return false;
+    }
+    return true;
+}
+
+static bool runtime_boot_guard_load(esp32qjs_runtime_t *runtime)
+{
+    nvs_handle_t handle;
+    esp_err_t err;
+    uint8_t version = 0;
+    uint8_t value = 0;
+    size_t reason_size = sizeof(runtime->last_startup_failure_reason);
+
+    if (runtime == NULL || !runtime->config.startup_guard) {
+        return false;
+    }
+    err = nvs_flash_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "startup guard cannot initialize NVS: %s", esp_err_to_name(err));
+        return false;
+    }
+    err = nvs_open(ESP32QJS_BOOT_GUARD_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "startup guard cannot open NVS: %s", esp_err_to_name(err));
+        return false;
+    }
+    err = nvs_get_u8(handle, "version", &version);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        err = nvs_erase_all(handle);
+        if (err == ESP_OK) {
+            err = nvs_set_u8(handle, "version", ESP32QJS_BOOT_GUARD_VERSION);
+        }
+        if (err == ESP_OK) {
+            err = nvs_commit(handle);
+        }
+    } else if (err == ESP_OK && version != ESP32QJS_BOOT_GUARD_VERSION) {
+        err = nvs_erase_all(handle);
+        if (err == ESP_OK) {
+            err = nvs_set_u8(handle, "version", ESP32QJS_BOOT_GUARD_VERSION);
+        }
+        if (err == ESP_OK) {
+            err = nvs_commit(handle);
+        }
+    }
+    if (err != ESP_OK) {
+        nvs_close(handle);
+        ESP_LOGE(TAG, "startup guard has invalid NVS state: %s", esp_err_to_name(err));
+        return false;
+    }
+    if (nvs_get_u8(handle, "safe", &value) == ESP_OK) {
+        runtime->safe_mode_requested = value != 0;
+    }
+    value = 0;
+    if (nvs_get_u8(handle, "failures", &value) == ESP_OK) {
+        runtime->startup_failure_count = value;
+    }
+    value = 0;
+    if (nvs_get_u8(handle, "pending", &value) == ESP_OK) {
+        runtime->startup_pending = value != 0;
+    }
+    if (nvs_get_str(handle, "reason", runtime->last_startup_failure_reason,
+                    &reason_size) != ESP_OK) {
+        runtime->last_startup_failure_reason[0] = '\0';
+    }
+    nvs_close(handle);
+    runtime->boot_guard_ready = true;
+
+    if (runtime->startup_pending) {
+        esp_reset_reason_t reset_reason = esp_reset_reason();
+
+        runtime->startup_pending = false;
+        if (runtime_reset_is_startup_failure(reset_reason)) {
+            if (runtime->startup_failure_count < UINT8_MAX) {
+                runtime->startup_failure_count++;
+            }
+            runtime_copy_string(runtime->last_startup_failure_reason,
+                                sizeof(runtime->last_startup_failure_reason),
+                                runtime_reset_failure_reason(reset_reason),
+                                "startup-failure");
+            if (runtime->startup_failure_count >=
+                runtime->config.startup_failure_limit) {
+                runtime->safe_mode_requested = true;
+            }
+        }
+        (void)runtime_boot_guard_commit(runtime);
+    }
+    runtime->safe_mode_active = runtime->safe_mode_requested;
+    return true;
+}
+
+static void runtime_boot_guard_arm(esp32qjs_runtime_t *runtime)
+{
+    if (runtime == NULL || !runtime->boot_guard_ready) {
+        return;
+    }
+    runtime->startup_pending = true;
+    runtime->startup_stabilizing = false;
+    runtime->startup_returned_us = 0;
+    (void)runtime_boot_guard_commit(runtime);
+}
+
+static void runtime_boot_guard_fail(esp32qjs_runtime_t *runtime,
+                                    const char *reason)
+{
+    if (runtime == NULL || !runtime->boot_guard_ready) {
+        return;
+    }
+    runtime->startup_pending = false;
+    runtime->startup_stabilizing = false;
+    if (runtime->startup_failure_count < UINT8_MAX) {
+        runtime->startup_failure_count++;
+    }
+    runtime_copy_string(runtime->last_startup_failure_reason,
+                        sizeof(runtime->last_startup_failure_reason),
+                        reason,
+                        "startup-failure");
+    if (runtime->startup_failure_count >= runtime->config.startup_failure_limit) {
+        runtime->safe_mode_requested = true;
+        runtime->safe_mode_active = true;
+    }
+    (void)runtime_boot_guard_commit(runtime);
+}
+
+static void runtime_boot_guard_disarm_intentional(esp32qjs_runtime_t *runtime)
+{
+    if (runtime == NULL || !runtime->boot_guard_ready ||
+        (!runtime->startup_pending && !runtime->startup_stabilizing)) {
+        return;
+    }
+    runtime->startup_pending = false;
+    runtime->startup_stabilizing = false;
+    runtime->startup_returned_us = 0;
+    (void)runtime_boot_guard_commit(runtime);
+}
+
+static void runtime_boot_guard_note_returned(esp32qjs_runtime_t *runtime)
+{
+    if (runtime == NULL || !runtime->boot_guard_ready) {
+        return;
+    }
+    runtime->startup_stabilizing = true;
+    runtime->startup_returned_us = (uint64_t)esp_timer_get_time();
+}
+
+static void runtime_boot_guard_poll_healthy(esp32qjs_runtime_t *runtime)
+{
+    uint64_t healthy_us;
+
+    if (runtime == NULL || !runtime->boot_guard_ready ||
+        !runtime->startup_stabilizing) {
+        return;
+    }
+    healthy_us = (uint64_t)runtime->config.startup_healthy_ms * 1000ULL;
+    if ((uint64_t)esp_timer_get_time() - runtime->startup_returned_us < healthy_us) {
+        return;
+    }
+    runtime->startup_pending = false;
+    runtime->startup_stabilizing = false;
+    runtime->startup_returned_us = 0;
+    if (!runtime->safe_mode_active) {
+        runtime->startup_failure_count = 0;
+        runtime->last_startup_failure_reason[0] = '\0';
+    }
+    (void)runtime_boot_guard_commit(runtime);
+}
+
+static bool runtime_set_safe_mode_hook(void *opaque, bool enabled)
+{
+    esp32qjs_runtime_t *runtime = opaque;
+
+    if (runtime == NULL || !runtime->boot_guard_ready) {
+        return false;
+    }
+    runtime->safe_mode_requested = enabled;
+    runtime->startup_pending = false;
+    runtime->startup_stabilizing = false;
+    runtime->startup_returned_us = 0;
+    if (!enabled) {
+        runtime->startup_failure_count = 0;
+        runtime->last_startup_failure_reason[0] = '\0';
+    }
+    return runtime_boot_guard_commit(runtime);
 }
 
 static uint32_t runtime_reason_checksum(const char *reason)
@@ -232,6 +498,12 @@ static bool runtime_host_status(void *opaque,
     status->task_priority = runtime->config.task_priority;
     status->task_watchdog_enabled = runtime->config.task_watchdog;
     status->task_watchdog_registered = runtime->watchdog_registered;
+    status->js_watchdog_enabled = runtime->config.js_watchdog;
+    status->js_watchdog_registered = runtime->js_watchdog_registered;
+#ifdef CONFIG_ESP_TASK_WDT_TIMEOUT_S
+    status->watchdog_timeout_ms = CONFIG_ESP_TASK_WDT_TIMEOUT_S * 1000U;
+#endif
+    status->last_outer_heartbeat_us = runtime->last_outer_heartbeat_us;
     runtime_copy_string(status->startup_script,
                         sizeof(status->startup_script),
                         runtime->startup_script,
@@ -266,6 +538,18 @@ static bool runtime_host_status(void *opaque,
     runtime_copy_string(status->software_reason,
                         sizeof(status->software_reason),
                         runtime->software_reason,
+                        NULL);
+    status->safe_mode_available = runtime->boot_guard_ready;
+    status->safe_mode_requested = runtime->safe_mode_requested;
+    status->safe_mode_active = runtime->safe_mode_active;
+    status->startup_failure_count = runtime->startup_failure_count;
+    status->startup_failure_limit = runtime->config.startup_failure_limit;
+    status->startup_healthy_ms = runtime->config.startup_healthy_ms;
+    status->startup_pending = runtime->startup_pending;
+    status->startup_stabilizing = runtime->startup_stabilizing;
+    runtime_copy_string(status->last_startup_failure_reason,
+                        sizeof(status->last_startup_failure_reason),
+                        runtime->last_startup_failure_reason,
                         NULL);
     return true;
 }
@@ -309,6 +593,7 @@ static esp32_mquickjs_control_result_t runtime_request_control_hook(
     receipt->requested_at_ms = requested_at_ms;
     receipt->due_at_ms = runtime->pending_due_at_ms;
     portEXIT_CRITICAL(&runtime->lifecycle_lock);
+    runtime_boot_guard_disarm_intentional(runtime);
     esp32_mquickjs_notify_activity(&runtime->engine);
     return ESP32_MQUICKJS_CONTROL_ACCEPTED;
 }
@@ -341,7 +626,9 @@ void esp32qjs_runtime_default_config(esp32qjs_runtime_config_t *config)
 #ifdef CONFIG_ESP32QJS_SECONDARY_LITTLEFS
     config->require_littlefs = true;
     config->mount_secondary_littlefs = true;
+#ifdef CONFIG_ESP32QJS_SECONDARY_LITTLEFS_REQUIRED
     config->require_secondary_littlefs = true;
+#endif
     config->secondary_littlefs_partition_label =
         CONFIG_ESP32QJS_SECONDARY_LITTLEFS_PARTITION_LABEL;
     config->secondary_littlefs_base_path =
@@ -358,6 +645,19 @@ void esp32qjs_runtime_default_config(esp32qjs_runtime_config_t *config)
 #endif
 #ifdef CONFIG_ESP32QJS_RUNTIME_TASK_WATCHDOG
     config->task_watchdog = true;
+#endif
+#ifdef CONFIG_ESP32QJS_RUNTIME_JS_WATCHDOG
+    config->js_watchdog = true;
+#endif
+#ifdef CONFIG_ESP32QJS_RUNTIME_STARTUP_GUARD
+    config->startup_guard = true;
+    config->startup_failure_limit =
+        (uint32_t)CONFIG_ESP32QJS_RUNTIME_STARTUP_FAILURE_LIMIT;
+    config->startup_healthy_ms =
+        (uint32_t)CONFIG_ESP32QJS_RUNTIME_STARTUP_HEALTHY_MS;
+#else
+    config->startup_failure_limit = 2U;
+    config->startup_healthy_ms = 30000U;
 #endif
     config->startup_script = "index.js";
     config->task_name = "js_runtime";
@@ -432,6 +732,8 @@ static void runtime_run_startup(esp32qjs_runtime_t *runtime)
         return;
     }
 
+    runtime_boot_guard_arm(runtime);
+
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
     result = esp32_mquickjs_load_startup_from_active_fs(runtime->ctx,
                                                         &runtime->engine,
@@ -441,7 +743,12 @@ static void runtime_run_startup(esp32qjs_runtime_t *runtime)
 #endif
     if (JS_IsException(result)) {
         esp32_mquickjs_print_exception(runtime->ctx);
+        runtime_boot_guard_fail(runtime, "startup-exception");
+        runtime_store_software_reason("startup-exception");
+        ESP_LOGE(TAG, "startup script failed; rebooting");
+        esp_restart();
     }
+    runtime_boot_guard_note_returned(runtime);
 }
 
 static bool runtime_create_generation(esp32qjs_runtime_t *runtime,
@@ -461,6 +768,8 @@ static bool runtime_create_generation(esp32qjs_runtime_t *runtime,
                                      runtime_host_status,
                                      runtime_request_control_hook,
                                      runtime);
+    esp32_mquickjs_set_safe_mode_hook(&runtime->engine,
+                                      runtime_set_safe_mode_hook);
     esp32_mquickjs_set_cooperate_hook(&runtime->engine, runtime_cooperate, runtime);
     runtime->engine.js_heap_size = runtime->config.js_heap_size;
     runtime->engine.js_heap_in_psram = esp_ptr_external_ram(runtime->js_heap);
@@ -543,7 +852,30 @@ static bool runtime_cooperate(void *opaque)
     if (runtime->watchdog_registered) {
         esp_task_wdt_reset();
     }
+    if (runtime->engine.native_wait_depth > 0) {
+        runtime_feed_js_watchdog(runtime);
+    }
     return !runtime->stop_requested && !runtime_control_due(runtime);
+}
+
+static void runtime_feed_js_watchdog(esp32qjs_runtime_t *runtime)
+{
+    if (runtime == NULL) {
+        return;
+    }
+    runtime->last_outer_heartbeat_us = (uint64_t)esp_timer_get_time();
+    if (runtime->js_watchdog_registered) {
+        (void)esp_task_wdt_reset_user(runtime->js_watchdog_user);
+    }
+}
+
+static void runtime_outer_heartbeat(esp32qjs_runtime_t *runtime)
+{
+    if (runtime == NULL) {
+        return;
+    }
+    runtime_feed_js_watchdog(runtime);
+    runtime_boot_guard_poll_healthy(runtime);
 }
 
 static esp32_mquickjs_poll_result_t runtime_poll_engine(esp32qjs_runtime_t *runtime)
@@ -556,10 +888,12 @@ static esp32_mquickjs_poll_result_t runtime_poll_engine(esp32qjs_runtime_t *runt
     if (runtime->watchdog_registered) {
         esp_task_wdt_reset();
     }
+    runtime_outer_heartbeat(runtime);
     result = esp32_mquickjs_poll(runtime->ctx, &runtime->engine);
     if (runtime->watchdog_registered) {
         esp_task_wdt_reset();
     }
+    runtime_outer_heartbeat(runtime);
     return result;
 }
 
@@ -594,11 +928,19 @@ static void runtime_handle_line(void *opaque, const char *line)
 static bool runtime_wait_for_activity(void *opaque, uint32_t timeout_ms)
 {
     esp32qjs_runtime_t *runtime = opaque;
+    bool notified;
 
-    return runtime != NULL &&
-           esp32_mquickjs_wait_for_activity(
-               &runtime->engine,
-               runtime_control_wait_ms(runtime, timeout_ms));
+    if (runtime == NULL) {
+        return false;
+    }
+    timeout_ms = runtime_control_wait_ms(runtime, timeout_ms);
+    if (runtime->js_watchdog_registered &&
+        (timeout_ms == UINT32_MAX || timeout_ms > ESP32QJS_OUTER_HEARTBEAT_WAIT_MS)) {
+        timeout_ms = ESP32QJS_OUTER_HEARTBEAT_WAIT_MS;
+    }
+    notified = esp32_mquickjs_wait_for_activity(&runtime->engine, timeout_ms);
+    runtime_outer_heartbeat(runtime);
+    return notified;
 }
 
 #if CONFIG_ESP32QJS_ENABLE_REPL
@@ -670,6 +1012,7 @@ static bool runtime_destroy_generation(esp32qjs_runtime_t *runtime,
         if (runtime->watchdog_registered) {
             esp_task_wdt_reset();
         }
+        runtime_outer_heartbeat(runtime);
         vTaskDelay(1);
     }
 }
@@ -778,6 +1121,11 @@ static void runtime_task(void *opaque)
     if (runtime->config.task_watchdog && esp_task_wdt_add(NULL) == ESP_OK) {
         runtime->watchdog_registered = true;
     }
+    if (runtime->config.js_watchdog &&
+        esp_task_wdt_add_user("js_outer", &runtime->js_watchdog_user) == ESP_OK) {
+        runtime->js_watchdog_registered = true;
+    }
+    runtime_outer_heartbeat(runtime);
 
     while (!runtime->stop_requested) {
         if (!runtime_handle_due_control(runtime)) {
@@ -790,6 +1138,7 @@ static void runtime_task(void *opaque)
         } else
 #endif
         {
+            runtime_outer_heartbeat(runtime);
             runtime_run_startup(runtime);
             runtime_set_state(runtime, ESP32_MQUICKJS_RUNTIME_RUNNING);
             while (!runtime->stop_requested && !runtime_control_due(runtime)) {
@@ -800,6 +1149,11 @@ static void runtime_task(void *opaque)
         }
     }
 
+    if (runtime->js_watchdog_registered) {
+        esp_task_wdt_delete_user(runtime->js_watchdog_user);
+        runtime->js_watchdog_registered = false;
+        runtime->js_watchdog_user = NULL;
+    }
     if (runtime->watchdog_registered) {
         esp_task_wdt_delete(NULL);
         runtime->watchdog_registered = false;
@@ -827,6 +1181,8 @@ esp_err_t esp32qjs_runtime_create(const esp32qjs_runtime_config_t *config,
     if (config == NULL || out_runtime == NULL || config->js_heap_size == 0 ||
         config->task_stack_size == 0 || config->task_priority == 0 ||
         config->restart_timeout_ms == 0 ||
+        (config->startup_guard &&
+         (config->startup_failure_limit == 0 || config->startup_healthy_ms == 0)) ||
         (config->restart_failure_action != ESP32_MQUICKJS_RESTART_FAILURE_REBOOT &&
          config->restart_failure_action != ESP32_MQUICKJS_RESTART_FAILURE_STOP)) {
         return ESP_ERR_INVALID_ARG;
@@ -850,6 +1206,7 @@ esp_err_t esp32qjs_runtime_create(const esp32qjs_runtime_config_t *config,
     runtime->state = ESP32_MQUICKJS_RUNTIME_CREATED;
     runtime->generation = 1U;
     runtime_load_software_reason(runtime);
+    (void)runtime_boot_guard_load(runtime);
     runtime_copy_string(runtime->startup_script,
                         sizeof(runtime->startup_script),
                         config->startup_script,
@@ -908,8 +1265,25 @@ esp_err_t esp32qjs_runtime_create(const esp32qjs_runtime_config_t *config,
                 false);
         if (!runtime->secondary_littlefs_mounted &&
             config->require_secondary_littlefs) {
-            runtime_release_unstarted(runtime);
-            return ESP_FAIL;
+            if (!runtime->safe_mode_active) {
+                runtime_boot_guard_fail(runtime, "secondary-filesystem");
+            }
+            if (!runtime->safe_mode_active) {
+                bool restart = runtime->boot_guard_ready &&
+                               config->restart_failure_action ==
+                                   ESP32_MQUICKJS_RESTART_FAILURE_REBOOT;
+
+                runtime_store_software_reason("secondary-filesystem");
+                runtime_release_unstarted(runtime);
+                if (restart) {
+                    ESP_LOGE(TAG,
+                             "required secondary filesystem failed; rebooting");
+                    esp_restart();
+                }
+                return ESP_FAIL;
+            }
+            ESP_LOGW(TAG,
+                     "required secondary filesystem is unavailable in safe mode");
         }
     }
 

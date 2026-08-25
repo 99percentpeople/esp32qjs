@@ -5,6 +5,9 @@
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_future.h"
 #include "utils/esp32_mquickjs_byte_source.h"
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+#include "utils/esp32_mquickjs_tls_error.h"
+#endif
 
 #include <errno.h>
 #include <fcntl.h>
@@ -16,8 +19,10 @@
 
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
 #include "esp_crt_bundle.h"
 #include "esp_tls.h"
+#endif
 #include "lwip/inet.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
@@ -49,7 +54,9 @@ typedef struct {
     char remote_host[SOCKET_HOST_MAX_BYTES + 1U];
     uint32_t sent_bytes;
     uint32_t received_bytes;
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
     esp_tls_t *tls;
+#endif
 } socket_entry_t;
 
 typedef struct {
@@ -114,6 +121,7 @@ static socket_entry_t *socket_allocate_entry(void)
     return NULL;
 }
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
 static void socket_close_tls_connection(socket_entry_t *entry)
 {
     if (entry == NULL) {
@@ -126,15 +134,19 @@ static void socket_close_tls_connection(socket_entry_t *entry)
     entry->fd = -1;
     entry->connected = false;
 }
+#endif
 
 static void socket_close_entry(socket_entry_t *entry)
 {
     if (entry == NULL || entry->id == 0) {
         return;
     }
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
     if (entry->tls != NULL) {
         socket_close_tls_connection(entry);
-    } else if (entry->fd >= 0) {
+    } else
+#endif
+    if (entry->fd >= 0) {
         shutdown(entry->fd, SHUT_RDWR);
         close(entry->fd);
     }
@@ -399,6 +411,12 @@ JSValue js_socket_open(JSContext *ctx,
     } else {
         return JS_ThrowRangeError(ctx, "socket protocol must be tcp or udp");
     }
+#if !CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+    if (secure) {
+        return JS_ThrowTypeError(ctx,
+                                 "TLS sockets require the TLS firmware capability");
+    }
+#else
     if (secure && protocol != SOCKET_PROTOCOL_TCP) {
         return JS_ThrowTypeError(ctx, "TLS is only supported for TCP client sockets");
     }
@@ -410,6 +428,7 @@ JSValue js_socket_open(JSContext *ctx,
         return JS_ThrowInternalError(ctx,
                                      "TLS socket support requires the certificate bundle");
     }
+#endif
 #endif
     entry = socket_allocate_entry();
     if (entry == NULL) {
@@ -631,7 +650,10 @@ struct esp32_mquickjs_future_driver_state {
     socklen_t address_len;
     char host[SOCKET_HOST_MAX_BYTES + 1U];
     char error_text[96];
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
     esp_tls_cfg_t tls_config;
+    esp32_mquickjs_tls_error_t tls_error;
+#endif
     bool started;
     bool issued;
     bool empty_result;
@@ -860,13 +882,16 @@ static bool socket_tcp_connect_future_prepare(
     if (argc < 4 || JS_IsUndefined(argv[3].val)) {
         state->timeout_ms = SOCKET_DEFAULT_CONNECT_TIMEOUT_MS;
     }
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
     if (entry->secure) {
         state->tls_config.non_block = true;
         state->tls_config.timeout_ms = state->timeout_ms;
 #if defined(CONFIG_MBEDTLS_CERTIFICATE_BUNDLE) && CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
-        state->tls_config.crt_bundle_attach = esp_crt_bundle_attach;
+        state->tls_config.crt_bundle_attach =
+            esp32_mquickjs_tls_crt_bundle_attach;
 #endif
     }
+#endif
     *out_state = state;
     return true;
 }
@@ -1111,6 +1136,7 @@ static void socket_future_step_connect(esp32_mquickjs_future_driver_state_t *sta
     int connect_error = 0;
     socklen_t error_len = sizeof(connect_error);
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
     if (entry->secure) {
         int result;
         int fd = -1;
@@ -1118,6 +1144,8 @@ static void socket_future_step_connect(esp32_mquickjs_future_driver_state_t *sta
         if (entry->tls == NULL) {
             entry->tls = esp_tls_init();
             if (entry->tls == NULL) {
+                esp32_mquickjs_tls_error_set(
+                    &state->tls_error, ESP_ERR_NO_MEM, ESP_OK, 0, 0);
                 socket_future_fail(state, ENOMEM, "could not allocate TLS context");
                 return;
             }
@@ -1129,8 +1157,11 @@ static void socket_future_step_connect(esp32_mquickjs_future_driver_state_t *sta
                                         &state->tls_config,
                                         entry->tls);
         if (result < 0) {
+            esp32_mquickjs_tls_error_capture(
+                &state->tls_error, entry->tls, ESP_FAIL);
             socket_future_fail(state, EIO, "TLS handshake failed");
         } else if (result > 0) {
+            esp32_mquickjs_tls_error_merge_verify_flags(&state->tls_error);
             if (esp_tls_get_conn_sockfd(entry->tls, &fd) != ESP_OK || fd < 0) {
                 socket_future_fail(state, EIO, "TLS socket descriptor unavailable");
                 return;
@@ -1141,6 +1172,7 @@ static void socket_future_step_connect(esp32_mquickjs_future_driver_state_t *sta
         }
         return;
     }
+#endif
 
     if (!state->issued) {
         int result;
@@ -1273,6 +1305,7 @@ static void socket_future_step_send(esp32_mquickjs_future_driver_state_t *state,
         data = state->send_data + state->offset;
         remaining = state->length - state->offset;
     }
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
     if (entry->secure) {
         if (entry->tls == NULL) {
             socket_future_fail(state, EBADF, "TLS connection is unavailable");
@@ -1285,7 +1318,9 @@ static void socket_future_step_send(esp32_mquickjs_future_driver_state_t *state,
             sent == ESP_TLS_ERR_SSL_WANT_WRITE) {
             return;
         }
-    } else {
+    } else
+#endif
+    {
         ready = socket_poll_fd(entry->fd, true);
         if (ready < 0 && errno != EINTR) {
             socket_future_fail(state, errno, NULL);
@@ -1307,6 +1342,12 @@ static void socket_future_step_send(esp32_mquickjs_future_driver_state_t *state,
         entry->connected = false;
         entry->peer_closed = true;
         if (state->offset == 0) {
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+            if (entry->secure) {
+                esp32_mquickjs_tls_error_capture(
+                    &state->tls_error, entry->tls, ESP_FAIL);
+            }
+#endif
             socket_future_fail(state,
                                entry->secure ? EIO : errno,
                                entry->secure ? "TLS write failed" : NULL);
@@ -1334,6 +1375,7 @@ static void socket_future_step_receive(esp32_mquickjs_future_driver_state_t *sta
         state->completed = true;
         return;
     }
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
     if (!udp && entry->secure) {
         if (entry->tls == NULL) {
             socket_future_fail(state, EBADF, "TLS connection is unavailable");
@@ -1347,7 +1389,9 @@ static void socket_future_step_receive(esp32_mquickjs_future_driver_state_t *sta
             state->received = -1;
             return;
         }
-    } else {
+    } else
+#endif
+    {
         ready = socket_poll_fd(entry->fd, false);
         if (ready < 0 && errno != EINTR) {
             socket_future_fail(state, errno, NULL);
@@ -1380,6 +1424,12 @@ static void socket_future_step_receive(esp32_mquickjs_future_driver_state_t *sta
         if (!udp) {
             entry->connected = false;
         }
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+        if (entry->secure) {
+            esp32_mquickjs_tls_error_capture(
+                &state->tls_error, entry->tls, ESP_FAIL);
+        }
+#endif
         socket_future_fail(state,
                            entry->secure ? EIO : errno,
                            entry->secure ? "TLS read failed" : NULL);
@@ -1447,6 +1497,12 @@ static void socket_future_step(esp32_mquickjs_future_driver_state_t *state)
     if (!state->completed && state->deadline_us > 0 &&
         (uint64_t)esp_timer_get_time() >= state->deadline_us) {
         if (state->kind == SOCKET_FUTURE_TCP_CONNECT) {
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+            if (entry->secure) {
+                esp32_mquickjs_tls_error_capture(
+                    &state->tls_error, entry->tls, ESP_ERR_TIMEOUT);
+            }
+#endif
             socket_future_fail(state, ETIMEDOUT, "timed out");
         } else if (state->kind == SOCKET_FUTURE_TCP_SEND) {
             state->completed = true;
@@ -1577,6 +1633,19 @@ static JSValue socket_future_finish(JSContext *ctx,
         return JS_ThrowInternalError(ctx, "socket operation cancelled");
     }
     if (state->error_code != 0) {
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+        if (state->tls_error.present) {
+            const char *operation =
+                state->kind == SOCKET_FUTURE_TCP_CONNECT
+                    ? "socket.tcp.connect()"
+                    : state->kind == SOCKET_FUTURE_TCP_SEND
+                          ? "socket.tcp.send()"
+                          : "socket.tcp.recv()";
+
+            return esp32_mquickjs_throw_tls_error(
+                ctx, operation, &state->tls_error);
+        }
+#endif
         return JS_ThrowInternalError(ctx,
                                      "%s%s%s: errno=%d",
                                      state->kind == SOCKET_FUTURE_TCP_CONNECT
@@ -1685,10 +1754,12 @@ static void socket_future_destroy(esp32_mquickjs_future_driver_state_t *state)
     entry = socket_future_entry(state);
     if (entry != NULL) {
         entry->busy = false;
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
         if (state->kind == SOCKET_FUTURE_TCP_CONNECT &&
             entry->secure && !entry->connected) {
             socket_close_tls_connection(entry);
         }
+#endif
     }
     if (state->client_fd >= 0) {
         close(state->client_fd);

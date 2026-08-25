@@ -472,12 +472,43 @@ class RemoteConfigTests(unittest.TestCase):
             self.assertIn("CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y", defaults)
             self.assertIn('CONFIG_ESP32_MQUICKJS_PSRAM_MODE="octal"', defaults)
             self.assertIn("CONFIG_SPIRAM_MODE_OCT=y", defaults)
+            self.assertIn(
+                "CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536", defaults
+            )
+            self.assertIn("CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y", defaults)
+            self.assertIn("CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y", defaults)
+            self.assertIn("CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=n", defaults)
+            self.assertIn("CONFIG_MBEDTLS_HAVE_TIME_DATE=n", defaults)
+            self.assertIn("CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n", defaults)
+            self.assertIn("CONFIG_ESP_TLS_USING_MBEDTLS=n", defaults)
+            self.assertIn("CONFIG_ESP_TLS_CUSTOM_STACK=y", defaults)
+            self.assertIn("CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=n", defaults)
+            self.assertIn("CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=n", defaults)
+            self.assertIn("CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384", defaults)
+            self.assertIn("CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096", defaults)
+            self.assertIn("CONFIG_MBEDTLS_DYNAMIC_BUFFER=n", defaults)
+            self.assertIn(
+                "CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=n", defaults
+            )
             self.assertIn("CONFIG_ESP32QJS_JS_HEAP_SIZE=4194304", defaults)
             constants = config.profile_constants_file.read_text(encoding="utf-8")
             self.assertNotIn("CONFIG_ESP32_MQUICKJS_USER_LED_PIN", defaults)
             self.assertIn('ESP32_MQUICKJS_PROFILE_INT("ESP32QJS_LED_PIN", 21)', constants)
             self.assertIn('ESP32_MQUICKJS_PROFILE_INT("ESP32QJS_I2C_SDA", 4)', constants)
             self.assertIn("0xDF0000", partitions)
+
+            tls_defaults = REMOTE.generated_hardware_defaults(
+                "esp32s3", 16, "octal", 8 * 1024 * 1024, True, True
+            )
+            self.assertIn("CONFIG_MBEDTLS_HAVE_TIME_DATE=y", tls_defaults)
+            self.assertIn("CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y", tls_defaults)
+            self.assertIn("CONFIG_ESP_TLS_USING_MBEDTLS=y", tls_defaults)
+            self.assertIn("CONFIG_ESP_TLS_CUSTOM_STACK=n", tls_defaults)
+            self.assertIn("CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=y", tls_defaults)
+            self.assertIn("CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y", tls_defaults)
+            self.assertIn(
+                "CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=y", tls_defaults
+            )
 
     def test_generated_profile_leaves_unconfigured_pins_unset(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -490,6 +521,18 @@ class RemoteConfigTests(unittest.TestCase):
             config = REMOTE.build_project_config(args, mcu, app)
             defaults = config.hardware_sdkconfig_defaults.read_text(encoding="utf-8")
             self.assertNotIn("CONFIG_SPIRAM", defaults)
+            self.assertIn("CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=y", defaults)
+            self.assertIn("CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=n", defaults)
+            self.assertIn("CONFIG_MBEDTLS_HAVE_TIME_DATE=n", defaults)
+            self.assertIn("CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n", defaults)
+            self.assertIn("CONFIG_ESP_TLS_USING_MBEDTLS=n", defaults)
+            self.assertIn("CONFIG_ESP_TLS_CUSTOM_STACK=y", defaults)
+            self.assertIn("CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=n", defaults)
+            self.assertIn("CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=n", defaults)
+            self.assertIn(
+                "CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=n", defaults
+            )
+            self.assertNotIn("CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP", defaults)
             self.assertNotIn("CONFIG_ESP32_MQUICKJS_USER_LED_PIN", defaults)
             self.assertEqual(
                 config.profile_constants_file.read_text(encoding="utf-8"),

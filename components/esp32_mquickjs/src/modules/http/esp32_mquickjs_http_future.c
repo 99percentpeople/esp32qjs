@@ -26,6 +26,7 @@ struct esp32_mquickjs_future_driver_state {
     esp32_mquickjs_runtime_t *runtime;
     esp32_mquickjs_future_token_t token;
     esp_err_t err;
+    esp32_mquickjs_tls_error_t tls_error;
     char error_text[ESP32_MQUICKJS_HTTP_ERROR_TEXT_LEN];
     volatile bool completed;
     bool started;
@@ -118,6 +119,7 @@ static void http_future_worker(void *opaque)
     state->response = esp32_mquickjs_http_perform_request(&state->request,
                                                           state->operation,
                                                           &state->err,
+                                                          &state->tls_error,
                                                           state->error_text,
                                                           sizeof(state->error_text));
     if (state->err == ESP_OK && state->response == NULL) {
@@ -233,6 +235,12 @@ static JSValue http_future_finish(JSContext *ctx,
         return JS_ThrowInternalError(ctx, "fetch cancelled");
     }
     if (state->err != ESP_OK || state->response == NULL) {
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+        if (state->tls_error.present) {
+            return esp32_mquickjs_throw_tls_error(
+                ctx, "fetch()", &state->tls_error);
+        }
+#endif
         return JS_ThrowInternalError(
             ctx,
             "%s",
@@ -267,7 +275,10 @@ static void http_future_destroy(esp32_mquickjs_future_driver_state_t *state)
 static uint32_t http_future_timeout_ms(
     const esp32_mquickjs_future_driver_state_t *state)
 {
-    return state != NULL ? state->request.timeout_ms : 0;
+    /* esp_http_client owns the request deadline so it can publish TLS detail
+     * before the Future settles. Cancellation still interrupts the worker. */
+    (void)state;
+    return 0;
 }
 
 static const esp32_mquickjs_future_driver_t s_http_future_driver = {

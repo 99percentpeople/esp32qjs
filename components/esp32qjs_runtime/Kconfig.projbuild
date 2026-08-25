@@ -46,6 +46,16 @@ config ESP32QJS_SECONDARY_LITTLEFS_BASE_PATH
     depends on ESP32QJS_SECONDARY_LITTLEFS
     default "/data"
 
+config ESP32QJS_SECONDARY_LITTLEFS_REQUIRED
+    bool "Require the secondary LittleFS partition"
+    depends on ESP32QJS_SECONDARY_LITTLEFS
+    default y
+    help
+        Treat a secondary filesystem mount failure as a guarded startup
+        failure. When startup guarding reaches its configured failure limit,
+        the runtime starts in safe mode without the secondary filesystem so
+        application recovery services can remain available.
+
 config ESP32QJS_AUTORUN_INDEX_JS
     bool "Auto-run /littlefs/index.js at boot"
     default y
@@ -92,5 +102,35 @@ config ESP32QJS_RUNTIME_TASK_WATCHDOG
     help
         Use the ESP-IDF task watchdog as a final recovery layer. JavaScript
         callback deadlines should normally interrupt runaway code first.
+
+config ESP32QJS_RUNTIME_JS_WATCHDOG
+    bool "Watch outer JavaScript scheduler progress"
+    default y if ESP_TASK_WDT_EN
+    depends on ESP_TASK_WDT_EN
+    help
+        Subscribe an independent task-watchdog user that is fed only after the
+        runtime returns to its outer scheduler or while a framework-owned
+        native wait cooperates with that scheduler. Tight JavaScript that never
+        enters a native wait still cannot conceal a turn that never returns.
+
+config ESP32QJS_RUNTIME_STARTUP_GUARD
+    bool "Track startup failures and expose persistent safe mode"
+    default y
+    help
+        Count watchdog, panic, and uncaught startup-script failures. Two
+        consecutive failures latch sys.safeMode until it is explicitly
+        cleared. Applications decide what safe mode skips.
+
+config ESP32QJS_RUNTIME_STARTUP_FAILURE_LIMIT
+    int "Consecutive startup failures before safe mode"
+    depends on ESP32QJS_RUNTIME_STARTUP_GUARD
+    range 1 10
+    default 2
+
+config ESP32QJS_RUNTIME_STARTUP_HEALTHY_MS
+    int "Healthy outer-scheduler window (ms)"
+    depends on ESP32QJS_RUNTIME_STARTUP_GUARD
+    range 1000 300000
+    default 30000
 
 endmenu

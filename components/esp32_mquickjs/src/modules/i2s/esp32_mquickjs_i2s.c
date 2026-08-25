@@ -70,10 +70,12 @@ typedef struct {
     uint32_t dma_frames_per_descriptor;
     uint32_t timeout_ms;
     volatile uint32_t overruns;
-    volatile uint32_t underruns;
+    volatile uint32_t send_queue_overflows;
     uint32_t sequence;
     i2s_chan_handle_t rx_handle;
     i2s_chan_handle_t tx_handle;
+    esp_timer_handle_t rx_timeout_timer;
+    esp_timer_handle_t tx_timeout_timer;
     esp32_mquickjs_runtime_t *rx_runtime;
     esp32_mquickjs_runtime_t *tx_runtime;
     esp32_mquickjs_future_token_t rx_token;
@@ -90,7 +92,6 @@ struct esp32_mquickjs_future_driver_state {
     esp32_mquickjs_i2s_ref_t channel_ref;
     esp32_mquickjs_runtime_t *runtime;
     esp32_mquickjs_future_token_t token;
-    esp_timer_handle_t timeout_timer;
     uint8_t *data;
     size_t requested_bytes;
     size_t transferred_bytes;
@@ -148,6 +149,32 @@ static bool i2s_to_u32(JSContext *ctx, JSValue value, uint32_t *out)
     }
     *out = converted;
     return true;
+}
+
+static uint32_t i2s_operation_buffer_caps(void)
+{
+    /* Keep transient PCM payloads out of the internal/DMA heap on boards
+     * with PSRAM. Do not fall back to internal memory after a PSRAM failure:
+     * a failed operation must not consume the reserve needed by DMA rings. */
+    return heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0
+               ? MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+               : MALLOC_CAP_8BIT;
+}
+
+static void *i2s_operation_buffer_malloc(size_t size)
+{
+    return heap_caps_malloc(size, i2s_operation_buffer_caps());
+}
+
+static void *i2s_operation_buffer_realloc(void *buffer, size_t size)
+{
+    return heap_caps_realloc(buffer, size, i2s_operation_buffer_caps());
+}
+
+static JSValue i2s_throw_no_memory(JSContext *ctx, const char *operation)
+{
+    return JS_ThrowInternalError(ctx, "%s failed: I2S_NO_MEMORY",
+                                 operation);
 }
 
 static bool i2s_to_gpio(JSContext *ctx, JSValue value, bool output, int *out)
@@ -209,6 +236,14 @@ static void i2s_cleanup_slot(esp32_mquickjs_i2s_slot_t *slot)
         if (slot->tx_handle != NULL) {
             (void)i2s_channel_disable(slot->tx_handle);
         }
+    }
+    if (slot->rx_timeout_timer != NULL) {
+        (void)esp_timer_stop(slot->rx_timeout_timer);
+        (void)esp_timer_delete(slot->rx_timeout_timer);
+    }
+    if (slot->tx_timeout_timer != NULL) {
+        (void)esp_timer_stop(slot->tx_timeout_timer);
+        (void)esp_timer_delete(slot->tx_timeout_timer);
     }
     if (slot->rx_handle != NULL) {
         (void)i2s_del_channel(slot->rx_handle);
@@ -350,9 +385,9 @@ static bool IRAM_ATTR i2s_on_sent(i2s_chan_handle_t handle,
     return task_woken == pdTRUE;
 }
 
-static bool IRAM_ATTR i2s_on_send_overflow(i2s_chan_handle_t handle,
-                                           i2s_event_data_t *event,
-                                           void *user_ctx)
+static bool IRAM_ATTR i2s_on_send_queue_overflow(i2s_chan_handle_t handle,
+                                                 i2s_event_data_t *event,
+                                                 void *user_ctx)
 {
     esp32_mquickjs_i2s_slot_t *slot = user_ctx;
     int task_woken = pdFALSE;
@@ -360,13 +395,33 @@ static bool IRAM_ATTR i2s_on_send_overflow(i2s_chan_handle_t handle,
     (void)handle;
     (void)event;
     if (slot != NULL) {
-        slot->underruns++;
+        slot->send_queue_overflows++;
         if (slot->tx_busy && slot->tx_runtime != NULL) {
             (void)esp32_mquickjs_future_wake_from_isr(
                 slot->tx_runtime, slot->tx_token, &task_woken);
         }
     }
     return task_woken == pdTRUE;
+}
+
+static void i2s_rx_timeout(void *opaque)
+{
+    esp32_mquickjs_i2s_slot_t *slot = opaque;
+
+    if (slot != NULL && slot->allocated && slot->rx_busy &&
+        slot->rx_runtime != NULL) {
+        (void)esp32_mquickjs_future_wake(slot->rx_runtime, slot->rx_token);
+    }
+}
+
+static void i2s_tx_timeout(void *opaque)
+{
+    esp32_mquickjs_i2s_slot_t *slot = opaque;
+
+    if (slot != NULL && slot->allocated && slot->tx_busy &&
+        slot->tx_runtime != NULL) {
+        (void)esp32_mquickjs_future_wake(slot->tx_runtime, slot->tx_token);
+    }
 }
 
 static JSValue i2s_status_object(JSContext *ctx,
@@ -403,8 +458,9 @@ static JSValue i2s_status_object(JSContext *ctx,
                                   ? "pdm" : "standard")) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "overruns",
                                          JS_NewUint32(ctx, slot->overruns)) ||
-        !esp32_mquickjs_set_property_ref(ctx, result, "underruns",
-                                         JS_NewUint32(ctx, slot->underruns)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "sendQueueOverflows",
+            JS_NewUint32(ctx, slot->send_queue_overflows)) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "readBusy",
                                          JS_NewBool(slot->rx_busy)) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "writeBusy",
@@ -439,15 +495,6 @@ static JSValue i2s_status_object(JSContext *ctx,
     JS_PopGCRef(ctx, &dma_ref);
     JS_PopGCRef(ctx, &pcm_ref);
     return JS_PopGCRef(ctx, &result_ref);
-}
-
-static void i2s_timeout_timer(void *opaque)
-{
-    esp32_mquickjs_future_driver_state_t *state = opaque;
-
-    if (state != NULL && !state->completed && state->runtime != NULL) {
-        (void)esp32_mquickjs_future_wake(state->runtime, state->token);
-    }
 }
 
 static bool i2s_read_prepare(
@@ -502,11 +549,11 @@ static bool i2s_read_prepare(
         JS_ThrowOutOfMemory(ctx);
         return false;
     }
-    state->data = heap_caps_malloc((size_t)frame_count * bytes_per_frame,
-                                   MALLOC_CAP_8BIT);
+    state->data = i2s_operation_buffer_malloc(
+        (size_t)frame_count * bytes_per_frame);
     if (state->data == NULL) {
         heap_caps_free(state);
-        JS_ThrowOutOfMemory(ctx);
+        i2s_throw_no_memory(ctx, "I2SChannel.read()");
         return false;
     }
     state->ctx = ctx;
@@ -597,20 +644,11 @@ static bool i2s_read_start(JSContext *ctx,
     state->token = token;
     state->started = true;
     if (state->timeout_ms > 0) {
-        esp_timer_create_args_t args = {
-            .callback = i2s_timeout_timer,
-            .arg = state,
-            .dispatch_method = ESP_TIMER_TASK,
-            .name = "mqjs_i2s",
-            .skip_unhandled_events = true,
-        };
-
         state->deadline_us = (uint64_t)esp_timer_get_time() +
                              (uint64_t)state->timeout_ms * 1000ULL;
-        if (esp_timer_create(&args, &state->timeout_timer) != ESP_OK ||
-            esp_timer_start_once(state->timeout_timer,
+        if (esp_timer_start_once(slot->rx_timeout_timer,
                                  (uint64_t)state->timeout_ms * 1000ULL) !=
-                ESP_OK) {
+            ESP_OK) {
             JS_ThrowInternalError(ctx, "failed to start I2S read timeout");
             return false;
         }
@@ -711,11 +749,10 @@ static void i2s_read_destroy(esp32_mquickjs_future_driver_state_t *state)
     if (state == NULL) {
         return;
     }
-    if (state->timeout_timer != NULL) {
-        (void)esp_timer_stop(state->timeout_timer);
-        (void)esp_timer_delete(state->timeout_timer);
-    }
     if (slot != NULL && state->started) {
+        if (slot->rx_timeout_timer != NULL) {
+            (void)esp_timer_stop(slot->rx_timeout_timer);
+        }
         slot->rx_busy = false;
         slot->rx_cancel_requested = false;
         slot->rx_runtime = NULL;
@@ -765,9 +802,9 @@ static bool i2s_append_write_bytes(JSContext *ctx, uint8_t **buffer,
             }
             next_capacity *= 2U;
         }
-        next = heap_caps_realloc(*buffer, next_capacity, MALLOC_CAP_8BIT);
+        next = i2s_operation_buffer_realloc(*buffer, next_capacity);
         if (next == NULL) {
-            JS_ThrowOutOfMemory(ctx);
+            i2s_throw_no_memory(ctx, "I2SChannel.write()");
             return false;
         }
         *buffer = next;
@@ -984,20 +1021,11 @@ static bool i2s_write_start(JSContext *ctx,
     state->token = token;
     state->started = true;
     if (state->timeout_ms > 0) {
-        esp_timer_create_args_t args = {
-            .callback = i2s_timeout_timer,
-            .arg = state,
-            .dispatch_method = ESP_TIMER_TASK,
-            .name = "mqjs_i2s_tx",
-            .skip_unhandled_events = true,
-        };
-
         state->deadline_us = (uint64_t)esp_timer_get_time() +
                              (uint64_t)state->timeout_ms * 1000ULL;
-        if (esp_timer_create(&args, &state->timeout_timer) != ESP_OK ||
-            esp_timer_start_once(state->timeout_timer,
+        if (esp_timer_start_once(slot->tx_timeout_timer,
                                  (uint64_t)state->timeout_ms * 1000ULL) !=
-                ESP_OK) {
+            ESP_OK) {
             JS_ThrowInternalError(ctx, "failed to start I2S write timeout");
             return false;
         }
@@ -1076,11 +1104,10 @@ static void i2s_write_destroy(
     if (state == NULL) {
         return;
     }
-    if (state->timeout_timer != NULL) {
-        (void)esp_timer_stop(state->timeout_timer);
-        (void)esp_timer_delete(state->timeout_timer);
-    }
     if (slot != NULL && state->started) {
+        if (slot->tx_timeout_timer != NULL) {
+            (void)esp_timer_stop(slot->tx_timeout_timer);
+        }
         slot->tx_busy = false;
         slot->tx_cancel_requested = false;
         slot->tx_runtime = NULL;
@@ -1434,7 +1461,7 @@ JSValue js_i2s_open(JSContext *ctx, JSValue *this_val, int argc,
         .on_recv = i2s_on_receive,
         .on_recv_q_ovf = i2s_on_overflow,
         .on_sent = i2s_on_sent,
-        .on_send_q_ovf = i2s_on_send_overflow,
+        .on_send_q_ovf = i2s_on_send_queue_overflow,
     };
     esp_err_t err;
     JSValue result;
@@ -1744,6 +1771,8 @@ parsed:
     channel_config.id = slot->port;
     channel_config.dma_desc_num = dma_descriptors;
     channel_config.dma_frame_num = dma_frames;
+    channel_config.auto_clear_after_cb =
+        (direction & ESP32_MQUICKJS_I2S_DIRECTION_TX) != 0;
     err = i2s_new_channel(
         &channel_config,
         (direction & ESP32_MQUICKJS_I2S_DIRECTION_TX) != 0
@@ -1754,6 +1783,9 @@ parsed:
             : NULL);
     if (err != ESP_OK) {
         i2s_cleanup_slot(slot);
+        if (err == ESP_ERR_NO_MEM) {
+            return i2s_throw_no_memory(ctx, "i2s.open()");
+        }
         return JS_ThrowInternalError(ctx, "i2s.open() failed to allocate channel: %s",
                                      esp_err_to_name(err));
     }
@@ -1816,8 +1848,33 @@ parsed:
         err = i2s_channel_register_event_callback(slot->tx_handle,
                                                   &callbacks, slot);
     }
+    if (err == ESP_OK && timeout_ms > 0 && slot->rx_handle != NULL) {
+        esp_timer_create_args_t timer_args = {
+            .callback = i2s_rx_timeout,
+            .arg = slot,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "mqjs_i2s_rx",
+            .skip_unhandled_events = true,
+        };
+
+        err = esp_timer_create(&timer_args, &slot->rx_timeout_timer);
+    }
+    if (err == ESP_OK && timeout_ms > 0 && slot->tx_handle != NULL) {
+        esp_timer_create_args_t timer_args = {
+            .callback = i2s_tx_timeout,
+            .arg = slot,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "mqjs_i2s_tx",
+            .skip_unhandled_events = true,
+        };
+
+        err = esp_timer_create(&timer_args, &slot->tx_timeout_timer);
+    }
     if (err != ESP_OK) {
         i2s_cleanup_slot(slot);
+        if (err == ESP_ERR_NO_MEM) {
+            return i2s_throw_no_memory(ctx, "i2s.open()");
+        }
         return JS_ThrowInternalError(ctx, "i2s.open() failed to initialize channel: %s",
                                      esp_err_to_name(err));
     }

@@ -100,7 +100,12 @@ deadline around one operation; the scoped helper restores the previous
 deadline and cannot extend its caller's budget. The runtime task watchdog is a
 final recovery layer, not a replacement for callback deadlines. While bounded
 JavaScript runs, VM interrupt checks invoke the runtime cooperate hook so long
-deadlines can feed the watchdog and still observe runtime stop requests.
+deadlines can feed the system-task watchdog and still observe runtime stop
+requests. A separate outer-JavaScript watchdog user is fed after control returns
+to the top-level scheduler and during a framework-owned native wait. This lets a
+bounded `Future.wait()` or network operation remain cooperative beyond the
+watchdog interval, while tight JavaScript that never enters a native wait still
+cannot conceal a turn that never returns.
 
 Native waits are split according to
 `CONFIG_ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS` (250 ms by default). Between
@@ -112,13 +117,31 @@ excluded from the ordinary JavaScript evaluation budget, while an explicit
 is drained before an interrupted call returns so DMA buffers remain valid; a
 synchronous HTTP request similarly waits for its bounded worker to finish.
 
+When startup guarding is enabled, the runtime writes only its private `qjs_rt`
+NVS namespace. It arms before the configured startup script, requires 30
+seconds of healthy outer-scheduler progress, and counts watchdog/panic resets or
+an uncaught startup exception while armed. The configured default latches
+`sys.safeMode` after two consecutive failures. The framework exposes the latch
+but does not decide which application files to skip; the Agent product keeps
+its system executor running and omits the complete `/workspace/index.js` load
+chain on the third boot. An operator clears the latch with
+`sys.safeMode = false` and then performs `sys.reboot()`.
+
+A required secondary LittleFS mount is part of guarded startup. The first mount
+failure is persisted and reboots when the configured restart failure action is
+`reboot`; the second consecutive failure latches safe mode and allows the
+runtime to start without that secondary filesystem. The framework reports the
+mount state through `sys.status.runtime.filesystem.secondaryMounted`; the
+application decides which services remain available and must not redirect its
+filesystem root to an unavailable partition.
+
 ## Current Lifecycle Constraint
 
 Shutdown is cooperative. `stop()` never force-deletes the runtime task, and
 `destroy()` never frees callback state still owned by an outgoing HTTP worker.
 A stop request wakes idle waits immediately and is checked between bounded
 native wait slices.
-HTTP servers and registered GPIO/Wi-Fi callbacks are shut down automatically;
+HTTP servers and registered GPIO/Wi-Fi event sources are shut down automatically;
 object finalizers close synchronous peripheral handles. If `destroy()` reports
 `ESP_ERR_INVALID_STATE`, wait for the bounded HTTP request to finish and retry
 destruction; the retry drains its completion without invoking the old callback.

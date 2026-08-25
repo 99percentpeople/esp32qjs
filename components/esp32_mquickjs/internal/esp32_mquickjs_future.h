@@ -82,6 +82,8 @@ JSValue js_future_all(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
 JSValue js_future_race(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_future_sleep(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_future_timeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_future_map(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_future_flat_map(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_future_status(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_future_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_future_cancel(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

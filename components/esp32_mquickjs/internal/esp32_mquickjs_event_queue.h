@@ -44,6 +44,10 @@ bool esp32_mquickjs_event_queue_send_from_isr(esp32_mquickjs_event_queue_t *queu
 bool esp32_mquickjs_event_queue_close(esp32_mquickjs_event_queue_t *queue);
 bool esp32_mquickjs_event_queue_is_closed(const esp32_mquickjs_event_queue_t *queue);
 uint32_t esp32_mquickjs_event_queue_dropped(const esp32_mquickjs_event_queue_t *queue);
+bool esp32_mquickjs_event_queue_register_receive_alias(
+    JSContext *ctx,
+    esp32_mquickjs_runtime_t *runtime,
+    JSValue function);
 esp32_mquickjs_event_queue_t *esp32_mquickjs_event_queue_from_value(
     JSContext *ctx,
     JSValue value);

@@ -13,7 +13,7 @@
 #include "freertos/task.h"
 
 #define ESP32_MQUICKJS_FUTURE_MAX_ARGS 16U
-#define ESP32_MQUICKJS_FUTURE_MAX_DRIVERS 48U
+#define ESP32_MQUICKJS_FUTURE_MAX_DRIVERS 64U
 #define ESP32_MQUICKJS_FUTURE_SLOT_COUNT \
     (CONFIG_ESP32_MQUICKJS_MAX_FUTURES + CONFIG_ESP32_MQUICKJS_INTERNAL_FUTURE_RESERVE)
 
@@ -33,6 +33,8 @@ typedef enum {
     FUTURE_KIND_ALL,
     FUTURE_KIND_RACE,
     FUTURE_KIND_TIMEOUT,
+    FUTURE_KIND_MAP,
+    FUTURE_KIND_FLAT_MAP,
 } future_kind_t;
 
 typedef struct {
@@ -77,6 +79,8 @@ typedef struct {
     const esp32_mquickjs_future_driver_t *driver;
     esp32_mquickjs_future_driver_state_t *driver_state;
     future_handle_t *handle;
+    bool continuation_running;
+    bool continuation_called;
 } future_slot_t;
 
 typedef struct {
@@ -688,6 +692,36 @@ done:
     return retained;
 }
 
+static bool future_retain_continuation(JSContext *ctx,
+                                       future_slot_t *slot,
+                                       JSValue input,
+                                       JSValue callback)
+{
+    JSValue *rooted;
+
+    if (slot == NULL || future_handle_from_value(ctx, input) == NULL ||
+        !JS_IsFunction(ctx, callback)) {
+        JS_ThrowTypeError(ctx, "Future continuation expects a live Future and a function");
+        return false;
+    }
+    slot->inputs = heap_caps_calloc(1, sizeof(*slot->inputs), MALLOC_CAP_8BIT);
+    if (slot->inputs == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        return false;
+    }
+    rooted = JS_AddGCRef(ctx, &slot->inputs[0]);
+    *rooted = input;
+    slot->input_count = 1;
+    slot->input_refs_retained = true;
+
+    rooted = JS_AddGCRef(ctx, &slot->function);
+    *rooted = callback;
+    rooted = JS_AddGCRef(ctx, &slot->receiver);
+    *rooted = JS_UNDEFINED;
+    slot->call_refs_retained = true;
+    return true;
+}
+
 static const esp32_mquickjs_future_driver_t *future_find_driver(future_runtime_t *state,
                                                                 JSValue function)
 {
@@ -853,6 +887,8 @@ static void future_dispatch_submission(JSContext *ctx,
         case FUTURE_KIND_ALL:
         case FUTURE_KIND_RACE:
         case FUTURE_KIND_TIMEOUT:
+        case FUTURE_KIND_MAP:
+        case FUTURE_KIND_FLAT_MAP:
             slot->state = FUTURE_STATE_PENDING;
             break;
         default:
@@ -1037,6 +1073,69 @@ static void future_advance_timeout(JSContext *ctx, future_slot_t *slot, uint64_t
     }
 }
 
+static void future_advance_continuation(JSContext *ctx,
+                                        esp32_mquickjs_runtime_t *runtime,
+                                        future_slot_t *slot)
+{
+    future_handle_t *input;
+    future_state_t input_state;
+    JSValue result;
+    JSValue argument;
+
+    if (slot->input_count != 1) {
+        future_reject_message(ctx, slot, "Future continuation lost its input");
+        return;
+    }
+    input = future_handle_from_value(ctx, slot->inputs[0].val);
+    if (input == NULL) {
+        future_reject_message(ctx, slot, "Future continuation input became stale");
+        return;
+    }
+    input_state = future_handle_state(input);
+    if (!future_is_terminal(input_state)) {
+        return;
+    }
+    input->observed = true;
+    if (input_state != FUTURE_STATE_FULFILLED) {
+        future_copy_terminal(ctx, slot, input);
+        return;
+    }
+    if (slot->continuation_running) {
+        return;
+    }
+    if (slot->continuation_called) {
+        future_copy_terminal(ctx, slot, input);
+        return;
+    }
+
+    argument = future_handle_result(input);
+    slot->continuation_running = true;
+    result = esp32_mquickjs_call(ctx,
+                                 runtime,
+                                 slot->function.val,
+                                 JS_UNDEFINED,
+                                 1,
+                                 &argument);
+    slot->continuation_running = false;
+    slot->continuation_called = true;
+    if (JS_IsException(result)) {
+        future_reject_current_exception(ctx, slot);
+        return;
+    }
+    if (slot->kind == FUTURE_KIND_MAP) {
+        future_settle(ctx, slot, FUTURE_STATE_FULFILLED, result);
+        return;
+    }
+
+    input = future_handle_from_value(ctx, result);
+    if (input == NULL) {
+        future_reject_message(ctx, slot, "future.flatMap() callback must return a Future");
+        return;
+    }
+    JS_DeleteGCRef(ctx, &slot->inputs[0]);
+    *JS_AddGCRef(ctx, &slot->inputs[0]) = result;
+}
+
 static bool future_advance_combinators(JSContext *ctx,
                                        esp32_mquickjs_runtime_t *runtime)
 {
@@ -1059,6 +1158,9 @@ static bool future_advance_combinators(JSContext *ctx,
             future_advance_race(ctx, slot);
         } else if (slot->kind == FUTURE_KIND_TIMEOUT) {
             future_advance_timeout(ctx, slot, now_us);
+        } else if (slot->kind == FUTURE_KIND_MAP ||
+                   slot->kind == FUTURE_KIND_FLAT_MAP) {
+            future_advance_continuation(ctx, runtime, slot);
         }
         handled = handled || slot->state != before;
     }
@@ -1128,6 +1230,35 @@ static bool future_poll_ready(JSContext *ctx,
         future_settle(ctx, slot, FUTURE_STATE_FULFILLED, result);
     }
     return true;
+}
+
+static bool future_poll_active_drivers(JSContext *ctx,
+                                       esp32_mquickjs_runtime_t *runtime)
+{
+    future_runtime_t *state = future_runtime(runtime);
+    bool handled = false;
+    int i;
+
+    if (state == NULL || state->slots == NULL) {
+        return false;
+    }
+    /*
+     * A wake token is only a latency optimization. ISR and worker completions
+     * use a bounded queue, so a full queue must not be able to strand a driver
+     * that has already completed or acknowledged cancellation. Polling the
+     * bounded active-slot set at each scheduler safe point also guarantees
+     * teardown progress when the final wake races with runtime shutdown.
+     */
+    for (i = 0; i < ESP32_MQUICKJS_FUTURE_SLOT_COUNT; ++i) {
+        future_slot_t *slot = &state->slots[i];
+
+        if (!slot->allocated || !slot->driver_active ||
+            slot->state == FUTURE_STATE_QUEUED) {
+            continue;
+        }
+        handled = future_poll_ready(ctx, runtime, future_token(slot)) || handled;
+    }
+    return handled;
 }
 
 bool esp32_mquickjs_init_future_runtime(JSContext *ctx,
@@ -1376,6 +1507,7 @@ bool esp32_mquickjs_future_poll(JSContext *ctx,
         handled = future_poll_ready(ctx, runtime, token) || handled;
         count++;
     }
+    handled = future_poll_active_drivers(ctx, runtime) || handled;
     handled = future_advance_combinators(ctx, runtime) || handled;
     return handled;
 }
@@ -1697,6 +1829,56 @@ JSValue js_future_timeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *
     return result;
 }
 
+static JSValue future_make_continuation(JSContext *ctx,
+                                        JSValue *this_val,
+                                        int argc,
+                                        JSValue *argv,
+                                        future_kind_t kind,
+                                        const char *api_name)
+{
+    esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
+    future_handle_t *input = future_this_handle(ctx, this_val, api_name);
+    future_slot_t *slot;
+    JSValue result;
+
+    if (input == NULL) {
+        return JS_EXCEPTION;
+    }
+    if (argc != 1 || !JS_IsFunction(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "%s expects one function", api_name);
+    }
+    slot = future_allocate_slot(ctx, runtime, kind);
+    if (slot == NULL) {
+        return JS_ThrowInternalError(ctx, "Future capacity is exhausted");
+    }
+    if (!future_retain_continuation(ctx, slot, *this_val, argv[0])) {
+        future_clear_slot(ctx, slot);
+        return JS_EXCEPTION;
+    }
+    result = future_make_handle(ctx, slot);
+    if (JS_IsException(result)) {
+        return result;
+    }
+    if (!future_submit(slot)) {
+        future_abandon_handle(slot);
+        future_clear_slot(ctx, slot);
+        return JS_ThrowInternalError(ctx, "Future submission queue is full");
+    }
+    return result;
+}
+
+JSValue js_future_map(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    return future_make_continuation(ctx, this_val, argc, argv,
+                                    FUTURE_KIND_MAP, "future.map()");
+}
+
+JSValue js_future_flat_map(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    return future_make_continuation(ctx, this_val, argc, argv,
+                                    FUTURE_KIND_FLAT_MAP, "future.flatMap()");
+}
+
 JSValue js_future_status(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     future_handle_t *handle = future_this_handle(ctx, this_val, "future.status()");
@@ -1712,8 +1894,10 @@ JSValue js_future_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
 {
     esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
     future_handle_t *handle = future_this_handle(ctx, this_val, "future.wait()");
+    esp32_mquickjs_native_wait_t native_wait;
     uint64_t wait_deadline_us = 0;
     int timeout_ms = 0;
+    JSValue result;
 
     if (handle == NULL) {
         return JS_EXCEPTION;
@@ -1727,13 +1911,15 @@ JSValue js_future_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
                            ((uint64_t)(uint32_t)timeout_ms * 1000ULL);
     }
     handle->observed = true;
+    esp32_mquickjs_native_wait_begin(runtime, &native_wait);
     while (!handle->terminal) {
         esp32_mquickjs_poll_result_t poll_result;
         uint32_t wait_ms = ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS;
         uint64_t now_us;
 
         if (future_handle_slot(handle) == NULL) {
-            return JS_ThrowInternalError(ctx, "future.wait() lost its operation");
+            result = JS_ThrowInternalError(ctx, "future.wait() lost its operation");
+            goto done;
         }
 
         poll_result = esp32_mquickjs_poll(ctx, runtime);
@@ -1742,10 +1928,14 @@ JSValue js_future_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
         }
         now_us = (uint64_t)esp_timer_get_time();
         if (wait_deadline_us > 0 && now_us >= wait_deadline_us) {
-            return JS_ThrowInternalError(ctx, "future.wait() timed out after %d ms", timeout_ms);
+            result = JS_ThrowInternalError(
+                ctx, "future.wait() timed out after %d ms", timeout_ms);
+            goto done;
         }
         if (!esp32_mquickjs_cooperate(runtime)) {
-            return JS_ThrowInternalError(ctx, "future.wait() was interrupted by a runtime stop request");
+            result = JS_ThrowInternalError(
+                ctx, "future.wait() was interrupted by a runtime stop request");
+            goto done;
         }
         if (poll_result != ESP32_MQUICKJS_POLL_NONE) {
             continue;
@@ -1765,12 +1955,16 @@ JSValue js_future_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
         (void)esp32_mquickjs_wait_for_activity(runtime, wait_ms);
     }
     if (handle->state == FUTURE_STATE_FULFILLED) {
-        return handle->result.val;
+        result = handle->result.val;
+    } else if (handle->state == FUTURE_STATE_REJECTED) {
+        result = JS_Throw(ctx, handle->result.val);
+    } else {
+        result = JS_ThrowInternalError(ctx, "future.wait() was cancelled");
     }
-    if (handle->state == FUTURE_STATE_REJECTED) {
-        return JS_Throw(ctx, handle->result.val);
-    }
-    return JS_ThrowInternalError(ctx, "future.wait() was cancelled");
+
+done:
+    esp32_mquickjs_native_wait_end(runtime, &native_wait);
+    return result;
 }
 
 JSValue js_future_cancel(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

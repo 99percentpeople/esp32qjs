@@ -5,6 +5,7 @@ idf_component_register(
         esp32_mquickjs
         esp_system
         esp_timer
+        nvs_flash
 )
 
 if(CONFIG_ESP32QJS_ENABLE_REPL)

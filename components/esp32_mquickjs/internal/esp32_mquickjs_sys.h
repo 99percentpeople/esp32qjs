@@ -27,6 +27,10 @@ JSValue js_sys_rtos_runtime_task(JSContext *ctx, JSValue *this_val, int argc, JS
 JSValue js_sys_runtime_status_get(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv, int magic);
 JSValue js_sys_runtime_status_filesystem(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_sys_runtime_status_resources(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_sys_runtime_status_watchdog(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_sys_runtime_status_startup(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_sys_safe_mode_get(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_sys_safe_mode_set(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_sys_tasks(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_sys_restart_runtime(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_sys_reboot(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

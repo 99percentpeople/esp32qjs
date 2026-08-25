@@ -9,6 +9,8 @@ test("sys/runtime", function () {
   var internalHeapAgain = status.memory.internal;
   var runtimeStatus = status.runtime;
   var resources = runtimeStatus.resources;
+  var watchdogStatus = runtimeStatus.watchdog;
+  var startupStatus = runtimeStatus.startup;
   var rtos = status.rtos;
   var taskSnapshot = sys.tasks({ limit: 2 });
   var profile = sys.config();
@@ -188,6 +190,12 @@ test("sys/runtime", function () {
     "task options should reject arrays");
 
   test.equal(runtimeStatus.generation, 1, "the first runtime generation should be one");
+  test.ok(typeof sys.safeMode === "boolean", "sys.safeMode should expose the persistent boot choice");
+  test.ok(typeof watchdogStatus.systemEnabled === "boolean", "system watchdog status");
+  test.ok(typeof watchdogStatus.jsEnabled === "boolean", "JavaScript watchdog status");
+  test.ok(watchdogStatus.lastOuterHeartbeatAgeMs >= 0, "outer heartbeat age");
+  test.ok(startupStatus.failureLimit >= 1, "startup failure limit");
+  test.ok(startupStatus.healthyAfterMs >= 1000, "startup healthy window");
   test.equal(runtimeStatus.restartCount, 0, "a fresh boot should have no runtime restarts");
   test.ok(runtimeStatus.uptimeMs >= 0, "runtime generation uptime should be non-negative");
   test.ok(resources.timers.capacity >= resources.timers.active,
@@ -244,6 +252,8 @@ test("sys/runtime", function () {
   expectFeature("websocket", hasObject("websocketClient"));
   expectFeature("bitmap", hasObject("bitmap"));
   expectFeature("wifi", hasObject("wifi"));
+  test.equal(typeof features.tls, "boolean",
+    "sys.info.features.tls should report the build capability");
   expectFeature("http", hasObject("http") && typeof globalThis.fetch === "function");
   expectFeature("httpServer", hasObject("http") && typeof globalThis.http.server === "function");
   expectFeature("runtimeLogs", hasObject("runtimeLogs"));

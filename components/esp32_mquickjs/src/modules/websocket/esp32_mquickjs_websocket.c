@@ -4,6 +4,7 @@
 
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_event_queue.h"
+#include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_wifi.h"
 
 #include <stdio.h>
@@ -65,6 +66,8 @@ typedef struct {
     uint32_t sent_messages;
     uint32_t dropped_events;
     uint32_t oversized_messages;
+    volatile bool sending;
+    volatile bool close_pending;
 } esp32_mquickjs_websocket_state_t;
 
 static esp32_mquickjs_websocket_state_t s_websocket_state;
@@ -76,6 +79,9 @@ static void websocket_event_handler(void *handler_args,
                                     esp_event_base_t base,
                                     int32_t event_id,
                                     void *event_data);
+static bool websocket_register_future_driver(
+    JSContext *ctx,
+    esp32_mquickjs_runtime_t *runtime);
 
 static void websocket_free_callback_event(
     esp32_mquickjs_websocket_callback_event_t *event)
@@ -277,15 +283,10 @@ static void websocket_event_handler(void *handler_args,
     }
 }
 
-static void websocket_close_source(void *opaque)
+static void websocket_finalize_close_source(void)
 {
     esp_websocket_client_handle_t client = s_websocket_state.client;
 
-    (void)opaque;
-    s_websocket_state.event_queue = NULL;
-    s_websocket_state.opened = false;
-    s_websocket_state.connected = false;
-    s_websocket_state.closing = true;
     if (client != NULL) {
         if (esp_websocket_client_is_connected(client)) {
             if (esp_websocket_client_close(
@@ -303,6 +304,21 @@ static void websocket_close_source(void *opaque)
     websocket_reset_fragment();
     websocket_drain_queue();
     s_websocket_state.closing = false;
+    s_websocket_state.close_pending = false;
+}
+
+static void websocket_close_source(void *opaque)
+{
+    (void)opaque;
+    s_websocket_state.event_queue = NULL;
+    s_websocket_state.opened = false;
+    s_websocket_state.connected = false;
+    s_websocket_state.closing = true;
+    if (s_websocket_state.sending) {
+        s_websocket_state.close_pending = true;
+        return;
+    }
+    websocket_finalize_close_source();
 }
 
 static void websocket_close_internal(void)
@@ -495,6 +511,9 @@ bool esp32_mquickjs_init_websocket_runtime(JSContext *ctx,
         return false;
     }
     s_websocket_state.initialized = true;
+    if (!websocket_register_future_driver(ctx, runtime)) {
+        return false;
+    }
     return true;
 }
 
@@ -789,6 +808,10 @@ JSValue js_websocket_send(JSContext *ctx,
         !esp_websocket_client_is_connected(s_websocket_state.client)) {
         return JS_ThrowInternalError(ctx, "websocketClient is not connected");
     }
+    if (s_websocket_state.sending) {
+        return JS_ThrowInternalError(
+            ctx, "websocketClient.send() failed because another send is active");
+    }
     text = JS_ToCStringLen(ctx, &text_len, argv[0], &text_buf);
     if (text == NULL) {
         return JS_EXCEPTION;
@@ -797,16 +820,246 @@ JSValue js_websocket_send(JSContext *ctx,
         return JS_ThrowRangeError(ctx, "websocketClient.send() message is too large");
     }
 
+    s_websocket_state.sending = true;
     sent = esp_websocket_client_send_text(
         s_websocket_state.client,
         text,
         (int)text_len,
         pdMS_TO_TICKS(s_websocket_state.send_timeout_ms));
+    s_websocket_state.sending = false;
+    if (s_websocket_state.close_pending) {
+        websocket_finalize_close_source();
+    }
     if (sent < 0 || (size_t)sent != text_len) {
         return JS_ThrowInternalError(ctx, "websocketClient.send() failed");
     }
     s_websocket_state.sent_messages++;
     return JS_NewInt32(ctx, sent);
+}
+
+struct esp32_mquickjs_future_driver_state {
+    esp32_mquickjs_runtime_t *runtime;
+    esp32_mquickjs_future_token_t token;
+    esp_websocket_client_handle_t client;
+    char *text;
+    size_t text_length;
+    uint32_t generation;
+    uint32_t timeout_ms;
+    volatile int sent;
+    volatile bool worker_completed;
+    bool started;
+    bool cancelled;
+};
+
+static void websocket_send_future_release(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL) {
+        return;
+    }
+    heap_caps_free(state->text);
+    heap_caps_free(state);
+}
+
+static bool websocket_send_future_prepare(
+    JSContext *ctx,
+    JSGCRef *this_ref,
+    int argc,
+    JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+    JSCStringBuf text_buf;
+    const char *text;
+    size_t text_length = 0;
+
+    (void)this_ref;
+    if (out_state == NULL || argc != 1 || !JS_IsString(ctx, argv[0].val)) {
+        JS_ThrowTypeError(
+            ctx, "websocketClient.send(text) expects one string");
+        return false;
+    }
+    if (!s_websocket_state.opened || s_websocket_state.client == NULL ||
+        !esp_websocket_client_is_connected(s_websocket_state.client)) {
+        JS_ThrowInternalError(ctx, "websocketClient is not connected");
+        return false;
+    }
+    if (s_websocket_state.sending) {
+        JS_ThrowInternalError(
+            ctx,
+            "websocketClient.send() failed because another send is active");
+        return false;
+    }
+    text = JS_ToCStringLen(ctx, &text_length, argv[0].val, &text_buf);
+    if (text == NULL) {
+        return false;
+    }
+    if (text_length > s_websocket_state.max_message_bytes ||
+        text_length > INT32_MAX) {
+        JS_ThrowRangeError(ctx,
+                           "websocketClient.send() message is too large");
+        return false;
+    }
+    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    if (state == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        return false;
+    }
+    state->text = heap_caps_malloc(text_length + 1U, MALLOC_CAP_8BIT);
+    if (state->text == NULL) {
+        websocket_send_future_release(state);
+        JS_ThrowOutOfMemory(ctx);
+        return false;
+    }
+    memcpy(state->text, text, text_length);
+    state->text[text_length] = '\0';
+    state->text_length = text_length;
+    state->client = s_websocket_state.client;
+    state->generation = s_websocket_state.generation;
+    state->timeout_ms = s_websocket_state.send_timeout_ms;
+    state->sent = -1;
+    *out_state = state;
+    return true;
+}
+
+static void websocket_send_future_worker(void *opaque)
+{
+    esp32_mquickjs_future_driver_state_t *state = opaque;
+
+    if (state == NULL) {
+        return;
+    }
+    if (!state->cancelled) {
+        state->sent = esp_websocket_client_send_text(
+            state->client, state->text, (int)state->text_length,
+            pdMS_TO_TICKS(state->timeout_ms));
+    }
+    state->worker_completed = true;
+    (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+}
+
+static bool websocket_send_future_start(
+    JSContext *ctx,
+    esp32_mquickjs_runtime_t *runtime,
+    esp32_mquickjs_future_token_t token,
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || s_websocket_state.sending ||
+        !s_websocket_state.opened ||
+        state->client != s_websocket_state.client ||
+        state->generation != s_websocket_state.generation) {
+        JS_ThrowInternalError(
+            ctx, "websocketClient changed before send started");
+        return false;
+    }
+    state->runtime = runtime;
+    state->token = token;
+    state->started = true;
+    s_websocket_state.sending = true;
+    if (!esp32_mquickjs_future_submit_worker(
+            runtime, token, websocket_send_future_worker, state)) {
+        s_websocket_state.sending = false;
+        JS_ThrowInternalError(
+            ctx, "websocketClient.send() worker queue is full");
+        return false;
+    }
+    return true;
+}
+
+static esp32_mquickjs_future_poll_t websocket_send_future_poll(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    return state != NULL && state->worker_completed
+               ? ESP32_MQUICKJS_FUTURE_READY
+               : ESP32_MQUICKJS_FUTURE_PENDING;
+}
+
+static JSValue websocket_send_future_finish(
+    JSContext *ctx,
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || state->cancelled) {
+        return JS_ThrowInternalError(
+            ctx, "websocketClient.send() was cancelled");
+    }
+    if (state->generation != s_websocket_state.generation ||
+        state->sent < 0 || (size_t)state->sent != state->text_length) {
+        return JS_ThrowInternalError(ctx, "websocketClient.send() failed");
+    }
+    s_websocket_state.sent_messages++;
+    return JS_NewInt32(ctx, state->sent);
+}
+
+static bool websocket_send_future_cancel(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || state->worker_completed || state->cancelled) {
+        return false;
+    }
+    state->cancelled = true;
+    return true;
+}
+
+static void websocket_send_future_destroy(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state != NULL && state->started) {
+        s_websocket_state.sending = false;
+        if (s_websocket_state.close_pending) {
+            websocket_finalize_close_source();
+        }
+    }
+    websocket_send_future_release(state);
+}
+
+static uint32_t websocket_send_future_timeout_ms(
+    const esp32_mquickjs_future_driver_state_t *state)
+{
+    return state != NULL && state->timeout_ms < UINT32_MAX - 1000U
+               ? state->timeout_ms + 1000U
+               : 0;
+}
+
+static const esp32_mquickjs_future_driver_t s_websocket_send_driver = {
+    .prepare = websocket_send_future_prepare,
+    .start = websocket_send_future_start,
+    .poll = websocket_send_future_poll,
+    .finish = websocket_send_future_finish,
+    .cancel = websocket_send_future_cancel,
+    .destroy = websocket_send_future_destroy,
+    .timeout_ms = websocket_send_future_timeout_ms,
+};
+
+static bool websocket_register_future_driver(
+    JSContext *ctx,
+    esp32_mquickjs_runtime_t *runtime)
+{
+    JSGCRef global_ref;
+    JSGCRef module_ref;
+    JSGCRef send_ref;
+    JSValue *global = JS_PushGCRef(ctx, &global_ref);
+    JSValue *module = JS_PushGCRef(ctx, &module_ref);
+    JSValue *send = JS_PushGCRef(ctx, &send_ref);
+    bool registered;
+
+    *global = JS_GetGlobalObject(ctx);
+    *module = JS_IsException(*global)
+                  ? JS_EXCEPTION
+                  : JS_GetPropertyStr(ctx, *global, "websocketClient");
+    *send = JS_IsException(*module)
+                ? JS_EXCEPTION
+                : JS_GetPropertyStr(ctx, *module, "send");
+    registered = !JS_IsException(*send) &&
+                 esp32_mquickjs_future_register_driver(
+                     ctx, runtime, *send, &s_websocket_send_driver);
+    if (!registered && !JS_HasException(ctx)) {
+        JS_ThrowInternalError(
+            ctx, "failed to register WebSocket Future driver");
+    }
+    JS_PopGCRef(ctx, &send_ref);
+    JS_PopGCRef(ctx, &module_ref);
+    JS_PopGCRef(ctx, &global_ref);
+    return registered;
 }
 
 JSValue js_websocket_status(JSContext *ctx,

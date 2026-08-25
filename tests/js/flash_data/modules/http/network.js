@@ -21,6 +21,11 @@ test("http/network", function () {
 
   test.ok(wifiStatus.connected, "wifi should be connected before fetch");
 
+  test.equal(wifi.syncTime({
+    servers: ["pool.ntp.org", "time.cloudflare.com"],
+    timeoutMs: 15000
+  }).synchronized, true, "time should be synchronized before public fetch");
+
   response = Future.call(fetch, globalThis, [cfg.httpUrl]).wait(20000);
 
   test.ok(response.status >= 200 && response.status < 600, "fetch status should be valid");

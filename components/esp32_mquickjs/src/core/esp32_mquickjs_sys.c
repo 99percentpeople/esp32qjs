@@ -366,6 +366,11 @@ JSValue js_sys_feature_get(JSContext *ctx,
 #else
         false,
 #endif
+#if defined(CONFIG_ESP32_MQUICKJS_FEATURE_TLS) && CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+        true,
+#else
+        false,
+#endif
     };
 
     (void)this_val;
@@ -1214,6 +1219,127 @@ JSValue js_sys_runtime_status_filesystem(JSContext *ctx,
         return JS_EXCEPTION;
     }
     return JS_PopGCRef(ctx, &object_ref);
+}
+
+JSValue js_sys_runtime_status_watchdog(JSContext *ctx,
+                                       JSValue *this_val,
+                                       int argc,
+                                       JSValue *argv)
+{
+    esp32_mquickjs_host_status_t status;
+    JSGCRef object_ref;
+    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    uint64_t now_us = (uint64_t)esp_timer_get_time();
+    int64_t heartbeat_age_ms = 0;
+
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    if (!sys_get_host_status(&status)) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_ThrowInternalError(ctx, "runtime host status is unavailable");
+    }
+    if (status.last_outer_heartbeat_us > 0 &&
+        status.last_outer_heartbeat_us <= now_us) {
+        heartbeat_age_ms = (int64_t)(
+            (now_us - status.last_outer_heartbeat_us) / 1000ULL);
+    }
+    *object = JS_NewObject(ctx);
+    if (JS_IsException(*object) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "systemEnabled",
+                                         JS_NewBool(status.task_watchdog_enabled)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "systemRegistered",
+                                         JS_NewBool(status.task_watchdog_registered)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "jsEnabled",
+                                         JS_NewBool(status.js_watchdog_enabled)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "jsRegistered",
+                                         JS_NewBool(status.js_watchdog_registered)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "timeoutMs",
+                                         JS_NewUint32(ctx, status.watchdog_timeout_ms)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "lastOuterHeartbeatAgeMs",
+                                         JS_NewInt64(ctx, heartbeat_age_ms))) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_EXCEPTION;
+    }
+    return JS_PopGCRef(ctx, &object_ref);
+}
+
+JSValue js_sys_runtime_status_startup(JSContext *ctx,
+                                      JSValue *this_val,
+                                      int argc,
+                                      JSValue *argv)
+{
+    esp32_mquickjs_host_status_t status;
+    JSGCRef object_ref;
+    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    const char *phase;
+
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    if (!sys_get_host_status(&status)) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_ThrowInternalError(ctx, "runtime host status is unavailable");
+    }
+    phase = status.safe_mode_active ? "safe-mode" :
+            status.startup_pending && !status.startup_stabilizing ? "armed" :
+            status.startup_stabilizing ? "stabilizing" : "healthy";
+    *object = JS_NewObject(ctx);
+    if (JS_IsException(*object) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "phase",
+                                         JS_NewString(ctx, phase)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "safeModeActive",
+                                         JS_NewBool(status.safe_mode_active)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "safeModeRequested",
+                                         JS_NewBool(status.safe_mode_requested)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "failureCount",
+                                         JS_NewUint32(ctx, status.startup_failure_count)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "failureLimit",
+                                         JS_NewUint32(ctx, status.startup_failure_limit)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "healthyAfterMs",
+                                         JS_NewUint32(ctx, status.startup_healthy_ms)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "lastFailureReason",
+            status.last_startup_failure_reason[0] != '\0'
+                ? JS_NewString(ctx, status.last_startup_failure_reason)
+                : JS_NULL)) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_EXCEPTION;
+    }
+    return JS_PopGCRef(ctx, &object_ref);
+}
+
+JSValue js_sys_safe_mode_get(JSContext *ctx,
+                             JSValue *this_val,
+                             int argc,
+                             JSValue *argv)
+{
+    esp32_mquickjs_host_status_t status;
+
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    if (!sys_get_host_status(&status) || !status.safe_mode_available) {
+        return JS_ThrowInternalError(ctx, "sys.safeMode is unavailable");
+    }
+    return JS_NewBool(status.safe_mode_requested);
+}
+
+JSValue js_sys_safe_mode_set(JSContext *ctx,
+                             JSValue *this_val,
+                             int argc,
+                             JSValue *argv)
+{
+    esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
+
+    (void)this_val;
+    if (argc != 1 || !JS_IsBool(argv[0])) {
+        return JS_ThrowTypeError(ctx, "sys.safeMode expects a boolean");
+    }
+    if (!esp32_mquickjs_set_safe_mode(runtime, argv[0] == JS_TRUE)) {
+        return JS_ThrowInternalError(ctx, "failed to persist sys.safeMode");
+    }
+    return JS_UNDEFINED;
 }
 
 static bool sys_set_resource_object(JSContext *ctx,

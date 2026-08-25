@@ -4,6 +4,8 @@
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
 
+#include "utils/esp32_mquickjs_tls_error.h"
+
 #define ESP32_MQUICKJS_HTTP_ERROR_TEXT_LEN 160
 
 typedef struct {
@@ -65,6 +67,7 @@ bool esp32_mquickjs_http_operation_is_cancelled(esp32_mquickjs_http_operation_t 
 esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_mquickjs_http_request_t *request,
                                                                     esp32_mquickjs_http_operation_t *operation,
                                                                     esp_err_t *out_err,
+                                                                    esp32_mquickjs_tls_error_t *out_tls_error,
                                                                     char *error_text,
                                                                     size_t error_text_size);
 JSValue esp32_mquickjs_http_make_response_object(JSContext *ctx,

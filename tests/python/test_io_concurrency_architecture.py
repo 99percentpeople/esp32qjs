@@ -18,6 +18,8 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn('JS_PROP_CLASS_DEF("Future", &js_future_class)', stdlib)
         self.assertIn('JS_PROP_CLASS_DEF("EventQueue", &js_event_queue_class)', stdlib)
         self.assertIn('JS_CFUNC_DEF("call", 3, js_future_call)', stdlib)
+        self.assertIn('JS_CFUNC_DEF("map", 1, js_future_map)', stdlib)
+        self.assertIn('JS_CFUNC_DEF("flatMap", 1, js_future_flat_map)', stdlib)
         self.assertIn('JS_CFUNC_DEF("receive", 1, js_event_queue_receive)', stdlib)
         self.assertIn("src/core/esp32_mquickjs_future.c", cmake)
         self.assertIn("src/core/esp32_mquickjs_event_queue.c", cmake)
@@ -91,6 +93,7 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertNotIn("staticFileHandler", declarations)
         self.assertNotIn("JSGCRef callback", server)
         self.assertIn("esp32_mquickjs_event_queue_new", server)
+        self.assertIn("esp32_mquickjs_event_queue_register_receive_alias", server)
         self.assertIn("receive(timeoutMs?: number): Request | null", declarations)
 
     def test_http_server_initializes_network_runtime_before_listening(self):
@@ -120,6 +123,54 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("esp32_mquickjs_future_submit_worker", nvs)
         self.assertIn("esp32_mquickjs_future_register_driver", nvs)
         self.assertIn("s_nvs_worker_lock", nvs)
+
+    def test_filesystem_changes_use_the_generic_event_queue(self):
+        filesystem = (
+            MQUICKJS / "src/modules/fs/esp32_mquickjs_fs.c"
+        ).read_text(encoding="utf-8")
+        stream = (MQUICKJS / "src/core/esp32_mquickjs_stream.c").read_text(
+            encoding="utf-8"
+        )
+        rpc = (MQUICKJS / "src/core/esp32_mquickjs_rpc.c").read_text(
+            encoding="utf-8"
+        )
+        stream_header = (
+            MQUICKJS / "internal/esp32_mquickjs_stream.h"
+        ).read_text(encoding="utf-8")
+        stdlib = (MQUICKJS / "src/core/mqjs_stdlib_esp32.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('JS_CFUNC_DEF("watch", 0, js_fs_watch)', stdlib)
+        self.assertIn("esp32_mquickjs_event_queue_new", filesystem)
+        self.assertIn("ESP32_MQUICKJS_EVENT_QUEUE_DROP_OLDEST", filesystem)
+        self.assertIn("esp32_mquickjs_fs_notify_change", filesystem)
+        self.assertIn("esp32_mquickjs_fs_notify_change", stream)
+        self.assertIn("esp32_mquickjs_fs_notify_change", rpc)
+        for source in (filesystem, stream, rpc, stream_header):
+            self.assertNotIn("esp32_mquickjs_fs_revision", source)
+            self.assertNotIn("esp32_mquickjs_fs_mark_mutated", source)
+            self.assertNotIn("s_fs_revision", source)
+
+    def test_application_text_policy_is_not_implemented_by_the_framework(self):
+        stream_header = (
+            MQUICKJS / "internal/esp32_mquickjs_stream.h"
+        ).read_text(encoding="utf-8")
+        stream = (MQUICKJS / "src/core/esp32_mquickjs_stream.c").read_text(
+            encoding="utf-8"
+        )
+        filesystem = (
+            MQUICKJS / "src/modules/fs/esp32_mquickjs_fs.c"
+        ).read_text(encoding="utf-8")
+        rpc = (MQUICKJS / "src/core/esp32_mquickjs_rpc.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn("esp32_mquickjs_utf8_validate_prefix", stream_header)
+        self.assertNotIn("esp32_mquickjs_utf8_validate_prefix", stream)
+        self.assertNotIn("esp32_mquickjs_utf8_validate_prefix", filesystem)
+        self.assertIn("cbor_value_validate", rpc)
+        self.assertIn("CborValidateUtf8", rpc)
 
     def test_internal_sync_adapters_have_reserved_future_capacity(self):
         future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
@@ -168,6 +219,25 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             "ready work must not bypass a finite wait deadline",
         )
 
+    def test_future_drivers_make_progress_when_a_wake_token_is_lost(self):
+        future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
+            encoding="utf-8"
+        )
+        poll_start = future.index("bool esp32_mquickjs_future_poll(")
+        poll_end = future.index(
+            "\nbool esp32_mquickjs_future_cooperate(", poll_start
+        )
+        poll = future[poll_start:poll_end]
+
+        self.assertIn("static bool future_poll_active_drivers(", future)
+        self.assertIn("future_poll_ready(ctx, runtime, future_token(slot))", future)
+        self.assertIn("future_poll_active_drivers(ctx, runtime)", poll)
+        self.assertLess(
+            poll.index("future_poll_active_drivers(ctx, runtime)"),
+            poll.index("future_advance_combinators(ctx, runtime)"),
+            "completed or cancelled native drivers must be reaped at each safe point",
+        )
+
     def test_uart_write_backpressure_and_read_readiness_are_cooperative(self):
         uart = (
             MQUICKJS / "src/modules/uart/esp32_mquickjs_uart.c"
@@ -195,6 +265,42 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("slot->timeout_ms", uart)
         self.assertNotIn("UART_WRITE_STALL_TIMEOUT_MS", uart)
         self.assertNotIn("span_copy", uart)
+
+    def test_uart_usb_and_websocket_sends_have_native_future_drivers(self):
+        uart = (
+            MQUICKJS / "src/modules/uart/esp32_mquickjs_uart.c"
+        ).read_text(encoding="utf-8")
+        usb_serial = (
+            MQUICKJS / "src/modules/usb_serial/esp32_mquickjs_usb_serial.c"
+        ).read_text(encoding="utf-8")
+        websocket = (
+            MQUICKJS / "src/modules/websocket/esp32_mquickjs_websocket.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("s_uart_write_driver", uart)
+        self.assertIn("s_uart_write_chunks_driver", uart)
+        self.assertIn("s_uart_write_source_driver", uart)
+        self.assertGreaterEqual(
+            uart.count("esp32_mquickjs_future_register_driver("), 5
+        )
+        self.assertIn("s_usb_serial_send_driver", usb_serial)
+        self.assertIn("esp32_mquickjs_future_register_driver(", usb_serial)
+        self.assertIn("s_websocket_send_driver", websocket)
+        self.assertIn("esp32_mquickjs_future_register_driver(", websocket)
+
+    def test_gpio_pins_are_strict_numbers_and_docs_use_future_watch(self):
+        gpio = (
+            MQUICKJS / "src/modules/gpio/esp32_mquickjs_gpio.c"
+        ).read_text(encoding="utf-8")
+        docs = (ROOT / "docs/c-api.md").read_text(encoding="utf-8")
+
+        self.assertIn("JS_IsNumber(ctx, value)", gpio)
+        self.assertIn("gpio.watch(pin, mode = gpio.CHANGE)", docs)
+        self.assertIn(
+            "Future.call(interrupts.receive, interrupts, [])", docs
+        )
+        self.assertNotIn("gpio.attachInterrupt", docs)
+        self.assertNotIn("gpio.detachInterrupt", docs)
 
     def test_byte_span_sources_hold_an_explicit_iterator_read_lease(self):
         byte_source = (

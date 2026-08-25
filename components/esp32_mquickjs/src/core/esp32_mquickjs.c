@@ -357,8 +357,12 @@ void esp32_mquickjs_native_wait_begin(esp32_mquickjs_runtime_t *runtime,
     }
     wait->saved_deadline_us = runtime != NULL ? runtime->deadline_us : 0;
     wait->started_us = (uint64_t)esp_timer_get_time();
+    wait->active = runtime != NULL;
     if (runtime != NULL) {
         runtime->deadline_us = 0;
+        if (runtime->native_wait_depth < UINT16_MAX) {
+            runtime->native_wait_depth++;
+        }
     }
 }
 
@@ -367,8 +371,12 @@ void esp32_mquickjs_native_wait_end(esp32_mquickjs_runtime_t *runtime,
 {
     uint64_t elapsed_us;
 
-    if (runtime == NULL || wait == NULL) {
+    if (runtime == NULL || wait == NULL || !wait->active) {
         return;
+    }
+    wait->active = false;
+    if (runtime->native_wait_depth > 0) {
+        runtime->native_wait_depth--;
     }
     elapsed_us = (uint64_t)esp_timer_get_time() - wait->started_us;
     if (wait->saved_deadline_us == 0) {
@@ -690,6 +698,22 @@ void esp32_mquickjs_set_system_hooks(esp32_mquickjs_runtime_t *runtime,
     runtime->host_status = status;
     runtime->system_control = control;
     runtime->system_opaque = opaque;
+}
+
+void esp32_mquickjs_set_safe_mode_hook(
+    esp32_mquickjs_runtime_t *runtime,
+    esp32_mquickjs_safe_mode_control_fn control)
+{
+    if (runtime != NULL) {
+        runtime->safe_mode_control = control;
+    }
+}
+
+bool esp32_mquickjs_set_safe_mode(esp32_mquickjs_runtime_t *runtime,
+                                  bool enabled)
+{
+    return runtime != NULL && runtime->safe_mode_control != NULL &&
+           runtime->safe_mode_control(runtime->system_opaque, enabled);
 }
 
 bool esp32_mquickjs_get_host_status(esp32_mquickjs_runtime_t *runtime,
@@ -1064,6 +1088,7 @@ JSContext *esp32_mquickjs_create(void *mem_start,
     runtime->output_generation = 0;
     runtime->littlefs_mounted = false;
     runtime->scoped_deadline_us = 0;
+    runtime->native_wait_depth = 0;
     runtime->load_root_depth = 0;
     snprintf(runtime->fs_root,
              sizeof(runtime->fs_root),
@@ -1094,6 +1119,7 @@ JSContext *esp32_mquickjs_create(void *mem_start,
     runtime->async_state = NULL;
     runtime->future_state = NULL;
     runtime->event_queue_state = NULL;
+    runtime->fs_state = NULL;
     runtime->startup_bytecode = NULL;
     runtime->context_started_us = (uint64_t)esp_timer_get_time();
     esp32_mquickjs_ensure_boot_id(runtime);
@@ -1247,6 +1273,9 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
     if (ctx != NULL) {
         JS_FreeContext(ctx);
     }
+#if CONFIG_ESP32_MQUICKJS_FEATURE_FS
+    esp32_mquickjs_deinit_fs_runtime(runtime);
+#endif
     esp32_mquickjs_deinit_event_queue_runtime(runtime);
     heap_caps_free(runtime->startup_bytecode);
     runtime->startup_bytecode = NULL;
@@ -1259,6 +1288,7 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
 #endif
     runtime->deadline_us = 0;
     runtime->scoped_deadline_us = 0;
+    runtime->native_wait_depth = 0;
     runtime->littlefs_mounted = false;
     runtime->load_root_depth = 0;
     runtime->fs_root[0] = '\0';
@@ -1283,6 +1313,7 @@ bool esp32_mquickjs_destroy(JSContext *ctx,
     if (destroyed && runtime != NULL) {
         runtime->host_status = NULL;
         runtime->system_control = NULL;
+        runtime->safe_mode_control = NULL;
         runtime->system_opaque = NULL;
     }
     return destroyed;
@@ -1304,6 +1335,7 @@ void esp32_mquickjs_release_persistent_state(esp32_mquickjs_runtime_t *runtime)
 #endif
     runtime->host_status = NULL;
     runtime->system_control = NULL;
+    runtime->safe_mode_control = NULL;
     runtime->system_opaque = NULL;
 }
 

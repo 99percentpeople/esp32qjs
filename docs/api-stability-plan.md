@@ -176,7 +176,7 @@ In the long-term plan, `nvs`, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `uart`
 
 ### Global Helpers
 
-Status: `Adjust before freeze`
+Status: `Adjusted`
 
 The current inventory is:
 
@@ -295,7 +295,7 @@ Current shape is already close to the right long-term layer:
 - raw pin configuration
 - digital read/write
 - pull, drive strength, hold
-- interrupt delivery, currently registered through `attachInterrupt(...)`
+- interrupt delivery through `watch(pin, mode): EventQueue`
 
 Why it is in a good place:
 
@@ -306,8 +306,8 @@ Why it is in a good place:
 Freeze recommendations:
 
 - Keep `pinMode`, `setPull`, `digitalRead`, `digitalWrite`, `toggle`, `hold`, `reset`, `status`.
-- Replace `attachInterrupt(pin, callback, mode)` / `detachInterrupt(pin)` with
-  `watch(pin, mode): EventQueue` and queue `close()`.
+- Keep `watch(pin, mode): EventQueue` and queue `close()` as the sole interrupt
+  lifecycle.
 - Keep interrupt event objects `{ pin, level, mode }` as queue values.
 - Keep richer state inspection in `status(pin)`.
 - Gate the whole module behind `FEATURE_GPIO`, even if most boards will leave it enabled.

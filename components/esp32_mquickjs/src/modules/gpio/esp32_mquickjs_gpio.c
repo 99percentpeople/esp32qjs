@@ -56,9 +56,15 @@ static int js_value_to_bool(JSContext *ctx, JSValue value, bool *out_value)
 
 static int js_value_to_gpio_num(JSContext *ctx, JSValue value, gpio_num_t *out_pin)
 {
+    double number;
     int pin;
 
-    if (JS_ToInt32(ctx, &pin, value) != 0) {
+    if (!JS_IsNumber(ctx, value) || JS_ToNumber(ctx, &number, value) != 0 ||
+        number < 0 || number >= GPIO_NUM_MAX) {
+        return -1;
+    }
+    pin = (int)number;
+    if ((double)pin != number) {
         return -1;
     }
     if (pin < 0 || pin >= GPIO_NUM_MAX || !GPIO_IS_VALID_GPIO(pin)) {
@@ -71,9 +77,15 @@ static int js_value_to_gpio_num(JSContext *ctx, JSValue value, gpio_num_t *out_p
 
 static int js_value_to_gpio_index(JSContext *ctx, JSValue value, int *out_pin)
 {
+    double number;
     int pin = -1;
 
-    if (JS_ToInt32(ctx, &pin, value) != 0) {
+    if (!JS_IsNumber(ctx, value) || JS_ToNumber(ctx, &number, value) != 0 ||
+        number < 0 || number >= GPIO_NUM_MAX) {
+        return -1;
+    }
+    pin = (int)number;
+    if ((double)pin != number) {
         return -1;
     }
 

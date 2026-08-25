@@ -2469,6 +2469,20 @@ def write_if_changed(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def sdkconfig_bool(path: Path | None, symbol: str, default: bool = False) -> bool:
+    """Read one final boolean assignment from an sdkconfig defaults file."""
+    if path is None:
+        return default
+    enabled = default
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line == f"{symbol}=y":
+            enabled = True
+        elif line == f"{symbol}=n" or line == f"# {symbol} is not set":
+            enabled = False
+    return enabled
+
+
 def hardware_constant_values(path: Path | None, idf_target: str) -> dict[str, object]:
     """Load and validate immutable hardware-profile constants for local builds."""
     if path is None:
@@ -2491,6 +2505,8 @@ def generated_hardware_defaults(
     flash_size_mb: int,
     psram_mode: str,
     psram_size_bytes: int,
+    tls_enabled: bool,
+    http_client_enabled: bool,
 ) -> str:
     """Create the allowlisted sdkconfig overlay for detected hardware capabilities."""
     lines = [
@@ -2499,9 +2515,29 @@ def generated_hardware_defaults(
         f"CONFIG_ESPTOOLPY_FLASHSIZE_{flash_size_mb}MB=y",
         f'CONFIG_ESPTOOLPY_FLASHSIZE="{flash_size_mb}MB"',
         f'CONFIG_ESP32_MQUICKJS_PSRAM_MODE="{psram_mode}"',
+        "CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y",
+        "CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384",
+        "CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096",
+        "CONFIG_MBEDTLS_DYNAMIC_BUFFER=n",
+        "CONFIG_LWIP_SNTP_MAX_SERVERS=4",
+        f"CONFIG_ESP_TLS_USING_MBEDTLS={'y' if tls_enabled else 'n'}",
+        f"CONFIG_ESP_TLS_CUSTOM_STACK={'n' if tls_enabled else 'y'}",
+        f"CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT={'y' if tls_enabled else 'n'}",
+        f"CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS={'y' if tls_enabled and http_client_enabled else 'n'}",
+        f"CONFIG_MBEDTLS_CERTIFICATE_BUNDLE={'y' if tls_enabled else 'n'}",
+        f"CONFIG_MBEDTLS_HAVE_TIME_DATE={'y' if tls_enabled else 'n'}",
+        f"CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE={'y' if tls_enabled else 'n'}",
+        f"CONFIG_MBEDTLS_X509_TRUSTED_CERT_CALLBACK={'y' if tls_enabled else 'n'}",
+        f"CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY={'y' if tls_enabled else 'n'}",
     ]
+    if tls_enabled:
+        lines.append("CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y")
     if psram_mode == "none":
         heap_size = 200_704 if idf_target == "esp32c3" else 262_144
+        lines.extend((
+            "CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=y",
+            "CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=n",
+        ))
         if idf_target == "esp32s3":
             lines.append("CONFIG_SPIRAM=n")
         lines.extend((
@@ -2527,7 +2563,10 @@ def generated_hardware_defaults(
             "CONFIG_SPIRAM_USE_MALLOC=y",
             "CONFIG_SPIRAM_MEMTEST=y",
             "CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384",
-            "CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768",
+            "CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536",
+            "CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y",
+            "CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=n",
+            "CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y",
             f"CONFIG_ESP32QJS_JS_HEAP_SIZE={heap_size}",
             "CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP=y",
         ))
@@ -2612,6 +2651,12 @@ def build_project_config(
     if partition_table is None:
         partition_table = generated_profile_dir / "partitions.csv"
     constants = hardware_constant_values(hardware_constants, profile.idf_target)
+    tls_enabled = sdkconfig_bool(
+        app_defaults, "CONFIG_ESP32_MQUICKJS_FEATURE_TLS"
+    )
+    http_client_enabled = sdkconfig_bool(
+        app_defaults, "CONFIG_ESP32_MQUICKJS_FEATURE_HTTP"
+    )
     write_if_changed(profile_constants_file, render_c_include(constants))
     write_if_changed(
         hardware_defaults,
@@ -2620,6 +2665,8 @@ def build_project_config(
             flash_size_mb,
             psram_mode,
             psram_size_bytes,
+            tls_enabled,
+            http_client_enabled,
         ),
     )
     if partition_table.parent == generated_profile_dir:

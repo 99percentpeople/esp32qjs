@@ -1870,11 +1870,30 @@ fail:
 bool esp32_mquickjs_init_http_server_runtime(JSContext *ctx,
                                              esp32_mquickjs_runtime_t *runtime)
 {
+    JSGCRef object_ref;
+    JSGCRef receive_ref;
+    JSValue *object;
+    JSValue *receive;
+    bool registered;
+
     if (!http_server_init_state(runtime)) {
         JS_ThrowOutOfMemory(ctx);
         return false;
     }
-    return true;
+    object = JS_PushGCRef(ctx, &object_ref);
+    receive = JS_PushGCRef(ctx, &receive_ref);
+    *object = JS_NewObjectClassUser(ctx, JS_CLASS_HTTP_SERVER);
+    *receive = JS_IsException(*object)
+        ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *object, "receive");
+    registered = !JS_IsException(*receive) &&
+                 esp32_mquickjs_event_queue_register_receive_alias(
+                     ctx, runtime, *receive);
+    if (!registered && !JS_IsException(*object) && !JS_IsException(*receive)) {
+        JS_ThrowInternalError(ctx, "failed to register HttpServer.receive Future driver");
+    }
+    JS_PopGCRef(ctx, &receive_ref);
+    JS_PopGCRef(ctx, &object_ref);
+    return registered;
 }
 
 JSValue js_http_server_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

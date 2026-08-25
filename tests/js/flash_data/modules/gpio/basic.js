@@ -39,6 +39,15 @@ test("gpio/basic", function () {
   test.ok(typeof gpio.led === "function", "gpio.led should exist");
   test.ok(!gpio.isValid(-1), "negative pin should be invalid");
   test.ok(!gpio.isOutputCapable(-1), "negative pin should not be output capable");
+  test.ok(!gpio.isValid([0]), "array pins must not be coerced to GPIO 0");
+  test.ok(!gpio.isValid("0"), "string pins must not be coerced to GPIO 0");
+  var invalidWatchCaught = false;
+  try {
+    gpio.watch([0]);
+  } catch (invalidWatchError) {
+    invalidWatchCaught = String(invalidWatchError).indexOf("expects a valid GPIO") >= 0;
+  }
+  test.ok(invalidWatchCaught, "gpio.watch should reject array pins");
 
   if (pin < 0) {
     return { pin: pin, skippedHardwareCheck: true };

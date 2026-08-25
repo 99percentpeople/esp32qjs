@@ -1,6 +1,7 @@
 #include "esp32_mquickjs_rpc.h"
 
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_fs_events.h"
 #include "utils/esp32_mquickjs_byte_source.h"
 #include "esp32qjs_rpc_wire.h"
 
@@ -515,12 +516,17 @@ static bool rpc_encode_map(JSContext *ctx,
         size_t key_len;
 
         *key_value = JS_GetPropertyUint32(ctx, *keys_array, i);
-        key = JS_IsException(*key_value) ? NULL : JS_ToCString(ctx, *key_value, &key_buf);
-        if (key == NULL) {
+        key = JS_IsException(*key_value)
+                  ? NULL
+                  : JS_ToCStringLen(ctx, &key_len, *key_value, &key_buf);
+        if (key == NULL || memchr(key, '\0', key_len) != NULL) {
+            if (key != NULL && !JS_HasException(ctx)) {
+                JS_ThrowTypeError(ctx,
+                                  "rpc.encode() map keys must not contain NUL");
+            }
             JS_PopGCRef(ctx, &key_ref);
             goto done;
         }
-        key_len = strlen(key);
         keys[i].name = malloc(key_len + 1U);
         if (keys[i].name == NULL) {
             JS_PopGCRef(ctx, &key_ref);
@@ -661,7 +667,10 @@ static bool rpc_encode_value(JSContext *ctx,
         JSCStringBuf string_buf;
         size_t length = 0;
         const char *string = JS_ToCStringLen(ctx, &length, value, &string_buf);
-        return string != NULL && rpc_encode_unsigned(buffer, 3, length) &&
+        if (string == NULL) {
+            return false;
+        }
+        return rpc_encode_unsigned(buffer, 3, length) &&
                rpc_buffer_append(buffer, string, length);
     }
     if (JS_GetClassID(ctx, value) == JS_CLASS_BYTE_SPAN_SOURCE ||
@@ -707,34 +716,6 @@ static bool rpc_encode_value(JSContext *ctx,
     }
     JS_ThrowTypeError(ctx, "rpc.encode() payload contains an unsupported value");
     return false;
-}
-
-static bool rpc_valid_utf8(const uint8_t *data, size_t length)
-{
-    size_t i = 0;
-    while (i < length) {
-        uint8_t first = data[i++];
-        uint32_t point;
-        size_t continuation;
-        size_t j;
-        if (first < 0x80U) continue;
-        if (first >= 0xc2U && first <= 0xdfU) {
-            point = first & 0x1fU; continuation = 1;
-        } else if (first >= 0xe0U && first <= 0xefU) {
-            point = first & 0x0fU; continuation = 2;
-        } else if (first >= 0xf0U && first <= 0xf4U) {
-            point = first & 0x07U; continuation = 3;
-        } else return false;
-        if (continuation > length - i) return false;
-        for (j = 0; j < continuation; ++j) {
-            uint8_t next = data[i++];
-            if ((next & 0xc0U) != 0x80U) return false;
-            point = (point << 6U) | (next & 0x3fU);
-        }
-        if ((continuation == 2 && (point < 0x800U || (point >= 0xd800U && point <= 0xdfffU))) ||
-            (continuation == 3 && (point < 0x10000U || point > 0x10ffffU))) return false;
-    }
-    return true;
 }
 
 static bool rpc_decode_unsigned(const uint8_t *data,
@@ -865,7 +846,7 @@ static JSValue rpc_decode_map(JSContext *ctx,
             key = field;
         } else if (major == 3 && string_keys_allowed) {
             if (!rpc_decode_unsigned(data, length, offset, additional, &raw) ||
-                raw > length - *offset || !rpc_valid_utf8(data + *offset, (size_t)raw)) goto failed;
+                raw > length - *offset) goto failed;
             owned_key = malloc((size_t)raw + 1U);
             if (owned_key == NULL) {
                 JS_ThrowOutOfMemory(ctx);
@@ -945,7 +926,6 @@ static JSValue rpc_decode_value(JSContext *ctx,
         }
         if (major == 3) {
             JSValue result;
-            if (!rpc_valid_utf8(data + *offset, (size_t)value)) goto invalid;
             result = JS_NewStringLen(ctx, (const char *)data + *offset, (size_t)value);
             *offset += (size_t)value;
             return result;
@@ -994,10 +974,26 @@ static JSValue rpc_decode_payload(JSContext *ctx,
 {
     CborParser parser;
     CborValue root;
+    CborError validation_error;
+    uint32_t validation_flags = CborValidateUtf8;
     size_t offset = 0;
     bool stream_used = false;
     JSValue result;
     if (cbor_parser_init(data, length, 0, &parser, &root) != CborNoError) {
+        return JS_ThrowTypeError(ctx, "rpc.feed() received malformed CBOR");
+    }
+    if (logical_length == length) {
+        validation_flags |= (uint32_t)CborValidateCompleteData;
+    }
+    /* Text well-formedness is part of the CBOR wire type, not product policy. */
+    validation_error = cbor_value_validate(&root, validation_flags);
+    if ((logical_length == length && validation_error != CborNoError) ||
+        (logical_length != length &&
+         validation_error != CborErrorUnexpectedEOF)) {
+        if (validation_error == CborErrorInvalidUtf8TextString) {
+            return JS_ThrowTypeError(ctx,
+                                     "rpc.feed() received invalid CBOR text");
+        }
         return JS_ThrowTypeError(ctx, "rpc.feed() received malformed CBOR");
     }
     result = rpc_decode_value(ctx, codec, data, length, logical_length, &offset, 0,
@@ -1782,6 +1778,35 @@ JSValue js_rpc_encode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
         }
         return JS_EXCEPTION;
     }
+    {
+        CborParser parser;
+        CborValue root;
+        CborError validation_error;
+        uint32_t validation_flags = CborValidateUtf8;
+
+        if (!payload.has_stream || payload.stream_length == 0) {
+            validation_flags |= (uint32_t)CborValidateCompleteData;
+        }
+        if (cbor_parser_init(payload.data, payload.length, 0, &parser, &root) !=
+                CborNoError) {
+            free(payload_data);
+            return JS_ThrowInternalError(ctx,
+                                         "rpc.encode() produced invalid CBOR");
+        }
+        /* Delegate the CBOR text contract to the bundled codec. */
+        validation_error = cbor_value_validate(&root, validation_flags);
+        if ((!payload.has_stream || payload.stream_length == 0)
+                ? validation_error != CborNoError
+                : validation_error != CborErrorUnexpectedEOF) {
+            free(payload_data);
+            if (validation_error == CborErrorInvalidUtf8TextString) {
+                return JS_ThrowTypeError(
+                    ctx, "rpc.encode() text values must be valid CBOR text");
+            }
+            return JS_ThrowInternalError(ctx,
+                                         "rpc.encode() produced invalid CBOR");
+        }
+    }
     if (payload.has_stream) {
         if (payload.length > ESP32_MQUICKJS_RPC_STREAM_PREFIX_BYTES ||
             payload.length + payload.stream_length > UINT32_MAX) {
@@ -1790,14 +1815,6 @@ JSValue js_rpc_encode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
         }
         return rpc_make_encoded_stream(ctx, (uint16_t)opcode, request_id,
                                        (uint8_t)flags, &payload);
-    }
-    {
-        CborParser parser;
-        CborValue root;
-        if (cbor_parser_init(payload.data, payload.length, 0, &parser, &root) != CborNoError) {
-            free(payload_data);
-            return JS_ThrowInternalError(ctx, "rpc.encode() produced invalid CBOR");
-        }
     }
     frames = JS_PushGCRef(ctx, &frames_ref);
     *frames = JS_NewArray(ctx, 0);
@@ -1945,6 +1962,8 @@ JSValue js_rpc_adopt_file(JSContext *ctx, JSValue *this_val, int argc, JSValue *
     }
     source->adopted = true;
     source->remove_on_destroy = false;
+    esp32_mquickjs_fs_notify_change(
+        ESP32_MQUICKJS_FS_CHANGE_WRITE, path, NULL);
     return JS_NewBool(true);
 }
 

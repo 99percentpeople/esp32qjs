@@ -14,7 +14,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
 #include "esp_crt_bundle.h"
+#endif
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "freertos/FreeRTOS.h"
@@ -712,6 +714,7 @@ static esp32_mquickjs_http_response_t *http_alloc_response(void)
 esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_mquickjs_http_request_t *request,
                                                                     esp32_mquickjs_http_operation_t *operation,
                                                                     esp_err_t *out_err,
+                                                                    esp32_mquickjs_tls_error_t *out_tls_error,
                                                                     char *error_text,
                                                                     size_t error_text_size)
 {
@@ -723,17 +726,31 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
     size_t i;
     char resolved_url[384];
 
-    if (out_err == NULL || error_text == NULL || error_text_size == 0) {
+    if (out_err == NULL || out_tls_error == NULL || error_text == NULL ||
+        error_text_size == 0) {
         return NULL;
     }
 
     *out_err = ESP_OK;
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+    esp32_mquickjs_tls_error_reset(out_tls_error);
+#else
+    memset(out_tls_error, 0, sizeof(*out_tls_error));
+#endif
     error_text[0] = '\0';
     if (request == NULL || request->url == NULL || request->method == NULL) {
         *out_err = ESP_ERR_INVALID_ARG;
         snprintf(error_text, error_text_size, "invalid fetch request");
         return NULL;
     }
+#if !CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+    if (strncmp(request->url, "https://", 8) == 0) {
+        *out_err = ESP_ERR_NOT_SUPPORTED;
+        snprintf(error_text, error_text_size,
+                 "HTTPS requires the TLS firmware capability");
+        return NULL;
+    }
+#endif
     if (!http_method_from_string(request->method, &method)) {
         *out_err = ESP_ERR_INVALID_ARG;
         snprintf(error_text, error_text_size, "unsupported HTTP method: %s", request->method);
@@ -757,10 +774,18 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
     config.user_agent = ESP32_MQUICKJS_HTTP_USER_AGENT;
     config.buffer_size = 1024;
     config.buffer_size_tx = 1024;
-    config.crt_bundle_attach = esp_crt_bundle_attach;
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+    config.crt_bundle_attach = esp32_mquickjs_tls_crt_bundle_attach;
+#endif
     client = esp_http_client_init(&config);
     if (client == NULL) {
         *out_err = ESP_FAIL;
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+        if (strncmp(request->url, "https://", 8) == 0) {
+            esp32_mquickjs_tls_error_set(
+                out_tls_error, ESP_ERR_NO_MEM, ESP_OK, 0, 0);
+        }
+#endif
         snprintf(error_text, error_text_size, "esp_http_client_init() failed");
         esp32_mquickjs_http_free_response(response);
         return NULL;
@@ -821,6 +846,20 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
     }
 
     *out_err = esp_http_client_perform(client);
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+    if (strncmp(request->url, "https://", 8) == 0) {
+        int mbedtls_error = 0;
+        int verify_flags = 0;
+        esp_err_t esp_tls_error =
+            esp_http_client_get_and_clear_last_tls_error(
+                client, &mbedtls_error, &verify_flags);
+
+        esp32_mquickjs_tls_error_set(
+            out_tls_error, *out_err, esp_tls_error, mbedtls_error,
+            (uint32_t)verify_flags);
+        esp32_mquickjs_tls_error_merge_verify_flags(out_tls_error);
+    }
+#endif
     if (esp32_mquickjs_http_operation_is_cancelled(operation)) {
         *out_err = ESP_ERR_INVALID_STATE;
         snprintf(error_text, error_text_size, "fetch cancelled");
@@ -1317,6 +1356,12 @@ static int http_parse_request_object(JSContext *ctx,
     if (url == NULL) {
         goto fail;
     }
+#if !CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+    if (strncmp(url, "https://", 8) == 0) {
+        JS_ThrowTypeError(ctx, "HTTPS requires the TLS firmware capability");
+        goto fail;
+    }
+#endif
     request->url = esp32_mquickjs_http_strdup(url);
     request->timeout_ms = ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS;
     request->max_body_bytes = CONFIG_ESP32_MQUICKJS_HTTP_MAX_RESPONSE_BODY_BYTES;
@@ -1400,6 +1445,12 @@ int esp32_mquickjs_http_build_request_from_args(JSContext *ctx,
     if (url == NULL) {
         return -1;
     }
+#if !CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+    if (strncmp(url, "https://", 8) == 0) {
+        JS_ThrowTypeError(ctx, "HTTPS requires the TLS firmware capability");
+        return -1;
+    }
+#endif
 
     request->url = esp32_mquickjs_http_strdup(url);
     request->method = esp32_mquickjs_http_strdup("GET");

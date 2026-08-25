@@ -34,6 +34,16 @@ test("timers/runtime", function () {
   var waitTimeoutStarted;
   var waitTimeoutElapsed;
   var waitTimeoutError = "";
+  var mapped;
+  var nestedMap;
+  var flattened;
+  var flatMapTypeError = false;
+  var mappedRejection = false;
+  var continuationCalled = false;
+  var continuationInput;
+  var cancelledContinuation;
+  var nestedWaitMapCalls = 0;
+  var nestedWaitMapped;
 
   test.ok(typeof Future === "function", "Future factory should exist");
   test.ok(typeof EventQueue === "function", "EventQueue class should exist");
@@ -45,6 +55,54 @@ test("timers/runtime", function () {
   test.ok(invoked, "wait should pump queued work");
   queued = null;
   gc();
+
+  mapped = Future.call(function () { return 20; }).map(function (value) {
+    return value + 2;
+  });
+  test.equal(mapped.wait(1000), 22, "future.map should transform fulfilled values");
+  nestedMap = Future.call(function () { return 4; }).map(function (value) {
+    return Future.call(function (inner) { return inner + 1; }, null, [value]);
+  });
+  test.ok(typeof nestedMap.wait(1000).wait === "function",
+    "future.map should preserve a returned Future as an ordinary value");
+  flattened = Future.call(function () { return 40; }).flatMap(function (value) {
+    return Future.call(function (inner) { return inner + 2; }, null, [value]);
+  });
+  test.equal(flattened.wait(1000), 42, "future.flatMap should follow the returned Future");
+  try {
+    Future.call(function () { return 1; }).flatMap(function (value) {
+      return value + 1;
+    }).wait(1000);
+  } catch (flatMapError) {
+    flatMapTypeError = String(flatMapError).indexOf("must return a Future") >= 0;
+  }
+  test.ok(flatMapTypeError, "future.flatMap should reject non-Future callback results");
+  try {
+    Future.call(function () { throw "map-upstream-fail"; }).map(function () {
+      continuationCalled = true;
+      return 1;
+    }).wait(1000);
+  } catch (mappedError) {
+    mappedRejection = String(mappedError).indexOf("map-upstream-fail") >= 0;
+  }
+  test.ok(mappedRejection, "future.map should preserve upstream rejection");
+  test.ok(!continuationCalled,
+    "future.map should not invoke its callback after upstream rejection");
+  continuationInput = Future.sleep(20);
+  cancelledContinuation = continuationInput.map(function () { return 1; });
+  test.ok(cancelledContinuation.cancel(),
+    "a mapped Future should be independently cancellable");
+  test.equal(continuationInput.wait(1000), undefined,
+    "cancelling a mapped Future should not cancel its upstream input");
+  nestedWaitMapped = Future.call(function () { return 10; }).map(function (value) {
+    nestedWaitMapCalls++;
+    Future.sleep(20).wait(1000);
+    return value + 1;
+  });
+  test.equal(nestedWaitMapped.wait(1000), 11,
+    "future.map callback should complete across a nested Future wait");
+  test.equal(nestedWaitMapCalls, 1,
+    "future.map callback must not re-enter during nested Future polling");
 
   Future.call(function () {
     fireAndForgetRan = true;

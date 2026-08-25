@@ -5,6 +5,8 @@
 #include "esp32_mquickjs_fs.h"
 
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_event_queue.h"
+#include "esp32_mquickjs_fs_events.h"
 #include "esp32_mquickjs_future.h"
 #include "utils/esp32_mquickjs_fs_path.h"
 #include "esp32_mquickjs_stream.h"
@@ -27,6 +29,7 @@ static const char *TAG = "esp32qjs";
 
 #define ESP32_MQUICKJS_MAX_LITTLEFS_MOUNTS 4U
 #define ESP32_MQUICKJS_PARTITION_LABEL_MAX 17U
+#define ESP32_MQUICKJS_FS_CHANGE_QUEUE_LEN 8U
 
 typedef struct {
     bool active;
@@ -34,10 +37,157 @@ typedef struct {
     char base_path[ESP32_MQUICKJS_FS_ROOT_MAX];
 } esp32_mquickjs_littlefs_mount_t;
 
+typedef struct {
+    esp32_mquickjs_fs_change_kind_t kind;
+    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+    char to_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+} esp32_mquickjs_fs_change_event_t;
+
+typedef struct esp32_mquickjs_fs_change_source {
+    struct esp32_mquickjs_fs_runtime *owner;
+    esp32_mquickjs_event_queue_t *changes;
+    char root[ESP32_MQUICKJS_FS_ROOT_MAX];
+    struct esp32_mquickjs_fs_change_source *next;
+} esp32_mquickjs_fs_change_source_t;
+
+typedef struct esp32_mquickjs_fs_runtime {
+    SemaphoreHandle_t lock;
+    esp32_mquickjs_fs_change_source_t *sources;
+} esp32_mquickjs_fs_runtime_t;
+
 static bool s_littlefs_mounted;
 static SemaphoreHandle_t s_fs_worker_lock;
 static esp32_mquickjs_littlefs_mount_t
     s_littlefs_mounts[ESP32_MQUICKJS_MAX_LITTLEFS_MOUNTS];
+
+static esp32_mquickjs_fs_runtime_t *fs_runtime(
+    esp32_mquickjs_runtime_t *runtime)
+{
+    return runtime != NULL ? runtime->fs_state : NULL;
+}
+
+static const char *fs_change_kind_name(esp32_mquickjs_fs_change_kind_t kind)
+{
+    switch (kind) {
+    case ESP32_MQUICKJS_FS_CHANGE_WRITE:
+        return "write";
+    case ESP32_MQUICKJS_FS_CHANGE_REMOVE:
+        return "remove";
+    case ESP32_MQUICKJS_FS_CHANGE_RENAME:
+        return "rename";
+    case ESP32_MQUICKJS_FS_CHANGE_MKDIR:
+        return "mkdir";
+    default:
+        return "change";
+    }
+}
+
+static bool fs_change_relative_path(const char *root,
+                                    const char *path,
+                                    char *relative,
+                                    size_t relative_size)
+{
+    size_t root_length;
+    const char *suffix;
+
+    if (root == NULL || path == NULL || relative == NULL || relative_size < 2U) {
+        return false;
+    }
+    root_length = strlen(root);
+    if (root_length == 0U || strncmp(path, root, root_length) != 0 ||
+        (path[root_length] != '\0' && path[root_length] != '/')) {
+        return false;
+    }
+    suffix = path + root_length;
+    while (*suffix == '/') {
+        suffix++;
+    }
+    if (*suffix == '\0') {
+        suffix = ".";
+    }
+    if (strlen(suffix) >= relative_size) {
+        return false;
+    }
+    snprintf(relative, relative_size, "%s", suffix);
+    return true;
+}
+
+static JSValue fs_change_to_js(JSContext *ctx,
+                               const void *event_value,
+                               void *opaque)
+{
+    const esp32_mquickjs_fs_change_event_t *event = event_value;
+    JSGCRef result_ref;
+    JSValue *result;
+
+    (void)opaque;
+    if (event == NULL) {
+        return JS_NULL;
+    }
+    result = JS_PushGCRef(ctx, &result_ref);
+    *result = JS_NewObject(ctx);
+    if (JS_IsException(*result) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "type", JS_NewString(ctx, fs_change_kind_name(event->kind))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "path", JS_NewString(ctx, event->path)) ||
+        (event->kind == ESP32_MQUICKJS_FS_CHANGE_RENAME &&
+         !esp32_mquickjs_set_property_ref(
+             ctx, result, "toPath", JS_NewString(ctx, event->to_path)))) {
+        JS_PopGCRef(ctx, &result_ref);
+        return JS_EXCEPTION;
+    }
+    return JS_PopGCRef(ctx, &result_ref);
+}
+
+static void fs_change_queue_closed(void *opaque)
+{
+    esp32_mquickjs_fs_change_source_t *source = opaque;
+    esp32_mquickjs_fs_runtime_t *state;
+    esp32_mquickjs_fs_change_source_t **cursor;
+
+    if (source == NULL || (state = source->owner) == NULL || state->lock == NULL) {
+        return;
+    }
+    xSemaphoreTake(state->lock, portMAX_DELAY);
+    cursor = &state->sources;
+    while (*cursor != NULL) {
+        if (*cursor == source) {
+            *cursor = source->next;
+            break;
+        }
+        cursor = &(*cursor)->next;
+    }
+    xSemaphoreGive(state->lock);
+    heap_caps_free(source);
+}
+
+void esp32_mquickjs_fs_notify_change(esp32_mquickjs_fs_change_kind_t kind,
+                                     const char *path,
+                                     const char *to_path)
+{
+    esp32_mquickjs_fs_runtime_t *state = fs_runtime(
+        esp32_mquickjs_get_active_runtime());
+    esp32_mquickjs_fs_change_source_t *source;
+    esp32_mquickjs_fs_change_event_t event;
+
+    if (state == NULL || state->lock == NULL || path == NULL) {
+        return;
+    }
+    xSemaphoreTake(state->lock, portMAX_DELAY);
+    for (source = state->sources; source != NULL; source = source->next) {
+        memset(&event, 0, sizeof(event));
+        event.kind = kind;
+        if (fs_change_relative_path(source->root, path,
+                                    event.path, sizeof(event.path)) &&
+            (kind != ESP32_MQUICKJS_FS_CHANGE_RENAME ||
+             fs_change_relative_path(source->root, to_path,
+                                     event.to_path, sizeof(event.to_path)))) {
+            (void)esp32_mquickjs_event_queue_send(source->changes, &event);
+        }
+    }
+    xSemaphoreGive(state->lock);
+}
 
 static esp32_mquickjs_littlefs_mount_t *find_littlefs_mount_by_root(
     const char *base_path)
@@ -547,6 +697,61 @@ JSValue js_fs_info(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     return JS_PopGCRef(ctx, &result_ref);
 }
 
+JSValue js_fs_watch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
+    esp32_mquickjs_fs_runtime_t *state = fs_runtime(runtime);
+    const char *root = active_fs_base_path();
+    JSGCRef queue_ref;
+    JSValue *queue_object;
+    esp32_mquickjs_event_queue_t *changes;
+    esp32_mquickjs_fs_change_source_t *source;
+
+    (void)this_val;
+    (void)argv;
+    if (argc != 0) {
+        return JS_ThrowTypeError(ctx, "fs.watch() expects no arguments");
+    }
+    if (state == NULL || state->lock == NULL) {
+        return JS_ThrowInternalError(ctx, "fs.watch() requires an active filesystem runtime");
+    }
+    source = heap_caps_calloc(1, sizeof(*source), MALLOC_CAP_8BIT);
+    if (source == NULL) {
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    source->owner = state;
+    snprintf(source->root, sizeof(source->root), "%s", root);
+
+    queue_object = JS_PushGCRef(ctx, &queue_ref);
+    *queue_object = esp32_mquickjs_event_queue_new(
+        ctx,
+        runtime,
+        sizeof(esp32_mquickjs_fs_change_event_t),
+        ESP32_MQUICKJS_FS_CHANGE_QUEUE_LEN,
+        ESP32_MQUICKJS_EVENT_QUEUE_DROP_OLDEST,
+        fs_change_to_js,
+        NULL,
+        fs_change_queue_closed,
+        source);
+    if (JS_IsException(*queue_object)) {
+        heap_caps_free(source);
+        JS_PopGCRef(ctx, &queue_ref);
+        return JS_EXCEPTION;
+    }
+    changes = esp32_mquickjs_event_queue_from_value(ctx, *queue_object);
+    if (changes == NULL) {
+        JS_PopGCRef(ctx, &queue_ref);
+        return JS_ThrowInternalError(ctx, "fs.watch() could not create its change queue");
+    }
+
+    xSemaphoreTake(state->lock, portMAX_DELAY);
+    source->changes = changes;
+    source->next = state->sources;
+    state->sources = source;
+    xSemaphoreGive(state->lock);
+    return JS_PopGCRef(ctx, &queue_ref);
+}
+
 JSValue js_framework_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
@@ -828,6 +1033,8 @@ static void fs_future_worker(void *opaque)
         }
     } else if (state->kind == FS_FUTURE_WRITE_TEXT ||
                state->kind == FS_FUTURE_APPEND_TEXT) {
+        bool path_existed = access(state->path, F_OK) == 0;
+        bool opened_mutation;
         FILE *file = fopen(state->path,
                            state->kind == FS_FUTURE_APPEND_TEXT ? "ab" : "wb");
 
@@ -835,9 +1042,16 @@ static void fs_future_worker(void *opaque)
             state->error_number = errno;
         } else {
             size_t written = fwrite(state->data, 1, state->data_length, file);
+            int close_result = fclose(file);
+            int write_error = errno;
 
-            if (fclose(file) != 0 || written != state->data_length) {
-                state->error_number = errno != 0 ? errno : EIO;
+            opened_mutation = state->kind == FS_FUTURE_WRITE_TEXT || !path_existed;
+            if (opened_mutation || written > 0U) {
+                esp32_mquickjs_fs_notify_change(
+                    ESP32_MQUICKJS_FS_CHANGE_WRITE, state->path, NULL);
+            }
+            if (close_result != 0 || written != state->data_length) {
+                state->error_number = write_error != 0 ? write_error : EIO;
             }
         }
     } else if (state->kind == FS_FUTURE_REMOVE) {
@@ -858,6 +1072,16 @@ static void fs_future_worker(void *opaque)
         state->error_number = errno;
     } else {
         state->result = true;
+    }
+    if (state->error_number == 0 && state->kind == FS_FUTURE_REMOVE) {
+        esp32_mquickjs_fs_notify_change(
+            ESP32_MQUICKJS_FS_CHANGE_REMOVE, state->path, NULL);
+    } else if (state->error_number == 0 && state->kind == FS_FUTURE_RENAME) {
+        esp32_mquickjs_fs_notify_change(
+            ESP32_MQUICKJS_FS_CHANGE_RENAME, state->path, state->to_path);
+    } else if (state->error_number == 0 && state->kind == FS_FUTURE_MKDIR) {
+        esp32_mquickjs_fs_notify_change(
+            ESP32_MQUICKJS_FS_CHANGE_MKDIR, state->path, NULL);
     }
     xSemaphoreGive(s_fs_worker_lock);
     state->completed = true;
@@ -1000,9 +1224,25 @@ bool esp32_mquickjs_init_fs_runtime(JSContext *ctx,
     size_t index;
     bool result = true;
 
+    if (runtime == NULL || runtime->fs_state != NULL) {
+        return false;
+    }
+    runtime->fs_state = heap_caps_calloc(
+        1, sizeof(esp32_mquickjs_fs_runtime_t), MALLOC_CAP_8BIT);
+    if (runtime->fs_state == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        return false;
+    }
+    fs_runtime(runtime)->lock = xSemaphoreCreateMutex();
+    if (fs_runtime(runtime)->lock == NULL) {
+        esp32_mquickjs_deinit_fs_runtime(runtime);
+        JS_ThrowOutOfMemory(ctx);
+        return false;
+    }
     if (s_fs_worker_lock == NULL) {
         s_fs_worker_lock = xSemaphoreCreateMutex();
         if (s_fs_worker_lock == NULL) {
+            esp32_mquickjs_deinit_fs_runtime(runtime);
             JS_ThrowOutOfMemory(ctx);
             return false;
         }
@@ -1028,7 +1268,24 @@ bool esp32_mquickjs_init_fs_runtime(JSContext *ctx,
     }
     JS_PopGCRef(ctx, &fs_ref);
     JS_PopGCRef(ctx, &global_ref);
+    if (!result) {
+        esp32_mquickjs_deinit_fs_runtime(runtime);
+    }
     return result;
+}
+
+void esp32_mquickjs_deinit_fs_runtime(esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_fs_runtime_t *state = fs_runtime(runtime);
+
+    if (state == NULL) {
+        return;
+    }
+    if (state->lock != NULL) {
+        vSemaphoreDelete(state->lock);
+    }
+    heap_caps_free(state);
+    runtime->fs_state = NULL;
 }
 
 static JSValue fs_future_call_and_wait(JSContext *ctx,

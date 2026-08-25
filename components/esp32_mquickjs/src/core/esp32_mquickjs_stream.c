@@ -1,8 +1,10 @@
 #include "esp32_mquickjs_stream.h"
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_fs_events.h"
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "esp_heap_caps.h"
 #include "utils/esp32_mquickjs_byte_source.h"
@@ -538,6 +540,7 @@ JSValue esp32_mquickjs_stream_open_file(JSContext *ctx,
                                         const char *mode)
 {
     esp32_mquickjs_stream_slot_t *slot;
+    bool path_existed;
     JSValue result;
 
     slot = stream_alloc_slot();
@@ -552,10 +555,15 @@ JSValue esp32_mquickjs_stream_open_file(JSContext *ctx,
     slot->kind = ESP32_MQUICKJS_STREAM_KIND_FILE;
     slot->binary = strchr(mode, 'b') != NULL;
     slot->seekable = true;
+    path_existed = access(path, F_OK) == 0;
     slot->handle.file = fopen(path, mode);
     if (slot->handle.file == NULL) {
         slot->allocated = false;
         return JS_ThrowInternalError(ctx, "open() failed for %s", path);
+    }
+    if (mode[0] == 'w' || (mode[0] == 'a' && !path_existed)) {
+        esp32_mquickjs_fs_notify_change(
+            ESP32_MQUICKJS_FS_CHANGE_WRITE, path, NULL);
     }
     slot->path = heap_caps_malloc(strlen(path) + 1, MALLOC_CAP_8BIT);
     if (slot->path == NULL) {
@@ -1153,6 +1161,8 @@ JSValue js_stream_write(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
                     return JS_ThrowInternalError(ctx, "stream.write() failed for %s",
                                                  slot->path != NULL ? slot->path : "<stream>");
                 }
+                esp32_mquickjs_fs_notify_change(
+                    ESP32_MQUICKJS_FS_CHANGE_WRITE, slot->path, NULL);
                 total += written;
             }
             esp32_mquickjs_byte_span_source_close(ctx, &source);
@@ -1173,6 +1183,10 @@ JSValue js_stream_write(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
                 return JS_ThrowInternalError(ctx, "stream.write() failed for %s",
                                              slot->path != NULL ? slot->path : "<stream>");
             }
+            if (written > 0) {
+                esp32_mquickjs_fs_notify_change(
+                    ESP32_MQUICKJS_FS_CHANGE_WRITE, slot->path, NULL);
+            }
             return JS_NewInt64(ctx, (int64_t)written);
         }
     }
@@ -1187,6 +1201,10 @@ JSValue js_stream_write(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
     if (written != text_len) {
         return JS_ThrowInternalError(ctx, "stream.write() failed for %s",
                                      slot->path != NULL ? slot->path : "<stream>");
+    }
+    if (written > 0) {
+        esp32_mquickjs_fs_notify_change(
+            ESP32_MQUICKJS_FS_CHANGE_WRITE, slot->path, NULL);
     }
     return JS_NewInt64(ctx, (int64_t)written);
 }

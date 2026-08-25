@@ -118,14 +118,28 @@ config ESP32_MQUICKJS_FEATURE_WIFI
         Enable Wi-Fi station bindings such as wifi.status(), wifi.scan(), and
         wifi.connect().
 
+config ESP32_MQUICKJS_FEATURE_TLS
+    bool "Enable public-CA TLS transport capability"
+    default n
+    select MBEDTLS_CERTIFICATE_BUNDLE
+    select MBEDTLS_HAVE_TIME_DATE
+    select MBEDTLS_X509_TRUSTED_CERT_CALLBACK
+    select MBEDTLS_SSL_KEEP_PEER_CERTIFICATE
+    select ESP_HTTP_CLIENT_ENABLE_HTTPS if ESP32_MQUICKJS_FEATURE_HTTP
+    help
+        Enable the shared TLS capability used by HTTPS and secure TCP sockets.
+        Public CA, hostname, and certificate-date verification remain
+        mandatory. When disabled, HTTP and socket modules remain available for
+        plaintext transports without linking the CA bundle or TLS paths.
+
 config ESP32_MQUICKJS_FEATURE_SOCKET
     bool "Enable socket module"
     default n
     help
         Enable generic handle-based socket APIs for TCP streams/listeners and
-        UDP datagrams. Outbound TCP handles may use TLS with system certificate
-        bundle verification. Framing, reconnect policy, authentication, and
-        all application protocols remain application responsibilities.
+        UDP datagrams. Outbound TCP handles may use TLS only when the separate
+        TLS capability is enabled. Framing, reconnect policy, authentication,
+        and all application protocols remain application responsibilities.
 
 config ESP32_MQUICKJS_FEATURE_RPC
     bool "Enable generic native binary RPC codec"
@@ -164,11 +178,13 @@ config ESP32_MQUICKJS_FEATURE_USB_SERIAL
 config ESP32_MQUICKJS_FEATURE_WEBSOCKET
     bool "Enable WebSocket client module"
     default n
-    depends on ESP32_MQUICKJS_FEATURE_WIFI
+    depends on ESP32_MQUICKJS_FEATURE_WIFI && ESP32_MQUICKJS_FEATURE_TLS
     help
         Enable the outbound websocketClient callback/send API. Applications
         connect only after Wi-Fi is ready and remain responsible for pairing
-        and authorization policy.
+        and authorization policy. The current ESP-IDF WebSocket component
+        contains WS and WSS in one transport library, so selecting this module
+        also requires the TLS capability.
 
 config ESP32_MQUICKJS_FEATURE_BITMAP
     bool "Enable bitmap module"

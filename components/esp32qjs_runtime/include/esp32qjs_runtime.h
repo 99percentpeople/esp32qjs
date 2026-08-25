@@ -30,6 +30,10 @@ typedef struct {
     bool autorun_startup_script;
     bool enable_repl;
     bool task_watchdog;
+    bool js_watchdog;
+    bool startup_guard;
+    uint32_t startup_failure_limit;
+    uint32_t startup_healthy_ms;
     const char *startup_script;
     const char *task_name;
     const char *secondary_littlefs_partition_label;

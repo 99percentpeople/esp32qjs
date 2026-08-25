@@ -938,6 +938,7 @@ void esp32_mquickjs_deinit_wifi_runtime(JSContext *ctx)
         return;
     }
 
+    esp32_mquickjs_deinit_wifi_time_sync();
     wifi_stop_connect_timeout_timer();
     if (s_wifi_state.scan_in_progress) {
         esp_wifi_scan_stop();
@@ -1039,6 +1040,40 @@ JSValue js_wifi_connect(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
                                                      argv);
     }
     JS_PopGCRef(ctx, &connect_ref);
+    JS_PopGCRef(ctx, &wifi_ref);
+    JS_PopGCRef(ctx, &global_ref);
+    return result;
+}
+
+JSValue js_wifi_sync_time(JSContext *ctx, JSValue *this_val, int argc,
+                          JSValue *argv)
+{
+    JSGCRef global_ref;
+    JSGCRef wifi_ref;
+    JSGCRef sync_ref;
+    JSValue *global;
+    JSValue *wifi;
+    JSValue *sync;
+    JSValue result;
+
+    (void)this_val;
+    global = JS_PushGCRef(ctx, &global_ref);
+    wifi = JS_PushGCRef(ctx, &wifi_ref);
+    sync = JS_PushGCRef(ctx, &sync_ref);
+    *global = JS_GetGlobalObject(ctx);
+    *wifi = JS_GetPropertyStr(ctx, *global, "wifi");
+    *sync = JS_IsException(*wifi)
+                ? JS_EXCEPTION
+                : JS_GetPropertyStr(ctx, *wifi, "syncTime");
+    if (JS_IsException(*global) || JS_IsException(*wifi) ||
+        JS_IsException(*sync)) {
+        result = JS_EXCEPTION;
+    } else {
+        result = esp32_mquickjs_future_call_and_wait(
+            ctx, esp32_mquickjs_get_active_runtime(), *sync, *wifi, argc,
+            argv);
+    }
+    JS_PopGCRef(ctx, &sync_ref);
     JS_PopGCRef(ctx, &wifi_ref);
     JS_PopGCRef(ctx, &global_ref);
     return result;

@@ -1297,6 +1297,9 @@ JSValue js_uart_port_write_source(JSContext *ctx, JSValue *this_val, int argc, J
 typedef enum {
     UART_FUTURE_READ,
     UART_FUTURE_FLUSH,
+    UART_FUTURE_WRITE,
+    UART_FUTURE_WRITE_CHUNKS,
+    UART_FUTURE_WRITE_SOURCE,
 } uart_future_kind_t;
 
 struct esp32_mquickjs_future_driver_state {
@@ -1311,8 +1314,28 @@ struct esp32_mquickjs_future_driver_state {
     uint32_t timeout_ms;
     uint32_t length;
     uint8_t *data;
+    const uint8_t *write_data;
+    uint8_t *write_owned;
+    size_t write_length;
     int read_length;
     esp_err_t err;
+    esp32_mquickjs_uart_write_result_t write_result;
+    esp32_mquickjs_uart_write_scope_t write_scope;
+    uint64_t write_started_us;
+    size_t write_offset;
+    uint32_t write_chunks;
+    uint32_t chunk_count;
+    uint32_t chunk_index;
+    esp32_mquickjs_byte_source_chunk_t chunk;
+    esp32_mquickjs_byte_span_source_t span_source;
+    esp32_mquickjs_byte_span_t span;
+    JSGCRef value_ref;
+    bool value_retained;
+    bool byte_view_leased;
+    bool chunk_active;
+    bool chunk_byte_view_leased;
+    bool span_source_opened;
+    bool source_failed;
     bool owner_retained;
     bool started;
     bool completed;
@@ -1364,9 +1387,146 @@ static void uart_future_release(esp32_mquickjs_future_driver_state_t *state)
     if (state->owner_retained) {
         JS_DeleteGCRef(state->ctx, &state->owner_ref);
     }
+    if (state->span_source_opened) {
+        esp32_mquickjs_byte_span_source_close(state->ctx,
+                                               &state->span_source);
+    }
+    if (state->chunk_byte_view_leased && state->chunk.rooted) {
+        esp32_mquickjs_byte_view_release_read(state->ctx,
+                                              state->chunk.value_ref.val);
+    }
+    if (state->chunk_active || state->chunk.rooted ||
+        state->chunk.owned != NULL) {
+        esp32_mquickjs_release_byte_source_chunk(state->ctx, &state->chunk);
+    }
+    if (state->byte_view_leased && state->value_retained) {
+        esp32_mquickjs_byte_view_release_read(state->ctx,
+                                              state->value_ref.val);
+    }
+    if (state->value_retained) {
+        JS_DeleteGCRef(state->ctx, &state->value_ref);
+    }
     heap_caps_free(state->data);
+    heap_caps_free(state->write_owned);
     heap_caps_free(state);
 }
+
+static const char *uart_future_write_api(uart_future_kind_t kind)
+{
+    switch (kind) {
+    case UART_FUTURE_WRITE:
+        return "UARTPort.write()";
+    case UART_FUTURE_WRITE_CHUNKS:
+        return "UARTPort.writeChunks()";
+    case UART_FUTURE_WRITE_SOURCE:
+        return "UARTPort.writeSource()";
+    default:
+        return "UART operation";
+    }
+}
+
+static bool uart_write_future_prepare_common(
+    JSContext *ctx,
+    JSGCRef *this_ref,
+    int argc,
+    JSGCRef *argv,
+    uart_future_kind_t kind,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+    esp32_mquickjs_uart_slot_t *slot;
+    JSValue error = JS_UNDEFINED;
+
+    if (out_state == NULL || argc != 1) {
+        JS_ThrowTypeError(ctx, "%s expects one data argument",
+                          uart_future_write_api(kind));
+        return false;
+    }
+    state = uart_future_allocate(ctx, this_ref->val, kind);
+    if (state == NULL) {
+        return false;
+    }
+    slot = uart_get_slot(&state->port_ref);
+    if (slot == NULL || slot->write_busy) {
+        uart_future_release(state);
+        JS_ThrowInternalError(
+            ctx, "%s failed because another write is active",
+            uart_future_write_api(kind));
+        return false;
+    }
+    state->write_result = UART_WRITE_OK;
+    esp32_mquickjs_byte_span_clear(&state->span);
+
+    if (kind == UART_FUTURE_WRITE) {
+        esp32_mquickjs_byte_source_t source;
+
+        if (JS_GetClassID(ctx, argv[0].val) == JS_CLASS_BYTE_VIEW) {
+            JSValue *value = JS_AddGCRef(ctx, &state->value_ref);
+
+            *value = argv[0].val;
+            state->value_retained = true;
+            if (!esp32_mquickjs_byte_view_acquire_read(
+                    ctx, state->value_ref.val, "UARTPort.write(data)",
+                    &state->write_data, &state->write_length)) {
+                uart_future_release(state);
+                return false;
+            }
+            state->byte_view_leased = true;
+        } else if (!esp32_mquickjs_get_byte_source(
+                       ctx, argv[0].val, "UARTPort.write(data)",
+                       &source, &state->write_owned, &error)) {
+            uart_future_release(state);
+            return false;
+        } else {
+            state->write_data = source.data;
+            state->write_length = source.length;
+        }
+        if (state->write_length > INT_MAX) {
+            uart_future_release(state);
+            JS_ThrowRangeError(
+                ctx,
+                "UARTPort.write() byte length exceeds supported UART write size");
+            return false;
+        }
+    } else if (kind == UART_FUTURE_WRITE_CHUNKS) {
+        JSValue *value = JS_AddGCRef(ctx, &state->value_ref);
+
+        *value = argv[0].val;
+        state->value_retained = true;
+        if (!esp32_mquickjs_get_byte_source_array_length(
+                ctx, state->value_ref.val,
+                "UARTPort.writeChunks(chunks)", &state->chunk_count,
+                &error)) {
+            uart_future_release(state);
+            return false;
+        }
+    } else {
+        if (!esp32_mquickjs_open_byte_span_source(
+                ctx, argv[0].val, "UARTPort.writeSource(source)",
+                &state->span_source, &error)) {
+            uart_future_release(state);
+            return false;
+        }
+        state->span_source_opened = true;
+    }
+    *out_state = state;
+    return true;
+}
+
+#define UART_WRITE_FUTURE_PREPARE(name, kind_value)                         \
+    static bool name(                                                       \
+        JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv,         \
+        esp32_mquickjs_future_driver_state_t **out_state)                   \
+    {                                                                       \
+        return uart_write_future_prepare_common(                            \
+            ctx, this_ref, argc, argv, kind_value, out_state);              \
+    }
+
+UART_WRITE_FUTURE_PREPARE(uart_write_future_prepare, UART_FUTURE_WRITE)
+UART_WRITE_FUTURE_PREPARE(uart_write_chunks_future_prepare,
+                          UART_FUTURE_WRITE_CHUNKS)
+UART_WRITE_FUTURE_PREPARE(uart_write_source_future_prepare,
+                          UART_FUTURE_WRITE_SOURCE)
 
 static bool uart_read_future_prepare(
     JSContext *ctx,
@@ -1434,6 +1594,217 @@ static bool uart_flush_future_prepare(
     return true;
 }
 
+static bool uart_future_is_write(
+    const esp32_mquickjs_future_driver_state_t *state)
+{
+    return state != NULL &&
+           (state->kind == UART_FUTURE_WRITE ||
+            state->kind == UART_FUTURE_WRITE_CHUNKS ||
+            state->kind == UART_FUTURE_WRITE_SOURCE);
+}
+
+static void uart_future_release_chunk(
+    esp32_mquickjs_future_driver_state_t *state,
+    bool completed)
+{
+    if (state == NULL || !state->chunk_active) {
+        return;
+    }
+    if (state->chunk_byte_view_leased && state->chunk.rooted) {
+        esp32_mquickjs_byte_view_release_read(state->ctx,
+                                              state->chunk.value_ref.val);
+    }
+    state->chunk_byte_view_leased = false;
+    esp32_mquickjs_release_byte_source_chunk(state->ctx, &state->chunk);
+    state->chunk_active = false;
+    state->write_offset = 0;
+    if (completed) {
+        state->write_chunks++;
+    }
+}
+
+static bool uart_future_next_write_data(
+    esp32_mquickjs_future_driver_state_t *state,
+    const uint8_t **out_data,
+    size_t *out_length)
+{
+    JSValue error = JS_UNDEFINED;
+
+    if (state == NULL || out_data == NULL || out_length == NULL) {
+        return false;
+    }
+    if (state->kind == UART_FUTURE_WRITE) {
+        if (state->write_offset >= state->write_length) {
+            state->completed = true;
+            return false;
+        }
+        *out_data = state->write_data;
+        *out_length = state->write_length;
+        return true;
+    }
+    if (state->kind == UART_FUTURE_WRITE_CHUNKS) {
+        for (;;) {
+            if (state->chunk_active &&
+                state->write_offset < state->chunk.source.length) {
+                *out_data = state->chunk.source.data;
+                *out_length = state->chunk.source.length;
+                return true;
+            }
+            uart_future_release_chunk(state, state->chunk_active);
+            if (state->chunk_index >= state->chunk_count) {
+                state->completed = true;
+                return false;
+            }
+            if (!esp32_mquickjs_get_byte_source_chunk(
+                    state->ctx, state->value_ref.val, state->chunk_index++,
+                    "UARTPort.writeChunks(chunks)", &state->chunk,
+                    &error)) {
+                state->source_failed = true;
+                state->completed = true;
+                return false;
+            }
+            state->chunk_active = true;
+            if (JS_GetClassID(state->ctx, state->chunk.value_ref.val) ==
+                JS_CLASS_BYTE_VIEW) {
+                if (!esp32_mquickjs_byte_view_acquire_read(
+                        state->ctx, state->chunk.value_ref.val,
+                        "UARTPort.writeChunks(chunks)",
+                        &state->chunk.source.data,
+                        &state->chunk.source.length)) {
+                    state->source_failed = true;
+                    state->completed = true;
+                    return false;
+                }
+                state->chunk_byte_view_leased = true;
+            }
+            if (state->chunk.source.length > INT_MAX) {
+                JS_ThrowRangeError(
+                    state->ctx,
+                    "UARTPort.writeChunks(chunks) byte length exceeds supported UART write size");
+                state->source_failed = true;
+                state->completed = true;
+                return false;
+            }
+            if (state->chunk.source.length == 0) {
+                uart_future_release_chunk(state, false);
+            }
+        }
+    }
+    for (;;) {
+        if (state->write_offset < state->span.length) {
+            *out_data = state->span.data;
+            *out_length = state->span.length;
+            return true;
+        }
+        if (state->span.length > 0) {
+            state->write_chunks++;
+        }
+        esp32_mquickjs_byte_span_clear(&state->span);
+        state->write_offset = 0;
+        if (!esp32_mquickjs_byte_span_source_next(
+                state->ctx, &state->span_source, &state->span)) {
+            state->source_failed = JS_HasException(state->ctx);
+            state->completed = true;
+            return false;
+        }
+        if (state->span.length > INT_MAX) {
+            JS_ThrowRangeError(
+                state->ctx,
+                "UARTPort.writeSource() span length exceeds supported UART write size");
+            state->source_failed = true;
+            state->completed = true;
+            return false;
+        }
+        if (state->span.length > 0 && state->span.data == NULL) {
+            JS_ThrowInternalError(
+                state->ctx,
+                "UARTPort.writeSource() received a non-empty span with null data");
+            state->source_failed = true;
+            state->completed = true;
+            return false;
+        }
+    }
+}
+
+static void uart_write_future_step(
+    esp32_mquickjs_future_driver_state_t *state,
+    esp32_mquickjs_uart_slot_t *slot)
+{
+    size_t budget = 1024U;
+
+    while (budget > 0 && !state->completed) {
+        const uint8_t *data = NULL;
+        size_t length = 0;
+        size_t remaining;
+        size_t chunk;
+        int written = 0;
+        uint64_t now_us;
+
+        if (!uart_future_next_write_data(state, &data, &length)) {
+            return;
+        }
+        if (data == NULL) {
+            JS_ThrowInternalError(
+                state->ctx, "%s received non-empty byte data with null data",
+                uart_future_write_api(state->kind));
+            state->source_failed = true;
+            state->completed = true;
+            return;
+        }
+        now_us = (uint64_t)esp_timer_get_time();
+        if ((state->write_scope.attempted || state->timeout_ms > 0) &&
+            now_us >= state->write_scope.deadline_us) {
+            state->write_result = UART_WRITE_TIMEOUT;
+            state->completed = true;
+            return;
+        }
+        remaining = length - state->write_offset;
+        chunk = remaining < budget ? remaining : budget;
+        if (slot->tx_buffer_size > 0) {
+            size_t free_size = 0;
+
+            if (uart_get_tx_buffer_free_size((uart_port_t)slot->port_id,
+                                             &free_size) != ESP_OK) {
+                state->write_result = UART_WRITE_DRIVER_ERROR;
+                state->completed = true;
+                return;
+            }
+            if (chunk > free_size) {
+                chunk = free_size;
+            }
+            if (chunk > 0) {
+                written = uart_write_bytes((uart_port_t)slot->port_id,
+                                           data + state->write_offset,
+                                           chunk);
+            }
+        } else {
+            written = uart_tx_chars((uart_port_t)slot->port_id,
+                                    (const char *)(data + state->write_offset),
+                                    (uint32_t)chunk);
+        }
+        state->write_scope.attempted = true;
+        if (written < 0) {
+            state->write_result = UART_WRITE_DRIVER_ERROR;
+            state->completed = true;
+            return;
+        }
+        if (written == 0) {
+            if ((uint64_t)esp_timer_get_time() >=
+                state->write_scope.deadline_us) {
+                state->write_result = UART_WRITE_TIMEOUT;
+                state->completed = true;
+            }
+            return;
+        }
+        state->write_offset += (size_t)written;
+        state->write_scope.bytes_written += (size_t)written;
+        budget -= (size_t)written;
+    }
+    if (!state->completed) {
+        (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+    }
+}
+
 static void uart_future_step(esp32_mquickjs_future_driver_state_t *state)
 {
     esp32_mquickjs_uart_slot_t *slot;
@@ -1447,7 +1818,9 @@ static void uart_future_step(esp32_mquickjs_future_driver_state_t *state)
         state->completed = true;
         return;
     }
-    if (state->kind == UART_FUTURE_READ) {
+    if (uart_future_is_write(state)) {
+        uart_write_future_step(state, slot);
+    } else if (state->kind == UART_FUTURE_READ) {
         size_t available = 0;
 
         state->err = uart_get_buffered_data_len((uart_port_t)slot->port_id,
@@ -1483,6 +1856,8 @@ static void uart_future_step(esp32_mquickjs_future_driver_state_t *state)
         if (state->kind == UART_FUTURE_READ) {
             state->read_length = 0;
             state->err = ESP_OK;
+        } else if (uart_future_is_write(state)) {
+            state->write_result = UART_WRITE_TIMEOUT;
         } else {
             state->err = ESP_ERR_TIMEOUT;
         }
@@ -1523,6 +1898,18 @@ static bool uart_future_start(JSContext *ctx,
         return false;
     }
     slot->busy = true;
+    if (uart_future_is_write(state)) {
+        if (slot->write_busy) {
+            slot->busy = false;
+            JS_ThrowInternalError(
+                ctx, "%s failed because another write is active",
+                uart_future_write_api(state->kind));
+            return false;
+        }
+        slot->write_busy = true;
+        uart_write_scope_begin(slot, &state->write_scope);
+        state->write_started_us = (uint64_t)esp_timer_get_time();
+    }
     uart_set_future_waiter(slot, runtime, token, true);
     state->runtime = runtime;
     state->token = token;
@@ -1545,9 +1932,12 @@ static bool uart_future_start(JSContext *ctx,
                 /* ESP-IDF exposes ring-buffer write readiness through the
                  * select callback, but not final hardware TX-done. Keep the
                  * flush probe bounded and let its timer only wake the Future. */
-                uint64_t period_us = timeout_us < UART_FLUSH_POLL_US
+                uint64_t maximum_period_us = uart_future_is_write(state)
+                                                 ? UART_WRITE_FIFO_POLL_MS * 1000ULL
+                                                 : UART_FLUSH_POLL_US;
+                uint64_t period_us = timeout_us < maximum_period_us
                                          ? timeout_us
-                                         : UART_FLUSH_POLL_US;
+                                         : maximum_period_us;
 
                 timer_err = esp_timer_start_periodic(state->poll_timer,
                                                      period_us);
@@ -1577,6 +1967,27 @@ static JSValue uart_future_finish(JSContext *ctx,
 {
     if (state == NULL || state->cancelled) {
         return JS_ThrowInternalError(ctx, "UART operation cancelled");
+    }
+    if (uart_future_is_write(state)) {
+        if (state->source_failed || JS_HasException(ctx)) {
+            return state->write_scope.bytes_written > 0
+                       ? uart_annotate_write_exception(
+                             ctx, &state->write_scope)
+                       : JS_EXCEPTION;
+        }
+        if (state->write_result != UART_WRITE_OK) {
+            return uart_write_error(ctx, state->write_result,
+                                    uart_future_write_api(state->kind),
+                                    &state->write_scope);
+        }
+        if (state->kind == UART_FUTURE_WRITE) {
+            return JS_NewInt64(
+                ctx, (int64_t)state->write_scope.bytes_written);
+        }
+        return uart_make_write_stats(
+            ctx, state->write_chunks,
+            state->write_scope.bytes_written,
+            (uint64_t)esp_timer_get_time() - state->write_started_us);
     }
     if (state->err != ESP_OK) {
         return uart_throw_error(ctx, state->err,
@@ -1609,6 +2020,9 @@ static void uart_future_destroy(esp32_mquickjs_future_driver_state_t *state)
 
     if (slot != NULL && state->started) {
         slot->busy = false;
+        if (uart_future_is_write(state)) {
+            slot->write_busy = false;
+        }
         uart_set_future_waiter(slot, NULL, state->token, false);
     }
     uart_future_release(state);
@@ -1631,6 +2045,22 @@ static const esp32_mquickjs_future_driver_t s_uart_flush_driver = {
     .cancel = uart_future_cancel,
     .destroy = uart_future_destroy,
 };
+
+#define UART_WRITE_FUTURE_DRIVER(name, prepare_fn)              \
+    static const esp32_mquickjs_future_driver_t name = {        \
+        .prepare = prepare_fn,                                  \
+        .start = uart_future_start,                              \
+        .poll = uart_future_poll,                                \
+        .finish = uart_future_finish,                            \
+        .cancel = uart_future_cancel,                            \
+        .destroy = uart_future_destroy,                          \
+    }
+
+UART_WRITE_FUTURE_DRIVER(s_uart_write_driver, uart_write_future_prepare);
+UART_WRITE_FUTURE_DRIVER(s_uart_write_chunks_driver,
+                         uart_write_chunks_future_prepare);
+UART_WRITE_FUTURE_DRIVER(s_uart_write_source_driver,
+                         uart_write_source_future_prepare);
 
 static JSValue uart_future_call_and_wait(JSContext *ctx,
                                          JSValue receiver,
@@ -1663,19 +2093,42 @@ static bool uart_register_future_drivers(JSContext *ctx,
                                          esp32_mquickjs_runtime_t *runtime)
 {
     JSGCRef object_ref;
+    JSGCRef write_ref;
+    JSGCRef write_chunks_ref;
+    JSGCRef write_source_ref;
     JSGCRef read_ref;
     JSGCRef flush_ref;
     JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    JSValue *write_fn = JS_PushGCRef(ctx, &write_ref);
+    JSValue *write_chunks_fn = JS_PushGCRef(ctx, &write_chunks_ref);
+    JSValue *write_source_fn = JS_PushGCRef(ctx, &write_source_ref);
     JSValue *read_fn = JS_PushGCRef(ctx, &read_ref);
     JSValue *flush_fn = JS_PushGCRef(ctx, &flush_ref);
     bool result;
 
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_UART_PORT);
+    *write_fn = JS_IsException(*object)
+        ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *object, "write");
+    *write_chunks_fn = JS_IsException(*object)
+        ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *object, "writeChunks");
+    *write_source_fn = JS_IsException(*object)
+        ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *object, "writeSource");
     *read_fn = JS_IsException(*object)
         ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *object, "read");
     *flush_fn = JS_IsException(*object)
         ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *object, "flush");
-    result = !JS_IsException(*read_fn) && !JS_IsException(*flush_fn) &&
+    result = !JS_IsException(*write_fn) &&
+             !JS_IsException(*write_chunks_fn) &&
+             !JS_IsException(*write_source_fn) &&
+             !JS_IsException(*read_fn) && !JS_IsException(*flush_fn) &&
+             esp32_mquickjs_future_register_driver(
+                 ctx, runtime, *write_fn, &s_uart_write_driver) &&
+             esp32_mquickjs_future_register_driver(
+                 ctx, runtime, *write_chunks_fn,
+                 &s_uart_write_chunks_driver) &&
+             esp32_mquickjs_future_register_driver(
+                 ctx, runtime, *write_source_fn,
+                 &s_uart_write_source_driver) &&
              esp32_mquickjs_future_register_driver(ctx, runtime,
                                                    *read_fn, &s_uart_read_driver) &&
              esp32_mquickjs_future_register_driver(ctx, runtime,
@@ -1685,6 +2138,9 @@ static bool uart_register_future_drivers(JSContext *ctx,
     }
     JS_PopGCRef(ctx, &flush_ref);
     JS_PopGCRef(ctx, &read_ref);
+    JS_PopGCRef(ctx, &write_source_ref);
+    JS_PopGCRef(ctx, &write_chunks_ref);
+    JS_PopGCRef(ctx, &write_ref);
     JS_PopGCRef(ctx, &object_ref);
     return result;
 }

@@ -123,6 +123,11 @@ PARTITION_LAYOUT=storage
 Application defaults control behavior such as REPL/autorun policy and explicitly
 enable the native modules the application needs. All optional module Kconfig defaults
 are off; MCU defaults only force modules off when that target cannot support them.
+TLS is an independent `CONFIG_ESP32_MQUICKJS_FEATURE_TLS` capability. It can be
+omitted while retaining plaintext HTTP and TCP/UDP; WebSocket currently depends
+on TLS because ESP-IDF packages WS and WSS in one transport component. Wi-Fi
+Enterprise EAP-TLS support is also omitted when this capability is disabled;
+ordinary WPA2/WPA3 personal networks remain available.
 Flash/PSRAM settings and optional constants are generated per build. Server builds
 append their validated module selection after the application defaults. `APP_ID` is the
 stable build identifier and must contain only letters, digits, `.`, `_`, or

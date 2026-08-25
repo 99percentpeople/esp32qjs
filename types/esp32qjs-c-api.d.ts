@@ -24,6 +24,8 @@ namespace ESP32QJS {
     status(): FutureStatus;
     wait(timeoutMs?: number): T;
     cancel(): boolean;
+    map<U>(fn: (value: T) => U): Future<U>;
+    flatMap<U>(fn: (value: T) => Future<U>): Future<U>;
   }
 
   interface FutureFactory {
@@ -428,6 +430,7 @@ namespace ESP32QJS {
     readonly readable: boolean;
     readonly writable: boolean;
 
+    /** Text modes assume trusted text; binary modes return an owned ByteView. */
     read(size?: number): string | ByteView | null;
     write(text: string): number;
     flush(): boolean;
@@ -456,6 +459,12 @@ namespace ESP32QJS {
     freeBytes: number;
   }
 
+  interface FsChangeEvent {
+    type: "write" | "remove" | "rename" | "mkdir";
+    path: string;
+    toPath?: string;
+  }
+
   /**
    * LittleFS helpers restricted to the active mounted root.
    *
@@ -471,6 +480,7 @@ namespace ESP32QJS {
     readonly ROOT: string;
     setRoot(path: string): string;
     info(): FsInfo;
+    watch(): EventQueue<FsChangeEvent>;
     open(path: string, mode?: FsOpenMode): Stream;
     list(path?: string): FsEntry[];
     stat(path: string): FsEntry;
@@ -568,9 +578,9 @@ namespace ESP32QJS {
    * gpio.toggle(pin);
    *
    * var interrupts = gpio.watch(pin, gpio.CHANGE);
-   * var event = interrupts.receive(1000);
-   * if (event) print(event.pin, event.mode, event.level);
-   * interrupts.close();
+   * Future.call(interrupts.receive, interrupts, []).map(function (event) {
+   *   if (event) print(event.pin, event.mode, event.level);
+   * });
    * ```
    */
   interface GpioModule {
@@ -1076,6 +1086,7 @@ namespace ESP32QJS {
     readonly websocket: boolean;
     readonly bitmap: boolean;
     readonly wifi: boolean;
+    readonly tls: boolean;
     readonly http: boolean;
     readonly httpServer: boolean;
     readonly runtimeLogs: boolean;
@@ -1277,6 +1288,25 @@ namespace ESP32QJS {
     secondaryMounted: boolean;
   }
 
+  interface SysRuntimeWatchdogStatus {
+    systemEnabled: boolean;
+    systemRegistered: boolean;
+    jsEnabled: boolean;
+    jsRegistered: boolean;
+    timeoutMs: number;
+    lastOuterHeartbeatAgeMs: number;
+  }
+
+  interface SysRuntimeStartupStatus {
+    phase: "armed" | "stabilizing" | "healthy" | "safe-mode";
+    safeModeActive: boolean;
+    safeModeRequested: boolean;
+    failureCount: number;
+    failureLimit: number;
+    healthyAfterMs: number;
+    lastFailureReason: string | null;
+  }
+
   interface SysPendingControl {
     action: SysControlAction;
     reason: string;
@@ -1293,6 +1323,8 @@ namespace ESP32QJS {
     readonly pendingControl: SysPendingControl | null;
     readonly filesystem: SysRuntimeFilesystemStatus;
     readonly resources: SysRuntimeResourcesStatus;
+    readonly watchdog: SysRuntimeWatchdogStatus;
+    readonly startup: SysRuntimeStartupStatus;
   }
 
   interface SysStatus {
@@ -1348,6 +1380,8 @@ namespace ESP32QJS {
   interface SysModule {
     readonly info: SysInfo;
     readonly status: SysStatus;
+    /** Persistent boot choice. Assignment affects the next startup only. */
+    safeMode: boolean;
     /** Return a fresh snapshot of every immutable selected hardware-profile value. */
     config(): { [key: string]: string | number | boolean };
     /**
@@ -1805,7 +1839,7 @@ namespace ESP32QJS {
     direction: I2SDirection;
     mode: I2SMode;
     overruns: number;
-    underruns: number;
+    sendQueueOverflows: number;
     readBusy: boolean;
     writeBusy: boolean;
     pcm: {
@@ -2155,6 +2189,31 @@ namespace ESP32QJS {
     hidden: boolean;
   }
 
+  interface WiFiTimeSyncOptions {
+    /** Caller-owned SNTP server names. Firmware does not select a provider. */
+    servers: string[];
+    timeoutMs?: number;
+  }
+
+  interface WiFiTimeStatus {
+    synchronized: true;
+    unixTimeMs: number;
+  }
+
+  type TlsErrorCode =
+    | "TLS_ALLOC_FAILED"
+    | "TLS_TIME_INVALID"
+    | "TLS_VERIFY_FAILED"
+    | "TLS_HANDSHAKE_FAILED"
+    | "TLS_TIMEOUT";
+
+  interface TlsError extends Error {
+    code: TlsErrorCode;
+    espTlsError: number;
+    mbedtlsError: number;
+    verifyFlags: number;
+  }
+
   type WiFiAuthMode =
     | "open"
     | "wep"
@@ -2196,6 +2255,7 @@ namespace ESP32QJS {
     readonly DEFAULT_TIMEOUT_MS: number;
     status(): WiFiStatus;
     connect(ssid: string, password: string, timeoutMs?: number): WiFiStatus;
+    syncTime(options: WiFiTimeSyncOptions): WiFiTimeStatus;
     disconnect(): WiFiStatus;
     scan(): WiFiScanResult[];
   }

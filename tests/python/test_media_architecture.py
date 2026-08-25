@@ -134,6 +134,14 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn("static bool i2s_read_cancel", source)
         self.assertIn("static bool i2s_write_cancel", source)
         self.assertIn("state->timed_out = true;", source)
+        self.assertIn("state->deadline_us", source)
+        self.assertNotIn("state->timeout_timer", source)
+        self.assertIn("slot->rx_timeout_timer", source)
+        self.assertIn("slot->tx_timeout_timer", source)
+        self.assertEqual(source.count("esp_timer_create("), 2)
+        self.assertIn("channel_config.auto_clear_after_cb", source)
+        self.assertIn('"sendQueueOverflows"', source)
+        self.assertNotIn('"underruns"', source)
         self.assertIn("I2SChannel.write() requires a tx or duplex channel", source)
         self.assertIn("i2s.open(pdm) only accepts direction", source)
         self.assertIn("static void i2s_request_close", source)
@@ -141,6 +149,11 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn("slot->tx_cancel_requested = true;", source)
         self.assertIn("i2s_request_close(&s_i2s_slots[i]);", source)
         self.assertIn("slot->generation = i2s_take_generation();", source)
+        self.assertIn("i2s_operation_buffer_caps", source)
+        self.assertIn("MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT", source)
+        self.assertIn("I2S_NO_MEMORY", source)
+        self.assertIn("i2s_del_channel(slot->rx_handle)", source)
+        self.assertIn("i2s_del_channel(slot->tx_handle)", source)
 
     def test_camera_capture_and_frame_lease_are_bounded(self):
         source = (MQUICKJS / "src/modules/camera/esp32_mquickjs_camera.c").read_text(
