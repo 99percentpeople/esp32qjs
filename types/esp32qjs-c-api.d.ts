@@ -441,7 +441,7 @@ namespace ESP32QJS {
 
     /** Text modes assume trusted text; binary modes return an owned ByteView. */
     read(size?: number): string | ByteView | null;
-    write(text: string): number;
+    write(data: string | ByteSource | ByteSpanSource): number;
     flush(): boolean;
     close(): boolean;
     seek(offset: number, whence?: number): number;
@@ -466,6 +466,11 @@ namespace ESP32QJS {
     totalBytes: number;
     usedBytes: number;
     freeBytes: number;
+  }
+
+  interface FsReadTextOptions {
+    /** Per-call bound, capped by CONFIG_ESP32_MQUICKJS_FS_READ_TEXT_MAX_BYTES. */
+    maxBytes?: number;
   }
 
   interface FsChangeEvent {
@@ -494,7 +499,7 @@ namespace ESP32QJS {
     list(path?: string): FsEntry[];
     stat(path: string): FsEntry;
     exists(path: string): boolean;
-    readText(path: string): string;
+    readText(path: string, options?: FsReadTextOptions): string;
     writeText(path: string, text: string): number;
     appendText(path: string, text: string): number;
     mkdir(path: string): boolean;
@@ -1518,12 +1523,12 @@ namespace ESP32QJS {
       addr: number,
       chunks: ArrayLike<ByteSource>,
     ): I2CWriteChunksStats;
-    read(addr: number, length: number): number[];
+    read(addr: number, length: number): ByteView;
     writeRead(
       addr: number,
       writeData: ByteSource,
       readLength: number,
-    ): number[];
+    ): ByteView;
   }
 
   /**
@@ -1631,7 +1636,7 @@ namespace ESP32QJS {
   interface SPIDevice {
     close(): boolean;
     status(): SPIDeviceStatus;
-    transfer(data: ByteSource): number[];
+    transfer(data: ByteSource): ByteView;
     write(data: ByteSource): number;
     /**
      * Write an array-like list of byte sources, reusing queued SPI
@@ -1649,7 +1654,7 @@ namespace ESP32QJS {
       source: ByteSpanSource,
       options?: SPIWriteOptions,
     ): SPIWriteStats;
-    read(length: number, fillByte?: number): number[];
+    read(length: number, fillByte?: number): ByteView;
   }
 
   /**
@@ -1720,7 +1725,7 @@ namespace ESP32QJS {
     write(data: ByteSource): number;
     writeChunks(chunks: ArrayLike<ByteSource>): UARTWriteStats;
     writeSource(source: ByteSpanSource): UARTWriteStats;
-    read(length: number, timeoutMs?: number): number[];
+    read(length: number, timeoutMs?: number): ByteView;
     available(): number;
     flush(timeoutMs?: number): boolean;
     clearRx(): boolean;

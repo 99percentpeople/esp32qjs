@@ -13,10 +13,17 @@ test("uart/loopback", function () {
 
   function assertBytesEqual(actual, expected, message) {
     var i;
+    var bytes;
 
-    test.equal(actual.length, expected.length, message + " length");
-    for (i = 0; i < expected.length; i++) {
-      test.equal(actual[i], expected[i], message + " byte " + i);
+    test.ok(actual instanceof _ByteView, message + " should return ByteView");
+    try {
+      bytes = actual.toArray();
+      test.equal(bytes.length, expected.length, message + " length");
+      for (i = 0; i < expected.length; i++) {
+        test.equal(bytes[i], expected[i], message + " byte " + i);
+      }
+    } finally {
+      actual.close();
     }
   }
 

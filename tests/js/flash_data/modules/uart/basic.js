@@ -6,6 +6,7 @@ test("uart/basic", function () {
   var overrideStatus;
   var staleError = "";
   var writeSourceRejected = false;
+  var emptyRead;
 
   test.ok(typeof uart.DEFAULT_PORT === "number", "uart.DEFAULT_PORT should be numeric");
   test.ok(typeof uart.DEFAULT_TX === "number", "uart.DEFAULT_TX should be numeric");
@@ -63,7 +64,15 @@ test("uart/basic", function () {
       buffer.close();
     }
   }
-  test.equal(port.read(0).length, 0, "UARTPort.read(0) should return an empty array");
+  emptyRead = port.read(0);
+  try {
+    test.ok(emptyRead instanceof _ByteView,
+      "UARTPort.read() should return a ByteView");
+    test.equal(emptyRead.length, 0,
+      "UARTPort.read(0) should return an empty ByteView");
+  } finally {
+    emptyRead.close();
+  }
   test.equal(port.flush(), true, "UARTPort.flush() should succeed");
   test.equal(port.clearRx(), true, "UARTPort.clearRx() should succeed");
   test.equal(port.close(), true, "UARTPort.close() should succeed");

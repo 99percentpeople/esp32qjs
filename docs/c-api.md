@@ -195,19 +195,28 @@ All `fs` operations are restricted to the immutable root captured by their
   Return `{ name, path, isDir, size }` for a path.
 - `fs.exists(path)`
   Return `true` if the path exists.
-- `fs.readText(path)`
-  Read a trusted text file. This low-level convenience does not validate file
-  encoding; applications that accept arbitrary bytes must use `"rb"` and own
-  their decoding policy.
+- `fs.readText(path, options?)`
+  Read a trusted text file with an allocation bound. `options.maxBytes`
+  defaults to and cannot exceed
+  `CONFIG_ESP32_MQUICKJS_FS_READ_TEXT_MAX_BYTES` (65536 by default). Files over
+  the selected bound throw an error with
+  `{ code: "FS_READ_LIMIT_EXCEEDED", path, maxBytes, actualBytes }`; consume
+  larger files through `Stream`. This convenience does not validate encoding,
+  so applications that accept arbitrary bytes must use `"rb"` and own their
+  decoding policy.
 - `fs.open(path, mode?)`
   Open a file stream. Supported modes are `r`, `rb`, `w`, `wb`, `a`, `ab`, `r+`, `w+`, and `a+`.
   File open and file-stream `read`, `write`, `flush`, `seek`, and `close` use
   native Future drivers, so `Future.call(...)` does not block the JavaScript
   runtime task on VFS calls. Direct calls cooperatively wait on the same driver.
 - `fs.writeText(path, text)`
-  Overwrite a text file and return the number of bytes written.
+  Atomically replace a text file and return the number of bytes written. The
+  implementation writes and syncs a same-directory temporary file, closes it,
+  then renames it over the destination. Watchers receive one `write` event
+  only after the rename commits.
 - `fs.appendText(path, text)`
-  Append text and return the number of bytes written.
+  Append text and return the number of bytes written. Append is synced before
+  returning but does not promise power-loss atomicity.
 - `fs.mkdir(path)`
   Create one directory level.
 - `fs.rename(fromPath, toPath)`
@@ -333,10 +342,13 @@ Stream instance shape:
 - `write(value)`
   Write and return the exact byte count. Text file modes accept strings.
   Binary file modes accept `ByteView`, array-like byte data, or a retained
-  `ByteSpanSource`; the source is consumed synchronously and no newline is
-  added.
+  `ByteSpanSource`; the Future driver opens a source lease during capture and
+  writes one span at a time without materializing the complete source. No
+  newline is added.
 - `flush()`
 - `close()`
+  Successful `flush()` or `close()` publishes one filesystem `write` event if
+  the stream has committed changes; individual spans do not publish events.
 - `seek(offset, whence?)`
   Move the file cursor and return the new position.
 - `tell()`
@@ -470,9 +482,10 @@ print(headers.get("content-type"));
   into a JavaScript byte array. This is intended for protocols that prepend a
   control byte to a native `ByteView`. It returns `{ chunks, bytes, totalUs }`.
 - `bus.read(addr, length)`
-  Read `length` bytes and return them as a JavaScript array.
+  Read `length` bytes into an owned `ByteView`. Close the view after use.
 - `bus.writeRead(addr, writeData, readLength)`
-  Write bytes, then read bytes in one transaction and return the read array.
+  Write bytes, then read bytes in one transaction and return an owned
+  `ByteView`.
 
 Example:
 
@@ -525,7 +538,9 @@ bus.close();
 - `device.close()`
   Remove the device from its parent SPI bus and make the JS object stale.
 - `device.transfer(data)`
-  Perform one synchronous full-duplex transaction from an array-like sequence of bytes or native byte view and return the received bytes as a JavaScript array.
+  Perform one cooperative full-duplex transaction from an array-like sequence
+  of bytes or native byte view and return the received bytes as an owned
+  `ByteView`.
 - `device.write(data)`
   Perform one synchronous write-only transaction from an array-like sequence of bytes or native byte view and return the number of transmitted bytes.
 - `device.writeChunks(chunks, options?)`
@@ -533,7 +548,8 @@ bus.close();
 - `device.writeSource(source, options?)`
   Queue spans from a retained native `ByteSpanSource`, such as `Bitmap.createSpanSource(...)`, without materializing a JavaScript chunk array. SPI treats the source as a generic transport capability; it does not inspect Bitmap internals. `options.queueDepth` and the returned stats object match `writeChunks(...)`.
 - `device.read(length, fillByte = 0)`
-  Clock `length` bytes and return the bytes read from MISO. `fillByte` controls the dummy value shifted out on MOSI while reading.
+  Clock `length` bytes and return an owned `ByteView` from MISO. `fillByte`
+  controls the dummy value shifted out on MOSI while reading.
 
 Example:
 
@@ -561,7 +577,9 @@ python scripts/remote.py test --scope js --module spi --loopback
 
 ## `uart` Module
 
-This module exposes synchronous TTL UART ports. It is intended for bounded peripheral exchanges and byte handoff; `Stream` remains the async/file/http-style IO abstraction.
+This module exposes cooperative Future-backed TTL UART ports. It is intended
+for bounded peripheral exchanges and byte handoff; direct calls wait
+cooperatively and `Future.call()` returns control immediately.
 
 - `uart.DEFAULT_PORT`
   Board/profile default UART peripheral.
@@ -613,7 +631,7 @@ applications so the current JavaScript call stack does not wait.
 
 - `port.read(length, timeoutMs = uart.DEFAULT_TIMEOUT_MS)`
   Read up to `length` bytes and return the bytes actually received as a
-  JavaScript array. RX readiness is interrupt-driven; the timeout uses a
+  owned `ByteView`. RX readiness is interrupt-driven; the timeout uses a
   one-shot native timer rather than readiness polling.
 - `port.available()`
   Return the number of bytes currently buffered for reading.

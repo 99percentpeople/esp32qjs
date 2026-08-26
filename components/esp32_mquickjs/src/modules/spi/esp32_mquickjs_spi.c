@@ -607,29 +607,6 @@ static JSValue spi_make_device_object(JSContext *ctx, const esp32_mquickjs_spi_d
     return JS_PopGCRef(ctx, &device_ref);
 }
 
-static JSValue js_bytes_to_array(JSContext *ctx, const uint8_t *bytes, size_t length)
-{
-    JSGCRef array_ref;
-    JSValue *array_obj;
-    uint32_t i;
-
-    array_obj = JS_PushGCRef(ctx, &array_ref);
-    *array_obj = JS_NewArray(ctx, 0);
-    if (JS_IsException(*array_obj)) {
-        JS_PopGCRef(ctx, &array_ref);
-        return JS_EXCEPTION;
-    }
-
-    for (i = 0; i < length; ++i) {
-        if (JS_IsException(JS_SetPropertyUint32(ctx, *array_obj, i, JS_NewInt32(ctx, bytes[i])))) {
-            JS_PopGCRef(ctx, &array_ref);
-            return JS_EXCEPTION;
-        }
-    }
-
-    return JS_PopGCRef(ctx, &array_ref);
-}
-
 typedef struct {
     uint32_t queue_depth;
 } spi_write_chunks_options_t;
@@ -1767,7 +1744,15 @@ static JSValue spi_future_finish(JSContext *ctx,
     if (state->kind == SPI_FUTURE_WRITE) {
         return JS_NewInt32(ctx, (int32_t)state->length);
     }
-    return js_bytes_to_array(ctx, state->rx_data, state->length);
+    {
+        JSValue result = esp32_mquickjs_new_owned_byte_view(
+            ctx, state->rx_data, state->length);
+
+        if (!JS_IsException(result)) {
+            state->rx_data = NULL;
+        }
+        return result;
+    }
 }
 
 static esp32_mquickjs_cancel_result_t spi_future_cancel(

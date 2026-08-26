@@ -313,29 +313,6 @@ static bool js_value_to_i2c_address(JSContext *ctx, JSValue value, uint16_t *out
     return true;
 }
 
-static JSValue js_bytes_to_array(JSContext *ctx, const uint8_t *bytes, size_t length)
-{
-    JSGCRef array_ref;
-    JSValue *array_obj;
-    uint32_t i;
-
-    array_obj = JS_PushGCRef(ctx, &array_ref);
-    *array_obj = JS_NewArray(ctx, 0);
-    if (JS_IsException(*array_obj)) {
-        JS_PopGCRef(ctx, &array_ref);
-        return JS_EXCEPTION;
-    }
-
-    for (i = 0; i < length; ++i) {
-        if (JS_IsException(JS_SetPropertyUint32(ctx, *array_obj, i, JS_NewInt32(ctx, bytes[i])))) {
-            JS_PopGCRef(ctx, &array_ref);
-            return JS_EXCEPTION;
-        }
-    }
-
-    return JS_PopGCRef(ctx, &array_ref);
-}
-
 static esp_err_t i2c_get_cached_device(esp32_mquickjs_i2c_slot_t *slot,
                                        uint16_t address,
                                        i2c_master_dev_handle_t *out_handle)
@@ -1173,7 +1150,15 @@ static JSValue i2c_future_finish(JSContext *ctx,
                                            state->write_length,
                                            state->total_us);
     }
-    return js_bytes_to_array(ctx, state->read_data, state->read_length);
+    {
+        JSValue result = esp32_mquickjs_new_owned_byte_view(
+            ctx, state->read_data, state->read_length);
+
+        if (!JS_IsException(result)) {
+            state->read_data = NULL;
+        }
+        return result;
+    }
 }
 
 static esp32_mquickjs_cancel_result_t i2c_future_cancel(

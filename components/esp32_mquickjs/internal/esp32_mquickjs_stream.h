@@ -29,7 +29,8 @@ JSValue esp32_mquickjs_stream_adopt_file(JSContext *ctx,
                                          JSValue global_obj,
                                          const char *path,
                                          const char *mode,
-                                         void *file_handle);
+                                         void *file_handle,
+                                         bool initial_write_dirty);
 
 JSValue esp32_mquickjs_stream_open_memory_owned(JSContext *ctx,
                                                 JSValue global_obj,

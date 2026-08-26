@@ -198,6 +198,55 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("memory_order_acquire", stream)
         self.assertIn("js_stream_finalizer", stdlib)
 
+    def test_binary_bus_reads_and_storage_use_bounded_owned_data(self):
+        byte_source = (
+            MQUICKJS / "src/core/esp32_mquickjs_byte_source.c"
+        ).read_text(encoding="utf-8")
+        stream = (
+            MQUICKJS / "src/core/esp32_mquickjs_stream.c"
+        ).read_text(encoding="utf-8")
+        filesystem = (
+            MQUICKJS / "src/modules/fs/esp32_mquickjs_fs.c"
+        ).read_text(encoding="utf-8")
+        kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
+        declarations = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("bool closed;", byte_source)
+        self.assertIn("view->closed = false", byte_source)
+        self.assertIn("view->closed = true", byte_source)
+        self.assertIn("return view != NULL && !view->closed", byte_source)
+
+        for module in ("i2c", "spi", "uart"):
+            source = (
+                MQUICKJS
+                / "src/modules"
+                / module
+                / f"esp32_mquickjs_{module}.c"
+            ).read_text(encoding="utf-8")
+            self.assertIn("esp32_mquickjs_new_owned_byte_view(", source)
+            self.assertNotIn("bytes_to_array", source)
+
+        self.assertIn("config ESP32_MQUICKJS_FS_READ_TEXT_MAX_BYTES", kconfig)
+        self.assertIn("fs_parse_read_text_options", filesystem)
+        self.assertIn('"FS_READ_LIMIT_EXCEEDED"', filesystem)
+        self.assertIn("fs_read_text_bounded", filesystem)
+        self.assertIn("fs_open_atomic_temp", filesystem)
+        self.assertIn("O_EXCL", filesystem)
+        self.assertIn("fsync(fileno(file))", filesystem)
+        self.assertIn("rename(temp_path, state->path)", filesystem)
+        self.assertIn("unlink(temp_path)", filesystem)
+        self.assertIn("maxBytes?: number", declarations)
+
+        self.assertNotIn("stream_collect_span_source", stream)
+        self.assertIn("stream_future_next_source_span", stream)
+        self.assertIn("esp32_mquickjs_open_byte_span_source", stream)
+        self.assertIn("esp32_mquickjs_byte_span_source_next", stream)
+        self.assertIn("_Atomic bool span_worker_completed", stream)
+        self.assertIn("state->io_length += written", stream)
+        self.assertIn("ByteSource | ByteSpanSource", declarations)
+
     def test_cross_task_future_completion_uses_c11_atomics(self):
         sources = [
             MQUICKJS / "src/core/esp32_mquickjs_event_queue.c",

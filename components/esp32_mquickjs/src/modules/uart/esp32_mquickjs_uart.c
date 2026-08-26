@@ -358,29 +358,6 @@ static esp32_mquickjs_uart_slot_t *uart_get_slot(const esp32_mquickjs_uart_port_
     return slot;
 }
 
-static JSValue uart_bytes_to_array(JSContext *ctx, const uint8_t *bytes, size_t length)
-{
-    JSGCRef array_ref;
-    JSValue *array_obj;
-    uint32_t i;
-
-    array_obj = JS_PushGCRef(ctx, &array_ref);
-    *array_obj = JS_NewArray(ctx, 0);
-    if (JS_IsException(*array_obj)) {
-        JS_PopGCRef(ctx, &array_ref);
-        return JS_EXCEPTION;
-    }
-
-    for (i = 0; i < length; ++i) {
-        if (JS_IsException(JS_SetPropertyUint32(ctx, *array_obj, i, JS_NewInt32(ctx, bytes[i])))) {
-            JS_PopGCRef(ctx, &array_ref);
-            return JS_EXCEPTION;
-        }
-    }
-
-    return JS_PopGCRef(ctx, &array_ref);
-}
-
 static JSValue uart_make_write_stats(JSContext *ctx,
                                      uint32_t chunks,
                                      size_t bytes,
@@ -1997,9 +1974,16 @@ static JSValue uart_future_finish(JSContext *ctx,
                                     ? "UARTPort.read() failed"
                                     : "UARTPort.flush() failed");
     }
-    return state->kind == UART_FUTURE_READ
-        ? uart_bytes_to_array(ctx, state->data, (size_t)state->read_length)
-        : JS_TRUE;
+    if (state->kind == UART_FUTURE_READ) {
+        JSValue result = esp32_mquickjs_new_owned_byte_view(
+            ctx, state->data, (size_t)state->read_length);
+
+        if (!JS_IsException(result)) {
+            state->data = NULL;
+        }
+        return result;
+    }
+    return JS_TRUE;
 }
 
 static esp32_mquickjs_cancel_result_t uart_future_cancel(

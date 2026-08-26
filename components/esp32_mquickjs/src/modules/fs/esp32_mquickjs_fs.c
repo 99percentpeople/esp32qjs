@@ -11,9 +11,13 @@
 #include "esp32_mquickjs_future.h"
 #include "utils/esp32_mquickjs_fs_path.h"
 #include "esp32_mquickjs_stream.h"
+#include "mquickjs_priv.h"
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
@@ -32,6 +36,7 @@ static const char *TAG = "esp32qjs";
 #define ESP32_MQUICKJS_MAX_LITTLEFS_MOUNTS 4U
 #define ESP32_MQUICKJS_PARTITION_LABEL_MAX 17U
 #define ESP32_MQUICKJS_FS_CHANGE_QUEUE_LEN 8U
+#define ESP32_MQUICKJS_FS_ATOMIC_TEMP_ATTEMPTS 32U
 
 typedef struct {
     bool active;
@@ -62,6 +67,7 @@ typedef struct {
 } esp32_mquickjs_fs_volume_t;
 
 static bool s_littlefs_mounted;
+static _Atomic uint32_t s_fs_atomic_temp_counter;
 static esp32_mquickjs_littlefs_mount_t
     s_littlefs_mounts[ESP32_MQUICKJS_MAX_LITTLEFS_MOUNTS];
 
@@ -910,15 +916,157 @@ struct esp32_mquickjs_future_driver_state {
     FILE *file;
     char *data;
     size_t data_length;
+    size_t max_bytes;
+    size_t actual_bytes;
     struct stat stat_value;
     fs_future_entry_t *entries;
     size_t entry_count;
     int error_number;
     bool result;
+    bool opened_mutation;
     esp32_mquickjs_resource_key_t resource_key;
     _Atomic bool completed;
     bool cancelled;
 };
+
+static JSValue fs_throw_read_limit_error(
+    JSContext *ctx,
+    const esp32_mquickjs_future_driver_state_t *state)
+{
+    JSGCRef error_ref;
+    JSValue *error;
+
+    (void)JS_ThrowRangeError(
+        ctx, "readText() refused %s because it exceeds maxBytes (%u)",
+        state->path, (unsigned)state->max_bytes);
+    if (!JS_HasException(ctx)) {
+        return JS_EXCEPTION;
+    }
+    error = JS_PushGCRef(ctx, &error_ref);
+    *error = JS_GetException(ctx);
+    if (JS_GetClassID(ctx, *error) >= 0 &&
+        (JS_IsException(JS_SetPropertyStr(
+             ctx, *error, "code",
+             JS_NewString(ctx, "FS_READ_LIMIT_EXCEEDED"))) ||
+         JS_IsException(JS_SetPropertyStr(
+             ctx, *error, "path", JS_NewString(ctx, state->path))) ||
+         JS_IsException(JS_SetPropertyStr(
+             ctx, *error, "maxBytes",
+             JS_NewUint32(ctx, (uint32_t)state->max_bytes))) ||
+         JS_IsException(JS_SetPropertyStr(
+             ctx, *error, "actualBytes",
+             JS_NewUint32(ctx, (uint32_t)state->actual_bytes))))) {
+        JS_PopGCRef(ctx, &error_ref);
+        return JS_EXCEPTION;
+    }
+    return JS_Throw(ctx, JS_PopGCRef(ctx, &error_ref));
+}
+
+static bool fs_number_to_bounded_size(JSContext *ctx,
+                                      JSValue value,
+                                      size_t minimum,
+                                      size_t maximum,
+                                      size_t *result)
+{
+    double number;
+    size_t converted;
+
+    if (result == NULL || !JS_IsNumber(ctx, value) ||
+        JS_ToNumber(ctx, &number, value) != 0 || !isfinite(number) ||
+        number < (double)minimum || number > (double)maximum) {
+        return false;
+    }
+    converted = (size_t)number;
+    if ((double)converted != number) {
+        return false;
+    }
+    *result = converted;
+    return true;
+}
+
+static bool fs_parse_read_text_options(JSContext *ctx,
+                                       int argc,
+                                       JSGCRef *argv,
+                                       size_t *max_bytes)
+{
+    JSGCRef keys_ref;
+    JSGCRef length_ref;
+    JSGCRef value_ref;
+    JSValue *keys;
+    JSValue *length_value;
+    JSValue *value;
+    int length = 0;
+    int index;
+
+    if (max_bytes == NULL) {
+        return false;
+    }
+    *max_bytes = CONFIG_ESP32_MQUICKJS_FS_READ_TEXT_MAX_BYTES;
+    if (argc < 2 || JS_IsUndefined(argv[1].val) || JS_IsNull(argv[1].val)) {
+        return true;
+    }
+    if (JS_GetClassID(ctx, argv[1].val) < 0 ||
+        JS_IsArray(ctx, argv[1].val)) {
+        JS_ThrowTypeError(ctx,
+                          "fs.readText(path, options?) expects an options object");
+        return false;
+    }
+
+    keys = JS_PushGCRef(ctx, &keys_ref);
+    length_value = JS_PushGCRef(ctx, &length_ref);
+    value = JS_PushGCRef(ctx, &value_ref);
+    *keys = js_object_keys(ctx, NULL, 1, &argv[1].val);
+    *length_value = JS_IsException(*keys)
+                        ? JS_EXCEPTION
+                        : JS_GetPropertyStr(ctx, *keys, "length");
+    if (JS_IsException(*length_value) ||
+        JS_ToInt32(ctx, &length, *length_value) != 0 || length < 0) {
+        goto fail;
+    }
+    for (index = 0; index < length; ++index) {
+        JSGCRef key_ref;
+        JSValue *key_value = JS_PushGCRef(ctx, &key_ref);
+        JSCStringBuf key_buf;
+        const char *key;
+
+        *key_value = JS_GetPropertyUint32(ctx, *keys, (uint32_t)index);
+        key = JS_IsException(*key_value)
+                  ? NULL
+                  : JS_ToCString(ctx, *key_value, &key_buf);
+        if (key == NULL || strcmp(key, "maxBytes") != 0) {
+            if (key != NULL) {
+                JS_ThrowTypeError(
+                    ctx,
+                    "fs.readText(path, options?) options contains unknown key '%s'",
+                    key);
+            }
+            JS_PopGCRef(ctx, &key_ref);
+            goto fail;
+        }
+        JS_PopGCRef(ctx, &key_ref);
+    }
+    *value = JS_GetPropertyStr(ctx, argv[1].val, "maxBytes");
+    if (!JS_IsUndefined(*value) &&
+        !fs_number_to_bounded_size(
+            ctx, *value, 1U,
+            CONFIG_ESP32_MQUICKJS_FS_READ_TEXT_MAX_BYTES, max_bytes)) {
+        JS_ThrowRangeError(
+            ctx,
+            "fs.readText(path, { maxBytes }) expects an integer in 1..%u",
+            (unsigned)CONFIG_ESP32_MQUICKJS_FS_READ_TEXT_MAX_BYTES);
+        goto fail;
+    }
+    JS_PopGCRef(ctx, &value_ref);
+    JS_PopGCRef(ctx, &length_ref);
+    JS_PopGCRef(ctx, &keys_ref);
+    return true;
+
+fail:
+    JS_PopGCRef(ctx, &value_ref);
+    JS_PopGCRef(ctx, &length_ref);
+    JS_PopGCRef(ctx, &keys_ref);
+    return false;
+}
 
 static bool fs_stream_mode_valid(const char *mode)
 {
@@ -964,7 +1112,7 @@ static bool fs_future_prepare_common(
                kind == FS_FUTURE_LIST ? "fs.list(path?)" :
                kind == FS_FUTURE_STAT ? "fs.stat(path)" :
                kind == FS_FUTURE_EXISTS ? "fs.exists(path)" :
-               kind == FS_FUTURE_READ_TEXT ? "fs.readText(path)" :
+               kind == FS_FUTURE_READ_TEXT ? "fs.readText(path, options?)" :
                kind == FS_FUTURE_WRITE_TEXT ? "fs.writeText(path, text)" :
                kind == FS_FUTURE_APPEND_TEXT ? "fs.appendText(path, text)" :
                kind == FS_FUTURE_REMOVE ? "fs.remove(path)" :
@@ -972,8 +1120,11 @@ static bool fs_future_prepare_common(
                "fs.mkdir(path)";
     if ((kind == FS_FUTURE_OPEN && (argc < 1 || argc > 2)) ||
         (kind == FS_FUTURE_LIST && argc > 1) ||
-        (kind != FS_FUTURE_OPEN && kind != FS_FUTURE_LIST && kind != FS_FUTURE_RENAME &&
-         kind != FS_FUTURE_WRITE_TEXT && kind != FS_FUTURE_APPEND_TEXT && argc != 1) ||
+        (kind == FS_FUTURE_READ_TEXT && (argc < 1 || argc > 2)) ||
+        (kind != FS_FUTURE_OPEN && kind != FS_FUTURE_LIST &&
+         kind != FS_FUTURE_RENAME && kind != FS_FUTURE_READ_TEXT &&
+         kind != FS_FUTURE_WRITE_TEXT && kind != FS_FUTURE_APPEND_TEXT &&
+         argc != 1) ||
         (kind == FS_FUTURE_RENAME && argc != 2) ||
         ((kind == FS_FUTURE_WRITE_TEXT || kind == FS_FUTURE_APPEND_TEXT) && argc != 2)) {
         JS_ThrowTypeError(ctx, "%s received invalid arguments", api_name);
@@ -1041,6 +1192,11 @@ static bool fs_future_prepare_common(
                               api_name);
         return false;
     }
+    if (kind == FS_FUTURE_READ_TEXT &&
+        !fs_parse_read_text_options(ctx, argc, argv, &state->max_bytes)) {
+        fs_future_release(state);
+        return false;
+    }
     if (kind == FS_FUTURE_WRITE_TEXT || kind == FS_FUTURE_APPEND_TEXT) {
         JSCStringBuf text_buf;
         const char *text;
@@ -1090,6 +1246,214 @@ FS_PREPARE(fs_mkdir_future_prepare, FS_FUTURE_MKDIR)
 
 #undef FS_PREPARE
 
+static int fs_read_text_bounded(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    FILE *file;
+    struct stat stat_value;
+    size_t capacity;
+    size_t length = 0;
+    char *data;
+    int result = 0;
+
+    file = fopen(state->path, "rb");
+    if (file == NULL) {
+        return errno != 0 ? errno : EIO;
+    }
+    if (fstat(fileno(file), &stat_value) != 0) {
+        result = errno != 0 ? errno : EIO;
+        goto done;
+    }
+    if (stat_value.st_size < 0) {
+        result = EIO;
+        goto done;
+    }
+    state->actual_bytes = (size_t)stat_value.st_size;
+    if ((uint64_t)stat_value.st_size > (uint64_t)state->max_bytes) {
+        result = EFBIG;
+        goto done;
+    }
+
+    capacity = (size_t)stat_value.st_size;
+    if (capacity == 0) {
+        capacity = 1U;
+    }
+    data = esp32_mquickjs_memory_payload_alloc(
+        capacity + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+    if (data == NULL) {
+        result = ENOMEM;
+        goto done;
+    }
+
+    for (;;) {
+        size_t available = capacity - length;
+        size_t read_length;
+
+        if (available == 0) {
+            if (capacity >= state->max_bytes) {
+                int extra = fgetc(file);
+
+                if (extra != EOF) {
+                    state->actual_bytes = state->max_bytes + 1U;
+                    result = EFBIG;
+                } else if (ferror(file)) {
+                    result = errno != 0 ? errno : EIO;
+                }
+                break;
+            }
+            {
+                size_t next_capacity = capacity > state->max_bytes / 2U
+                                           ? state->max_bytes
+                                           : capacity * 2U;
+                char *grown = esp32_mquickjs_memory_payload_realloc(
+                    data, next_capacity + 1U,
+                    ESP32_MQUICKJS_MEMORY_EXTERNAL);
+
+                if (grown == NULL) {
+                    result = ENOMEM;
+                    break;
+                }
+                data = grown;
+                capacity = next_capacity;
+                continue;
+            }
+        }
+
+        read_length = fread(data + length, 1, available, file);
+        length += read_length;
+        if (read_length < available) {
+            if (ferror(file)) {
+                result = errno != 0 ? errno : EIO;
+            }
+            break;
+        }
+    }
+
+    if (result == 0) {
+        data[length] = '\0';
+        state->data = data;
+        state->data_length = length;
+        state->actual_bytes = length;
+        data = NULL;
+    }
+    heap_caps_free(data);
+
+done:
+    if (fclose(file) != 0 && result == 0) {
+        result = errno != 0 ? errno : EIO;
+    }
+    return result;
+}
+
+static uint32_t fs_atomic_path_hash(const char *path)
+{
+    const uint8_t *cursor = (const uint8_t *)path;
+    uint32_t hash = 2166136261U;
+
+    while (cursor != NULL && *cursor != '\0') {
+        hash ^= *cursor++;
+        hash *= 16777619U;
+    }
+    return hash;
+}
+
+static int fs_open_atomic_temp(const char *path,
+                               char *temp_path,
+                               size_t temp_path_size,
+                               FILE **out_file)
+{
+    const char *separator = strrchr(path, '/');
+    size_t directory_length;
+    uint32_t hash;
+    uint32_t attempt;
+
+    if (separator == NULL || separator == path || temp_path == NULL ||
+        out_file == NULL) {
+        return EINVAL;
+    }
+    directory_length = (size_t)(separator - path);
+    hash = fs_atomic_path_hash(path);
+    *out_file = NULL;
+    for (attempt = 0; attempt < ESP32_MQUICKJS_FS_ATOMIC_TEMP_ATTEMPTS;
+         ++attempt) {
+        uint32_t counter = atomic_fetch_add_explicit(
+            &s_fs_atomic_temp_counter, 1U, memory_order_relaxed);
+        int needed = snprintf(temp_path, temp_path_size,
+                              "%.*s/.qjs-%08" PRIx32 "-%08" PRIx32 ".tmp",
+                              (int)directory_length, path, hash, counter);
+        int fd;
+
+        if (needed <= 0 || (size_t)needed >= temp_path_size) {
+            return ENAMETOOLONG;
+        }
+        fd = open(temp_path, O_WRONLY | O_CREAT | O_EXCL | O_TRUNC, 0600);
+        if (fd >= 0) {
+            *out_file = fdopen(fd, "wb");
+            if (*out_file == NULL) {
+                int open_error = errno != 0 ? errno : EIO;
+
+                close(fd);
+                unlink(temp_path);
+                return open_error;
+            }
+            return 0;
+        }
+        if (errno != EEXIST) {
+            return errno != 0 ? errno : EIO;
+        }
+    }
+    return EEXIST;
+}
+
+static int fs_write_file_and_sync(FILE *file,
+                                  const char *data,
+                                  size_t data_length)
+{
+    size_t written = 0;
+    int result = 0;
+
+    while (written < data_length) {
+        size_t chunk = fwrite(data + written, 1, data_length - written, file);
+
+        if (chunk == 0) {
+            result = errno != 0 ? errno : EIO;
+            break;
+        }
+        written += chunk;
+    }
+    if (result == 0 && fflush(file) != 0) {
+        result = errno != 0 ? errno : EIO;
+    }
+    if (result == 0 && fsync(fileno(file)) != 0) {
+        result = errno != 0 ? errno : EIO;
+    }
+    if (fclose(file) != 0 && result == 0) {
+        result = errno != 0 ? errno : EIO;
+    }
+    return result;
+}
+
+static int fs_write_text_atomic(
+    const esp32_mquickjs_future_driver_state_t *state)
+{
+    char temp_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+    FILE *file = NULL;
+    int result = fs_open_atomic_temp(state->path, temp_path,
+                                     sizeof(temp_path), &file);
+
+    if (result != 0) {
+        return result;
+    }
+    result = fs_write_file_and_sync(file, state->data, state->data_length);
+    if (result == 0 && rename(temp_path, state->path) != 0) {
+        result = errno != 0 ? errno : EIO;
+    }
+    if (result != 0) {
+        unlink(temp_path);
+    }
+    return result;
+}
+
 static void fs_future_worker(void *opaque)
 {
     esp32_mquickjs_future_driver_state_t *state = opaque;
@@ -1104,10 +1468,10 @@ static void fs_future_worker(void *opaque)
         state->file = fopen(state->path, state->mode);
         if (state->file == NULL) {
             state->error_number = errno;
-        } else if (state->mode[0] == 'w' ||
-                   (state->mode[0] == 'a' && !path_existed)) {
-            esp32_mquickjs_fs_notify_change(
-                ESP32_MQUICKJS_FS_CHANGE_WRITE, state->path, NULL);
+        } else {
+            state->opened_mutation =
+                state->mode[0] == 'w' ||
+                (state->mode[0] == 'a' && !path_existed);
         }
     } else if (state->kind == FS_FUTURE_LIST) {
         DIR *dir = opendir(state->path);
@@ -1160,31 +1524,26 @@ static void fs_future_worker(void *opaque)
             state->error_number = errno;
         }
     } else if (state->kind == FS_FUTURE_READ_TEXT) {
-        state->data = (char *)load_script_file(state->path, &state->data_length);
-        if (state->data == NULL) {
-            state->error_number = errno != 0 ? errno : EIO;
+        state->error_number = fs_read_text_bounded(state);
+    } else if (state->kind == FS_FUTURE_WRITE_TEXT) {
+        state->error_number = fs_write_text_atomic(state);
+        if (state->error_number == 0) {
+            esp32_mquickjs_fs_notify_change(
+                ESP32_MQUICKJS_FS_CHANGE_WRITE, state->path, NULL);
         }
-    } else if (state->kind == FS_FUTURE_WRITE_TEXT ||
-               state->kind == FS_FUTURE_APPEND_TEXT) {
+    } else if (state->kind == FS_FUTURE_APPEND_TEXT) {
         bool path_existed = access(state->path, F_OK) == 0;
-        bool opened_mutation;
-        FILE *file = fopen(state->path,
-                           state->kind == FS_FUTURE_APPEND_TEXT ? "ab" : "wb");
+        FILE *file = fopen(state->path, "ab");
 
         if (file == NULL) {
             state->error_number = errno;
         } else {
-            size_t written = fwrite(state->data, 1, state->data_length, file);
-            int close_result = fclose(file);
-            int write_error = errno;
-
-            opened_mutation = state->kind == FS_FUTURE_WRITE_TEXT || !path_existed;
-            if (opened_mutation || written > 0U) {
+            state->error_number = fs_write_file_and_sync(
+                file, state->data, state->data_length);
+            if (state->error_number == 0 &&
+                (!path_existed || state->data_length > 0U)) {
                 esp32_mquickjs_fs_notify_change(
                     ESP32_MQUICKJS_FS_CHANGE_WRITE, state->path, NULL);
-            }
-            if (close_result != 0 || written != state->data_length) {
-                state->error_number = write_error != 0 ? write_error : EIO;
             }
         }
     } else if (state->kind == FS_FUTURE_REMOVE) {
@@ -1263,6 +1622,10 @@ static JSValue fs_future_finish(JSContext *ctx,
         return JS_ThrowInternalError(ctx, "filesystem operation cancelled");
     }
     if (state->error_number != 0) {
+        if (state->kind == FS_FUTURE_READ_TEXT &&
+            state->error_number == EFBIG) {
+            return fs_throw_read_limit_error(ctx, state);
+        }
         return fs_throw_error(ctx, fs_future_action(state), state->path,
                               state->error_number);
     }
@@ -1275,7 +1638,8 @@ static JSValue fs_future_finish(JSContext *ctx,
         result = JS_IsException(*global_obj)
             ? JS_EXCEPTION
             : esp32_mquickjs_stream_adopt_file(ctx, *global_obj, state->path,
-                                               state->mode, state->file);
+                                               state->mode, state->file,
+                                               state->opened_mutation);
         if (!JS_IsException(result)) {
             state->file = NULL;
         } else {

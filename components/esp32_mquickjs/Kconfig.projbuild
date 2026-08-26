@@ -24,6 +24,16 @@ config ESP32_MQUICKJS_FEATURE_FS
     help
         Enable the LittleFS-backed fs module and related script-path settings.
 
+config ESP32_MQUICKJS_FS_READ_TEXT_MAX_BYTES
+    int "Maximum fs.readText payload size"
+    range 1 1048576
+    default 65536
+    depends on ESP32_MQUICKJS_FEATURE_FS
+    help
+        Hard upper bound for one fs.readText() allocation. Callers may request
+        a smaller maxBytes limit; larger files must be consumed through a
+        binary or text Stream instead of being materialized as one JS string.
+
 config ESP32_MQUICKJS_FEATURE_NVS
     bool "Enable bounded NVS string module"
     default n

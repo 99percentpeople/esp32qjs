@@ -15,7 +15,15 @@ test("stream/stream", function () {
   var queuedSeek;
   var queuedRead;
   var queuedResults;
+  var spanPath = "stream-span-source.bin";
+  var spanBitmap;
+  var spanSource;
+  var spanStream;
+  var spanWrite;
+  var streamChanges;
+  var streamChange;
 
+  streamChanges = fs.watch();
   writeStream = fs.open(path, "w+");
   test.equal(writeStream.kind, "file", "stream kind");
   test.equal(writeStream.mode, "w+", "stream mode");
@@ -36,12 +44,22 @@ test("stream/stream", function () {
   test.equal(queuedResults[1], 3, "second queued write byte count");
   test.equal(queuedResults[3], "abcdef",
     "same-stream Futures should execute in submission order");
+  test.equal(streamChanges.receive(0), null,
+    "stream writes should not publish before a successful commit");
   writeStream.seek(0, Stream.SEEK_END);
   writeStream.flush();
+  streamChange = streamChanges.receive(0);
+  test.equal(streamChange.type, "write",
+    "stream flush should publish one committed write event");
+  test.equal(streamChange.path, path,
+    "stream flush event path");
   test.equal(writeStream.tell(), 6, "tell after write");
   writeStream.seek(0, Stream.SEEK_SET);
   test.equal(writeStream.read(2), "ab", "read after write");
   writeStream.close();
+  test.equal(streamChanges.receive(0), null,
+    "closing a clean stream should not duplicate the write event");
+  streamChanges.close();
 
   stream = fs.open(path, "r");
   test.ok(stream.readable, "read stream should be readable");
@@ -98,6 +116,34 @@ test("stream/stream", function () {
     "closed ByteView should reject later reads");
   test.equal(stream.read(1), null, "binary read at eof should return null");
   stream.close();
+
+  if (sys.info.features.bitmap && typeof bitmap === "object") {
+    spanBitmap = bitmap.create({
+      width: 4,
+      height: 2,
+      format: "gray8",
+      chunkBytes: 2
+    });
+    spanBitmap.clear(0x2a);
+    spanSource = spanBitmap.createSpanSource({ chunkBytes: 2 });
+    spanStream = fs.open(spanPath, "wb");
+    try {
+      spanWrite = Future.call(spanStream.write, spanStream, [spanSource]);
+      test.equal(spanWrite.wait(1000), 8,
+        "binary Stream Future should consume all ByteSpanSource spans");
+      spanStream.close();
+      spanStream = null;
+      test.equal(fs.stat(spanPath).size, 8,
+        "ByteSpanSource stream output should have the exact byte length");
+    } finally {
+      if (spanStream !== null) {
+        spanStream.close();
+      }
+      spanSource.close();
+      spanBitmap.close();
+    }
+    fs.remove(spanPath);
+  }
   fs.remove(path);
   fs.remove(binaryPath);
 

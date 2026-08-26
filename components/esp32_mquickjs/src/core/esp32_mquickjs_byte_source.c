@@ -14,6 +14,7 @@ typedef struct {
     size_t length;
     uint8_t *owned_data;
     uint16_t read_leases;
+    bool closed;
 } esp32_mquickjs_byte_view_t;
 
 typedef struct {
@@ -114,7 +115,7 @@ static esp32_mquickjs_byte_view_t *byte_view_from_value(JSContext *ctx,
         return NULL;
     }
     view = JS_GetOpaque(ctx, value);
-    if (view == NULL || view->data == NULL) {
+    if (view == NULL || view->closed) {
         JS_ThrowReferenceError(ctx, "%s failed because the ByteView is closed", api_name);
         return NULL;
     }
@@ -175,6 +176,7 @@ static JSValue byte_view_make(JSContext *ctx,
     view->length = length;
     view->owned_data = owned_data;
     view->read_leases = 0;
+    view->closed = false;
     JS_SetOpaque(ctx, *object, view);
 
     if (!JS_IsUndefined(*rooted_owner) &&
@@ -571,7 +573,7 @@ bool esp32_mquickjs_byte_view_is_open(JSContext *ctx, JSValue value)
         return false;
     }
     view = JS_GetOpaque(ctx, value);
-    return view != NULL && view->data != NULL;
+    return view != NULL && !view->closed;
 }
 
 bool esp32_mquickjs_update_byte_view(JSContext *ctx,
@@ -668,6 +670,7 @@ static void byte_view_release(esp32_mquickjs_byte_view_t *view)
     view->owned_data = NULL;
     view->data = NULL;
     view->length = 0;
+    view->closed = true;
 }
 
 JSValue js_byte_view_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

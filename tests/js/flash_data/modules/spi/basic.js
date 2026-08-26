@@ -6,6 +6,8 @@ test("spi/basic", function () {
   var deviceStatus;
   var overrideBus;
   var overrideStatus;
+  var emptyTransfer;
+  var emptyRead;
   var staleBusError = "";
   var staleDeviceError = "";
 
@@ -74,8 +76,21 @@ test("spi/basic", function () {
       buffer.close();
     }
   }
-  test.equal(device.transfer([]).length, 0, "SPIDevice.transfer([]) should return an empty array");
-  test.equal(device.read(0).length, 0, "SPIDevice.read(0) should return an empty array");
+  emptyTransfer = device.transfer([]);
+  emptyRead = device.read(0);
+  try {
+    test.ok(emptyTransfer instanceof _ByteView,
+      "SPIDevice.transfer() should return a ByteView");
+    test.ok(emptyRead instanceof _ByteView,
+      "SPIDevice.read() should return a ByteView");
+    test.equal(emptyTransfer.length, 0,
+      "SPIDevice.transfer([]) should return an empty ByteView");
+    test.equal(emptyRead.length, 0,
+      "SPIDevice.read(0) should return an empty ByteView");
+  } finally {
+    emptyTransfer.close();
+    emptyRead.close();
+  }
 
   test.equal(bus.close(), true, "SPIBus.close() should succeed");
 

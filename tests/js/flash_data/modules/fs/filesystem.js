@@ -23,6 +23,10 @@ test("fs/filesystem", function () {
   var streamText;
   var leaked;
   var index;
+  var limitError = null;
+  var invalidLimitError = "";
+  var unknownOptionError = "";
+  var atomicTempFound = false;
 
   test.equal(fs.ROOT, "/littlefs", "fs root");
   systemFs = fs;
@@ -52,6 +56,34 @@ test("fs/filesystem", function () {
   test.equal(change.type, "write", "watch write type");
   test.equal(change.path, filePath, "watch write path");
   test.equal(fs.readText(filePath), "hello", "readText round-trip");
+  test.equal(fs.readText(filePath, { maxBytes: 5 }), "hello",
+    "readText should accept content at the configured limit");
+  try {
+    fs.readText(filePath, { maxBytes: 4 });
+  } catch (readLimitError) {
+    limitError = readLimitError;
+  }
+  test.ok(limitError !== null, "readText should reject content above maxBytes");
+  test.equal(limitError.code, "FS_READ_LIMIT_EXCEEDED",
+    "readText limit error code");
+  test.equal(limitError.maxBytes, 4, "readText limit error maxBytes");
+  test.equal(limitError.actualBytes, 5, "readText limit error actualBytes");
+  test.ok(String(limitError.path).indexOf(filePath) >= 0,
+    "readText limit error path");
+  try {
+    fs.readText(filePath, { maxBytes: 0 });
+  } catch (invalidReadLimitError) {
+    invalidLimitError = String(invalidReadLimitError);
+  }
+  test.ok(invalidLimitError.indexOf("1..") >= 0,
+    "readText should reject maxBytes below the configured range");
+  try {
+    fs.readText(filePath, { limit: 5 });
+  } catch (unknownReadOptionError) {
+    unknownOptionError = String(unknownReadOptionError);
+  }
+  test.ok(unknownOptionError.indexOf("unknown key 'limit'") >= 0,
+    "readText should reject unknown options");
   appended = fs.appendText(filePath, "!");
   test.equal(appended, 1, "appendText byte count");
   test.equal(changes.receive(0).type, "write", "watch append type");
@@ -68,6 +100,14 @@ test("fs/filesystem", function () {
   laneResults = Future.all([laneWrite, laneAppend, laneRead]).wait(2000);
   test.equal(laneResults[2], "lane-first-second",
     "same-volume Futures should execute in submission order");
+  entries = fs.list(dirPath);
+  for (index = 0; index < entries.length; index += 1) {
+    if (entries[index].name.indexOf(".qjs-") === 0) {
+      atomicTempFound = true;
+    }
+  }
+  test.ok(!atomicTempFound,
+    "successful atomic writeText should not leave temporary files");
 
   stream = Future.call(fs.open, fs, [filePath, "r"]).wait(1000);
   pendingStreamRead = Future.call(stream.read, stream, [16]);

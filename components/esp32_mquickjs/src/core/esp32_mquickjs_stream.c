@@ -37,6 +37,7 @@ typedef struct {
     bool externally_acquired;
     bool close_queued;
     bool release_pending;
+    bool write_dirty;
     uint16_t owner_count;
     uint16_t future_reservations;
     char *path;
@@ -134,8 +135,13 @@ static void stream_cleanup_slot(esp32_mquickjs_stream_slot_t *slot)
     }
 
     if (slot->kind == ESP32_MQUICKJS_STREAM_KIND_FILE && slot->handle.file != NULL) {
-        fclose(slot->handle.file);
+        int close_result = fclose(slot->handle.file);
+
         slot->handle.file = NULL;
+        if (close_result == 0 && slot->write_dirty && slot->path != NULL) {
+            esp32_mquickjs_fs_notify_change(
+                ESP32_MQUICKJS_FS_CHANGE_WRITE, slot->path, NULL);
+        }
     } else if (slot->kind == ESP32_MQUICKJS_STREAM_KIND_MEMORY && slot->handle.memory.owned) {
         heap_caps_free(slot->handle.memory.data);
         slot->handle.memory.data = NULL;
@@ -159,6 +165,7 @@ static void stream_cleanup_slot(esp32_mquickjs_stream_slot_t *slot)
     slot->externally_acquired = false;
     slot->close_queued = false;
     slot->release_pending = false;
+    slot->write_dirty = false;
     slot->owner_count = 0;
     slot->future_reservations = 0;
     slot->kind = ESP32_MQUICKJS_STREAM_KIND_FILE;
@@ -533,18 +540,17 @@ JSValue esp32_mquickjs_stream_open_file(JSContext *ctx,
     if (file == NULL) {
         return JS_ThrowInternalError(ctx, "open() failed for %s", path);
     }
-    if (mode[0] == 'w' || (mode[0] == 'a' && !path_existed)) {
-        esp32_mquickjs_fs_notify_change(
-            ESP32_MQUICKJS_FS_CHANGE_WRITE, path, NULL);
-    }
-    return esp32_mquickjs_stream_adopt_file(ctx, global_obj, path, mode, file);
+    return esp32_mquickjs_stream_adopt_file(
+        ctx, global_obj, path, mode, file,
+        mode[0] == 'w' || (mode[0] == 'a' && !path_existed));
 }
 
 JSValue esp32_mquickjs_stream_adopt_file(JSContext *ctx,
                                          JSValue global_obj,
                                          const char *path,
                                          const char *mode,
-                                         void *file_handle)
+                                         void *file_handle,
+                                         bool initial_write_dirty)
 {
     esp32_mquickjs_stream_slot_t *slot;
     JSValue result;
@@ -569,6 +575,7 @@ JSValue esp32_mquickjs_stream_adopt_file(JSContext *ctx,
     slot->kind = ESP32_MQUICKJS_STREAM_KIND_FILE;
     slot->binary = strchr(mode, 'b') != NULL;
     slot->seekable = true;
+    slot->write_dirty = initial_write_dirty;
     slot->handle.file = (FILE *)file_handle;
     slot->path = heap_caps_malloc(strlen(path) + 1, MALLOC_CAP_8BIT);
     if (slot->path == NULL) {
@@ -1011,7 +1018,10 @@ typedef enum {
 
 struct esp32_mquickjs_future_driver_state {
     stream_future_kind_t kind;
+    JSContext *ctx;
     esp32_mquickjs_fs_stream_ref_t ref;
+    esp32_mquickjs_runtime_t *runtime;
+    esp32_mquickjs_future_token_t token;
     uint8_t *data;
     size_t data_length;
     size_t io_length;
@@ -1022,95 +1032,17 @@ struct esp32_mquickjs_future_driver_state {
     bool binary;
     bool closed;
     bool reservation_retained;
+    esp32_mquickjs_byte_span_source_t span_source;
+    esp32_mquickjs_byte_span_t span;
+    JSGCRef source_error_ref;
+    bool span_source_opened;
+    bool source_error_retained;
+    bool span_worker_active;
     esp32_mquickjs_resource_key_t resource_key;
+    _Atomic bool span_worker_completed;
     _Atomic bool completed;
     _Atomic bool cancelled;
 };
-
-static bool stream_collect_span_source(
-    JSContext *ctx,
-    JSValue value,
-    uint8_t **out_data,
-    size_t *out_length)
-{
-    esp32_mquickjs_byte_span_source_t source;
-    esp32_mquickjs_byte_span_t span;
-    JSValue error = JS_UNDEFINED;
-    uint8_t *data = NULL;
-    size_t length = 0;
-    size_t capacity = 0;
-    size_t known_length = 0;
-    bool success = false;
-
-    *out_data = NULL;
-    *out_length = 0;
-    if (esp32_mquickjs_byte_span_source_known_length(ctx, value,
-                                                     &known_length) &&
-        known_length > 0) {
-        data = esp32_mquickjs_memory_payload_alloc(
-            known_length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
-        if (data == NULL) {
-            JS_ThrowOutOfMemory(ctx);
-            return false;
-        }
-        capacity = known_length;
-    }
-    if (!esp32_mquickjs_open_byte_span_source(
-            ctx, value, "stream.write(data)", &source, &error)) {
-        heap_caps_free(data);
-        if (!JS_HasException(ctx)) {
-            JS_ThrowInternalError(ctx, "stream.write(data) could not open its source");
-        }
-        return false;
-    }
-    esp32_mquickjs_byte_span_clear(&span);
-    while (esp32_mquickjs_byte_span_source_next(ctx, &source, &span)) {
-        uint8_t *grown;
-        size_t needed;
-        size_t new_capacity;
-
-        if (span.length == 0) {
-            continue;
-        }
-        if (span.data == NULL || span.length > SIZE_MAX - length) {
-            JS_ThrowOutOfMemory(ctx);
-            goto done;
-        }
-        needed = length + span.length;
-        new_capacity = capacity == 0 ? 1024U : capacity;
-        while (new_capacity < needed) {
-            if (new_capacity > SIZE_MAX / 2U) {
-                new_capacity = needed;
-                break;
-            }
-            new_capacity *= 2U;
-        }
-        if (new_capacity != capacity) {
-            grown = esp32_mquickjs_memory_payload_realloc(
-                data, new_capacity, ESP32_MQUICKJS_MEMORY_EXTERNAL);
-            if (grown == NULL) {
-                JS_ThrowOutOfMemory(ctx);
-                goto done;
-            }
-            data = grown;
-            capacity = new_capacity;
-        }
-        memcpy(data + length, span.data, span.length);
-        length += span.length;
-    }
-    if (JS_HasException(ctx)) {
-        goto done;
-    }
-    *out_data = data;
-    *out_length = length;
-    data = NULL;
-    success = true;
-
-done:
-    esp32_mquickjs_byte_span_source_close(ctx, &source);
-    heap_caps_free(data);
-    return success;
-}
 
 static void stream_future_release(
     esp32_mquickjs_future_driver_state_t *state)
@@ -1121,6 +1053,15 @@ static void stream_future_release(
         return;
     }
     heap_caps_free(state->data);
+    if (state->span_source_opened) {
+        esp32_mquickjs_byte_span_source_close(state->ctx,
+                                               &state->span_source);
+        state->span_source_opened = false;
+    }
+    if (state->source_error_retained) {
+        JS_DeleteGCRef(state->ctx, &state->source_error_ref);
+        state->source_error_retained = false;
+    }
     slot = stream_get_slot(&state->ref);
     if (slot != NULL) {
         if (state->reservation_retained && slot->future_reservations > 0) {
@@ -1172,8 +1113,11 @@ static bool stream_future_prepare_common(
     }
     atomic_init(&state->completed, false);
     atomic_init(&state->cancelled, false);
+    atomic_init(&state->span_worker_completed, false);
     state->kind = kind;
+    state->ctx = ctx;
     state->binary = slot->binary;
+    esp32_mquickjs_byte_span_clear(&state->span);
     state->resource_key = slot->kind == ESP32_MQUICKJS_STREAM_KIND_FILE
         ? esp32_mquickjs_fs_resource_key_for_path(slot->path)
         : slot;
@@ -1220,11 +1164,19 @@ static bool stream_future_prepare_common(
 
             if (class_id == JS_CLASS_BYTE_SPAN_SOURCE ||
                 class_id == JS_CLASS_BITMAP_SPAN_SOURCE) {
-                if (!stream_collect_span_source(ctx, argv[0].val,
-                                                &state->data,
-                                                &state->data_length)) {
+                JSValue error = JS_UNDEFINED;
+
+                if (!esp32_mquickjs_open_byte_span_source(
+                        ctx, argv[0].val, "stream.write(data)",
+                        &state->span_source, &error)) {
+                    if (!JS_HasException(ctx)) {
+                        JS_ThrowInternalError(
+                            ctx,
+                            "stream.write(data) could not open its source");
+                    }
                     goto fail;
                 }
+                state->span_source_opened = true;
             } else {
                 esp32_mquickjs_byte_source_t source;
                 uint8_t *owned = NULL;
@@ -1320,6 +1272,70 @@ STREAM_PREPARE(stream_seek_future_prepare, STREAM_FUTURE_SEEK)
 
 #undef STREAM_PREPARE
 
+static void stream_future_retain_source_exception(
+    esp32_mquickjs_future_driver_state_t *state,
+    const char *fallback)
+{
+    JSValue *error;
+
+    if (state == NULL || state->source_error_retained) {
+        return;
+    }
+    if (!JS_HasException(state->ctx)) {
+        (void)JS_ThrowInternalError(state->ctx, "%s", fallback);
+    }
+    error = JS_AddGCRef(state->ctx, &state->source_error_ref);
+    *error = JS_GetException(state->ctx);
+    state->source_error_retained = true;
+}
+
+static bool stream_future_next_source_span(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    unsigned empty_spans = 0;
+
+    while (state != NULL && state->span_source_opened &&
+           !atomic_load_explicit(&state->cancelled, memory_order_acquire)) {
+        if (!esp32_mquickjs_byte_span_source_next(
+                state->ctx, &state->span_source, &state->span)) {
+            if (JS_HasException(state->ctx)) {
+                stream_future_retain_source_exception(
+                    state, "stream.write(data) source iteration failed");
+            }
+            atomic_store_explicit(&state->completed, true,
+                                  memory_order_release);
+            return false;
+        }
+        if (state->span.length == 0) {
+            if (++empty_spans > 16U) {
+                (void)JS_ThrowInternalError(
+                    state->ctx,
+                    "stream.write(data) source produced too many empty spans");
+                stream_future_retain_source_exception(
+                    state, "stream.write(data) source iteration failed");
+                atomic_store_explicit(&state->completed, true,
+                                      memory_order_release);
+                return false;
+            }
+            continue;
+        }
+        if (state->span.data == NULL ||
+            state->span.length > SIZE_MAX - state->io_length) {
+            (void)JS_ThrowInternalError(
+                state->ctx,
+                "stream.write(data) source produced an invalid span");
+            stream_future_retain_source_exception(
+                state, "stream.write(data) source produced an invalid span");
+            atomic_store_explicit(&state->completed, true,
+                                  memory_order_release);
+            return false;
+        }
+        return true;
+    }
+    atomic_store_explicit(&state->completed, true, memory_order_release);
+    return false;
+}
+
 static void stream_future_worker(void *opaque)
 {
     esp32_mquickjs_future_driver_state_t *state = opaque;
@@ -1337,23 +1353,50 @@ static void stream_future_worker(void *opaque)
             state->error_number = errno != 0 ? errno : EIO;
         }
     } else if (state->kind == STREAM_FUTURE_WRITE) {
+        if (state->span_source_opened) {
+            if (!atomic_load_explicit(&state->cancelled,
+                                      memory_order_acquire)) {
+                size_t written = fwrite(state->span.data, 1,
+                                        state->span.length,
+                                        slot->handle.file);
+
+                if (written != state->span.length) {
+                    state->error_number = errno != 0 ? errno : EIO;
+                } else {
+                    state->io_length += written;
+                    if (written > 0) {
+                        slot->write_dirty = true;
+                    }
+                }
+            }
+            atomic_store_explicit(&state->span_worker_completed, true,
+                                  memory_order_release);
+            return;
+        }
         state->io_length = fwrite(state->data, 1, state->data_length,
                                   slot->handle.file);
         if (state->io_length != state->data_length) {
             state->error_number = errno != 0 ? errno : EIO;
         } else if (state->io_length > 0) {
-            esp32_mquickjs_fs_notify_change(
-                ESP32_MQUICKJS_FS_CHANGE_WRITE, slot->path, NULL);
+            slot->write_dirty = true;
         }
     } else if (state->kind == STREAM_FUTURE_FLUSH) {
         if (fflush(slot->handle.file) != 0) {
             state->error_number = errno != 0 ? errno : EIO;
+        } else if (slot->write_dirty) {
+            esp32_mquickjs_fs_notify_change(
+                ESP32_MQUICKJS_FS_CHANGE_WRITE, slot->path, NULL);
+            slot->write_dirty = false;
         }
     } else if (state->kind == STREAM_FUTURE_CLOSE) {
         if (slot->kind == ESP32_MQUICKJS_STREAM_KIND_FILE &&
             slot->handle.file != NULL) {
             if (fclose(slot->handle.file) != 0) {
                 state->error_number = errno != 0 ? errno : EIO;
+            } else if (slot->write_dirty) {
+                esp32_mquickjs_fs_notify_change(
+                    ESP32_MQUICKJS_FS_CHANGE_WRITE, slot->path, NULL);
+                slot->write_dirty = false;
             }
             slot->handle.file = NULL;
         }
@@ -1379,7 +1422,27 @@ static bool stream_future_start(
     if (slot == NULL) {
         return false;
     }
+    state->runtime = runtime;
+    state->token = token;
     if (slot->kind == ESP32_MQUICKJS_STREAM_KIND_FILE) {
+        if (state->kind == STREAM_FUTURE_WRITE &&
+            state->span_source_opened) {
+            if (!stream_future_next_source_span(state)) {
+                (void)esp32_mquickjs_future_wake(runtime, token);
+                return true;
+            }
+            atomic_store_explicit(&state->span_worker_completed, false,
+                                  memory_order_release);
+            state->span_worker_active = true;
+            if (!esp32_mquickjs_future_submit_worker(
+                    runtime, token, stream_future_worker, state)) {
+                state->span_worker_active = false;
+                JS_ThrowInternalError(
+                    ctx, "stream Future worker queue is busy");
+                return false;
+            }
+            return true;
+        }
         if (!esp32_mquickjs_future_submit_worker(
                 runtime, token, stream_future_worker, state)) {
             JS_ThrowInternalError(ctx, "stream Future worker queue is busy");
@@ -1413,6 +1476,36 @@ static bool stream_future_start(
 static esp32_mquickjs_future_poll_t stream_future_poll(
     esp32_mquickjs_future_driver_state_t *state)
 {
+    if (state != NULL && state->span_source_opened) {
+        if (atomic_load_explicit(&state->completed, memory_order_acquire)) {
+            return ESP32_MQUICKJS_FUTURE_READY;
+        }
+        if (!state->span_worker_active ||
+            !atomic_load_explicit(&state->span_worker_completed,
+                                  memory_order_acquire)) {
+            return ESP32_MQUICKJS_FUTURE_PENDING;
+        }
+        state->span_worker_active = false;
+        if (state->error_number != 0 ||
+            atomic_load_explicit(&state->cancelled, memory_order_acquire) ||
+            !stream_future_next_source_span(state)) {
+            atomic_store_explicit(&state->completed, true,
+                                  memory_order_release);
+            return ESP32_MQUICKJS_FUTURE_READY;
+        }
+        atomic_store_explicit(&state->span_worker_completed, false,
+                              memory_order_release);
+        state->span_worker_active = true;
+        if (!esp32_mquickjs_future_submit_worker(
+                state->runtime, state->token, stream_future_worker, state)) {
+            state->span_worker_active = false;
+            state->error_number = EBUSY;
+            atomic_store_explicit(&state->completed, true,
+                                  memory_order_release);
+            return ESP32_MQUICKJS_FUTURE_READY;
+        }
+        return ESP32_MQUICKJS_FUTURE_PENDING;
+    }
     return state != NULL && atomic_load_explicit(
                                 &state->completed, memory_order_acquire)
         ? ESP32_MQUICKJS_FUTURE_READY
@@ -1426,6 +1519,9 @@ static JSValue stream_future_finish(
     if (state == NULL || atomic_load_explicit(
                              &state->cancelled, memory_order_acquire)) {
         return JS_ThrowInternalError(ctx, "stream operation cancelled");
+    }
+    if (state->source_error_retained) {
+        return JS_Throw(ctx, state->source_error_ref.val);
     }
     if (state->error_number != 0) {
         return JS_ThrowInternalError(ctx, "stream operation failed (%s)",
