@@ -1840,6 +1840,8 @@ internal memory. The full ESP-IDF certificate bundle accepts valid
 cross-signed public-CA chains. Peer and intermediate certificate dates remain
 verified; a bundle-generated trust anchor has no encoded validity dates and is
 treated as the trusted public key it represents.
+HTTPS, secure WebSocket connections, and raw TLS sockets all use this same
+certificate-bundle verification path.
 If external RAM encryption is not enabled, TLS session
 material in PSRAM remains readable to an attacker with physical memory access.
 

@@ -8,12 +8,12 @@
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_net.h"
 #include "utils/esp32_mquickjs_byte_source.h"
+#include "utils/esp32_mquickjs_tls_error.h"
 
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
-#include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "esp_websocket_client.h"
@@ -856,7 +856,7 @@ JSValue js_websocket_open(JSContext *ctx,
     config.task_prio = 5;
     config.buffer_size = 1024;
     if (use_cert_bundle && strncmp(url_copy, "wss://", 6) == 0) {
-        config.crt_bundle_attach = esp_crt_bundle_attach;
+        config.crt_bundle_attach = esp32_mquickjs_tls_crt_bundle_attach;
     }
 
     client = esp_websocket_client_init(&config);

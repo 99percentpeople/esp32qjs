@@ -42,6 +42,9 @@ class TlsArchitectureTests(SourceContractTestCase):
         http = (
             MQUICKJS / "src/modules/http/esp32_mquickjs_http.c"
         ).read_text(encoding="utf-8")
+        websocket = (
+            MQUICKJS / "src/modules/websocket/esp32_mquickjs_websocket.c"
+        ).read_text(encoding="utf-8")
 
         for code in (
             "TLS_ALLOC_FAILED",
@@ -70,6 +73,9 @@ class TlsArchitectureTests(SourceContractTestCase):
         self.assertIn("intermediate certificates always retain raw DER", helper)
         self.assertIn("esp32_mquickjs_tls_crt_bundle_attach", http)
         self.assertIn("esp32_mquickjs_tls_crt_bundle_attach", socket)
+        self.assertIn("esp32_mquickjs_tls_crt_bundle_attach", websocket)
+        self.assertNotIn("= esp_crt_bundle_attach", websocket)
+        self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET", helper)
         self.assertIn("esp32_mquickjs_tls_error_capture", socket)
         self.assertIn("esp_http_client_get_and_clear_last_tls_error", http)
 
