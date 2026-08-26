@@ -3,11 +3,11 @@
 Status: implemented for the unreleased Host API v1. Board-backed reboot and
 long-run restart soak checks remain part of release validation.
 
-This document defines the breaking `sys` redesign that must land before the
-unreleased Host API v1 is frozen. `ESP32QJS_HOST_API_VERSION` remains `1`.
-There is no compatibility period, deprecated alias, or v2 namespace: the
-current flat `sys.info()` result is replaced in place throughout the framework,
-device Agent, tests, declarations, and documentation.
+This document defines the implemented `sys` surface for the unreleased Host API
+v1. `ESP32QJS_HOST_API_VERSION` remains `1`. There is no compatibility period,
+deprecated alias, or v2 namespace: the former flat `sys.info()` result was
+replaced in place throughout the framework, device Agent, tests, declarations,
+and documentation.
 
 The design keeps `sys` focused on platform identity, diagnostics, and runtime
 lifecycle. Peripheral operations remain in literal modules such as `gpio`,
@@ -1013,7 +1013,7 @@ Introspection getters have no side effects beyond bounded allocation and native
 measurement. They do not run garbage collection, reset heap minima, or mutate
 drivers.
 
-## Breaking Migration Map
+## Removed pre-v1 shape
 
 There are no compatibility aliases.
 
@@ -1046,7 +1046,7 @@ There are no compatibility aliases.
 | `freeHeap` field | `sys.freeHeap()` or `sys.status.memory.default.freeBytes` |
 | `jsTimeMs` | `sys.millis()` or `sys.status.boot.uptimeMs` |
 
-Known repository consumers that must move in the same implementation change:
+The implementation change moved all known repository consumers together:
 
 - Agent configuration hardware identity;
 - enrollment/device information projection;
@@ -1055,22 +1055,16 @@ Known repository consumers that must move in the same implementation change:
 - runtime, diagnostics, hardware, and networking server skills;
 - C API reference, declarations, syntax examples, and JS device tests.
 
-## Implementation Order
+## Implementation status
 
-1. Add native snapshot helpers and resource counters without changing the public
-   registration.
-2. Replace `sys.info()` with the lazy `info`/`status` namespace tree, add task
-   snapshot Kconfig, declarations, docs, tests, and migrate every repository
-   consumer atomically.
-3. Refactor managed-runtime creation/destruction into outer-lifetime and
-   per-generation helpers.
-4. Add the control hook, supervisor state machine, runtime restart, reboot RTC
-   reason, and failure policy.
-5. Preserve runtime logs across JavaScript generations and verify Agent log
-   sequence behavior.
-6. Add authenticated Agent operator controls and control-plane endpoints.
-7. Freeze `sys` only after the validation matrix below passes on ESP32-C3 and
-   ESP32-S3.
+The lazy information/status trees, task snapshot, resource counters, generation
+supervisor, JavaScript-only restart, reboot receipt, retained runtime logs,
+startup guard, persistent safe-mode latch, Agent lifecycle controls,
+declarations, and architecture tests are implemented on the sole v1 contract.
+
+The surface remains a freeze candidate until the board-backed matrix below has
+completed on ESP32-C3 and ESP32-S3, including repeated restart, reboot,
+startup-failure, resource-drain, and required-workspace recovery scenarios.
 
 ## Validation Matrix
 

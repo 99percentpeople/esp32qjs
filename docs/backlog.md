@@ -1,7 +1,8 @@
 # Framework Backlog
 
-Status: not implemented. This file contains only work that remains after the
-current framework, display-driver, and I/O-concurrency plans were completed.
+Status: open work only. Implemented runtime, display-driver, async-I/O, startup
+guard, and safe-mode behavior is documented in the API references and is not
+repeated here.
 
 API-shape and freeze work is tracked separately in
 [API Stability Plan](api-stability-plan.md).
@@ -10,8 +11,11 @@ API-shape and freeze work is tracked separately in
 
 - Add signed firmware and resource artifacts.
 - Add A/B OTA updates with rollback.
-- Add safe-mode boot after repeated startup failures.
-- Test recovery across power loss during flash, workspace, NVS, and OTA writes.
+- Qualify the existing startup guard and application-owned safe mode across
+  interrupted startup, corrupt required workspace filesystems, and repeated
+  watchdog or panic resets.
+- Test recovery across power loss during flash, workspace, NVS, and future OTA
+  writes.
 
 ## Production Security
 
@@ -34,8 +38,8 @@ API-shape and freeze work is tracked separately in
   hardware.
 - Add fault-injection coverage for allocation failure, queue saturation,
   transport loss, storage corruption, and interrupted writes.
-- Complete repeated HTTP/HTTPS worker lifecycle and PSRAM memory-regression
-  qualification, including reliable USB Serial/JTAG re-enumeration after host
-  reset operations.
+- Extend the completed HTTP/HTTPS/WebSocket lifecycle checks into long-duration,
+  mixed TLS/media pressure on PSRAM and no-PSRAM profiles, including reliable
+  USB Serial/JTAG re-enumeration after host reset operations.
 - Complete repeated hardware lifecycle and memory-regression qualification for
   SSD1306, ST7789, shared buses, and supported ESP32-S3/ESP32-C3 boards.

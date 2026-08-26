@@ -12,17 +12,18 @@ The API is split into two parts:
 - [docs/js-api.md](js-api.md)
   JavaScript-side APIs loaded from LittleFS, currently including `display` and `ui`.
 - [docs/api-stability-plan.md](api-stability-plan.md)
-  Draft long-term API plan covering freeze targets, modules that still need adjustment, and current next-step candidates.
+  Current v1 freeze policy, implementation status, and the evidence still
+  required before individual areas can be declared stable.
 - [docs/runtime-api.md](runtime-api.md)
   Native C lifecycle and integration API for custom firmware entry points.
 - [docs/backlog.md](backlog.md)
-  Production, recovery, security, extensibility, and verification work that has
-  not yet been implemented.
+  Remaining production, recovery, security, extensibility, and verification
+  work; completed API work is intentionally not repeated there.
 
 Recommended reading order:
 
 1. `c-api.md` for the built-in runtime and transport APIs.
-2. `api-stability-plan.md` for the remaining long-term API direction and active roadmap.
+2. `api-stability-plan.md` for current freeze policy and remaining validation.
 3. `js-api.md` for higher-level JS helpers layered on top of the built-ins.
 4. `runtime-api.md` for embedding and lifecycle integration.
 5. `backlog.md` for work that remains outside the current API implementation.
