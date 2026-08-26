@@ -28,6 +28,7 @@
 #include "esp_heap_caps.h"
 #include "esp_littlefs.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -36,6 +37,7 @@ static const char *TAG = "esp32qjs";
 #define ESP32_MQUICKJS_MAX_LITTLEFS_MOUNTS 4U
 #define ESP32_MQUICKJS_PARTITION_LABEL_MAX 17U
 #define ESP32_MQUICKJS_FS_CHANGE_QUEUE_LEN 8U
+#define ESP32_MQUICKJS_FS_CHANGE_QUEUE_MAX_LEN 64U
 #define ESP32_MQUICKJS_FS_ATOMIC_TEMP_ATTEMPTS 32U
 
 typedef struct {
@@ -46,6 +48,8 @@ typedef struct {
 
 typedef struct {
     esp32_mquickjs_fs_change_kind_t kind;
+    uint32_t sequence;
+    int64_t timestamp_us;
     char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
     char to_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
 } esp32_mquickjs_fs_change_event_t;
@@ -53,6 +57,7 @@ typedef struct {
 typedef struct esp32_mquickjs_fs_change_source {
     struct esp32_mquickjs_fs_runtime *owner;
     esp32_mquickjs_event_queue_t *changes;
+    uint32_t event_sequence;
     char root[ESP32_MQUICKJS_FS_ROOT_MAX];
     struct esp32_mquickjs_fs_change_source *next;
 } esp32_mquickjs_fs_change_source_t;
@@ -139,6 +144,10 @@ static JSValue fs_change_to_js(JSContext *ctx,
     *result = JS_NewObject(ctx);
     if (JS_IsException(*result) ||
         !esp32_mquickjs_set_property_ref(
+            ctx, result, "sequence", JS_NewUint32(ctx, event->sequence)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "timestampUs", JS_NewInt64(ctx, event->timestamp_us)) ||
+        !esp32_mquickjs_set_property_ref(
             ctx, result, "type", JS_NewString(ctx, fs_change_kind_name(event->kind))) ||
         !esp32_mquickjs_set_property_ref(
             ctx, result, "path", JS_NewString(ctx, event->path)) ||
@@ -181,10 +190,12 @@ void esp32_mquickjs_fs_notify_change(esp32_mquickjs_fs_change_kind_t kind,
         esp32_mquickjs_get_active_runtime());
     esp32_mquickjs_fs_change_source_t *source;
     esp32_mquickjs_fs_change_event_t event;
+    int64_t timestamp_us;
 
     if (state == NULL || state->lock == NULL || path == NULL) {
         return;
     }
+    timestamp_us = esp_timer_get_time();
     xSemaphoreTake(state->lock, portMAX_DELAY);
     for (source = state->sources; source != NULL; source = source->next) {
         memset(&event, 0, sizeof(event));
@@ -194,6 +205,11 @@ void esp32_mquickjs_fs_notify_change(esp32_mquickjs_fs_change_kind_t kind,
             (kind != ESP32_MQUICKJS_FS_CHANGE_RENAME ||
              fs_change_relative_path(source->root, to_path,
                                      event.to_path, sizeof(event.to_path)))) {
+            event.sequence = ++source->event_sequence;
+            if (event.sequence == 0) {
+                event.sequence = ++source->event_sequence;
+            }
+            event.timestamp_us = timestamp_us;
             (void)esp32_mquickjs_event_queue_send(source->changes, &event);
         }
     }
@@ -797,6 +813,90 @@ JSValue js_fs_info(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     return JS_PopGCRef(ctx, &result_ref);
 }
 
+static bool fs_parse_watch_options(JSContext *ctx,
+                                   int argc,
+                                   JSValue *argv,
+                                   uint32_t *capacity)
+{
+    JSGCRef keys_ref;
+    JSGCRef length_ref;
+    JSGCRef value_ref;
+    JSValue *keys;
+    JSValue *length_value;
+    JSValue *value;
+    double number;
+    int length = 0;
+    int index;
+
+    if (capacity == NULL) {
+        return false;
+    }
+    *capacity = ESP32_MQUICKJS_FS_CHANGE_QUEUE_LEN;
+    if (argc == 0 || JS_IsUndefined(argv[0])) {
+        return true;
+    }
+    if (argc != 1 || JS_GetClassID(ctx, argv[0]) < 0 || JS_IsArray(ctx, argv[0])) {
+        JS_ThrowTypeError(ctx, "fs.watch(options?) expects { capacity? }");
+        return false;
+    }
+
+    keys = JS_PushGCRef(ctx, &keys_ref);
+    length_value = JS_PushGCRef(ctx, &length_ref);
+    value = JS_PushGCRef(ctx, &value_ref);
+    *keys = js_object_keys(ctx, NULL, 1, &argv[0]);
+    *length_value = JS_IsException(*keys)
+                        ? JS_EXCEPTION
+                        : JS_GetPropertyStr(ctx, *keys, "length");
+    if (JS_IsException(*length_value) ||
+        JS_ToInt32(ctx, &length, *length_value) != 0 || length < 0) {
+        goto fail;
+    }
+    for (index = 0; index < length; ++index) {
+        JSGCRef key_ref;
+        JSValue *key_value = JS_PushGCRef(ctx, &key_ref);
+        JSCStringBuf key_buf;
+        const char *key;
+
+        *key_value = JS_GetPropertyUint32(ctx, *keys, (uint32_t)index);
+        key = JS_IsException(*key_value)
+                  ? NULL
+                  : JS_ToCString(ctx, *key_value, &key_buf);
+        if (key == NULL || strcmp(key, "capacity") != 0) {
+            if (key != NULL) {
+                JS_ThrowTypeError(
+                    ctx, "fs.watch(options?) options contains unknown key '%s'", key);
+            }
+            JS_PopGCRef(ctx, &key_ref);
+            goto fail;
+        }
+        JS_PopGCRef(ctx, &key_ref);
+    }
+    *value = JS_GetPropertyStr(ctx, argv[0], "capacity");
+    if (!JS_IsUndefined(*value) &&
+        (!JS_IsNumber(ctx, *value) || JS_ToNumber(ctx, &number, *value) != 0 ||
+         !isfinite(number) || number < 1.0 ||
+         number > (double)ESP32_MQUICKJS_FS_CHANGE_QUEUE_MAX_LEN ||
+         (double)(uint32_t)number != number)) {
+        JS_ThrowRangeError(
+            ctx, "fs.watch({ capacity }) expects an integer in 1..%u",
+            (unsigned)ESP32_MQUICKJS_FS_CHANGE_QUEUE_MAX_LEN);
+        goto fail;
+    }
+    if (!JS_IsUndefined(*value)) {
+        *capacity = (uint32_t)number;
+    }
+    JS_PopGCRef(ctx, &value_ref);
+    JS_PopGCRef(ctx, &length_ref);
+    JS_PopGCRef(ctx, &keys_ref);
+    return true;
+
+fail:
+    JS_PopGCRef(ctx, &value_ref);
+    JS_PopGCRef(ctx, &length_ref);
+    JS_PopGCRef(ctx, &keys_ref);
+    return false;
+}
+
 JSValue js_fs_watch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
@@ -806,13 +906,13 @@ JSValue js_fs_watch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     JSValue *queue_object;
     esp32_mquickjs_event_queue_t *changes;
     esp32_mquickjs_fs_change_source_t *source;
+    uint32_t capacity;
 
-    (void)argv;
     if (root == NULL) {
         return JS_EXCEPTION;
     }
-    if (argc != 0) {
-        return JS_ThrowTypeError(ctx, "fs.watch() expects no arguments");
+    if (!fs_parse_watch_options(ctx, argc, argv, &capacity)) {
+        return JS_EXCEPTION;
     }
     if (state == NULL || state->lock == NULL) {
         return JS_ThrowInternalError(ctx, "fs.watch() requires an active filesystem runtime");
@@ -829,7 +929,7 @@ JSValue js_fs_watch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
         ctx,
         runtime,
         sizeof(esp32_mquickjs_fs_change_event_t),
-        ESP32_MQUICKJS_FS_CHANGE_QUEUE_LEN,
+        capacity,
         ESP32_MQUICKJS_EVENT_QUEUE_DROP_OLDEST,
         fs_change_to_js,
         NULL,

@@ -473,7 +473,14 @@ namespace ESP32QJS {
     maxBytes?: number;
   }
 
+  interface FsWatchOptions {
+    /** EventQueue capacity in 1..64. Defaults to 8. */
+    capacity?: number;
+  }
+
   interface FsChangeEvent {
+    sequence: number;
+    timestampUs: number;
     type: "write" | "remove" | "rename" | "mkdir";
     path: string;
     toPath?: string;
@@ -494,7 +501,7 @@ namespace ESP32QJS {
     readonly ROOT: string;
     volume(root: string): FsVolume;
     info(): FsInfo;
-    watch(): EventQueue<FsChangeEvent>;
+    watch(options?: FsWatchOptions): EventQueue<FsChangeEvent>;
     open(path: string, mode?: FsOpenMode): Stream;
     list(path?: string): FsEntry[];
     stat(path: string): FsEntry;
@@ -542,6 +549,8 @@ namespace ESP32QJS {
   type GpioInterruptMode = "change" | "rising" | "falling" | "low" | "high";
 
   interface GpioInterruptEvent {
+    sequence: number;
+    timestampUs: number;
     pin: number;
     level: boolean;
     mode: GpioInterruptMode;

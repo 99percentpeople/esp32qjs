@@ -2202,7 +2202,7 @@
       "qualifiedName": "FsVolume.prototype.watch",
       "surface": "FsVolume.prototype",
       "name": "watch",
-      "arity": 0,
+      "arity": 1,
       "implementation": "js_fs_watch",
       "visibility": "public",
       "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",

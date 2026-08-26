@@ -27,6 +27,12 @@ test("fs/filesystem", function () {
   var invalidLimitError = "";
   var unknownOptionError = "";
   var atomicTempFound = false;
+  var boundedChanges;
+  var boundedFirst;
+  var boundedSecond;
+  var boundedStats;
+  var watchCapacityError = "";
+  var watchOptionsError = "";
 
   test.equal(fs.ROOT, "/littlefs", "fs root");
   systemFs = fs;
@@ -46,6 +52,8 @@ test("fs/filesystem", function () {
   change = pendingChange.wait(1000);
   test.equal(change.type, "mkdir", "watch mkdir type");
   test.equal(change.path, dirPath, "watch mkdir path");
+  test.equal(change.sequence, 1, "watch sequence should start at one");
+  test.ok(change.timestampUs > 0, "watch events should include a timestamp");
   test.equal(mirrorChanges.receive(0).path, dirPath, "independent watcher path");
   test.ok(mirrorChanges.close(), "independent watcher should close");
   test.ok(fs.stat(dirPath).isDir, "mkdir should create a directory");
@@ -136,6 +144,45 @@ test("fs/filesystem", function () {
   test.equal(changes.receive(0).type, "remove", "watch directory removal");
   test.ok(!fs.exists(dirPath), "removed directory should not exist");
   test.ok(changes.close(), "watch queue should close");
+
+  boundedChanges = fs.watch({ capacity: 2 });
+  test.equal(boundedChanges.stats().capacity, 2,
+    "fs.watch should apply the requested bounded capacity");
+  fs.writeText("watch-overflow-a.txt", "a");
+  fs.writeText("watch-overflow-b.txt", "b");
+  fs.writeText("watch-overflow-c.txt", "c");
+  boundedStats = boundedChanges.stats();
+  test.equal(boundedStats.queued, 2,
+    "bounded filesystem watcher should retain its configured event count");
+  test.equal(boundedStats.dropped, 1,
+    "filesystem watcher should count a dropped oldest event");
+  boundedFirst = boundedChanges.receive(0);
+  boundedSecond = boundedChanges.receive(0);
+  test.equal(boundedFirst.sequence, 2,
+    "a dropped oldest filesystem event should leave a detectable sequence gap");
+  test.equal(boundedSecond.sequence, 3,
+    "filesystem event sequence should advance per matching change");
+  test.ok(boundedSecond.timestampUs >= boundedFirst.timestampUs,
+    "filesystem event timestamps should be monotonic");
+  boundedChanges.close();
+  fs.remove("watch-overflow-a.txt");
+  fs.remove("watch-overflow-b.txt");
+  fs.remove("watch-overflow-c.txt");
+
+  try {
+    fs.watch({ capacity: 0 });
+  } catch (invalidWatchCapacity) {
+    watchCapacityError = String(invalidWatchCapacity);
+  }
+  test.ok(watchCapacityError.indexOf("1..64") >= 0,
+    "fs.watch should reject a capacity outside its public bound");
+  try {
+    fs.watch({ cap: 2 });
+  } catch (invalidWatchOptions) {
+    watchOptionsError = String(invalidWatchOptions);
+  }
+  test.ok(watchOptionsError.indexOf("unknown key 'cap'") >= 0,
+    "fs.watch should reject unknown option keys");
 
   for (index = 0; index < 20; index += 1) {
     leaked = fs.open("index.js", "r");

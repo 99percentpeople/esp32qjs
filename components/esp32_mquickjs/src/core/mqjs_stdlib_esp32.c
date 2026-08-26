@@ -278,7 +278,7 @@ static const JSPropDef js_fs_volume_proto[] = {
     JS_CGETSET_DEF("ROOT", js_fs_get_root, NULL),
     JS_CFUNC_DEF("volume", 1, js_fs_volume),
     JS_CFUNC_DEF("info", 0, js_fs_info),
-    JS_CFUNC_DEF("watch", 0, js_fs_watch),
+    JS_CFUNC_DEF("watch", 1, js_fs_watch),
     JS_CFUNC_DEF("open", 2, js_fs_open),
     JS_CFUNC_DEF("list", 1, js_fs_list),
     JS_CFUNC_DEF("stat", 1, js_fs_stat),

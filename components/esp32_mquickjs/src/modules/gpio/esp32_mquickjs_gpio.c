@@ -12,13 +12,18 @@
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "hal/gpio_ll.h"
 
 #define GPIO_INTERRUPT_QUEUE_LEN 16
 
 typedef struct {
     gpio_num_t pin;
     uint32_t generation;
+    uint32_t sequence;
+    int64_t timestamp_us;
+    bool level;
     gpio_int_type_t intr_type;
 } gpio_interrupt_event_t;
 
@@ -26,6 +31,7 @@ typedef struct {
     esp32_mquickjs_event_queue_t *event_queue;
     gpio_num_t pin;
     uint32_t generation;
+    uint32_t event_sequence;
     uint32_t dropped;
     gpio_int_type_t intr_type;
     bool handler_installed;
@@ -477,15 +483,22 @@ static void gpio_interrupt_isr_handler(void *arg)
     generation = slot->generation;
     event_queue = slot->event_queue;
     event.intr_type = slot->intr_type;
+    if (attached && event_queue != NULL) {
+        event.sequence = ++slot->event_sequence;
+        if (event.sequence == 0) {
+            event.sequence = ++slot->event_sequence;
+        }
+    }
     portEXIT_CRITICAL_ISR(&s_gpio_interrupt_lock);
-    if (!attached) {
+    if (!attached || event_queue == NULL) {
         return;
     }
 
     event.pin = pin;
     event.generation = generation;
-    if (event_queue == NULL ||
-        !esp32_mquickjs_event_queue_send_from_isr(event_queue, &event, &task_woken)) {
+    event.timestamp_us = esp_timer_get_time();
+    event.level = gpio_ll_get_level(&GPIO, (uint32_t)pin) != 0;
+    if (!esp32_mquickjs_event_queue_send_from_isr(event_queue, &event, &task_woken)) {
         portENTER_CRITICAL_ISR(&s_gpio_interrupt_lock);
         if (slot->attached && slot->generation == generation) {
             slot->dropped++;
@@ -514,9 +527,13 @@ static JSValue gpio_make_interrupt_event(JSContext *ctx, const void *data, void 
         return JS_EXCEPTION;
     }
 
-    if (!esp32_mquickjs_set_property_ref(ctx, event_obj, "pin", JS_NewInt32(ctx, (int32_t)interrupt->pin)) ||
+    if (!esp32_mquickjs_set_property_ref(ctx, event_obj, "sequence",
+                                         JS_NewUint32(ctx, interrupt->sequence)) ||
+        !esp32_mquickjs_set_property_ref(ctx, event_obj, "timestampUs",
+                                         JS_NewInt64(ctx, interrupt->timestamp_us)) ||
+        !esp32_mquickjs_set_property_ref(ctx, event_obj, "pin", JS_NewInt32(ctx, (int32_t)interrupt->pin)) ||
         !esp32_mquickjs_set_property_ref(ctx, event_obj, "level",
-                                     JS_NewBool(gpio_get_level(interrupt->pin) != 0)) ||
+                                     JS_NewBool(interrupt->level)) ||
         !esp32_mquickjs_set_property_ref(ctx, event_obj, "mode",
                                      JS_NewString(ctx, gpio_interrupt_mode_to_string(interrupt->intr_type)))) {
         JS_PopGCRef(ctx, &event_ref);
@@ -991,6 +1008,7 @@ JSValue js_gpio_watch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
     slot->pin = pin;
     slot->event_queue = event_queue;
     slot->generation++;
+    slot->event_sequence = 0;
     slot->intr_type = intr_type;
     slot->dropped = 0;
     slot->attached = true;

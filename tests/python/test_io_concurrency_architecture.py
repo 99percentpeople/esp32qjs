@@ -296,6 +296,14 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertNotIn("volatile", gpio)
         self.assertIn("portENTER_CRITICAL_ISR(&s_gpio_interrupt_lock)", gpio)
         self.assertIn("portENTER_CRITICAL(&s_gpio_interrupt_lock)", gpio)
+        self.assertIn("uint32_t event_sequence;", gpio)
+        self.assertIn("event.timestamp_us = esp_timer_get_time();", gpio)
+        self.assertIn("event.level = gpio_ll_get_level(&GPIO", gpio)
+        self.assertIn('event_obj, "sequence"', gpio)
+        self.assertIn('event_obj, "timestampUs"', gpio)
+        event_start = gpio.index("static JSValue gpio_make_interrupt_event(")
+        event_end = gpio.index("\nstatic JSValue gpio_make_status(", event_start)
+        self.assertNotIn("gpio_get_level(", gpio[event_start:event_end])
 
         self.assertNotIn("volatile", i2s)
         self.assertIn("#include <stdatomic.h>", i2s)
@@ -326,10 +334,16 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             encoding="utf-8"
         )
 
-        self.assertIn('JS_CFUNC_DEF("watch", 0, js_fs_watch)', stdlib)
+        self.assertIn('JS_CFUNC_DEF("watch", 1, js_fs_watch)', stdlib)
         self.assertIn("esp32_mquickjs_event_queue_new", filesystem)
         self.assertIn("ESP32_MQUICKJS_EVENT_QUEUE_DROP_OLDEST", filesystem)
         self.assertIn("esp32_mquickjs_fs_notify_change", filesystem)
+        self.assertIn("ESP32_MQUICKJS_FS_CHANGE_QUEUE_MAX_LEN 64U", filesystem)
+        self.assertIn("uint32_t event_sequence;", filesystem)
+        self.assertIn("timestamp_us = esp_timer_get_time();", filesystem)
+        self.assertIn('result, "sequence"', filesystem)
+        self.assertIn('result, "timestampUs"', filesystem)
+        self.assertIn("fs_parse_watch_options", filesystem)
         self.assertIn("esp32_mquickjs_fs_notify_change", stream)
         self.assertIn("esp32_mquickjs_fs_notify_change", rpc)
         for source in (filesystem, stream, rpc, stream_header):

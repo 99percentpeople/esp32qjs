@@ -181,12 +181,14 @@ All `fs` operations are restricted to the immutable root captured by their
 - `fs.info()`
   Return live LittleFS capacity for this volume as
   `{ root, totalBytes, usedBytes, freeBytes }`.
-- `fs.watch()`
+- `fs.watch(options?)`
   Return an `EventQueue` for filesystem changes under this volume. Events are
-  `{ type, path }`, with `toPath` on `rename`; `type` is `write`, `remove`,
-  `rename`, or `mkdir`. Paths are relative to the root captured when the queue
-  is created. Independent watchers may coexist; close each queue when it is no
-  longer needed. Use
+  `{ sequence, timestampUs, type, path }`, with `toPath` on `rename`; `type` is
+  `write`, `remove`, `rename`, or `mkdir`. `options.capacity` accepts `1..64`
+  and defaults to `8`; the queue drops the oldest event when full, so a sequence
+  gap and `stats().dropped` expose loss. Paths are relative to the root captured
+  when the queue is created. Independent watchers may coexist; close each queue
+  when it is no longer needed. Use
   `Future.call(changes.receive, changes, [timeoutMs])` to wait without blocking
   the JavaScript runtime.
 - `fs.list(path = ".")`
@@ -1304,10 +1306,13 @@ try {
 - `gpio.hold(pin, enabled)`
   Enable or disable pad hold on output-capable GPIOs.
 - `gpio.watch(pin, mode = gpio.CHANGE)`
-  Return a bounded `EventQueue` of `{ pin, level, mode }` interrupt events. The
-  ESP-IDF ISR only enqueues native records and never invokes JavaScript. Only one
-  watcher may own a pin; creating another closes and replaces the old watcher.
-  Closing the queue detaches the interrupt.
+  Return a bounded `EventQueue` of
+  `{ sequence, timestampUs, pin, level, mode }` interrupt events. The ISR
+  captures the level with the sequence and timestamp before enqueueing, so a
+  delayed consumer does not observe a newer pin level for an older event. The
+  ESP-IDF ISR never invokes JavaScript. Only one watcher may own a pin; creating
+  another closes and replaces the old watcher. Closing the queue detaches the
+  interrupt.
 - `gpio.reset(pin)`
   Reset the pad back to the ESP-IDF default GPIO state.
 - `gpio.led(value)`

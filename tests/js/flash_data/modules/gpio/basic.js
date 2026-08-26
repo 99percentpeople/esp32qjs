@@ -117,7 +117,20 @@ test("gpio/basic", function () {
   var interruptEvent = interrupts.receive(1000);
   test.equal(interruptEvent.pin, pin, "interrupt event pin");
   test.equal(interruptEvent.mode, gpio.CHANGE, "interrupt event mode");
-  test.ok(typeof interruptEvent.level === "boolean", "interrupt event level should be boolean");
+  test.equal(interruptEvent.level, true,
+    "interrupt event should retain the level captured by the ISR");
+  test.equal(interruptEvent.sequence, 1,
+    "first interrupt event should start a watcher-local sequence");
+  test.ok(interruptEvent.timestampUs > 0,
+    "interrupt event should include a monotonic timestamp");
+  gpio.digitalWrite(pin, false);
+  var secondInterruptEvent = interrupts.receive(1000);
+  test.equal(secondInterruptEvent.level, false,
+    "queued interrupt events should retain their own captured level");
+  test.equal(secondInterruptEvent.sequence, interruptEvent.sequence + 1,
+    "interrupt sequence should advance for every ISR event");
+  test.ok(secondInterruptEvent.timestampUs >= interruptEvent.timestampUs,
+    "interrupt timestamps should be monotonic");
   test.ok(interrupts.close(), "interrupt EventQueue should close");
   queueStats = interrupts.stats();
   test.ok(!queueStats.open, "closed interrupt EventQueue should report closed");
