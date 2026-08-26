@@ -89,13 +89,23 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
 
         self.assertIn('JS_CFUNC_DEF("route", 2, js_http_server_route)', stdlib)
         self.assertIn('JS_CFUNC_DEF("respond", 2, js_http_server_respond)', stdlib)
+        self.assertIn('JS_CFUNC_DEF("stats", 0, js_http_server_stats)', stdlib)
         self.assertNotIn('JS_CFUNC_DEF("get", 2, js_http_server_get)', stdlib)
         self.assertNotIn("staticFileHandler", stdlib)
         self.assertNotIn("staticFileHandler", declarations)
         self.assertNotIn("JSGCRef callback", server)
         self.assertIn("esp32_mquickjs_event_queue_new", server)
         self.assertIn("esp32_mquickjs_event_queue_register_receive_alias", server)
+        self.assertIn("s_http_server_respond_driver", server)
+        self.assertIn("esp32_mquickjs_future_submit_worker", server)
+        self.assertIn("memory_order_release", server)
+        self.assertIn("memory_order_acquire", server)
+        self.assertIn("js_http_server_finalizer", stdlib)
+        self.assertNotIn('"serverId"', server)
+        self.assertNotIn('"serverGeneration"', server)
         self.assertIn("receive(timeoutMs?: number): Request | null", declarations)
+        self.assertIn("class HttpServer implements EventQueue<Request>", declarations)
+        self.assertIn("route(method: string, path: string): boolean", declarations)
 
     def test_http_server_initializes_network_runtime_before_listening(self):
         server = (
@@ -441,7 +451,7 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             "atomic_store_explicit(&state->tls_request->cancel_requested",
             socket,
         )
-        socket_cancel_start = socket.index(
+        socket_cancel_start = socket.rindex(
             "static esp32_mquickjs_cancel_result_t socket_future_cancel("
         )
         socket_cancel_end = socket.index(

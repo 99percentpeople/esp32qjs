@@ -21,13 +21,13 @@ test("websocket/network", function () {
       pingIntervalSec: 5,
       maxMessageBytes: 4096
     });
-    event = client.recv(20000);
+    event = client.receive(20000);
     test.equal(event.type, "open", "WebSocket client should emit open");
     test.ok(websocketClient.status().connected,
       "WebSocket client should connect");
 
     client.send(payload);
-    event = client.recv(10000);
+    event = client.receive(10000);
     if (event && event.type === "message") echoed = event.data;
     test.equal(echoed, payload,
       "WebSocket server should echo the complete text frame");

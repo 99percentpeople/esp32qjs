@@ -654,7 +654,7 @@ config ESP32_MQUICKJS_SOCKET_MAX_SOURCE_BYTES
     default 1048576
     depends on ESP32_MQUICKJS_FEATURE_SOCKET
     help
-        Bound a ByteSpanSource consumed by socket.tcp.send(). Individual spans
+        Bound a ByteSpanSource consumed by TCPSocket.send(). Individual spans
         are written directly and remain limited only by the source contract.
 
 config ESP32_MQUICKJS_WEBSOCKET_MAX_MESSAGE_BYTES

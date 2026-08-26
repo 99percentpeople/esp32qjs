@@ -7,6 +7,7 @@
 #include "esp32_mquickjs_event_queue.h"
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_net.h"
+#include "utils/esp32_mquickjs_byte_source.h"
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -14,6 +15,7 @@
 
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "esp_websocket_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -27,6 +29,7 @@
 #define WEBSOCKET_DEFAULT_SEND_TIMEOUT_MS 1000
 #define WEBSOCKET_DEFAULT_PING_INTERVAL_SEC 10
 #define WEBSOCKET_OPCODE_TEXT 0x1
+#define WEBSOCKET_OPCODE_BINARY 0x2
 #define WEBSOCKET_OPCODE_CLOSE 0x8
 #define WEBSOCKET_OPCODE_PING 0x9
 #define WEBSOCKET_OPCODE_PONG 0xA
@@ -50,7 +53,10 @@ typedef struct {
     uint32_t generation;
     char *data;
     size_t data_len;
+    uint32_t sequence;
+    int64_t timestamp_us;
     int32_t code;
+    bool binary;
     char message[WEBSOCKET_ERROR_TEXT_LEN];
 } esp32_mquickjs_websocket_callback_event_t;
 
@@ -67,12 +73,14 @@ typedef struct {
     char *fragment;
     size_t fragment_len;
     size_t fragment_expected;
+    bool fragment_binary;
     bool fragment_dropping;
     uint32_t opened_events;
     uint32_t received_messages;
     uint32_t sent_messages;
     _Atomic uint32_t dropped_events;
     _Atomic uint32_t oversized_messages;
+    _Atomic uint32_t event_sequence;
     bool sending;
     bool close_pending;
 } esp32_mquickjs_websocket_state_t;
@@ -103,6 +111,7 @@ static void websocket_reset_state(void)
     atomic_init(&s_websocket_state.lifecycle, WEBSOCKET_LIFECYCLE_IDLE);
     atomic_init(&s_websocket_state.dropped_events, 0);
     atomic_init(&s_websocket_state.oversized_messages, 0);
+    atomic_init(&s_websocket_state.event_sequence, 0);
 }
 
 static bool websocket_callback_begin(uint32_t *generation)
@@ -189,6 +198,7 @@ static void websocket_reset_fragment(void)
     s_websocket_state.fragment = NULL;
     s_websocket_state.fragment_len = 0;
     s_websocket_state.fragment_expected = 0;
+    s_websocket_state.fragment_binary = false;
     s_websocket_state.fragment_dropping = false;
 }
 
@@ -201,6 +211,11 @@ static void websocket_enqueue(esp32_mquickjs_websocket_callback_event_t *event,
         return;
     }
     event->generation = generation;
+    event->sequence = atomic_fetch_add_explicit(
+                          &s_websocket_state.event_sequence, 1,
+                          memory_order_relaxed) +
+                      1U;
+    event->timestamp_us = esp_timer_get_time();
     if (xQueueSend(s_websocket_state.queue, event, 0) != pdTRUE) {
         atomic_fetch_add_explicit(&s_websocket_state.dropped_events, 1,
                                   memory_order_relaxed);
@@ -248,9 +263,11 @@ static void websocket_handle_data(const esp_websocket_event_data_t *data,
         data->op_code == WEBSOCKET_OPCODE_PONG) {
         return;
     }
-    if (data->op_code != WEBSOCKET_OPCODE_TEXT) {
+    if (data->payload_offset == 0 &&
+        data->op_code != WEBSOCKET_OPCODE_TEXT &&
+        data->op_code != WEBSOCKET_OPCODE_BINARY) {
         if (data->payload_offset == 0) {
-            websocket_enqueue_error("only complete WebSocket text messages are supported",
+            websocket_enqueue_error("unsupported WebSocket data opcode",
                                     data->op_code, generation);
         }
         return;
@@ -269,6 +286,8 @@ static void websocket_handle_data(const esp_websocket_event_data_t *data,
     if (offset == 0) {
         websocket_reset_fragment();
         s_websocket_state.fragment_expected = payload_len;
+        s_websocket_state.fragment_binary =
+            data->op_code == WEBSOCKET_OPCODE_BINARY;
         if (!data->fin || payload_len > s_websocket_state.max_message_bytes) {
             s_websocket_state.fragment_dropping = true;
             if (payload_len > s_websocket_state.max_message_bytes) {
@@ -284,9 +303,13 @@ static void websocket_handle_data(const esp_websocket_event_data_t *data,
                     generation);
             }
         } else {
+            size_t allocation_size =
+                payload_len + (s_websocket_state.fragment_binary ? 0U : 1U);
+
             s_websocket_state.fragment =
                 esp32_mquickjs_memory_payload_alloc(
-                    payload_len + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+                    allocation_size > 0 ? allocation_size : 1U,
+                    ESP32_MQUICKJS_MEMORY_EXTERNAL);
             if (s_websocket_state.fragment == NULL) {
                 s_websocket_state.fragment_dropping = true;
                 websocket_enqueue_error(
@@ -321,9 +344,12 @@ static void websocket_handle_data(const esp_websocket_event_data_t *data,
             .kind = WEBSOCKET_CALLBACK_MESSAGE,
             .data = s_websocket_state.fragment,
             .data_len = payload_len,
+            .binary = s_websocket_state.fragment_binary,
         };
 
-        event.data[event.data_len] = '\0';
+        if (!event.binary) {
+            event.data[event.data_len] = '\0';
+        }
         s_websocket_state.fragment = NULL;
         s_websocket_state.fragment_len = 0;
         s_websocket_state.fragment_expected = 0;
@@ -439,11 +465,13 @@ static void websocket_close_internal(void)
 
 static bool websocket_make_event_object(
     JSContext *ctx,
-    const esp32_mquickjs_websocket_callback_event_t *event,
+    esp32_mquickjs_websocket_callback_event_t *event,
     JSValue *out_event)
 {
     JSGCRef object_ref;
+    JSGCRef data_ref;
     JSValue *object;
+    JSValue *data;
     const char *type;
 
     switch (event->kind) {
@@ -463,17 +491,35 @@ static bool websocket_make_event_object(
     }
 
     object = JS_PushGCRef(ctx, &object_ref);
+    data = JS_PushGCRef(ctx, &data_ref);
+    *data = JS_UNDEFINED;
     *object = JS_NewObject(ctx);
     if (JS_IsException(*object) ||
-        !esp32_mquickjs_set_property_ref(ctx, object, "type", JS_NewString(ctx, type))) {
+        !esp32_mquickjs_set_property_ref(ctx, object, "type",
+                                         JS_NewString(ctx, type)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "sequence",
+                                         JS_NewUint32(ctx, event->sequence)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "timestampUs",
+                                         JS_NewInt64(ctx, event->timestamp_us))) {
+        JS_PopGCRef(ctx, &data_ref);
         JS_PopGCRef(ctx, &object_ref);
         return false;
     }
-    if (event->kind == WEBSOCKET_CALLBACK_MESSAGE &&
-        !esp32_mquickjs_set_property_ref(ctx, object, "data",
-                                         JS_NewStringLen(ctx, event->data, event->data_len))) {
-        JS_PopGCRef(ctx, &object_ref);
-        return false;
+    if (event->kind == WEBSOCKET_CALLBACK_MESSAGE) {
+        *data = event->binary
+                    ? esp32_mquickjs_new_owned_byte_view(
+                          ctx, event->data, event->data_len)
+                    : JS_NewStringLen(ctx, event->data, event->data_len);
+        if (event->binary && !JS_IsException(*data)) {
+            event->data = NULL;
+        }
+        if (JS_IsException(*data) ||
+            !esp32_mquickjs_set_property_ref(ctx, object, "data", *data)) {
+            JS_PopGCRef(ctx, &data_ref);
+            JS_PopGCRef(ctx, &object_ref);
+            return false;
+        }
+        *data = JS_UNDEFINED;
     }
     if ((event->kind == WEBSOCKET_CALLBACK_CLOSE ||
          event->kind == WEBSOCKET_CALLBACK_ERROR) &&
@@ -484,10 +530,12 @@ static bool websocket_make_event_object(
          !esp32_mquickjs_set_property_ref(ctx, object, "reconnecting",
                                           JS_NewBool(
                                               websocket_generation_is_active(
-                                                  event->generation))))) {
+                                              event->generation))))) {
+        JS_PopGCRef(ctx, &data_ref);
         JS_PopGCRef(ctx, &object_ref);
         return false;
     }
+    JS_PopGCRef(ctx, &data_ref);
     *out_event = JS_PopGCRef(ctx, &object_ref);
     return true;
 }
@@ -668,11 +716,9 @@ JSValue js_websocket_open(JSContext *ctx,
     esp_websocket_client_config_t config = {0};
     esp_websocket_client_handle_t client;
     JSGCRef queue_ref;
-    JSGCRef receive_ref;
     JSGCRef send_ref;
     JSGCRef status_ref;
     JSValue *queue_object;
-    JSValue *receive;
     JSValue *send;
     JSValue *status;
     esp_err_t err;
@@ -829,7 +875,6 @@ JSValue js_websocket_open(JSContext *ctx,
     s_websocket_state.max_message_bytes = (size_t)max_message_bytes;
     s_websocket_state.send_timeout_ms = (uint32_t)send_timeout_ms;
     queue_object = JS_PushGCRef(ctx, &queue_ref);
-    receive = JS_PushGCRef(ctx, &receive_ref);
     send = JS_PushGCRef(ctx, &send_ref);
     status = JS_PushGCRef(ctx, &status_ref);
     *queue_object = esp32_mquickjs_event_queue_new(
@@ -842,20 +887,15 @@ JSValue js_websocket_open(JSContext *ctx,
         websocket_drop_event,
         websocket_close_source,
         NULL);
-    *receive = JS_IsException(*queue_object)
-        ? JS_EXCEPTION
-        : JS_GetPropertyStr(ctx, *queue_object, "receive");
     *send = JS_GetPropertyStr(ctx, *this_val, "send");
     *status = JS_GetPropertyStr(ctx, *this_val, "status");
-    if (JS_IsException(*queue_object) || JS_IsException(*receive) ||
+    if (JS_IsException(*queue_object) ||
         JS_IsException(*send) || JS_IsException(*status) ||
-        JS_IsException(JS_SetPropertyStr(ctx, *queue_object, "recv", *receive)) ||
         JS_IsException(JS_SetPropertyStr(ctx, *queue_object, "send", *send)) ||
         JS_IsException(JS_SetPropertyStr(ctx, *queue_object, "status", *status))) {
         websocket_close_source(NULL);
         JS_PopGCRef(ctx, &status_ref);
         JS_PopGCRef(ctx, &send_ref);
-        JS_PopGCRef(ctx, &receive_ref);
         JS_PopGCRef(ctx, &queue_ref);
         return JS_EXCEPTION;
     }
@@ -876,7 +916,6 @@ JSValue js_websocket_open(JSContext *ctx,
         websocket_close_internal();
         JS_PopGCRef(ctx, &status_ref);
         JS_PopGCRef(ctx, &send_ref);
-        JS_PopGCRef(ctx, &receive_ref);
         JS_PopGCRef(ctx, &queue_ref);
         return JS_ThrowInternalError(ctx,
                                      "failed to start WebSocket client: %s",
@@ -884,7 +923,6 @@ JSValue js_websocket_open(JSContext *ctx,
     }
     JS_PopGCRef(ctx, &status_ref);
     JS_PopGCRef(ctx, &send_ref);
-    JS_PopGCRef(ctx, &receive_ref);
     return JS_PopGCRef(ctx, &queue_ref);
 }
 
@@ -906,19 +944,175 @@ JSValue js_websocket_close(JSContext *ctx,
     return JS_NewBool(was_open);
 }
 
+static bool websocket_copy_send_payload(JSContext *ctx,
+                                        JSValue value,
+                                        char **out_data,
+                                        size_t *out_length,
+                                        bool *out_binary)
+{
+    int class_id = JS_GetClassID(ctx, value);
+
+    *out_data = NULL;
+    *out_length = 0;
+    *out_binary = !JS_IsString(ctx, value);
+    if (JS_IsString(ctx, value)) {
+        JSCStringBuf text_buf;
+        const char *text;
+        size_t length = 0;
+
+        text = JS_ToCStringLen(ctx, &length, value, &text_buf);
+        if (text == NULL) {
+            return false;
+        }
+        if (length > s_websocket_state.max_message_bytes ||
+            length > INT32_MAX) {
+            JS_ThrowRangeError(ctx,
+                               "websocketClient.send() message is too large");
+            return false;
+        }
+        *out_data = esp32_mquickjs_memory_payload_alloc(
+            length > 0 ? length : 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+        if (*out_data == NULL) {
+            JS_ThrowOutOfMemory(ctx);
+            return false;
+        }
+        if (length > 0) {
+            memcpy(*out_data, text, length);
+        }
+        *out_length = length;
+        return true;
+    }
+    if (class_id == JS_CLASS_BYTE_SPAN_SOURCE ||
+        class_id == JS_CLASS_BITMAP_SPAN_SOURCE) {
+        esp32_mquickjs_byte_span_source_t source;
+        JSValue error = JS_UNDEFINED;
+        size_t capacity = 0;
+        size_t length = 0;
+        bool opened = false;
+        bool ok = false;
+
+        if (!esp32_mquickjs_open_byte_span_source(
+                ctx, value, "websocketClient.send(data)", &source, &error)) {
+            if (!JS_IsUndefined(error) && !JS_IsException(error)) {
+                (void)JS_Throw(ctx, error);
+            }
+            return false;
+        }
+        opened = true;
+        for (;;) {
+            esp32_mquickjs_byte_span_t span;
+            size_t required;
+
+            if (!esp32_mquickjs_byte_span_source_next(ctx, &source, &span)) {
+                ok = !JS_HasException(ctx);
+                break;
+            }
+            if (span.length == 0) {
+                continue;
+            }
+            if (span.data == NULL ||
+                span.length > s_websocket_state.max_message_bytes ||
+                length > s_websocket_state.max_message_bytes - span.length) {
+                JS_ThrowRangeError(
+                    ctx, "websocketClient.send() message is too large");
+                break;
+            }
+            required = length + span.length;
+            if (required > capacity) {
+                size_t next_capacity = capacity == 0 ? 256U : capacity;
+                char *next;
+
+                while (next_capacity < required) {
+                    if (next_capacity >=
+                        s_websocket_state.max_message_bytes / 2U) {
+                        next_capacity = s_websocket_state.max_message_bytes;
+                        break;
+                    }
+                    next_capacity *= 2U;
+                }
+                next = esp32_mquickjs_memory_payload_realloc(
+                    *out_data, next_capacity,
+                    ESP32_MQUICKJS_MEMORY_EXTERNAL);
+                if (next == NULL) {
+                    JS_ThrowOutOfMemory(ctx);
+                    break;
+                }
+                *out_data = next;
+                capacity = next_capacity;
+            }
+            memcpy(*out_data + length, span.data, span.length);
+            length = required;
+        }
+        if (opened) {
+            esp32_mquickjs_byte_span_source_close(ctx, &source);
+        }
+        if (!ok) {
+            heap_caps_free(*out_data);
+            *out_data = NULL;
+            return false;
+        }
+        if (*out_data == NULL) {
+            *out_data = esp32_mquickjs_memory_payload_alloc(
+                1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+            if (*out_data == NULL) {
+                JS_ThrowOutOfMemory(ctx);
+                return false;
+            }
+        }
+        *out_length = length;
+        return true;
+    }
+    {
+        esp32_mquickjs_byte_source_t source;
+        uint8_t *owned = NULL;
+        JSValue error = JS_UNDEFINED;
+
+        if (!esp32_mquickjs_get_byte_source(
+                ctx, value, "websocketClient.send(data)", &source, &owned,
+                &error)) {
+            if (!JS_IsUndefined(error) && !JS_IsException(error)) {
+                (void)JS_Throw(ctx, error);
+            }
+            return false;
+        }
+        if (source.length > s_websocket_state.max_message_bytes ||
+            source.length > INT32_MAX) {
+            esp32_mquickjs_release_byte_source(owned);
+            JS_ThrowRangeError(ctx,
+                               "websocketClient.send() message is too large");
+            return false;
+        }
+        *out_data = esp32_mquickjs_memory_payload_alloc(
+            source.length > 0 ? source.length : 1U,
+            ESP32_MQUICKJS_MEMORY_EXTERNAL);
+        if (*out_data == NULL) {
+            esp32_mquickjs_release_byte_source(owned);
+            JS_ThrowOutOfMemory(ctx);
+            return false;
+        }
+        if (source.length > 0) {
+            memcpy(*out_data, source.data, source.length);
+        }
+        *out_length = source.length;
+        esp32_mquickjs_release_byte_source(owned);
+        return true;
+    }
+}
+
 JSValue js_websocket_send(JSContext *ctx,
                           JSValue *this_val,
                           int argc,
                           JSValue *argv)
 {
-    JSCStringBuf text_buf;
-    const char *text;
-    size_t text_len = 0;
+    char *data = NULL;
+    size_t length = 0;
+    bool binary = false;
     int sent;
 
     (void)this_val;
-    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
-        return JS_ThrowTypeError(ctx, "websocketClient.send(text) expects a string");
+    if (argc != 1) {
+        return JS_ThrowTypeError(
+            ctx, "websocketClient.send(data) expects one data argument");
     }
     if (atomic_load_explicit(&s_websocket_state.lifecycle,
                              memory_order_acquire) !=
@@ -931,25 +1125,25 @@ JSValue js_websocket_send(JSContext *ctx,
         return JS_ThrowInternalError(
             ctx, "websocketClient.send() failed because another send is active");
     }
-    text = JS_ToCStringLen(ctx, &text_len, argv[0], &text_buf);
-    if (text == NULL) {
+    if (!websocket_copy_send_payload(ctx, argv[0], &data, &length,
+                                     &binary)) {
         return JS_EXCEPTION;
-    }
-    if (text_len > s_websocket_state.max_message_bytes || text_len > INT32_MAX) {
-        return JS_ThrowRangeError(ctx, "websocketClient.send() message is too large");
     }
 
     s_websocket_state.sending = true;
-    sent = esp_websocket_client_send_text(
-        s_websocket_state.client,
-        text,
-        (int)text_len,
-        pdMS_TO_TICKS(s_websocket_state.send_timeout_ms));
+    sent = binary
+               ? esp_websocket_client_send_bin(
+                     s_websocket_state.client, data, (int)length,
+                     pdMS_TO_TICKS(s_websocket_state.send_timeout_ms))
+               : esp_websocket_client_send_text(
+                     s_websocket_state.client, data, (int)length,
+                     pdMS_TO_TICKS(s_websocket_state.send_timeout_ms));
     s_websocket_state.sending = false;
+    heap_caps_free(data);
     if (s_websocket_state.close_pending) {
         websocket_finalize_close_source();
     }
-    if (sent < 0 || (size_t)sent != text_len) {
+    if (sent < 0 || (size_t)sent != length) {
         return JS_ThrowInternalError(ctx, "websocketClient.send() failed");
     }
     s_websocket_state.sent_messages++;
@@ -958,11 +1152,12 @@ JSValue js_websocket_send(JSContext *ctx,
 
 struct esp32_mquickjs_future_driver_state {
     esp_websocket_client_handle_t client;
-    char *text;
-    size_t text_length;
+    char *data;
+    size_t length;
     uint32_t generation;
     uint32_t timeout_ms;
     int sent;
+    bool binary;
     _Atomic bool worker_completed;
     bool started;
     _Atomic bool cancelled;
@@ -974,7 +1169,7 @@ static void websocket_send_future_release(
     if (state == NULL) {
         return;
     }
-    heap_caps_free(state->text);
+    heap_caps_free(state->data);
     heap_caps_free(state);
 }
 
@@ -986,14 +1181,11 @@ static bool websocket_send_future_prepare(
     esp32_mquickjs_future_driver_state_t **out_state)
 {
     esp32_mquickjs_future_driver_state_t *state;
-    JSCStringBuf text_buf;
-    const char *text;
-    size_t text_length = 0;
 
     (void)this_ref;
-    if (out_state == NULL || argc != 1 || !JS_IsString(ctx, argv[0].val)) {
+    if (out_state == NULL || argc != 1) {
         JS_ThrowTypeError(
-            ctx, "websocketClient.send(text) expects one string");
+            ctx, "websocketClient.send(data) expects one data argument");
         return false;
     }
     if (atomic_load_explicit(&s_websocket_state.lifecycle,
@@ -1010,16 +1202,6 @@ static bool websocket_send_future_prepare(
             "websocketClient.send() failed because another send is active");
         return false;
     }
-    text = JS_ToCStringLen(ctx, &text_length, argv[0].val, &text_buf);
-    if (text == NULL) {
-        return false;
-    }
-    if (text_length > s_websocket_state.max_message_bytes ||
-        text_length > INT32_MAX) {
-        JS_ThrowRangeError(ctx,
-                           "websocketClient.send() message is too large");
-        return false;
-    }
     state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
@@ -1027,15 +1209,11 @@ static bool websocket_send_future_prepare(
     }
     atomic_init(&state->worker_completed, false);
     atomic_init(&state->cancelled, false);
-    state->text = heap_caps_malloc(text_length + 1U, MALLOC_CAP_8BIT);
-    if (state->text == NULL) {
+    if (!websocket_copy_send_payload(ctx, argv[0].val, &state->data,
+                                     &state->length, &state->binary)) {
         websocket_send_future_release(state);
-        JS_ThrowOutOfMemory(ctx);
         return false;
     }
-    memcpy(state->text, text, text_length);
-    state->text[text_length] = '\0';
-    state->text_length = text_length;
     state->client = s_websocket_state.client;
     state->generation = s_websocket_state.generation;
     state->timeout_ms = s_websocket_state.send_timeout_ms;
@@ -1052,9 +1230,15 @@ static void websocket_send_future_worker(void *opaque)
         return;
     }
     if (!atomic_load_explicit(&state->cancelled, memory_order_acquire)) {
-        state->sent = esp_websocket_client_send_text(
-            state->client, state->text, (int)state->text_length,
-            pdMS_TO_TICKS(state->timeout_ms));
+        state->sent = state->binary
+                          ? esp_websocket_client_send_bin(
+                                state->client, state->data,
+                                (int)state->length,
+                                pdMS_TO_TICKS(state->timeout_ms))
+                          : esp_websocket_client_send_text(
+                                state->client, state->data,
+                                (int)state->length,
+                                pdMS_TO_TICKS(state->timeout_ms));
     }
     atomic_store_explicit(
         &state->worker_completed, true, memory_order_release);
@@ -1108,7 +1292,7 @@ static JSValue websocket_send_future_finish(
             ctx, "websocketClient.send() was cancelled");
     }
     if (state->generation != s_websocket_state.generation ||
-        state->sent < 0 || (size_t)state->sent != state->text_length) {
+        state->sent < 0 || (size_t)state->sent != state->length) {
         return JS_ThrowInternalError(ctx, "websocketClient.send() failed");
     }
     s_websocket_state.sent_messages++;

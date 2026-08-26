@@ -46,22 +46,34 @@ class TransportArchitectureTests(SourceContractTestCase):
         self.assertIn('JS_PROP_CLASS_DEF("sys", &js_sys_obj)', stdlib)
         self.assertNotIn('JS_PROP_CLASS_DEF("esp32",', stdlib)
         self.assertIn('JS_PROP_CLASS_DEF("socket", &js_socket_obj)', stdlib)
-        self.assertIn("socket.tcp", source)
-        self.assertIn("socket.udp", source)
+        for class_name in ("TCPSocket", "TCPListener", "UDPSocket"):
+            self.assertIn(f'JS_CLASS_DEF("{class_name}"', stdlib)
         for operation in (
-            "js_socket_open",
-            "js_socket_close",
-            "js_socket_status",
+            "js_socket_open_tcp",
+            "js_socket_listen_tcp",
+            "js_socket_open_udp",
+            "js_socket_handle_close",
+            "js_socket_handle_status",
+            "js_socket_handle_finalizer",
             "js_socket_get_max_transfer_bytes",
             "js_socket_tcp_connect",
-            "js_socket_tcp_listen",
             "js_socket_tcp_accept",
             "js_socket_tcp_send",
             "js_socket_tcp_recv",
-            "js_socket_udp_sendto",
-            "js_socket_udp_recvfrom",
+            "js_socket_udp_send_to",
+            "js_socket_udp_receive_from",
         ):
             self.assertIn(operation, source)
+        self.assertIn("entry_generation", source)
+        self.assertIn("socket_find_entry_generation", source)
+        self.assertIn("future_reservations", source)
+        self.assertIn("socket_future_resource_key", source)
+        self.assertIn("control_lane_key", source)
+        self.assertIn("accept_lane_key", source)
+        self.assertIn("tx_lane_key", source)
+        self.assertIn("rx_lane_key", source)
+        self.assertNotIn("socket_require_entry", source)
+        self.assertNotIn("return JS_NewInt32(ctx, client->id)", source)
         self.assertNotIn("tcpClient", source)
         self.assertNotIn("agent.", source)
         self.assertNotIn("deviceId", source)
@@ -103,7 +115,7 @@ class TransportArchitectureTests(SourceContractTestCase):
         function_end = source.index("\nstatic void websocket_event_handler(", function_start)
         handler = source[function_start:function_end]
         error_position = handler.index(
-            'websocket_enqueue_error("only complete WebSocket text'
+            'websocket_enqueue_error("unsupported WebSocket data opcode"'
         )
 
         for opcode in (
@@ -112,6 +124,30 @@ class TransportArchitectureTests(SourceContractTestCase):
             "WEBSOCKET_OPCODE_PONG",
         ):
             self.assertLess(handler.index(opcode), error_position)
+
+    def test_websocket_and_usb_use_receive_with_typed_binary_payloads(self):
+        websocket = (
+            MQUICKJS / "src" / "modules" / "websocket" / "esp32_mquickjs_websocket.c"
+        ).read_text(encoding="utf-8")
+        usb = (
+            MQUICKJS / "src" / "modules" / "usb_serial" / "esp32_mquickjs_usb_serial.c"
+        ).read_text(encoding="utf-8")
+        declarations = (ROOT / "types" / "esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("WEBSOCKET_OPCODE_BINARY", websocket)
+        self.assertIn("esp_websocket_client_send_bin(", websocket)
+        self.assertIn("esp32_mquickjs_new_owned_byte_view(", websocket)
+        self.assertIn("websocket_free_callback_event(data);", websocket)
+        self.assertNotIn('JS_SetPropertyStr(ctx, *queue_object, "recv"', websocket)
+        self.assertNotIn('JS_SetPropertyStr(ctx, *queue_object, "recv"', usb)
+        self.assertIn('binary ? "chunkBytes" : "maxFrameBytes"', usb)
+        self.assertIn("interface USBSerialTextHandle extends EventQueue<string>", declarations)
+        self.assertIn("interface USBSerialBinaryHandle extends EventQueue<ByteView>", declarations)
+        self.assertIn("send(data: string | ByteSource | ByteSpanSource): number", declarations)
+        self.assertNotIn("recv(timeoutMs?: number): WebSocketClientEvent", declarations)
+        self.assertNotIn("recv(timeoutMs?: number): string | null", declarations)
 
     def test_repeated_input_transports_use_event_queues_without_callbacks(self):
         sources = (

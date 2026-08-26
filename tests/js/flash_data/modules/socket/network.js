@@ -18,12 +18,12 @@ test("socket/network", function () {
     "time should be synchronized before raw TLS");
 
   function connectAndClose() {
-    var id = socket.open("tcp", { tls: true });
+    var client = socket.openTCP({ tls: true });
     try {
-      test.ok(socket.tcp.connect(id, "example.com", 443, 15000),
+      test.ok(client.connect("example.com", 443, { timeoutMs: 15000 }),
         "raw TLS should connect to a public CA host");
     } finally {
-      socket.close(id);
+      client.close();
     }
   }
 

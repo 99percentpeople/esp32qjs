@@ -958,9 +958,9 @@ consume the same USB input stream.
   Compile-time upper bound for one text frame or received binary chunk.
 - `usbSerial.open(options?)`
   Return a bounded EventQueue handle. `options.mode` is explicitly `"text"`
-  (the default) or `"binary"`; `options.maxFrameBytes` may select a smaller
-  bound.
-- `handle.recv(timeoutMs?)`
+  (the default) or `"binary"`; text mode uses `options.maxFrameBytes`, while
+  binary mode uses `options.chunkBytes`, to select a smaller bound.
+- `handle.receive(timeoutMs?)`
   Return the next text frame or owning `ByteView`, or `null` at the timeout.
   Text mode uses CR/LF boundaries. Binary mode returns native input chunks and
   never inserts, strips, or waits for a newline.
@@ -977,7 +977,7 @@ consume the same USB input stream.
 
 ```js
 var serial = usbSerial.open({ maxFrameBytes: 4096 });
-var line = serial.recv(1000);
+var line = serial.receive(1000);
 if (line !== null) serial.send(line);
 ```
 
@@ -1736,73 +1736,77 @@ clocks and are not affected by SNTP adjustments.
 ## `socket` Module
 
 `socket` is exposed when `sys.info.features.socket` is enabled. It provides
-bounded, handle-based TCP/UDP sockets. Verified outbound TLS streams are
+bounded TCP/UDP socket objects. Verified outbound TLS streams are
 available only when the separately selectable `sys.info.features.tls` build
 capability is enabled. The framework does not add line framing, reconnect
 policy, authentication, or an application protocol.
 
-- `socket.open(protocol, options = {})`
-  Open a `"tcp"` or `"udp"` socket and return its numeric handle.
-  `options.localPort` binds the local port. For an outbound verified TLS client,
-  use `socket.open("tcp", { tls: true })`; TLS uses the system CA certificate
+- `socket.openTCP(options = {})`
+  Return a `TCPSocket`. `options.localPort` binds the local port. For an
+  outbound verified TLS client, use `socket.openTCP({ tls: true })`; TLS uses
+  the system CA certificate
   bundle, verifies the DNS name and certificate validity dates, and does not
-  support listening or a fixed local port. When the TLS capability is omitted,
-  requesting `tls: true` fails before allocating a socket handle.
-- `socket.close(socket_id)`
-  Close a handle. Closing an already closed handle returns `false`.
-- `socket.status(socket_id)`
-  Return protocol, local/remote endpoint, connected/listening state, peer-close
-  state, and byte counters.
-- `socket.get_max_message_bytes(socket_id)`
-  Return the maximum bytes accepted by one send or receive call. For TCP this
-  is a chunk limit, not a message boundary.
-- `socket.tcp.connect(socket_id, remote_host, remote_port, timeout = 5000)`
-  Connect a TCP handle. The host string may be an IP address or DNS name. DNS
+  support a fixed local port. When the TLS capability is omitted, requesting
+  `tls: true` fails before allocating a socket object.
+- `socket.listenTCP({ localPort, backlog = 4 })`
+  Bind and return a `TCPListener`.
+- `socket.openUDP(options = {})`
+  Bind and return a `UDPSocket`; `options.localPort` defaults to `0`.
+- `socket.MAX_TRANSFER_BYTES`
+  Is the maximum bytes accepted by one datagram or stream chunk. TCP itself
+  has no message boundary.
+- `tcp.connect(remoteHost, remotePort, { timeoutMs = 5000 } = {})`
+  Connect a `TCPSocket`. The host string may be an IP address or DNS name. DNS
   resolution is dispatched through the asynchronous lwIP resolver, so a slow
   lookup does not stop JavaScript, timers, other Futures, or EventQueues. The
   timeout covers resolution, TCP connect, and the TLS handshake when enabled.
   TLS connection setup runs in a bounded worker so ESP-IDF network waits do not
   block the JavaScript task; PSRAM profiles prefer external RAM for its stack.
-- `socket.tcp.listen(socket_id, backlog = 4)`
-  Turn a bound TCP handle into a listener.
-- `socket.tcp.accept(socket_id, timeout = 0)`
-  Return a connected client handle or `null` when no connection is ready.
-- `socket.tcp.send(socket_id, data, timeout = 0)`
+- `listener.accept(timeoutMs = 0)`
+  Return a connected `TCPSocket` or `null` when no connection is ready.
+- `tcp.send(data, timeoutMs = 0)`
   Send a `ByteView`, array-like byte source, or `ByteSpanSource` and return the
   number of bytes written. A source is consumed one span at a time across
   partial plain/TLS writes, then closed on every terminal path. Source bodies
   are bounded by `CONFIG_ESP32_MQUICKJS_SOCKET_MAX_SOURCE_BYTES` (1 MiB by
   default) without requiring a single contiguous copy.
-- `socket.tcp.recv(socket_id, max_bytes, timeout = 0)`
+- `tcp.recv(maxBytes = socket.MAX_TRANSFER_BYTES, timeoutMs = 0)`
   Return one raw stream chunk or `null`. TCP has no message boundaries.
-- `socket.udp.sendto(socket_id, remote_host, remote_port, data)`
+- `udp.sendTo(remoteHost, remotePort, data)`
   Send one UDP datagram. DNS names use the same asynchronous resolver path.
-- `socket.udp.recvfrom(socket_id, max_bytes, timeout = 0)`
+- `udp.receiveFrom(maxBytes = socket.MAX_TRANSFER_BYTES, timeoutMs = 0)`
   Return `{ data, remoteHost, remotePort }` or `null`.
+- `socketObject.status()`
+  Return protocol, local/remote endpoint, connected/listening state, peer-close
+  state, and byte counters. Internal IDs are never exposed.
+- `socketObject.close()`
+  Request cancellation of pending operations and release the socket after each
+  driver confirms completion. The first call returns `true`; repeated calls
+  return `false`. A finalizer performs the same release when needed.
 
-`accept`, `recv`, and `recvfrom` default to non-blocking operation. Their
-optional `timeout` is bounded to 60000 ms and remains subordinate to an outer
+`accept`, `recv`, and `receiveFrom` default to non-blocking operation. Their
+optional timeout is bounded to 60000 ms and remains subordinate to an outer
 `sys.withTimeout()` deadline.
 
 ```js
-var client = socket.open("tcp", { localPort: 0 });
-socket.tcp.connect(client, "192.0.2.10", 9000, 5000);
+var client = socket.openTCP({ localPort: 0 });
+client.connect("192.0.2.10", 9000, { timeoutMs: 5000 });
 var payload = fs.open("payload.bin", "rb");
 var payloadBytes = payload.read(1024);
 payload.close();
-socket.tcp.send(client, payloadBytes, 1000);
-print(socket.tcp.recv(client, 1024, 100));
-socket.close(client);
+client.send(payloadBytes, 1000);
+print(client.recv(1024, 100));
+client.close();
 
-var secureClient = socket.open("tcp", { tls: true });
-socket.tcp.connect(secureClient, "example.com", 443, 5000);
-socket.tcp.send(secureClient, payloadBytes, 1000);
-socket.close(secureClient);
+var secureClient = socket.openTCP({ tls: true });
+secureClient.connect("example.com", 443, { timeoutMs: 5000 });
+secureClient.send(payloadBytes, 1000);
+secureClient.close();
 
-var udp = socket.open("udp", { localPort: 0 });
-socket.udp.sendto(udp, "192.0.2.10", 9001, "hello");
-print(JSON.stringify(socket.udp.recvfrom(udp, 1024, 100)));
-socket.close(udp);
+var udp = socket.openUDP({ localPort: 0 });
+udp.sendTo("192.0.2.10", 9001, "hello");
+print(JSON.stringify(udp.receiveFrom(1024, 100)));
+udp.close();
 ```
 
 Verified TLS failures from raw sockets and HTTPS fetches carry a stable `code`
@@ -1906,11 +1910,14 @@ It uses a bounded `EventQueue` handle and does not invoke application callbacks.
   Start a connection and return a handle. Required `options.url` uses `ws://`
   or `wss://`; the remaining network, reconnect, authorization, and size options
   are unchanged.
-- `handle.recv(timeoutMs?)`
+- `handle.receive(timeoutMs?)`
   Return the next `{ type: "open" | "message" | "close" | "error", ... }`
-  event, or `null` at the timeout.
-- `handle.send(text)` / `handle.status()` / `handle.close()`
-  Send text, inspect counters, or close the event source. The send operation has
+  event, or `null` at the timeout. Every event carries `sequence` and
+  `timestampUs`; message `data` is a string for text frames and an owning
+  `ByteView` for binary frames.
+- `handle.send(data)` / `handle.status()` / `handle.close()`
+  Send text or bounded binary `ByteSource`/`ByteSpanSource` data, inspect
+  counters, or close the event source. The send operation has
   a native Future driver; use `Future.call(handle.send, handle, [text])` to
   return before network backpressure clears. Only one send may be active.
 
@@ -1920,14 +1927,15 @@ var client = websocketClient.open({
   authorization: "Bearer paired-device-token",
   autoReconnect: true
 });
-var event = client.recv(10000);
+var event = client.receive(10000);
 if (event && event.type === "open") {
   client.send(JSON.stringify({ type: "protocol.ping", id: 1 }));
 }
 ```
 
-Only complete text messages are accepted. Close, ping, and pong control frames
-are handled natively and are not reported as application errors.
+Complete text and binary messages are accepted. Close, ping, and pong control
+frames are handled natively and are not reported as application errors. A
+dropped binary event releases its native payload automatically.
 
 ## `http` Module
 
@@ -1967,15 +1975,22 @@ print(responses[0].status, responses[1].status);
 - `server.route(method, path)`
   Register a declarative route. Supported methods are `GET`, `POST`, `PUT`,
   `PATCH`, `DELETE`, `HEAD`, `OPTIONS`, and `ANY`; `*` in a path uses the
-  built-in glob matcher.
+  built-in glob matcher. Returns `true` after registration.
 - `server.start()` / `server.stop()`
-  Start or stop listening while retaining the server and route table.
+  Start or stop listening while retaining the server and route table. Each
+  returns `true` only when it changed the listening state and `false` when the
+  requested state was already active.
 - `server.receive(timeoutMs?)`
   Return the next matching `Request`, or `null` at the timeout. The request
   queue is bounded and rejects overflow with HTTP 503.
+- `server.stats()`
+  Return the same bounded queue statistics as `EventQueue.stats()`, including
+  queued requests and the exact dropped count.
 - `server.respond(request, response)`
   Complete one live request with a `Response`. A request is generation-checked
-  and cannot be completed twice.
+  and cannot be completed twice. This method has a native Future driver, so
+  `Future.call(server.respond, server, [request, response])` returns before a
+  slow response stream or socket finishes.
 - `server.removeRoute(path, method?)` / `server.clearRoutes()`
   Remove matching declarative routes.
 - `server.close()`

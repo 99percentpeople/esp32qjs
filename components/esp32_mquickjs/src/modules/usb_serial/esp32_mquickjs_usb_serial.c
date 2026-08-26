@@ -319,12 +319,15 @@ static bool usb_serial_poller(JSContext *ctx,
     return emit.handled;
 }
 
-static bool usb_serial_parse_max_frame_bytes(JSContext *ctx,
-                                              JSValue options,
-                                              size_t *out_max_frame_bytes)
+static bool usb_serial_parse_frame_limit(JSContext *ctx,
+                                         JSValue options,
+                                         bool binary,
+                                         size_t *out_max_frame_bytes)
 {
     JSValue value;
     int raw_value;
+    int minimum = binary ? (int)USB_SERIAL_JTAG_PACKET_BYTES : 256;
+    const char *name = binary ? "chunkBytes" : "maxFrameBytes";
 
     *out_max_frame_bytes = CONFIG_ESP32_MQUICKJS_USB_SERIAL_MAX_FRAME_BYTES;
     if (JS_IsUndefined(options) || JS_IsNull(options)) {
@@ -334,11 +337,11 @@ static bool usb_serial_parse_max_frame_bytes(JSContext *ctx,
         return false;
     }
 
-    value = JS_GetPropertyStr(ctx, options, "maxFrameBytes");
+    value = JS_GetPropertyStr(ctx, options, name);
     if (JS_IsUndefined(value)) {
         return true;
     }
-    if (JS_ToInt32(ctx, &raw_value, value) != 0 || raw_value < 256 ||
+    if (JS_ToInt32(ctx, &raw_value, value) != 0 || raw_value < minimum ||
         raw_value > CONFIG_ESP32_MQUICKJS_USB_SERIAL_MAX_FRAME_BYTES) {
         return false;
     }
@@ -455,11 +458,9 @@ JSValue js_usb_serial_open(JSContext *ctx,
 {
     JSValue options = JS_UNDEFINED;
     JSGCRef queue_ref;
-    JSGCRef receive_ref;
     JSGCRef send_ref;
     JSGCRef status_ref;
     JSValue *queue_object;
-    JSValue *receive;
     JSValue *send;
     JSValue *status;
     size_t max_frame_bytes;
@@ -478,15 +479,18 @@ JSValue js_usb_serial_open(JSContext *ctx,
     if (argc == 1) {
         options = argv[0];
     }
-    if (!usb_serial_parse_max_frame_bytes(ctx, options, &max_frame_bytes)) {
-        return JS_ThrowRangeError(
-            ctx,
-            "usbSerial.open() maxFrameBytes must be between 256 and %d",
-            CONFIG_ESP32_MQUICKJS_USB_SERIAL_MAX_FRAME_BYTES);
-    }
     if (!usb_serial_parse_binary_mode(ctx, options, &binary)) {
         return JS_ThrowTypeError(ctx,
                                  "usbSerial.open() mode must be \"text\" or \"binary\"");
+    }
+    if (!usb_serial_parse_frame_limit(ctx, options, binary,
+                                      &max_frame_bytes)) {
+        return JS_ThrowRangeError(
+            ctx,
+            binary
+                ? "usbSerial.open() chunkBytes must be between 64 and %d"
+                : "usbSerial.open() maxFrameBytes must be between 256 and %d",
+            CONFIG_ESP32_MQUICKJS_USB_SERIAL_MAX_FRAME_BYTES);
     }
 
     if (!binary) {
@@ -503,7 +507,6 @@ JSValue js_usb_serial_open(JSContext *ctx,
                                     s_usb_serial_state.line_buffer,
                                     max_frame_bytes);
     queue_object = JS_PushGCRef(ctx, &queue_ref);
-    receive = JS_PushGCRef(ctx, &receive_ref);
     send = JS_PushGCRef(ctx, &send_ref);
     status = JS_PushGCRef(ctx, &status_ref);
     *queue_object = esp32_mquickjs_event_queue_new(
@@ -516,20 +519,15 @@ JSValue js_usb_serial_open(JSContext *ctx,
         usb_serial_drop_event,
         usb_serial_close_source,
         NULL);
-    *receive = JS_IsException(*queue_object)
-        ? JS_EXCEPTION
-        : JS_GetPropertyStr(ctx, *queue_object, "receive");
     *send = JS_GetPropertyStr(ctx, *this_val, "send");
     *status = JS_GetPropertyStr(ctx, *this_val, "status");
-    if (JS_IsException(*queue_object) || JS_IsException(*receive) ||
+    if (JS_IsException(*queue_object) ||
         JS_IsException(*send) || JS_IsException(*status) ||
-        JS_IsException(JS_SetPropertyStr(ctx, *queue_object, "recv", *receive)) ||
         JS_IsException(JS_SetPropertyStr(ctx, *queue_object, "send", *send)) ||
         JS_IsException(JS_SetPropertyStr(ctx, *queue_object, "status", *status))) {
         usb_serial_release_line_buffer();
         JS_PopGCRef(ctx, &status_ref);
         JS_PopGCRef(ctx, &send_ref);
-        JS_PopGCRef(ctx, &receive_ref);
         JS_PopGCRef(ctx, &queue_ref);
         return JS_EXCEPTION;
     }
@@ -537,7 +535,6 @@ JSValue js_usb_serial_open(JSContext *ctx,
     s_usb_serial_state.opened = true;
     JS_PopGCRef(ctx, &status_ref);
     JS_PopGCRef(ctx, &send_ref);
-    JS_PopGCRef(ctx, &receive_ref);
     return JS_PopGCRef(ctx, &queue_ref);
 }
 

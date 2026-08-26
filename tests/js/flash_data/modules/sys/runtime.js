@@ -291,8 +291,9 @@ test("sys/runtime", function () {
   expectFeature("net", hasObject("net"));
   expectFeature("usbSerial", hasObject("usbSerial"));
   expectFeature("socket", hasObject("socket") &&
-    typeof globalThis.socket.tcp === "object" &&
-    typeof globalThis.socket.udp === "object");
+    typeof globalThis.socket.openTCP === "function" &&
+    typeof globalThis.socket.listenTCP === "function" &&
+    typeof globalThis.socket.openUDP === "function");
   expectFeature("websocket", hasObject("websocketClient"));
   expectFeature("bitmap", hasObject("bitmap"));
   expectFeature("wifi", hasObject("wifi"));

@@ -54,13 +54,27 @@ typedef enum {
 
 typedef struct {
     int id;
+    uint32_t generation;
     int fd;
     socket_protocol_t protocol;
     bool connected;
     bool listening;
     bool peer_closed;
-    bool busy;
+    bool control_busy;
+    bool accept_busy;
+    bool tx_busy;
+    bool rx_busy;
+    bool close_pending;
     bool secure;
+    uint16_t future_reservations;
+    uint8_t control_lane_key;
+    uint8_t accept_lane_key;
+    uint8_t tx_lane_key;
+    uint8_t rx_lane_key;
+    esp32_mquickjs_future_driver_state_t *control_active;
+    esp32_mquickjs_future_driver_state_t *accept_active;
+    esp32_mquickjs_future_driver_state_t *tx_active;
+    esp32_mquickjs_future_driver_state_t *rx_active;
     int local_port;
     int remote_port;
     char local_ip[INET6_ADDRSTRLEN];
@@ -73,6 +87,11 @@ typedef struct {
 } socket_entry_t;
 
 typedef struct {
+    int id;
+    uint32_t generation;
+} socket_handle_ref_t;
+
+typedef struct {
     bool initialized;
     int next_id;
     socket_entry_t entries[CONFIG_ESP32_MQUICKJS_SOCKET_MAX_HANDLES];
@@ -82,6 +101,10 @@ static socket_state_t s_socket;
 
 static bool socket_register_future_drivers(JSContext *ctx,
                                            esp32_mquickjs_runtime_t *runtime);
+static esp32_mquickjs_cancel_result_t socket_future_cancel(
+    esp32_mquickjs_future_driver_state_t *state);
+static void socket_future_destroy(
+    esp32_mquickjs_future_driver_state_t *state);
 
 static const char *socket_protocol_name(socket_protocol_t protocol)
 {
@@ -91,11 +114,22 @@ static const char *socket_protocol_name(socket_protocol_t protocol)
 
 static void socket_reset_entry(socket_entry_t *entry)
 {
+    uint32_t generation;
+
     if (entry == NULL) {
         return;
     }
+    generation = entry->generation;
     memset(entry, 0, sizeof(*entry));
+    entry->generation = generation;
     entry->fd = -1;
+}
+
+static bool socket_entry_busy(const socket_entry_t *entry)
+{
+    return entry != NULL &&
+           (entry->control_busy || entry->accept_busy || entry->tx_busy ||
+            entry->rx_busy);
 }
 
 static socket_entry_t *socket_find_entry(int id)
@@ -113,6 +147,14 @@ static socket_entry_t *socket_find_entry(int id)
     return NULL;
 }
 
+static socket_entry_t *socket_find_entry_generation(int id,
+                                                    uint32_t generation)
+{
+    socket_entry_t *entry = socket_find_entry(id);
+
+    return entry != NULL && entry->generation == generation ? entry : NULL;
+}
+
 static socket_entry_t *socket_allocate_entry(void)
 {
     size_t i;
@@ -124,6 +166,10 @@ static socket_entry_t *socket_allocate_entry(void)
             continue;
         }
         socket_reset_entry(entry);
+        entry->generation++;
+        if (entry->generation == 0) {
+            entry->generation++;
+        }
         s_socket.next_id++;
         if (s_socket.next_id <= 0) {
             s_socket.next_id = 1;
@@ -166,6 +212,32 @@ static void socket_close_entry(socket_entry_t *entry)
     socket_reset_entry(entry);
 }
 
+static void socket_request_close(socket_entry_t *entry)
+{
+    if (entry == NULL || entry->id == 0 || entry->close_pending) {
+        return;
+    }
+    entry->close_pending = true;
+    if (entry->fd >= 0) {
+        (void)shutdown(entry->fd, SHUT_RDWR);
+    }
+    if (entry->control_active != NULL) {
+        (void)socket_future_cancel(entry->control_active);
+    }
+    if (entry->accept_active != NULL) {
+        (void)socket_future_cancel(entry->accept_active);
+    }
+    if (entry->tx_active != NULL) {
+        (void)socket_future_cancel(entry->tx_active);
+    }
+    if (entry->rx_active != NULL) {
+        (void)socket_future_cancel(entry->rx_active);
+    }
+    if (!socket_entry_busy(entry) && entry->future_reservations == 0) {
+        socket_close_entry(entry);
+    }
+}
+
 static bool socket_to_int(JSContext *ctx,
                           JSValue value,
                           int min_value,
@@ -182,25 +254,8 @@ static bool socket_to_int(JSContext *ctx,
     return true;
 }
 
-static bool socket_optional_int(JSContext *ctx,
-                                int argc,
-                                JSValue *argv,
-                                int index,
-                                int default_value,
-                                int min_value,
-                                int max_value,
-                                int *out_value)
-{
-    if (index >= argc || JS_IsUndefined(argv[index])) {
-        *out_value = default_value;
-        return true;
-    }
-    return socket_to_int(ctx, argv[index], min_value, max_value, out_value);
-}
-
 static bool socket_open_options(JSContext *ctx,
-                                int argc,
-                                JSValue *argv,
+                                JSValue options,
                                 int *out_local_port,
                                 bool *out_secure)
 {
@@ -210,22 +265,22 @@ static bool socket_open_options(JSContext *ctx,
 
     *out_local_port = 0;
     *out_secure = false;
-    if (argc < 2 || JS_IsUndefined(argv[1])) {
+    if (JS_IsUndefined(options) || JS_IsNull(options)) {
         return true;
     }
-    if (JS_GetClassID(ctx, argv[1]) < 0 || JS_IsArray(ctx, argv[1])) {
+    if (JS_GetClassID(ctx, options) < 0 || JS_IsArray(ctx, options)) {
         return false;
     }
 
     option = JS_PushGCRef(ctx, &option_ref);
-    *option = JS_GetPropertyStr(ctx, argv[1], "localPort");
+    *option = JS_GetPropertyStr(ctx, options, "localPort");
     if (JS_IsException(*option) ||
         (!JS_IsUndefined(*option) &&
          !socket_to_int(ctx, *option, 0, 65535, out_local_port))) {
         valid = false;
     }
     if (valid) {
-        *option = JS_GetPropertyStr(ctx, argv[1], "tls");
+        *option = JS_GetPropertyStr(ctx, options, "tls");
         if (JS_IsException(*option) ||
             (!JS_IsUndefined(*option) && !JS_IsBool(*option))) {
             valid = false;
@@ -237,27 +292,153 @@ static bool socket_open_options(JSContext *ctx,
     return valid;
 }
 
-static socket_entry_t *socket_require_entry(JSContext *ctx,
-                                            JSValue value,
-                                            socket_protocol_t protocol)
+static bool socket_listen_options(JSContext *ctx,
+                                  JSValue options,
+                                  int *out_local_port,
+                                  int *out_backlog)
 {
-    socket_entry_t *entry;
-    int id;
+    JSGCRef option_ref;
+    JSValue *option;
+    bool valid = true;
 
-    if (!socket_to_int(ctx, value, 1, INT32_MAX, &id)) {
-        JS_ThrowTypeError(ctx, "invalid socket_id");
+    *out_local_port = 0;
+    *out_backlog = SOCKET_DEFAULT_LISTEN_BACKLOG;
+    if (JS_IsUndefined(options) || JS_IsNull(options) ||
+        JS_GetClassID(ctx, options) < 0 || JS_IsArray(ctx, options)) {
+        return false;
+    }
+    option = JS_PushGCRef(ctx, &option_ref);
+    *option = JS_GetPropertyStr(ctx, options, "localPort");
+    if (JS_IsException(*option) || JS_IsUndefined(*option) ||
+        !socket_to_int(ctx, *option, 0, 65535, out_local_port)) {
+        valid = false;
+    }
+    if (valid) {
+        *option = JS_GetPropertyStr(ctx, options, "backlog");
+        if (JS_IsException(*option) ||
+            (!JS_IsUndefined(*option) &&
+             !socket_to_int(ctx, *option, 1,
+                            CONFIG_ESP32_MQUICKJS_SOCKET_MAX_HANDLES,
+                            out_backlog))) {
+            valid = false;
+        }
+    }
+    JS_PopGCRef(ctx, &option_ref);
+    return valid;
+}
+
+static bool socket_connect_options(JSContext *ctx,
+                                   JSValue options,
+                                   int *out_timeout_ms)
+{
+    JSGCRef timeout_ref;
+    JSValue *timeout;
+    bool valid;
+
+    *out_timeout_ms = SOCKET_DEFAULT_CONNECT_TIMEOUT_MS;
+    if (JS_IsUndefined(options) || JS_IsNull(options)) {
+        return true;
+    }
+    if (JS_GetClassID(ctx, options) < 0 || JS_IsArray(ctx, options)) {
+        return false;
+    }
+    timeout = JS_PushGCRef(ctx, &timeout_ref);
+    *timeout = JS_GetPropertyStr(ctx, options, "timeoutMs");
+    valid = !JS_IsException(*timeout) &&
+            (JS_IsUndefined(*timeout) ||
+             socket_to_int(ctx, *timeout, 0, SOCKET_MAX_TIMEOUT_MS,
+                           out_timeout_ms));
+    JS_PopGCRef(ctx, &timeout_ref);
+    return valid;
+}
+
+static bool socket_class_matches_protocol(int class_id,
+                                          socket_protocol_t protocol,
+                                          bool listener)
+{
+    if (protocol == SOCKET_PROTOCOL_TCP) {
+        return class_id ==
+                   (listener ? JS_CLASS_TCP_LISTENER : JS_CLASS_TCP_SOCKET);
+    }
+    return protocol == SOCKET_PROTOCOL_UDP && !listener &&
+           class_id == JS_CLASS_UDP_SOCKET;
+}
+
+static socket_entry_t *socket_require_handle(JSContext *ctx,
+                                             JSValue value,
+                                             socket_protocol_t protocol,
+                                             bool listener,
+                                             const char *api_name)
+{
+    socket_handle_ref_t *ref;
+    socket_entry_t *entry;
+    int class_id = JS_GetClassID(ctx, value);
+
+    if (!socket_class_matches_protocol(class_id, protocol, listener) ||
+        (ref = JS_GetOpaque(ctx, value)) == NULL) {
+        JS_ThrowTypeError(ctx, "%s expects the matching socket object",
+                          api_name);
         return NULL;
     }
-    entry = socket_find_entry(id);
+    entry = socket_find_entry_generation(ref->id, ref->generation);
     if (entry == NULL) {
-        JS_ThrowRangeError(ctx, "unknown socket_id");
+        JS_ThrowReferenceError(ctx, "%s cannot use a closed or stale socket",
+                               api_name);
         return NULL;
     }
-    if (protocol != SOCKET_PROTOCOL_NONE && entry->protocol != protocol) {
-        JS_ThrowTypeError(ctx, "socket protocol does not match operation");
+    if (entry->protocol != protocol || entry->listening != listener ||
+        entry->close_pending) {
+        JS_ThrowReferenceError(ctx, "%s cannot use a closing socket",
+                               api_name);
         return NULL;
     }
     return entry;
+}
+
+static socket_entry_t *socket_require_any_handle(JSContext *ctx,
+                                                 JSValue value,
+                                                 const char *api_name)
+{
+    int class_id = JS_GetClassID(ctx, value);
+
+    if (class_id == JS_CLASS_TCP_SOCKET) {
+        return socket_require_handle(ctx, value, SOCKET_PROTOCOL_TCP, false,
+                                     api_name);
+    }
+    if (class_id == JS_CLASS_TCP_LISTENER) {
+        return socket_require_handle(ctx, value, SOCKET_PROTOCOL_TCP, true,
+                                     api_name);
+    }
+    if (class_id == JS_CLASS_UDP_SOCKET) {
+        return socket_require_handle(ctx, value, SOCKET_PROTOCOL_UDP, false,
+                                     api_name);
+    }
+    JS_ThrowTypeError(ctx, "%s expects a socket object", api_name);
+    return NULL;
+}
+
+static JSValue socket_make_handle(JSContext *ctx,
+                                  socket_entry_t *entry,
+                                  int class_id)
+{
+    JSGCRef object_ref;
+    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    socket_handle_ref_t *ref;
+
+    *object = JS_NewObjectClassUser(ctx, class_id);
+    if (JS_IsException(*object)) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_EXCEPTION;
+    }
+    ref = heap_caps_malloc(sizeof(*ref), MALLOC_CAP_8BIT);
+    if (ref == NULL) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    ref->id = entry->id;
+    ref->generation = entry->generation;
+    JS_SetOpaque(ctx, *object, ref);
+    return JS_PopGCRef(ctx, &object_ref);
 }
 
 static bool socket_set_nonblocking(int fd)
@@ -379,36 +560,32 @@ void esp32_mquickjs_deinit_socket_runtime(JSContext *ctx)
     memset(&s_socket, 0, sizeof(s_socket));
 }
 
-JSValue js_socket_open(JSContext *ctx,
-                       JSValue *this_val,
-                       int argc,
-                       JSValue *argv)
+static JSValue socket_open_handle(JSContext *ctx,
+                                  socket_protocol_t protocol,
+                                  JSValue options,
+                                  bool listener)
 {
-    JSCStringBuf protocol_buf;
-    const char *protocol_name;
-    socket_protocol_t protocol;
     socket_entry_t *entry;
     struct sockaddr_in local_address = {0};
     int local_port;
+    int backlog = SOCKET_DEFAULT_LISTEN_BACKLOG;
     int fd;
-    bool secure;
+    bool secure = false;
+    int class_id;
+    JSValue handle;
 
-    (void)this_val;
-    if (argc < 1 || !JS_IsString(ctx, argv[0]) ||
-        !socket_open_options(ctx, argc, argv, &local_port, &secure)) {
-        return JS_ThrowTypeError(ctx,
-                                 "socket.open(protocol, options) expects tcp or udp and an options object");
-    }
-    protocol_name = JS_ToCString(ctx, argv[0], &protocol_buf);
-    if (protocol_name == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (strcmp(protocol_name, "tcp") == 0) {
-        protocol = SOCKET_PROTOCOL_TCP;
-    } else if (strcmp(protocol_name, "udp") == 0) {
-        protocol = SOCKET_PROTOCOL_UDP;
-    } else {
-        return JS_ThrowRangeError(ctx, "socket protocol must be tcp or udp");
+    if (listener) {
+        if (!socket_listen_options(ctx, options, &local_port, &backlog)) {
+            return JS_ThrowTypeError(
+                ctx,
+                "socket.listenTCP(options) expects { localPort, backlog? }");
+        }
+    } else if (!socket_open_options(ctx, options, &local_port, &secure)) {
+        return JS_ThrowTypeError(
+            ctx,
+            protocol == SOCKET_PROTOCOL_TCP
+                ? "socket.openTCP(options?) expects an options object"
+                : "socket.openUDP(options?) expects an options object");
     }
 #if !CONFIG_ESP32_MQUICKJS_FEATURE_TLS
     if (secure) {
@@ -416,7 +593,7 @@ JSValue js_socket_open(JSContext *ctx,
                                  "TLS sockets require the TLS firmware capability");
     }
 #else
-    if (secure && protocol != SOCKET_PROTOCOL_TCP) {
+    if (secure && (protocol != SOCKET_PROTOCOL_TCP || listener)) {
         return JS_ThrowTypeError(ctx, "TLS is only supported for TCP client sockets");
     }
     if (secure && local_port != 0) {
@@ -437,7 +614,11 @@ JSValue js_socket_open(JSContext *ctx,
         entry->protocol = SOCKET_PROTOCOL_TCP;
         entry->secure = true;
         snprintf(entry->local_ip, sizeof(entry->local_ip), "0.0.0.0");
-        return JS_NewInt32(ctx, entry->id);
+        handle = socket_make_handle(ctx, entry, JS_CLASS_TCP_SOCKET);
+        if (JS_IsException(handle)) {
+            socket_close_entry(entry);
+        }
+        return handle;
     }
     fd = socket(AF_INET,
                 protocol == SOCKET_PROTOCOL_TCP ? SOCK_STREAM : SOCK_DGRAM,
@@ -447,7 +628,7 @@ JSValue js_socket_open(JSContext *ctx,
             close(fd);
         }
         socket_reset_entry(entry);
-        return JS_ThrowInternalError(ctx, "socket.open() failed: errno=%d", errno);
+        return JS_ThrowInternalError(ctx, "socket open failed: errno=%d", errno);
     }
     local_address.sin_family = AF_INET;
     local_address.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -455,58 +636,144 @@ JSValue js_socket_open(JSContext *ctx,
     if (bind(fd, (struct sockaddr *)&local_address, sizeof(local_address)) != 0) {
         close(fd);
         socket_reset_entry(entry);
-        return JS_ThrowInternalError(ctx, "socket.open() bind failed: errno=%d", errno);
+        return JS_ThrowInternalError(ctx, "socket bind failed: errno=%d", errno);
     }
     entry->fd = fd;
     entry->protocol = protocol;
-    socket_refresh_local_address(entry);
-    return JS_NewInt32(ctx, entry->id);
-}
+    entry->listening = listener;
+    if (listener && listen(fd, backlog) != 0) {
+        int error_code = errno;
 
-JSValue js_socket_close(JSContext *ctx,
-                        JSValue *this_val,
-                        int argc,
-                        JSValue *argv)
-{
-    socket_entry_t *entry;
-    int id;
-
-    (void)this_val;
-    if (argc < 1 || !socket_to_int(ctx, argv[0], 1, INT32_MAX, &id)) {
-        return JS_ThrowTypeError(ctx, "socket.close(socket_id) expects a socket id");
-    }
-    entry = socket_find_entry(id);
-    if (entry == NULL) {
-        return JS_NewBool(false);
-    }
-    if (entry->busy) {
+        socket_close_entry(entry);
         return JS_ThrowInternalError(ctx,
-                                     "socket.close() refused while an operation is pending");
+                                     "socket.listenTCP() failed: errno=%d",
+                                     error_code);
     }
-    socket_close_entry(entry);
-    return JS_NewBool(true);
+    socket_refresh_local_address(entry);
+    class_id = listener ? JS_CLASS_TCP_LISTENER
+                        : protocol == SOCKET_PROTOCOL_TCP
+                              ? JS_CLASS_TCP_SOCKET
+                              : JS_CLASS_UDP_SOCKET;
+    handle = socket_make_handle(ctx, entry, class_id);
+    if (JS_IsException(handle)) {
+        socket_close_entry(entry);
+    }
+    return handle;
 }
 
-JSValue js_socket_status(JSContext *ctx,
-                         JSValue *this_val,
-                         int argc,
-                         JSValue *argv)
+JSValue js_socket_open_tcp(JSContext *ctx,
+                           JSValue *this_val,
+                           int argc,
+                           JSValue *argv)
+{
+    (void)this_val;
+    if (argc > 1) {
+        return JS_ThrowTypeError(ctx, "socket.openTCP(options?) expected");
+    }
+    return socket_open_handle(ctx, SOCKET_PROTOCOL_TCP,
+                              argc == 0 ? JS_UNDEFINED : argv[0], false);
+}
+
+JSValue js_socket_listen_tcp(JSContext *ctx,
+                             JSValue *this_val,
+                             int argc,
+                             JSValue *argv)
+{
+    (void)this_val;
+    if (argc != 1) {
+        return JS_ThrowTypeError(
+            ctx, "socket.listenTCP(options) expects { localPort, backlog? }");
+    }
+    return socket_open_handle(ctx, SOCKET_PROTOCOL_TCP, argv[0], true);
+}
+
+JSValue js_socket_open_udp(JSContext *ctx,
+                           JSValue *this_val,
+                           int argc,
+                           JSValue *argv)
+{
+    (void)this_val;
+    if (argc > 1) {
+        return JS_ThrowTypeError(ctx, "socket.openUDP(options?) expected");
+    }
+    return socket_open_handle(ctx, SOCKET_PROTOCOL_UDP,
+                              argc == 0 ? JS_UNDEFINED : argv[0], false);
+}
+
+JSValue js_socket_handle_constructor(JSContext *ctx,
+                                     JSValue *this_val,
+                                     int argc,
+                                     JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_ThrowTypeError(ctx, "socket handles cannot be constructed directly");
+}
+
+void js_socket_handle_finalizer(JSContext *ctx, void *opaque)
+{
+    socket_handle_ref_t *ref = opaque;
+    socket_entry_t *entry = ref != NULL
+        ? socket_find_entry_generation(ref->id, ref->generation) : NULL;
+
+    (void)ctx;
+    if (entry != NULL) {
+        socket_request_close(entry);
+    }
+    heap_caps_free(ref);
+}
+
+JSValue js_socket_handle_close(JSContext *ctx,
+                               JSValue *this_val,
+                               int argc,
+                               JSValue *argv)
+{
+    socket_handle_ref_t *ref;
+    socket_entry_t *entry;
+    int class_id = JS_GetClassID(ctx, *this_val);
+
+    (void)argc;
+    (void)argv;
+    if (class_id != JS_CLASS_TCP_SOCKET &&
+        class_id != JS_CLASS_TCP_LISTENER &&
+        class_id != JS_CLASS_UDP_SOCKET) {
+        return JS_ThrowTypeError(ctx, "socket close expects a socket object");
+    }
+    ref = JS_GetOpaque(ctx, *this_val);
+    if (ref == NULL) {
+        return JS_FALSE;
+    }
+    entry = socket_find_entry_generation(ref->id, ref->generation);
+    JS_SetOpaque(ctx, *this_val, NULL);
+    if (entry != NULL) {
+        socket_request_close(entry);
+    }
+    heap_caps_free(ref);
+    return JS_NewBool(entry != NULL);
+}
+
+JSValue js_socket_handle_status(JSContext *ctx,
+                                JSValue *this_val,
+                                int argc,
+                                JSValue *argv)
 {
     socket_entry_t *entry;
     JSGCRef status_ref;
     JSValue *status;
 
-    (void)this_val;
-    if (argc < 1 || (entry = socket_require_entry(ctx,
-                                                  argv[0],
-                                                  SOCKET_PROTOCOL_NONE)) == NULL) {
+    (void)argc;
+    (void)argv;
+    entry = socket_require_any_handle(ctx, *this_val, "socket.status()");
+    if (entry == NULL) {
         return JS_EXCEPTION;
     }
-    socket_refresh_local_address(entry);
+    if (entry->fd >= 0) {
+        socket_refresh_local_address(entry);
+    }
     status = JS_PushGCRef(ctx, &status_ref);
     *status = JS_NewObject(ctx);
     if (JS_IsException(*status) ||
-        !esp32_mquickjs_set_property_ref(ctx, status, "id", JS_NewInt32(ctx, entry->id)) ||
         !esp32_mquickjs_set_property_ref(ctx,
                                          status,
                                          "protocol",
@@ -569,46 +836,27 @@ JSValue js_socket_get_max_transfer_bytes(JSContext *ctx,
 }
 
 static JSValue socket_future_call_and_wait(JSContext *ctx,
-                                           const char *family_name,
+                                           JSValue this_value,
                                            const char *method_name,
                                            int argc,
                                            JSValue *argv)
 {
-    JSGCRef global_ref;
-    JSGCRef socket_ref;
-    JSGCRef family_ref;
     JSGCRef method_ref;
-    JSValue *global = JS_PushGCRef(ctx, &global_ref);
-    JSValue *socket = JS_PushGCRef(ctx, &socket_ref);
-    JSValue *family = JS_PushGCRef(ctx, &family_ref);
     JSValue *method = JS_PushGCRef(ctx, &method_ref);
     JSValue result;
 
-    *global = JS_GetGlobalObject(ctx);
-    *socket = JS_IsException(*global)
-        ? JS_EXCEPTION
-        : JS_GetPropertyStr(ctx, *global, "socket");
-    *family = JS_IsException(*socket)
-        ? JS_EXCEPTION
-        : JS_GetPropertyStr(ctx, *socket, family_name);
-    *method = JS_IsException(*family)
-        ? JS_EXCEPTION
-        : JS_GetPropertyStr(ctx, *family, method_name);
-    if (JS_IsException(*global) || JS_IsException(*socket) ||
-        JS_IsException(*family) || JS_IsException(*method)) {
+    *method = JS_GetPropertyStr(ctx, this_value, method_name);
+    if (JS_IsException(*method)) {
         result = JS_EXCEPTION;
     } else {
         result = esp32_mquickjs_future_call_and_wait(ctx,
                                                      esp32_mquickjs_get_active_runtime(),
                                                      *method,
-                                                     *family,
+                                                     this_value,
                                                      argc,
                                                      argv);
     }
     JS_PopGCRef(ctx, &method_ref);
-    JS_PopGCRef(ctx, &family_ref);
-    JS_PopGCRef(ctx, &socket_ref);
-    JS_PopGCRef(ctx, &global_ref);
     return result;
 }
 
@@ -667,6 +915,7 @@ struct esp32_mquickjs_future_driver_state {
     esp32_mquickjs_future_token_t token;
     esp_timer_handle_t poll_timer;
     int entry_id;
+    uint32_t entry_generation;
     int fd;
     int port;
     int timeout_ms;
@@ -680,6 +929,7 @@ struct esp32_mquickjs_future_driver_state {
     uint8_t *data;
     const uint8_t *send_data;
     JSGCRef send_owner_ref;
+    JSGCRef owner_ref;
     esp32_mquickjs_byte_span_source_t send_source;
     esp32_mquickjs_byte_span_t send_span;
     size_t send_span_offset;
@@ -704,14 +954,81 @@ struct esp32_mquickjs_future_driver_state {
     bool send_source_open;
     bool send_is_span_source;
     bool source_has_known_length;
+    bool owner_retained;
+    bool reservation_held;
 };
 
 static socket_entry_t *socket_future_entry(
     const esp32_mquickjs_future_driver_state_t *state)
 {
-    socket_entry_t *entry = state != NULL ? socket_find_entry(state->entry_id) : NULL;
+    return state != NULL
+               ? socket_find_entry_generation(state->entry_id,
+                                              state->entry_generation)
+               : NULL;
+}
 
-    return entry != NULL && entry->fd == state->fd ? entry : NULL;
+static bool *socket_future_busy_flag(socket_entry_t *entry,
+                                     socket_future_kind_t kind)
+{
+    if (entry == NULL) {
+        return NULL;
+    }
+    switch (kind) {
+        case SOCKET_FUTURE_TCP_CONNECT:
+            return &entry->control_busy;
+        case SOCKET_FUTURE_TCP_ACCEPT:
+            return &entry->accept_busy;
+        case SOCKET_FUTURE_TCP_SEND:
+        case SOCKET_FUTURE_UDP_SENDTO:
+            return &entry->tx_busy;
+        case SOCKET_FUTURE_TCP_RECV:
+        case SOCKET_FUTURE_UDP_RECVFROM:
+            return &entry->rx_busy;
+    }
+    return NULL;
+}
+
+static esp32_mquickjs_future_driver_state_t **socket_future_active_slot(
+    socket_entry_t *entry,
+    socket_future_kind_t kind)
+{
+    if (entry == NULL) {
+        return NULL;
+    }
+    switch (kind) {
+        case SOCKET_FUTURE_TCP_CONNECT:
+            return &entry->control_active;
+        case SOCKET_FUTURE_TCP_ACCEPT:
+            return &entry->accept_active;
+        case SOCKET_FUTURE_TCP_SEND:
+        case SOCKET_FUTURE_UDP_SENDTO:
+            return &entry->tx_active;
+        case SOCKET_FUTURE_TCP_RECV:
+        case SOCKET_FUTURE_UDP_RECVFROM:
+            return &entry->rx_active;
+    }
+    return NULL;
+}
+
+static uint8_t *socket_future_lane_key(socket_entry_t *entry,
+                                       socket_future_kind_t kind)
+{
+    if (entry == NULL) {
+        return NULL;
+    }
+    switch (kind) {
+        case SOCKET_FUTURE_TCP_CONNECT:
+            return &entry->control_lane_key;
+        case SOCKET_FUTURE_TCP_ACCEPT:
+            return &entry->accept_lane_key;
+        case SOCKET_FUTURE_TCP_SEND:
+        case SOCKET_FUTURE_UDP_SENDTO:
+            return &entry->tx_lane_key;
+        case SOCKET_FUTURE_TCP_RECV:
+        case SOCKET_FUTURE_UDP_RECVFROM:
+            return &entry->rx_lane_key;
+    }
+    return NULL;
 }
 
 static void socket_future_fail(esp32_mquickjs_future_driver_state_t *state,
@@ -855,18 +1172,21 @@ static bool socket_future_prepare_tcp_source(
 
 static esp32_mquickjs_future_driver_state_t *socket_future_allocate(
     JSContext *ctx,
-    JSValue socket_id,
+    JSValue owner,
     socket_protocol_t protocol,
+    bool listener,
     socket_future_kind_t kind)
 {
     esp32_mquickjs_future_driver_state_t *state;
-    socket_entry_t *entry = socket_require_entry(ctx, socket_id, protocol);
+    socket_entry_t *entry = socket_require_handle(
+        ctx, owner, protocol, listener, "socket Future operation");
+    JSValue *owner_root;
 
     if (entry == NULL) {
         return NULL;
     }
-    if (entry->busy) {
-        JS_ThrowInternalError(ctx, "socket already has an operation in progress");
+    if (entry->future_reservations == UINT16_MAX) {
+        JS_ThrowInternalError(ctx, "socket Future reservation limit reached");
         return NULL;
     }
     state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
@@ -877,10 +1197,16 @@ static esp32_mquickjs_future_driver_state_t *socket_future_allocate(
     state->kind = kind;
     state->ctx = ctx;
     state->entry_id = entry->id;
+    state->entry_generation = entry->generation;
     state->fd = entry->fd;
     state->client_fd = -1;
     state->received = -1;
     esp32_mquickjs_byte_span_clear(&state->send_span);
+    entry->future_reservations++;
+    state->reservation_held = true;
+    owner_root = JS_AddGCRef(ctx, &state->owner_ref);
+    *owner_root = owner;
+    state->owner_retained = true;
     return state;
 }
 
@@ -894,34 +1220,33 @@ static bool socket_tcp_connect_future_prepare(
     esp32_mquickjs_future_driver_state_t *state;
     socket_entry_t *entry;
 
-    (void)this_ref;
-    if (out_state == NULL || argc < 3 || argc > 4) {
+    if (out_state == NULL || argc < 2 || argc > 3) {
         JS_ThrowTypeError(ctx,
-                          "socket.tcp.connect(socketId, remoteHost, remotePort, timeoutMs?) expected");
+                          "TCPSocket.connect(remoteHost, remotePort, options?) expected");
         return false;
     }
-    state = socket_future_allocate(ctx, argv[0].val, SOCKET_PROTOCOL_TCP,
+    state = socket_future_allocate(ctx, this_ref->val, SOCKET_PROTOCOL_TCP,
+                                   false,
                                    SOCKET_FUTURE_TCP_CONNECT);
     if (state == NULL) {
         return false;
     }
     entry = socket_future_entry(state);
     if (entry == NULL || entry->connected || entry->listening ||
-        !socket_get_host(ctx, argv[1].val, state->host, sizeof(state->host)) ||
-        !socket_to_int(ctx, argv[2].val, 1, 65535, &state->port) ||
-        (argc >= 4 && !JS_IsUndefined(argv[3].val) &&
-         !socket_to_int(ctx, argv[3].val, 0, SOCKET_MAX_TIMEOUT_MS,
-                        &state->timeout_ms))) {
-        heap_caps_free(state);
+        !socket_get_host(ctx, argv[0].val, state->host, sizeof(state->host)) ||
+        !socket_to_int(ctx, argv[1].val, 1, 65535, &state->port) ||
+        (argc >= 3 &&
+         !socket_connect_options(ctx, argv[2].val, &state->timeout_ms))) {
+        socket_future_destroy(state);
         if (entry != NULL && (entry->connected || entry->listening)) {
             JS_ThrowInternalError(ctx, "TCP socket is already active");
         } else {
             JS_ThrowTypeError(ctx,
-                              "socket.tcp.connect(socketId, remoteHost, remotePort, timeoutMs?) expected");
+                              "TCPSocket.connect(remoteHost, remotePort, options?) expected");
         }
         return false;
     }
-    if (argc < 4 || JS_IsUndefined(argv[3].val)) {
+    if (argc < 3 || JS_IsUndefined(argv[2].val) || JS_IsNull(argv[2].val)) {
         state->timeout_ms = SOCKET_DEFAULT_CONNECT_TIMEOUT_MS;
     }
     state->connect_phase = SOCKET_CONNECT_RESOLVING;
@@ -939,26 +1264,26 @@ static bool socket_tcp_accept_future_prepare(
     esp32_mquickjs_future_driver_state_t *state;
     socket_entry_t *entry;
 
-    (void)this_ref;
-    if (out_state == NULL || argc < 1 || argc > 2) {
-        JS_ThrowTypeError(ctx, "socket.tcp.accept(socketId, timeoutMs?) expected");
+    if (out_state == NULL || argc > 1) {
+        JS_ThrowTypeError(ctx, "TCPListener.accept(timeoutMs?) expected");
         return false;
     }
-    state = socket_future_allocate(ctx, argv[0].val, SOCKET_PROTOCOL_TCP,
+    state = socket_future_allocate(ctx, this_ref->val, SOCKET_PROTOCOL_TCP,
+                                   true,
                                    SOCKET_FUTURE_TCP_ACCEPT);
     if (state == NULL) {
         return false;
     }
     entry = socket_future_entry(state);
     if (entry == NULL || !entry->listening ||
-        (argc >= 2 && !JS_IsUndefined(argv[1].val) &&
-         !socket_to_int(ctx, argv[1].val, 0, SOCKET_MAX_TIMEOUT_MS,
+        (argc >= 1 && !JS_IsUndefined(argv[0].val) &&
+         !socket_to_int(ctx, argv[0].val, 0, SOCKET_MAX_TIMEOUT_MS,
                         &state->timeout_ms))) {
-        heap_caps_free(state);
+        socket_future_destroy(state);
         if (entry != NULL && !entry->listening) {
             JS_ThrowInternalError(ctx, "TCP socket is not listening");
         } else {
-            JS_ThrowRangeError(ctx, "invalid socket.tcp.accept() timeout");
+            JS_ThrowRangeError(ctx, "invalid TCPListener.accept() timeout");
         }
         return false;
     }
@@ -976,33 +1301,31 @@ static bool socket_tcp_send_future_prepare(
     esp32_mquickjs_future_driver_state_t *state;
     socket_entry_t *entry;
 
-    (void)this_ref;
-    if (out_state == NULL || argc < 2 || argc > 3) {
+    if (out_state == NULL || argc < 1 || argc > 2) {
         JS_ThrowTypeError(ctx,
-                          "socket.tcp.send(socketId, data, timeoutMs?) expects ByteView or ByteSpanSource data");
+                          "TCPSocket.send(data, timeoutMs?) expects ByteView or ByteSpanSource data");
         return false;
     }
-    state = socket_future_allocate(ctx, argv[0].val, SOCKET_PROTOCOL_TCP,
+    state = socket_future_allocate(ctx, this_ref->val, SOCKET_PROTOCOL_TCP,
+                                   false,
                                    SOCKET_FUTURE_TCP_SEND);
     if (state == NULL) {
         return false;
     }
     entry = socket_future_entry(state);
     if (entry == NULL || !entry->connected ||
-        (argc >= 3 && !JS_IsUndefined(argv[2].val) &&
-         !socket_to_int(ctx, argv[2].val, 0, SOCKET_MAX_TIMEOUT_MS,
+        (argc >= 2 && !JS_IsUndefined(argv[1].val) &&
+         !socket_to_int(ctx, argv[1].val, 0, SOCKET_MAX_TIMEOUT_MS,
                         &state->timeout_ms)) ||
         !socket_future_prepare_tcp_source(
-            ctx, argv[1].val,
-            "socket.tcp.send(socketId, data, timeoutMs?)", state)) {
-        socket_future_release_send_source(state);
-        heap_caps_free(state->data);
-        heap_caps_free(state);
+            ctx, argv[0].val,
+            "TCPSocket.send(data, timeoutMs?)", state)) {
+        socket_future_destroy(state);
         if (entry != NULL && !entry->connected) {
             JS_ThrowInternalError(ctx, "TCP socket is not connected");
         } else if (!JS_HasException(ctx)) {
             JS_ThrowTypeError(ctx,
-                              "socket.tcp.send(socketId, data, timeoutMs?) expects ByteView or ByteSpanSource data");
+                              "TCPSocket.send(data, timeoutMs?) expects ByteView or ByteSpanSource data");
         }
         return false;
     }
@@ -1022,24 +1345,23 @@ static bool socket_receive_future_prepare(
     esp32_mquickjs_future_driver_state_t *state;
     int max_bytes;
 
-    (void)this_ref;
-    if (out_state == NULL || argc < 1 || argc > 3) {
+    if (out_state == NULL || argc > 2) {
         JS_ThrowRangeError(ctx, "invalid socket receive option");
         return false;
     }
-    state = socket_future_allocate(ctx, argv[0].val, protocol, kind);
+    state = socket_future_allocate(ctx, this_ref->val, protocol, false, kind);
     if (state == NULL) {
         return false;
     }
     max_bytes = CONFIG_ESP32_MQUICKJS_SOCKET_MAX_MESSAGE_BYTES;
-    if ((argc >= 2 && !JS_IsUndefined(argv[1].val) &&
-         !socket_to_int(ctx, argv[1].val, 1,
+    if ((argc >= 1 && !JS_IsUndefined(argv[0].val) &&
+         !socket_to_int(ctx, argv[0].val, 1,
                         CONFIG_ESP32_MQUICKJS_SOCKET_MAX_MESSAGE_BYTES,
                         &max_bytes)) ||
-        (argc >= 3 && !JS_IsUndefined(argv[2].val) &&
-         !socket_to_int(ctx, argv[2].val, 0, SOCKET_MAX_TIMEOUT_MS,
+        (argc >= 2 && !JS_IsUndefined(argv[1].val) &&
+         !socket_to_int(ctx, argv[1].val, 0, SOCKET_MAX_TIMEOUT_MS,
                         &state->timeout_ms))) {
-        heap_caps_free(state);
+        socket_future_destroy(state);
         JS_ThrowRangeError(ctx, "invalid socket receive option");
         return false;
     }
@@ -1047,7 +1369,7 @@ static bool socket_receive_future_prepare(
     state->data = esp32_mquickjs_memory_payload_alloc(
         state->length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (state->data == NULL) {
-        heap_caps_free(state);
+        socket_future_destroy(state);
         JS_ThrowOutOfMemory(ctx);
         return false;
     }
@@ -1077,26 +1399,27 @@ static bool socket_udp_sendto_future_prepare(
 {
     esp32_mquickjs_future_driver_state_t *state;
 
-    (void)this_ref;
-    if (out_state == NULL || argc != 4) {
+    if (out_state == NULL || argc != 3) {
         JS_ThrowTypeError(ctx,
-                          "socket.udp.sendto(socketId, remoteHost, remotePort, data) expected");
+                          "UDPSocket.sendTo(remoteHost, remotePort, data) expected");
         return false;
     }
-    state = socket_future_allocate(ctx, argv[0].val, SOCKET_PROTOCOL_UDP,
+    state = socket_future_allocate(ctx, this_ref->val, SOCKET_PROTOCOL_UDP,
+                                   false,
                                    SOCKET_FUTURE_UDP_SENDTO);
     if (state == NULL) {
         return false;
     }
-    if (!socket_get_host(ctx, argv[1].val, state->host, sizeof(state->host)) ||
-        !socket_to_int(ctx, argv[2].val, 1, 65535, &state->port) ||
-        !socket_future_copy_source(ctx, argv[3].val,
-                                   "socket.udp.sendto(socketId, remoteHost, remotePort, data)",
+    if (!socket_get_host(ctx, argv[0].val, state->host, sizeof(state->host)) ||
+        !socket_to_int(ctx, argv[1].val, 1, 65535, &state->port) ||
+        !socket_future_copy_source(ctx, argv[2].val,
+                                   "UDPSocket.sendTo(remoteHost, remotePort, data)",
                                    state)) {
-        heap_caps_free(state->data);
-        heap_caps_free(state);
-        JS_ThrowTypeError(ctx,
-                          "socket.udp.sendto(socketId, remoteHost, remotePort, data) expected");
+        socket_future_destroy(state);
+        if (!JS_HasException(ctx)) {
+            JS_ThrowTypeError(ctx,
+                              "UDPSocket.sendTo(remoteHost, remotePort, data) expected");
+        }
         return false;
     }
     *out_state = state;
@@ -1909,18 +2232,33 @@ static bool socket_future_start(JSContext *ctx,
     socket_entry_t *entry = socket_future_entry(state);
     esp_timer_create_args_t timer_args = {0};
     bool needs_resolution;
+    bool *busy;
+    esp32_mquickjs_future_driver_state_t **active;
 
     if (state == NULL || entry == NULL) {
         JS_ThrowReferenceError(ctx, "socket was closed before operation start");
         return false;
     }
-    if (entry->busy) {
-        JS_ThrowInternalError(ctx, "socket already has an operation in progress");
+    busy = socket_future_busy_flag(entry, state->kind);
+    active = socket_future_active_slot(entry, state->kind);
+    if (busy == NULL || active == NULL) {
+        JS_ThrowInternalError(ctx, "invalid socket Future lane");
         return false;
     }
-    entry->busy = true;
     state->runtime = runtime;
     state->token = token;
+    if (entry->close_pending) {
+        state->cancelled = true;
+        state->completed = true;
+        (void)esp32_mquickjs_future_wake(runtime, token);
+        return true;
+    }
+    if (*busy || *active != NULL) {
+        JS_ThrowInternalError(ctx, "socket Future lane is already active");
+        return false;
+    }
+    *busy = true;
+    *active = state;
     state->started = true;
     needs_resolution = socket_future_needs_resolution(state);
     if (state->timeout_ms > 0) {
@@ -2033,10 +2371,10 @@ static JSValue socket_future_finish(JSContext *ctx,
         if (state->tls_error.present) {
             const char *operation =
                 state->kind == SOCKET_FUTURE_TCP_CONNECT
-                    ? "socket.tcp.connect()"
+                    ? "TCPSocket.connect()"
                     : state->kind == SOCKET_FUTURE_TCP_SEND
-                          ? "socket.tcp.send()"
-                          : "socket.tcp.recv()";
+                          ? "TCPSocket.send()"
+                          : "TCPSocket.recv()";
 
             return esp32_mquickjs_throw_tls_error(
                 ctx, operation, &state->tls_error);
@@ -2045,16 +2383,16 @@ static JSValue socket_future_finish(JSContext *ctx,
         return JS_ThrowInternalError(ctx,
                                      "%s%s%s: errno=%d",
                                      state->kind == SOCKET_FUTURE_TCP_CONNECT
-                                         ? "socket.tcp.connect()"
+                                         ? "TCPSocket.connect()"
                                          : state->kind == SOCKET_FUTURE_TCP_ACCEPT
-                                             ? "socket.tcp.accept()"
+                                             ? "TCPListener.accept()"
                                              : state->kind == SOCKET_FUTURE_TCP_SEND
-                                                 ? "socket.tcp.send()"
+                                                 ? "TCPSocket.send()"
                                                  : state->kind == SOCKET_FUTURE_TCP_RECV
-                                                     ? "socket.tcp.recv()"
+                                                     ? "TCPSocket.recv()"
                                                      : state->kind == SOCKET_FUTURE_UDP_SENDTO
-                                                         ? "socket.udp.sendto()"
-                                                         : "socket.udp.recvfrom()",
+                                                         ? "UDPSocket.sendTo()"
+                                                         : "UDPSocket.receiveFrom()",
                                      state->error_text[0] != '\0' ? " " : " failed",
                                      state->error_text,
                                      state->error_code);
@@ -2072,6 +2410,7 @@ static JSValue socket_future_finish(JSContext *ctx,
             return JS_NewBool(true);
         case SOCKET_FUTURE_TCP_ACCEPT: {
             socket_entry_t *client;
+            JSValue handle;
 
             if (state->empty_result) {
                 return JS_NULL;
@@ -2080,6 +2419,10 @@ static JSValue socket_future_finish(JSContext *ctx,
             if (client == NULL || !socket_set_nonblocking(state->client_fd)) {
                 if (client != NULL) {
                     socket_reset_entry(client);
+                }
+                if (state->client_fd >= 0) {
+                    close(state->client_fd);
+                    state->client_fd = -1;
                 }
                 return JS_ThrowInternalError(ctx, "socket handle limit reached");
             }
@@ -2094,7 +2437,11 @@ static JSValue socket_future_finish(JSContext *ctx,
                                        &client->remote_port)) {
                 snprintf(client->remote_host, sizeof(client->remote_host), "unknown");
             }
-            return JS_NewInt32(ctx, client->id);
+            handle = socket_make_handle(ctx, client, JS_CLASS_TCP_SOCKET);
+            if (JS_IsException(handle)) {
+                socket_close_entry(client);
+            }
+            return handle;
         }
         case SOCKET_FUTURE_TCP_SEND:
             entry->sent_bytes += (uint32_t)state->offset;
@@ -2160,6 +2507,8 @@ static esp32_mquickjs_cancel_result_t socket_future_cancel(
 static void socket_future_destroy(esp32_mquickjs_future_driver_state_t *state)
 {
     socket_entry_t *entry;
+    bool *busy;
+    esp32_mquickjs_future_driver_state_t **active;
 
     if (state == NULL) {
         return;
@@ -2167,10 +2516,17 @@ static void socket_future_destroy(esp32_mquickjs_future_driver_state_t *state)
     socket_future_stop_timer(state);
     entry = socket_future_entry(state);
     if (entry != NULL) {
-        entry->busy = false;
+        busy = socket_future_busy_flag(entry, state->kind);
+        active = socket_future_active_slot(entry, state->kind);
+        if (state->started && busy != NULL) {
+            *busy = false;
+        }
+        if (active != NULL && *active == state) {
+            *active = NULL;
+        }
 #if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
         if (state->kind == SOCKET_FUTURE_TCP_CONNECT &&
-            entry->secure && !entry->connected) {
+            entry->secure && !entry->connected && !entry->close_pending) {
             socket_close_tls_connection(entry);
         }
 #endif
@@ -2183,7 +2539,19 @@ static void socket_future_destroy(esp32_mquickjs_future_driver_state_t *state)
 #if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
     socket_tls_request_release(state->tls_request);
 #endif
+    if (state->owner_retained) {
+        JS_DeleteGCRef(state->ctx, &state->owner_ref);
+    }
     heap_caps_free(state->data);
+    if (entry != NULL && state->reservation_held) {
+        if (entry->future_reservations > 0) {
+            entry->future_reservations--;
+        }
+        if (entry->close_pending && entry->future_reservations == 0 &&
+            !socket_entry_busy(entry)) {
+            socket_close_entry(entry);
+        }
+    }
     heap_caps_free(state);
 }
 
@@ -2194,6 +2562,15 @@ static uint32_t socket_future_timeout_ms(
     return 0;
 }
 
+static esp32_mquickjs_resource_key_t socket_future_resource_key(
+    const esp32_mquickjs_future_driver_state_t *state)
+{
+    socket_entry_t *entry = socket_future_entry(state);
+
+    return (esp32_mquickjs_resource_key_t)socket_future_lane_key(
+        entry, state != NULL ? state->kind : SOCKET_FUTURE_TCP_CONNECT);
+}
+
 #define SOCKET_FUTURE_DRIVER(name, prepare_fn) \
     static const esp32_mquickjs_future_driver_t name = { \
         .capture = prepare_fn, \
@@ -2202,6 +2579,7 @@ static uint32_t socket_future_timeout_ms(
         .finish = socket_future_finish, \
         .cancel = socket_future_cancel, \
         .destroy = socket_future_destroy, \
+        .resource_key = socket_future_resource_key, \
         .timeout_ms = socket_future_timeout_ms, \
     }
 
@@ -2217,75 +2595,59 @@ SOCKET_FUTURE_DRIVER(s_socket_udp_recvfrom_driver, socket_udp_recvfrom_future_pr
 static bool socket_register_future_drivers(JSContext *ctx,
                                            esp32_mquickjs_runtime_t *runtime)
 {
-    JSGCRef global_ref;
-    JSGCRef socket_ref;
-    JSGCRef tcp_ref;
-    JSGCRef udp_ref;
-    JSGCRef connect_ref;
-    JSGCRef accept_ref;
-    JSGCRef send_ref;
-    JSGCRef recv_ref;
-    JSGCRef sendto_ref;
-    JSGCRef recvfrom_ref;
-    JSValue *global = JS_PushGCRef(ctx, &global_ref);
-    JSValue *socket = JS_PushGCRef(ctx, &socket_ref);
-    JSValue *tcp = JS_PushGCRef(ctx, &tcp_ref);
-    JSValue *udp = JS_PushGCRef(ctx, &udp_ref);
-    JSValue *connect_fn = JS_PushGCRef(ctx, &connect_ref);
-    JSValue *accept_fn = JS_PushGCRef(ctx, &accept_ref);
-    JSValue *send_fn = JS_PushGCRef(ctx, &send_ref);
-    JSValue *recv_fn = JS_PushGCRef(ctx, &recv_ref);
-    JSValue *sendto_fn = JS_PushGCRef(ctx, &sendto_ref);
-    JSValue *recvfrom_fn = JS_PushGCRef(ctx, &recvfrom_ref);
-    bool result;
+    JSGCRef object_ref;
+    JSGCRef method_ref;
+    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    JSValue *method = JS_PushGCRef(ctx, &method_ref);
+    bool result = true;
 
-    *global = JS_GetGlobalObject(ctx);
-    *socket = JS_IsException(*global) ? JS_EXCEPTION
-                                      : JS_GetPropertyStr(ctx, *global, "socket");
-    *tcp = JS_IsException(*socket) ? JS_EXCEPTION
-                                   : JS_GetPropertyStr(ctx, *socket, "tcp");
-    *udp = JS_IsException(*socket) ? JS_EXCEPTION
-                                   : JS_GetPropertyStr(ctx, *socket, "udp");
-    *connect_fn = JS_IsException(*tcp) ? JS_EXCEPTION
-                                       : JS_GetPropertyStr(ctx, *tcp, "connect");
-    *accept_fn = JS_IsException(*tcp) ? JS_EXCEPTION
-                                      : JS_GetPropertyStr(ctx, *tcp, "accept");
-    *send_fn = JS_IsException(*tcp) ? JS_EXCEPTION
-                                    : JS_GetPropertyStr(ctx, *tcp, "send");
-    *recv_fn = JS_IsException(*tcp) ? JS_EXCEPTION
-                                    : JS_GetPropertyStr(ctx, *tcp, "recv");
-    *sendto_fn = JS_IsException(*udp) ? JS_EXCEPTION
-                                      : JS_GetPropertyStr(ctx, *udp, "sendto");
-    *recvfrom_fn = JS_IsException(*udp) ? JS_EXCEPTION
-                                        : JS_GetPropertyStr(ctx, *udp, "recvfrom");
-    result = !JS_IsException(*connect_fn) && !JS_IsException(*accept_fn) &&
-             !JS_IsException(*send_fn) && !JS_IsException(*recv_fn) &&
-             !JS_IsException(*sendto_fn) && !JS_IsException(*recvfrom_fn) &&
-             esp32_mquickjs_future_register_driver(ctx, runtime, *connect_fn,
-                                                    &s_socket_tcp_connect_driver) &&
-             esp32_mquickjs_future_register_driver(ctx, runtime, *accept_fn,
-                                                    &s_socket_tcp_accept_driver) &&
-             esp32_mquickjs_future_register_driver(ctx, runtime, *send_fn,
-                                                    &s_socket_tcp_send_driver) &&
-             esp32_mquickjs_future_register_driver(ctx, runtime, *recv_fn,
-                                                    &s_socket_tcp_recv_driver) &&
-             esp32_mquickjs_future_register_driver(ctx, runtime, *sendto_fn,
-                                                    &s_socket_udp_sendto_driver) &&
-             esp32_mquickjs_future_register_driver(ctx, runtime, *recvfrom_fn,
-                                                    &s_socket_udp_recvfrom_driver);
+    *object = JS_NewObjectClassUser(ctx, JS_CLASS_TCP_SOCKET);
+    *method = JS_IsException(*object) ? JS_EXCEPTION
+                                      : JS_GetPropertyStr(ctx, *object, "connect");
+    result = !JS_IsException(*method) &&
+             esp32_mquickjs_future_register_driver(
+                 ctx, runtime, *method, &s_socket_tcp_connect_driver);
+    if (result) {
+        *method = JS_GetPropertyStr(ctx, *object, "send");
+        result = !JS_IsException(*method) &&
+                 esp32_mquickjs_future_register_driver(
+                     ctx, runtime, *method, &s_socket_tcp_send_driver);
+    }
+    if (result) {
+        *method = JS_GetPropertyStr(ctx, *object, "recv");
+        result = !JS_IsException(*method) &&
+                 esp32_mquickjs_future_register_driver(
+                     ctx, runtime, *method, &s_socket_tcp_recv_driver);
+    }
+    if (result) {
+        *object = JS_NewObjectClassUser(ctx, JS_CLASS_TCP_LISTENER);
+        *method = JS_IsException(*object)
+                      ? JS_EXCEPTION
+                      : JS_GetPropertyStr(ctx, *object, "accept");
+        result = !JS_IsException(*method) &&
+                 esp32_mquickjs_future_register_driver(
+                     ctx, runtime, *method, &s_socket_tcp_accept_driver);
+    }
+    if (result) {
+        *object = JS_NewObjectClassUser(ctx, JS_CLASS_UDP_SOCKET);
+        *method = JS_IsException(*object)
+                      ? JS_EXCEPTION
+                      : JS_GetPropertyStr(ctx, *object, "sendTo");
+        result = !JS_IsException(*method) &&
+                 esp32_mquickjs_future_register_driver(
+                     ctx, runtime, *method, &s_socket_udp_sendto_driver);
+    }
+    if (result) {
+        *method = JS_GetPropertyStr(ctx, *object, "receiveFrom");
+        result = !JS_IsException(*method) &&
+                 esp32_mquickjs_future_register_driver(
+                     ctx, runtime, *method, &s_socket_udp_recvfrom_driver);
+    }
     if (!result) {
         JS_ThrowInternalError(ctx, "failed to register socket Future drivers");
     }
-    JS_PopGCRef(ctx, &recvfrom_ref);
-    JS_PopGCRef(ctx, &sendto_ref);
-    JS_PopGCRef(ctx, &recv_ref);
-    JS_PopGCRef(ctx, &send_ref);
-    JS_PopGCRef(ctx, &accept_ref);
-    JS_PopGCRef(ctx, &connect_ref);
-    JS_PopGCRef(ctx, &udp_ref);
-    JS_PopGCRef(ctx, &tcp_ref);
-    JS_PopGCRef(ctx, &socket_ref);
-    JS_PopGCRef(ctx, &global_ref);
+    JS_PopGCRef(ctx, &method_ref);
+    JS_PopGCRef(ctx, &object_ref);
     return result;
 }
 
@@ -2294,44 +2656,7 @@ JSValue js_socket_tcp_connect(JSContext *ctx,
                               int argc,
                               JSValue *argv)
 {
-    (void)this_val;
-    return socket_future_call_and_wait(ctx, "tcp", "connect", argc, argv);
-}
-
-JSValue js_socket_tcp_listen(JSContext *ctx,
-                             JSValue *this_val,
-                             int argc,
-                             JSValue *argv)
-{
-    socket_entry_t *entry;
-    int backlog;
-
-    (void)this_val;
-    if (argc < 1 ||
-        (entry = socket_require_entry(ctx, argv[0], SOCKET_PROTOCOL_TCP)) == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (entry->connected || entry->busy) {
-        return JS_ThrowInternalError(ctx, "TCP socket is already active");
-    }
-    if (entry->secure) {
-        return JS_ThrowTypeError(ctx, "TLS socket handles are client-only and cannot listen");
-    }
-    if (!socket_optional_int(ctx,
-                             argc,
-                             argv,
-                             1,
-                             SOCKET_DEFAULT_LISTEN_BACKLOG,
-                             1,
-                             CONFIG_ESP32_MQUICKJS_SOCKET_MAX_HANDLES,
-                             &backlog)) {
-        return JS_ThrowRangeError(ctx, "invalid socket.tcp.listen() backlog");
-    }
-    if (listen(entry->fd, backlog) != 0) {
-        return JS_ThrowInternalError(ctx, "socket.tcp.listen() failed: errno=%d", errno);
-    }
-    entry->listening = true;
-    return JS_NewBool(true);
+    return socket_future_call_and_wait(ctx, *this_val, "connect", argc, argv);
 }
 
 JSValue js_socket_tcp_accept(JSContext *ctx,
@@ -2339,8 +2664,7 @@ JSValue js_socket_tcp_accept(JSContext *ctx,
                              int argc,
                              JSValue *argv)
 {
-    (void)this_val;
-    return socket_future_call_and_wait(ctx, "tcp", "accept", argc, argv);
+    return socket_future_call_and_wait(ctx, *this_val, "accept", argc, argv);
 }
 
 JSValue js_socket_tcp_send(JSContext *ctx,
@@ -2348,8 +2672,7 @@ JSValue js_socket_tcp_send(JSContext *ctx,
                            int argc,
                            JSValue *argv)
 {
-    (void)this_val;
-    return socket_future_call_and_wait(ctx, "tcp", "send", argc, argv);
+    return socket_future_call_and_wait(ctx, *this_val, "send", argc, argv);
 }
 
 JSValue js_socket_tcp_recv(JSContext *ctx,
@@ -2357,26 +2680,24 @@ JSValue js_socket_tcp_recv(JSContext *ctx,
                            int argc,
                            JSValue *argv)
 {
-    (void)this_val;
-    return socket_future_call_and_wait(ctx, "tcp", "recv", argc, argv);
+    return socket_future_call_and_wait(ctx, *this_val, "recv", argc, argv);
 }
 
-JSValue js_socket_udp_sendto(JSContext *ctx,
-                             JSValue *this_val,
-                             int argc,
-                             JSValue *argv)
+JSValue js_socket_udp_send_to(JSContext *ctx,
+                              JSValue *this_val,
+                              int argc,
+                              JSValue *argv)
 {
-    (void)this_val;
-    return socket_future_call_and_wait(ctx, "udp", "sendto", argc, argv);
+    return socket_future_call_and_wait(ctx, *this_val, "sendTo", argc, argv);
 }
 
-JSValue js_socket_udp_recvfrom(JSContext *ctx,
-                               JSValue *this_val,
-                               int argc,
-                               JSValue *argv)
+JSValue js_socket_udp_receive_from(JSContext *ctx,
+                                   JSValue *this_val,
+                                   int argc,
+                                   JSValue *argv)
 {
-    (void)this_val;
-    return socket_future_call_and_wait(ctx, "udp", "recvfrom", argc, argv);
+    return socket_future_call_and_wait(ctx, *this_val, "receiveFrom", argc,
+                                       argv);
 }
 
 #endif

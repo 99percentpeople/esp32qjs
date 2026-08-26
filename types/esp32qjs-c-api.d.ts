@@ -2129,8 +2129,16 @@ namespace ESP32QJS {
     tls?: boolean;
   }
 
+  interface TCPListenOptions {
+    localPort: number;
+    backlog?: number;
+  }
+
+  interface TCPConnectOptions {
+    timeoutMs?: number;
+  }
+
   interface SocketStatus {
-    id: number;
     protocol: SocketProtocol;
     secure: boolean;
     connected: boolean;
@@ -2144,19 +2152,23 @@ namespace ESP32QJS {
     receivedBytes: number;
   }
 
-  /** Operations on TCP stream and listener handles. */
-  interface SocketTcpModule {
+  interface TCPSocket {
     connect(
-      socketId: number,
       remoteHost: string,
       remotePort: number,
-      timeout?: number,
+      options?: TCPConnectOptions,
     ): boolean;
-    listen(socketId: number, backlog?: number): boolean;
-    accept(socketId: number, timeout?: number): number | null;
-    send(socketId: number, data: ByteSource | ByteSpanSource, timeout?: number): number;
+    send(data: ByteSource | ByteSpanSource, timeoutMs?: number): number;
     /** Receive one currently available TCP stream chunk, not a framed message. */
-    recv(socketId: number, maxBytes?: number, timeout?: number): ByteView | null;
+    recv(maxBytes?: number, timeoutMs?: number): ByteView | null;
+    status(): SocketStatus;
+    close(): boolean;
+  }
+
+  interface TCPListener {
+    accept(timeoutMs?: number): TCPSocket | null;
+    status(): SocketStatus;
+    close(): boolean;
   }
 
   interface SocketUdpDatagram {
@@ -2165,32 +2177,35 @@ namespace ESP32QJS {
     remotePort: number;
   }
 
-  /** Operations on UDP datagram handles. */
-  interface SocketUdpModule {
-    sendto(
-      socketId: number,
+  interface UDPSocket {
+    sendTo(
       remoteHost: string,
       remotePort: number,
       data: ByteSource,
     ): number;
-    recvfrom(
-      socketId: number,
+    receiveFrom(
       maxBytes?: number,
-      timeout?: number,
+      timeoutMs?: number,
     ): SocketUdpDatagram | null;
+    status(): SocketStatus;
+    close(): boolean;
   }
 
   interface SocketModule {
-    open(protocol: SocketProtocol, options?: SocketOpenOptions): number;
-    close(socketId: number): boolean;
-    status(socketId: number): SocketStatus;
+    openTCP(options?: SocketOpenOptions): TCPSocket;
+    listenTCP(options: TCPListenOptions): TCPListener;
+    openUDP(options?: SocketOpenOptions): UDPSocket;
     readonly MAX_TRANSFER_BYTES: number;
-    tcp: SocketTcpModule;
-    udp: SocketUdpModule;
   }
 
-  interface USBSerialOpenOptions {
+  interface USBSerialTextOptions {
+    mode?: "text";
     maxFrameBytes?: number;
+  }
+
+  interface USBSerialBinaryOptions {
+    mode: "binary";
+    chunkBytes?: number;
   }
 
   interface USBSerialStatus {
@@ -2203,18 +2218,23 @@ namespace ESP32QJS {
     droppedFrames: number;
   }
 
-  interface USBSerialHandle extends EventQueue<string> {
-    recv(timeoutMs?: number): string | null;
+  interface USBSerialTextHandle extends EventQueue<string> {
     send(text: string): number;
+    status(): USBSerialStatus;
+  }
+
+  interface USBSerialBinaryHandle extends EventQueue<ByteView> {
+    send(data: ByteSource | ByteSpanSource): number;
     status(): USBSerialStatus;
   }
 
   /** Headless USB Serial/JTAG NDJSON transport; mutually exclusive with the REPL. */
   interface USBSerialModule {
     readonly MAX_FRAME_BYTES: number;
-    open(options?: USBSerialOpenOptions): USBSerialHandle;
+    open(options?: USBSerialTextOptions): USBSerialTextHandle;
+    open(options: USBSerialBinaryOptions): USBSerialBinaryHandle;
     close(): boolean;
-    send(text: string): number;
+    send(data: string | ByteSource | ByteSpanSource): number;
     status(): USBSerialStatus;
   }
 
@@ -2232,10 +2252,17 @@ namespace ESP32QJS {
   }
 
   type WebSocketClientEvent =
-    | { type: "open" }
-    | { type: "message"; data: string }
+    | { type: "open"; sequence: number; timestampUs: number }
+    | {
+        type: "message";
+        sequence: number;
+        timestampUs: number;
+        data: string | ByteView;
+      }
     | {
         type: "close" | "error";
+        sequence: number;
+        timestampUs: number;
         code: number;
         message: string;
         reconnecting: boolean;
@@ -2254,17 +2281,16 @@ namespace ESP32QJS {
   }
 
   interface WebSocketClientHandle extends EventQueue<WebSocketClientEvent> {
-    recv(timeoutMs?: number): WebSocketClientEvent | null;
-    send(text: string): number;
+    send(data: string | ByteSource | ByteSpanSource): number;
     status(): WebSocketClientStatus;
   }
 
-  /** Singleton outbound WebSocket text client. */
+  /** Singleton outbound WebSocket text/binary client. */
   interface WebSocketClientModule {
     readonly MAX_MESSAGE_BYTES: number;
     open(options: WebSocketClientOpenOptions): WebSocketClientHandle;
     close(): boolean;
-    send(text: string): number;
+    send(data: string | ByteSource | ByteSpanSource): number;
     status(): WebSocketClientStatus;
   }
 
@@ -2431,20 +2457,19 @@ namespace ESP32QJS {
    * if (request !== null) server.respond(request, Response.text("pong"));
    * ```
    */
-  class HttpServer {
+  class HttpServer implements EventQueue<Request> {
     private constructor();
-    readonly serverId: number;
-    readonly serverGeneration: number;
     readonly port: number;
     readonly ctrlPort: number;
     readonly host: string;
     started: boolean;
     closed: boolean;
-    start(): void;
-    stop(): void;
-    close(): void;
-    route(method: string, path: string): void;
+    start(): boolean;
+    stop(): boolean;
+    close(): boolean;
+    route(method: string, path: string): boolean;
     receive(timeoutMs?: number): Request | null;
+    stats(): EventQueueStats;
     respond(request: Request, response: Response): boolean;
     removeRoute(path: string, method?: string): number;
     clearRoutes(): number;
@@ -2584,7 +2609,7 @@ namespace ESP32QJS {
   var usbSerial: ESP32QJS.USBSerialModule;
   /** Generic TCP and UDP socket namespace. */
   var socket: ESP32QJS.SocketModule;
-  /** Outbound WebSocket text client. */
+  /** Outbound WebSocket text/binary client. */
   var websocketClient: ESP32QJS.WebSocketClientModule;
   /** Native Bitmap helpers. Exposed only when `sys.info.features.bitmap` is enabled. */
   var bitmap: ESP32QJS.BitmapModule;

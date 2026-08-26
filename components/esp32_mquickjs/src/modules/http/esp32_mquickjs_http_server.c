@@ -13,6 +13,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,6 +66,7 @@ typedef struct {
 
 typedef struct {
     bool allocated;
+    bool responding;
     uint8_t request_id;
     uint32_t generation;
     uint8_t server_id;
@@ -87,6 +89,11 @@ typedef struct {
     uint8_t server_id;
     uint32_t generation;
 } esp32_mquickjs_http_server_event_source_t;
+
+typedef struct {
+    uint8_t server_id;
+    uint32_t generation;
+} esp32_mquickjs_http_server_ref_t;
 
 typedef struct {
     bool initialized;
@@ -114,6 +121,8 @@ static const char *TAG = "esp32qjs_httpd";
 static esp32_mquickjs_http_server_state_t s_http_server_state;
 
 static bool http_server_glob_match(const char *pattern, const char *text);
+static void http_server_close_request_body(JSContext *ctx,
+                                           JSValue request_value);
 
 static httpd_method_t http_server_method_from_name(const char *method_name)
 {
@@ -1654,6 +1663,20 @@ static void http_server_cleanup_requests_for_server(uint8_t server_id)
     }
 }
 
+static bool http_server_has_active_response(uint8_t server_id)
+{
+    int i;
+
+    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN; ++i) {
+        if (s_http_server_state.requests[i].allocated &&
+            s_http_server_state.requests[i].server_id == server_id &&
+            s_http_server_state.requests[i].responding) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void http_server_close_slot(JSContext *ctx, esp32_mquickjs_http_server_slot_t *server)
 {
     if (server == NULL) {
@@ -1673,46 +1696,26 @@ static int http_server_server_id_from_object(JSContext *ctx,
                                              const char *api_name,
                                              int32_t *out_server_id)
 {
-    JSGCRef object_ref;
-    JSGCRef server_id_ref;
-    JSGCRef generation_ref;
-    JSValue *server_obj;
-    JSValue *server_id_value;
-    JSValue *generation_value;
+    esp32_mquickjs_http_server_ref_t *ref;
     esp32_mquickjs_http_server_slot_t *server;
-    uint32_t generation = 0;
-    int server_id = -1;
 
     if (out_server_id == NULL || JS_GetClassID(ctx, server_value) != JS_CLASS_HTTP_SERVER) {
         JS_ThrowTypeError(ctx, "%s expects an HttpServer instance", api_name);
         return -1;
     }
 
-    server_obj = JS_PushGCRef(ctx, &object_ref);
-    server_id_value = JS_PushGCRef(ctx, &server_id_ref);
-    generation_value = JS_PushGCRef(ctx, &generation_ref);
-    *server_obj = server_value;
-    *server_id_value = JS_GetPropertyStr(ctx, *server_obj, "serverId");
-    *generation_value = JS_GetPropertyStr(ctx, *server_obj, "serverGeneration");
-    if (JS_IsException(*server_id_value) || JS_IsException(*generation_value) ||
-        JS_ToInt32(ctx, &server_id, *server_id_value) != 0 ||
-        JS_ToUint32(ctx, &generation, *generation_value) != 0) {
-        JS_PopGCRef(ctx, &generation_ref);
-        JS_PopGCRef(ctx, &server_id_ref);
-        JS_PopGCRef(ctx, &object_ref);
+    ref = JS_GetOpaque(ctx, server_value);
+    if (ref == NULL) {
         JS_ThrowTypeError(ctx, "%s expects a valid HttpServer instance", api_name);
         return -1;
     }
-    JS_PopGCRef(ctx, &generation_ref);
-    JS_PopGCRef(ctx, &server_id_ref);
-    JS_PopGCRef(ctx, &object_ref);
 
-    server = http_server_get_slot(server_id);
-    if (server == NULL || server->generation != generation) {
+    server = http_server_get_slot(ref->server_id);
+    if (server == NULL || server->generation != ref->generation) {
         JS_ThrowInternalError(ctx, "%s cannot use a closed or stale HttpServer", api_name);
         return -1;
     }
-    *out_server_id = server_id;
+    *out_server_id = ref->server_id;
     return 0;
 }
 
@@ -1806,6 +1809,7 @@ static JSValue http_server_make_server_object(JSContext *ctx, JSValue global_obj
     JSValue *events_obj;
     esp32_mquickjs_http_server_slot_t *server = http_server_get_slot(server_id);
     esp32_mquickjs_http_server_event_source_t *source = NULL;
+    esp32_mquickjs_http_server_ref_t *ref = NULL;
 
     (void)global_obj;
     server_obj = JS_PushGCRef(ctx, &server_ref);
@@ -1815,6 +1819,13 @@ static JSValue http_server_make_server_object(JSContext *ctx, JSValue global_obj
     if (JS_IsException(*server_obj) || server == NULL) {
         goto fail;
     }
+    ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
+    if (ref == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        goto fail;
+    }
+    ref->server_id = (uint8_t)server_id;
+    ref->generation = server->generation;
 
     source = heap_caps_calloc(1, sizeof(*source), MALLOC_CAP_8BIT);
     if (source == NULL) {
@@ -1844,12 +1855,7 @@ static JSValue http_server_make_server_object(JSContext *ctx, JSValue global_obj
         goto fail;
     }
 
-    if (!esp32_mquickjs_set_property_ref(ctx, server_obj, "serverId", JS_NewInt32(ctx, server_id)) ||
-        !esp32_mquickjs_set_property_ref(ctx,
-                                     server_obj,
-                                     "serverGeneration",
-                                     JS_NewUint32(ctx, server->generation)) ||
-        !esp32_mquickjs_set_property_ref(ctx, server_obj, "port", JS_NewInt32(ctx, server->port)) ||
+    if (!esp32_mquickjs_set_property_ref(ctx, server_obj, "port", JS_NewInt32(ctx, server->port)) ||
         !esp32_mquickjs_set_property_ref(ctx, server_obj, "ctrlPort", JS_NewInt32(ctx, server->ctrl_port)) ||
         !esp32_mquickjs_set_property_ref(ctx,
                                      server_obj,
@@ -1863,24 +1869,296 @@ static JSValue http_server_make_server_object(JSContext *ctx, JSValue global_obj
         !esp32_mquickjs_set_property_ref(ctx, server_obj, "_eventQueue", *events_obj)) {
         goto fail;
     }
+    JS_SetOpaque(ctx, *server_obj, ref);
+    ref = NULL;
 
     JS_PopGCRef(ctx, &events_ref);
     return JS_PopGCRef(ctx, &server_ref);
 
 fail:
+    heap_caps_free(ref);
     heap_caps_free(source);
     JS_PopGCRef(ctx, &events_ref);
     JS_PopGCRef(ctx, &server_ref);
     return JS_EXCEPTION;
 }
 
+struct esp32_mquickjs_future_driver_state {
+    JSContext *ctx;
+    JSGCRef request_ref;
+    JSGCRef server_ref;
+    esp32_mquickjs_http_server_response_t response;
+    uint8_t server_id;
+    uint8_t request_id;
+    uint32_t request_generation;
+    esp_err_t send_result;
+    _Atomic bool worker_completed;
+    bool request_retained;
+    bool server_retained;
+    bool request_claimed;
+    bool started;
+    bool finished;
+    bool cancelled;
+};
+
+static esp32_mquickjs_http_server_request_t *http_server_respond_request(
+    const esp32_mquickjs_future_driver_state_t *state)
+{
+    esp32_mquickjs_http_server_request_t *request;
+
+    if (state == NULL ||
+        state->request_id >= ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN) {
+        return NULL;
+    }
+    request = &s_http_server_state.requests[state->request_id];
+    return request->allocated &&
+                   request->generation == state->request_generation &&
+                   request->server_id == state->server_id
+               ? request
+               : NULL;
+}
+
+static void http_server_respond_release(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL) {
+        return;
+    }
+    http_server_free_response(&state->response);
+    if (state->request_retained) {
+        JS_DeleteGCRef(state->ctx, &state->request_ref);
+        state->request_retained = false;
+    }
+    if (state->server_retained) {
+        JS_DeleteGCRef(state->ctx, &state->server_ref);
+        state->server_retained = false;
+    }
+    heap_caps_free(state);
+}
+
+static bool http_server_respond_future_capture(
+    JSContext *ctx,
+    JSGCRef *this_ref,
+    int argc,
+    JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+    esp32_mquickjs_http_server_request_t *request;
+    JSGCRef request_id_ref;
+    JSGCRef generation_ref;
+    JSValue *request_id_value;
+    JSValue *generation_value;
+    uint32_t generation = 0;
+    int request_id = -1;
+    int32_t server_id = -1;
+
+    if (out_state == NULL || argc != 2 || this_ref == NULL ||
+        http_server_server_id_from_object(
+            ctx, this_ref->val, "server.respond", &server_id) != 0) {
+        if (!JS_HasException(ctx)) {
+            JS_ThrowTypeError(
+                ctx, "server.respond(request, response) expects two arguments");
+        }
+        return false;
+    }
+    request_id_value = JS_PushGCRef(ctx, &request_id_ref);
+    generation_value = JS_PushGCRef(ctx, &generation_ref);
+    *request_id_value = JS_GetPropertyStr(ctx, argv[0].val, "_requestId");
+    *generation_value = JS_GetPropertyStr(
+        ctx, argv[0].val, "_requestGeneration");
+    if (JS_IsException(*request_id_value) ||
+        JS_IsException(*generation_value) ||
+        JS_ToInt32(ctx, &request_id, *request_id_value) != 0 ||
+        JS_ToUint32(ctx, &generation, *generation_value) != 0 ||
+        request_id < 0 ||
+        request_id >= ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN) {
+        JS_PopGCRef(ctx, &generation_ref);
+        JS_PopGCRef(ctx, &request_id_ref);
+        JS_ThrowTypeError(
+            ctx,
+            "server.respond expects a live request returned by server.receive");
+        return false;
+    }
+    JS_PopGCRef(ctx, &generation_ref);
+    JS_PopGCRef(ctx, &request_id_ref);
+    request = &s_http_server_state.requests[request_id];
+    if (!request->allocated || request->generation != generation ||
+        request->server_id != (uint8_t)server_id ||
+        request->async_req == NULL || request->responding) {
+        JS_ThrowInternalError(
+            ctx, "server.respond cannot use a completed or stale request");
+        return false;
+    }
+    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    if (state == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        return false;
+    }
+    atomic_init(&state->worker_completed, false);
+    state->ctx = ctx;
+    state->server_id = (uint8_t)server_id;
+    state->request_id = (uint8_t)request_id;
+    state->request_generation = generation;
+    state->send_result = ESP_FAIL;
+    if (http_server_make_response(ctx, &argv[1].val, &state->response) != 0) {
+        http_server_respond_release(state);
+        return false;
+    }
+    *JS_AddGCRef(ctx, &state->request_ref) = argv[0].val;
+    state->request_retained = true;
+    *JS_AddGCRef(ctx, &state->server_ref) = this_ref->val;
+    state->server_retained = true;
+    request->responding = true;
+    state->request_claimed = true;
+    http_server_close_request_body(ctx, argv[0].val);
+    if (!esp32_mquickjs_set_property_ref(
+            ctx, &state->request_ref.val, "_requestId", JS_NewInt32(ctx, -1))) {
+        request->responding = false;
+        state->request_claimed = false;
+        http_server_respond_release(state);
+        return false;
+    }
+    *out_state = state;
+    return true;
+}
+
+static void http_server_respond_worker(void *opaque)
+{
+    esp32_mquickjs_future_driver_state_t *state = opaque;
+    esp32_mquickjs_http_server_request_t *request =
+        http_server_respond_request(state);
+
+    if (state != NULL && request != NULL && request->async_req != NULL) {
+        state->send_result = http_server_send_response(
+            request->async_req, &state->response);
+    }
+    if (state != NULL) {
+        atomic_store_explicit(
+            &state->worker_completed, true, memory_order_release);
+    }
+}
+
+static bool http_server_respond_future_start(
+    JSContext *ctx,
+    esp32_mquickjs_runtime_t *runtime,
+    esp32_mquickjs_future_token_t token,
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    esp32_mquickjs_http_server_request_t *request =
+        http_server_respond_request(state);
+
+    if (state == NULL || request == NULL || !request->responding ||
+        request->async_req == NULL || s_http_server_state.shutting_down) {
+        JS_ThrowReferenceError(
+            ctx, "HTTP request closed before response started");
+        return false;
+    }
+    state->started = true;
+    if (!esp32_mquickjs_future_submit_worker(
+            runtime, token, http_server_respond_worker, state)) {
+        state->started = false;
+        JS_ThrowInternalError(ctx, "HTTP response worker queue is full");
+        return false;
+    }
+    return true;
+}
+
+static esp32_mquickjs_future_poll_t http_server_respond_future_poll(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    return state != NULL && atomic_load_explicit(
+                                &state->worker_completed,
+                                memory_order_acquire)
+               ? ESP32_MQUICKJS_FUTURE_READY
+               : ESP32_MQUICKJS_FUTURE_PENDING;
+}
+
+static JSValue http_server_respond_future_finish(
+    JSContext *ctx,
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    esp32_mquickjs_http_server_request_t *request =
+        http_server_respond_request(state);
+    esp_err_t send_result;
+
+    if (state == NULL || state->cancelled) {
+        return JS_ThrowInternalError(ctx, "HTTP response was cancelled");
+    }
+    send_result = state->send_result;
+    http_server_free_response(&state->response);
+    if (request != NULL) {
+        request->responding = false;
+        http_server_cleanup_request(request);
+    }
+    state->request_claimed = false;
+    state->finished = true;
+    if (send_result != ESP_OK) {
+        return JS_ThrowInternalError(ctx, "failed to send HTTP response");
+    }
+    return JS_TRUE;
+}
+
+static esp32_mquickjs_cancel_result_t http_server_respond_future_cancel(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || state->finished || state->cancelled) {
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
+    }
+    if (state->started) {
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
+    }
+    state->cancelled = true;
+    atomic_store_explicit(
+        &state->worker_completed, true, memory_order_release);
+    return ESP32_MQUICKJS_CANCELLED;
+}
+
+static void http_server_respond_future_destroy(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    esp32_mquickjs_http_server_request_t *request =
+        http_server_respond_request(state);
+
+    if (state == NULL) {
+        return;
+    }
+    if (state->request_claimed && request != NULL) {
+        if (state->started && atomic_load_explicit(
+                                  &state->worker_completed,
+                                  memory_order_acquire)) {
+            request->responding = false;
+            http_server_cleanup_request(request);
+        } else {
+            request->responding = false;
+            if (state->request_retained) {
+                (void)esp32_mquickjs_set_property_ref(
+                    state->ctx, &state->request_ref.val, "_requestId",
+                    JS_NewInt32(state->ctx, state->request_id));
+            }
+        }
+    }
+    http_server_respond_release(state);
+}
+
+static const esp32_mquickjs_future_driver_t s_http_server_respond_driver = {
+    .capture = http_server_respond_future_capture,
+    .start = http_server_respond_future_start,
+    .poll = http_server_respond_future_poll,
+    .finish = http_server_respond_future_finish,
+    .cancel = http_server_respond_future_cancel,
+    .destroy = http_server_respond_future_destroy,
+};
+
 bool esp32_mquickjs_init_http_server_runtime(JSContext *ctx,
                                              esp32_mquickjs_runtime_t *runtime)
 {
     JSGCRef object_ref;
     JSGCRef receive_ref;
+    JSGCRef respond_ref;
     JSValue *object;
     JSValue *receive;
+    JSValue *respond;
     bool registered;
 
     if (!http_server_init_state(runtime)) {
@@ -1889,15 +2167,23 @@ bool esp32_mquickjs_init_http_server_runtime(JSContext *ctx,
     }
     object = JS_PushGCRef(ctx, &object_ref);
     receive = JS_PushGCRef(ctx, &receive_ref);
+    respond = JS_PushGCRef(ctx, &respond_ref);
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_HTTP_SERVER);
     *receive = JS_IsException(*object)
         ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *object, "receive");
-    registered = !JS_IsException(*receive) &&
+    *respond = JS_IsException(*object)
+        ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *object, "respond");
+    registered = !JS_IsException(*receive) && !JS_IsException(*respond) &&
                  esp32_mquickjs_event_queue_register_receive_alias(
-                     ctx, runtime, *receive);
-    if (!registered && !JS_IsException(*object) && !JS_IsException(*receive)) {
-        JS_ThrowInternalError(ctx, "failed to register HttpServer.receive Future driver");
+                     ctx, runtime, *receive) &&
+                 esp32_mquickjs_future_register_driver(
+                     ctx, runtime, *respond, &s_http_server_respond_driver);
+    if (!registered && !JS_IsException(*object) &&
+        !JS_IsException(*receive) && !JS_IsException(*respond)) {
+        JS_ThrowInternalError(
+            ctx, "failed to register HttpServer Future drivers");
     }
+    JS_PopGCRef(ctx, &respond_ref);
     JS_PopGCRef(ctx, &receive_ref);
     JS_PopGCRef(ctx, &object_ref);
     return registered;
@@ -1911,10 +2197,26 @@ JSValue js_http_server_constructor(JSContext *ctx, JSValue *this_val, int argc, 
     return JS_ThrowTypeError(ctx, "HttpServer cannot be constructed directly");
 }
 
+void js_http_server_finalizer(JSContext *ctx, void *opaque)
+{
+    esp32_mquickjs_http_server_ref_t *ref = opaque;
+    esp32_mquickjs_http_server_slot_t *server;
+
+    if (ref == NULL) {
+        return;
+    }
+    server = http_server_get_slot(ref->server_id);
+    if (server != NULL && server->generation == ref->generation) {
+        http_server_close_slot(ctx, server);
+    }
+    heap_caps_free(ref);
+}
+
 JSValue js_http_server_start(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int32_t server_id = -1;
     esp32_mquickjs_http_server_slot_t *server;
+    bool was_started;
 
     (void)argc;
     (void)argv;
@@ -1922,31 +2224,41 @@ JSValue js_http_server_start(JSContext *ctx, JSValue *this_val, int argc, JSValu
         return JS_EXCEPTION;
     }
     server = http_server_get_slot(server_id);
+    was_started = server->started;
     if (!http_server_start_slot(server)) {
         return JS_ThrowInternalError(ctx, "failed to start HTTP server");
     }
     esp32_mquickjs_set_property_ref(ctx, this_val, "started", JS_TRUE);
-    return JS_UNDEFINED;
+    return JS_NewBool(!was_started);
 }
 
 JSValue js_http_server_stop(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     int32_t server_id = -1;
+    esp32_mquickjs_http_server_slot_t *server;
+    bool was_started;
 
     (void)argc;
     (void)argv;
     if (http_server_server_id_from_object(ctx, *this_val, "server.stop", &server_id) != 0) {
         return JS_EXCEPTION;
     }
-    http_server_stop_slot(http_server_get_slot(server_id));
+    if (http_server_has_active_response((uint8_t)server_id)) {
+        return JS_ThrowInternalError(
+            ctx, "server.stop() refused while a response is pending");
+    }
+    server = http_server_get_slot(server_id);
+    was_started = server->started;
+    http_server_stop_slot(server);
     esp32_mquickjs_set_property_ref(ctx, this_val, "started", JS_FALSE);
-    return JS_UNDEFINED;
+    return JS_NewBool(was_started);
 }
 
 JSValue js_http_server_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     JSGCRef closed_ref;
     JSValue *closed_value;
+    esp32_mquickjs_http_server_ref_t *ref;
     int32_t server_id = -1;
 
     (void)argc;
@@ -1962,19 +2274,26 @@ JSValue js_http_server_close(JSContext *ctx, JSValue *this_val, int argc, JSValu
     }
     if (*closed_value == JS_TRUE) {
         JS_PopGCRef(ctx, &closed_ref);
-        return JS_UNDEFINED;
+        return JS_FALSE;
     }
     JS_PopGCRef(ctx, &closed_ref);
 
     if (http_server_server_id_from_object(ctx, *this_val, "server.close", &server_id) != 0) {
         return JS_EXCEPTION;
     }
+    if (http_server_has_active_response((uint8_t)server_id)) {
+        return JS_ThrowInternalError(
+            ctx, "server.close() refused while a response is pending");
+    }
+    ref = JS_GetOpaque(ctx, *this_val);
     http_server_close_slot(ctx, http_server_get_slot(server_id));
+    JS_SetOpaque(ctx, *this_val, NULL);
+    heap_caps_free(ref);
     if (!esp32_mquickjs_set_property_ref(ctx, this_val, "started", JS_FALSE) ||
         !esp32_mquickjs_set_property_ref(ctx, this_val, "closed", JS_TRUE)) {
         return JS_EXCEPTION;
     }
-    return JS_UNDEFINED;
+    return JS_TRUE;
 }
 
 JSValue js_http_server_receive(JSContext *ctx, JSValue *this_val,
@@ -2013,6 +2332,39 @@ done:
     JS_PopGCRef(ctx, &receive_ref);
     JS_PopGCRef(ctx, &events_ref);
     JS_PopGCRef(ctx, &server_ref);
+    return result;
+}
+
+JSValue js_http_server_stats(JSContext *ctx, JSValue *this_val,
+                             int argc, JSValue *argv)
+{
+    JSGCRef events_ref;
+    JSGCRef stats_ref;
+    JSValue *events = JS_PushGCRef(ctx, &events_ref);
+    JSValue *stats = JS_PushGCRef(ctx, &stats_ref);
+    JSValue result;
+    int32_t server_id = -1;
+
+    (void)argc;
+    (void)argv;
+    if (this_val == NULL ||
+        http_server_server_id_from_object(
+            ctx, *this_val, "server.stats", &server_id) != 0) {
+        result = JS_EXCEPTION;
+        goto done;
+    }
+    *events = JS_GetPropertyStr(ctx, *this_val, "_eventQueue");
+    *stats = JS_IsException(*events)
+                 ? JS_EXCEPTION
+                 : JS_GetPropertyStr(ctx, *events, "stats");
+    result = JS_IsException(*events) || JS_IsException(*stats)
+                 ? JS_EXCEPTION
+                 : http_server_call_function(
+                       ctx, *stats, *events, 0, NULL);
+
+done:
+    JS_PopGCRef(ctx, &stats_ref);
+    JS_PopGCRef(ctx, &events_ref);
     return result;
 }
 
@@ -2174,7 +2526,7 @@ JSValue js_http_server_route(JSContext *ctx, JSValue *this_val, int argc, JSValu
         http_server_cleanup_route(ctx, &candidate);
         return JS_ThrowInternalError(ctx, "too many server routes");
     }
-    return JS_UNDEFINED;
+    return JS_TRUE;
 }
 
 static void http_server_close_request_body(JSContext *ctx, JSValue request_value)
@@ -2191,74 +2543,20 @@ static void http_server_close_request_body(JSContext *ctx, JSValue request_value
 
 JSValue js_http_server_respond(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_http_server_request_t *request;
-    esp32_mquickjs_http_server_response_t response = {0};
-    JSGCRef request_ref;
-    JSGCRef request_id_ref;
-    JSGCRef generation_ref;
-    JSGCRef response_ref;
-    JSValue *request_value;
-    JSValue *request_id_value;
-    JSValue *generation_value;
-    JSValue *response_value;
-    uint32_t generation = 0;
-    int request_id = -1;
-    int32_t server_id = -1;
-    esp_err_t send_result;
+    JSGCRef method_ref;
+    JSValue *method = JS_PushGCRef(ctx, &method_ref);
+    JSValue result;
 
-    if (http_server_server_id_from_object(ctx, *this_val, "server.respond", &server_id) != 0) {
-        return JS_EXCEPTION;
-    }
-    if (argc < 2) {
-        return JS_ThrowTypeError(ctx, "server.respond(request, response) expects two arguments");
-    }
-
-    request_value = JS_PushGCRef(ctx, &request_ref);
-    request_id_value = JS_PushGCRef(ctx, &request_id_ref);
-    generation_value = JS_PushGCRef(ctx, &generation_ref);
-    response_value = JS_PushGCRef(ctx, &response_ref);
-    *request_value = argv[0];
-    *response_value = argv[1];
-    *request_id_value = JS_GetPropertyStr(ctx, *request_value, "_requestId");
-    *generation_value = JS_GetPropertyStr(ctx, *request_value, "_requestGeneration");
-    if (JS_IsException(*request_id_value) || JS_IsException(*generation_value) ||
-        JS_ToInt32(ctx, &request_id, *request_id_value) != 0 ||
-        JS_ToUint32(ctx, &generation, *generation_value) != 0 ||
-        request_id < 0 || request_id >= ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN) {
-        JS_ThrowTypeError(ctx, "server.respond expects a live request returned by server.receive");
-        goto fail;
-    }
-    request = &s_http_server_state.requests[request_id];
-    if (!request->allocated || request->generation != generation ||
-        request->server_id != (uint8_t)server_id || request->async_req == NULL) {
-        JS_ThrowInternalError(ctx, "server.respond cannot use a completed or stale request");
-        goto fail;
-    }
-    if (http_server_make_response(ctx, response_value, &response) != 0) {
-        goto fail;
-    }
-
-    send_result = http_server_send_response(request->async_req, &response);
-    http_server_close_request_body(ctx, *request_value);
-    http_server_free_response(&response);
-    http_server_cleanup_request(request);
-    (void)esp32_mquickjs_set_property_ref(ctx, request_value, "_requestId", JS_NewInt32(ctx, -1));
-    JS_PopGCRef(ctx, &response_ref);
-    JS_PopGCRef(ctx, &generation_ref);
-    JS_PopGCRef(ctx, &request_id_ref);
-    JS_PopGCRef(ctx, &request_ref);
-    if (send_result != ESP_OK) {
-        return JS_ThrowInternalError(ctx, "failed to send HTTP response");
-    }
-    return JS_TRUE;
-
-fail:
-    http_server_free_response(&response);
-    JS_PopGCRef(ctx, &response_ref);
-    JS_PopGCRef(ctx, &generation_ref);
-    JS_PopGCRef(ctx, &request_id_ref);
-    JS_PopGCRef(ctx, &request_ref);
-    return JS_EXCEPTION;
+    *method = this_val != NULL
+                  ? JS_GetPropertyStr(ctx, *this_val, "respond")
+                  : JS_EXCEPTION;
+    result = JS_IsException(*method)
+                 ? JS_EXCEPTION
+                 : esp32_mquickjs_future_call_and_wait(
+                       ctx, esp32_mquickjs_get_active_runtime(), *method,
+                       *this_val, argc, argv);
+    JS_PopGCRef(ctx, &method_ref);
+    return result;
 }
 
 JSValue js_http_server_create(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

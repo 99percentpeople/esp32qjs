@@ -1,40 +1,61 @@
 test("socket/offline", function () {
-  var tcpId = socket.open("tcp", { localPort: 0 });
-  var udpId = socket.open("udp", { localPort: 0 });
-  var tlsId = socket.open("tcp", { tls: true });
-  var tcpStatus = socket.status(tcpId);
-  var udpStatus = socket.status(udpId);
-  var tlsStatus = socket.status(tlsId);
+  var tcp = socket.openTCP({ localPort: 0 });
+  var udp = socket.openUDP({ localPort: 0 });
+  var listener = socket.listenTCP({ localPort: 0, backlog: 2 });
+  var tls = sys.info.features.tls ? socket.openTCP({ tls: true }) : null;
+  var tcpStatus = tcp.status();
+  var udpStatus = udp.status();
+  var listenerStatus = listener.status();
+  var tlsStatus = tls === null ? null : tls.status();
   var maxTransferBytes = socket.MAX_TRANSFER_BYTES;
-  var invalidProtocol = "";
+  var invalidOptions = "";
+  var staleError = "";
 
-  test.equal(tcpStatus.protocol, "tcp", "TCP handle should report its protocol");
-  test.equal(udpStatus.protocol, "udp", "UDP handle should report its protocol");
-  test.equal(tlsStatus.protocol, "tcp", "TLS handle should remain a TCP stream");
+  test.equal(tcpStatus.protocol, "tcp", "TCP object should report its protocol");
+  test.equal(udpStatus.protocol, "udp", "UDP object should report its protocol");
   test.equal(tcpStatus.secure, false, "plain TCP should report secure=false");
-  test.equal(tlsStatus.secure, true, "TLS TCP should report secure=true");
+  if (tlsStatus !== null) {
+    test.equal(tlsStatus.protocol, "tcp", "TLS socket should remain a TCP stream");
+    test.equal(tlsStatus.secure, true, "TLS TCP should report secure=true");
+  }
   test.ok(!tcpStatus.connected && !tcpStatus.listening,
-    "new TCP handle should be inactive");
+    "new TCP object should be inactive");
+  test.ok(listenerStatus.listening,
+    "listenTCP should return an active listener");
+  test.equal(typeof tcpStatus.id, "undefined",
+    "socket status must not expose an internal numeric id");
   test.ok(maxTransferBytes >= 256,
     "socket transfer limit should be exposed");
-  test.equal(socket.tcp.recv(tcpId, 64, 0), null,
+  test.equal(tcp.recv(64, 0), null,
     "inactive TCP recv should be non-blocking");
-  test.equal(socket.udp.recvfrom(udpId, 64, 0), null,
-    "UDP recvfrom should return null when no datagram is ready");
+  test.equal(udp.receiveFrom(64, 0), null,
+    "UDP receiveFrom should return null when no datagram is ready");
+  test.equal(listener.accept(0), null,
+    "listener accept should return null when no client is ready");
 
   try {
-    socket.open("invalid", {});
-  } catch (protocolError) {
-    invalidProtocol = String(protocolError && protocolError.message
-      ? protocolError.message : protocolError);
+    socket.listenTCP({});
+  } catch (optionsError) {
+    invalidOptions = String(optionsError && optionsError.message
+      ? optionsError.message : optionsError);
   }
-  test.ok(invalidProtocol.indexOf("tcp or udp") >= 0,
-    "socket.open should reject unknown protocols");
+  test.ok(invalidOptions.indexOf("localPort") >= 0,
+    "listenTCP should require localPort");
 
-  test.ok(socket.close(tcpId), "TCP handle should close");
-  test.ok(!socket.close(tcpId), "socket.close should be idempotent");
-  test.ok(socket.close(udpId), "UDP handle should close");
-  test.ok(socket.close(tlsId), "TLS handle should close before connecting");
+  test.ok(tcp.close(), "TCP object should close");
+  test.ok(!tcp.close(), "socket object close should be idempotent");
+  try {
+    tcp.status();
+  } catch (error) {
+    staleError = String(error && error.message ? error.message : error);
+  }
+  test.ok(staleError.indexOf("closed") >= 0 || staleError.indexOf("stale") >= 0,
+    "closed socket methods should reject the stale object");
+  test.ok(udp.close(), "UDP object should close");
+  test.ok(listener.close(), "listener object should close");
+  if (tls !== null) {
+    test.ok(tls.close(), "TLS socket should close before connecting");
+  }
 
   return {
     maxTransferBytes: maxTransferBytes

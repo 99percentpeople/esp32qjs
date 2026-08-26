@@ -911,34 +911,50 @@ static const JSClassDef js_rpc_obj =
 #endif
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
-static const JSPropDef js_socket_tcp[] = {
-    JS_CFUNC_DEF("connect", 4, js_socket_tcp_connect),
-    JS_CFUNC_DEF("listen", 2, js_socket_tcp_listen),
-    JS_CFUNC_DEF("accept", 2, js_socket_tcp_accept),
-    JS_CFUNC_DEF("send", 3, js_socket_tcp_send),
-    JS_CFUNC_DEF("recv", 3, js_socket_tcp_recv),
+static const JSPropDef js_tcp_socket_proto[] = {
+    JS_CFUNC_DEF("connect", 3, js_socket_tcp_connect),
+    JS_CFUNC_DEF("send", 2, js_socket_tcp_send),
+    JS_CFUNC_DEF("recv", 2, js_socket_tcp_recv),
+    JS_CFUNC_DEF("status", 0, js_socket_handle_status),
+    JS_CFUNC_DEF("close", 0, js_socket_handle_close),
     JS_PROP_END,
 };
 
-static const JSClassDef js_socket_tcp_obj =
-    JS_OBJECT_DEF("tcp", js_socket_tcp);
+static const JSClassDef js_tcp_socket_class =
+    JS_CLASS_DEF("TCPSocket", 0, js_socket_handle_constructor,
+                 JS_CLASS_TCP_SOCKET, NULL, js_tcp_socket_proto, NULL,
+                 js_socket_handle_finalizer);
 
-static const JSPropDef js_socket_udp[] = {
-    JS_CFUNC_DEF("sendto", 4, js_socket_udp_sendto),
-    JS_CFUNC_DEF("recvfrom", 3, js_socket_udp_recvfrom),
+static const JSPropDef js_tcp_listener_proto[] = {
+    JS_CFUNC_DEF("accept", 1, js_socket_tcp_accept),
+    JS_CFUNC_DEF("status", 0, js_socket_handle_status),
+    JS_CFUNC_DEF("close", 0, js_socket_handle_close),
     JS_PROP_END,
 };
 
-static const JSClassDef js_socket_udp_obj =
-    JS_OBJECT_DEF("udp", js_socket_udp);
+static const JSClassDef js_tcp_listener_class =
+    JS_CLASS_DEF("TCPListener", 0, js_socket_handle_constructor,
+                 JS_CLASS_TCP_LISTENER, NULL, js_tcp_listener_proto, NULL,
+                 js_socket_handle_finalizer);
+
+static const JSPropDef js_udp_socket_proto[] = {
+    JS_CFUNC_DEF("sendTo", 3, js_socket_udp_send_to),
+    JS_CFUNC_DEF("receiveFrom", 2, js_socket_udp_receive_from),
+    JS_CFUNC_DEF("status", 0, js_socket_handle_status),
+    JS_CFUNC_DEF("close", 0, js_socket_handle_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_udp_socket_class =
+    JS_CLASS_DEF("UDPSocket", 0, js_socket_handle_constructor,
+                 JS_CLASS_UDP_SOCKET, NULL, js_udp_socket_proto, NULL,
+                 js_socket_handle_finalizer);
 
 static const JSPropDef js_socket[] = {
-    JS_CFUNC_DEF("open", 2, js_socket_open),
-    JS_CFUNC_DEF("close", 1, js_socket_close),
-    JS_CFUNC_DEF("status", 1, js_socket_status),
+    JS_CFUNC_DEF("openTCP", 1, js_socket_open_tcp),
+    JS_CFUNC_DEF("listenTCP", 1, js_socket_listen_tcp),
+    JS_CFUNC_DEF("openUDP", 1, js_socket_open_udp),
     JS_CGETSET_DEF("MAX_TRANSFER_BYTES", js_socket_get_max_transfer_bytes, NULL),
-    JS_PROP_CLASS_DEF("tcp", &js_socket_tcp_obj),
-    JS_PROP_CLASS_DEF("udp", &js_socket_udp_obj),
     JS_PROP_END,
 };
 
@@ -1008,6 +1024,7 @@ static const JSPropDef js_http_server_proto[] = {
     JS_CFUNC_DEF("stop", 0, js_http_server_stop),
     JS_CFUNC_DEF("close", 0, js_http_server_close),
     JS_CFUNC_DEF("receive", 1, js_http_server_receive),
+    JS_CFUNC_DEF("stats", 0, js_http_server_stats),
     JS_CFUNC_DEF("route", 2, js_http_server_route),
     JS_CFUNC_DEF("respond", 2, js_http_server_respond),
     JS_CFUNC_DEF("removeRoute", 2, js_http_server_remove_route),
@@ -1016,7 +1033,7 @@ static const JSPropDef js_http_server_proto[] = {
 };
 
 static const JSClassDef js_http_server_class =
-    JS_CLASS_DEF("HttpServer", 0, js_http_server_constructor, JS_CLASS_HTTP_SERVER, NULL, js_http_server_proto, NULL, NULL);
+    JS_CLASS_DEF("HttpServer", 0, js_http_server_constructor, JS_CLASS_HTTP_SERVER, NULL, js_http_server_proto, NULL, js_http_server_finalizer);
 #endif
 
 static const JSPropDef js_global_object_extra[] = {
@@ -1109,6 +1126,11 @@ static const JSPropDef js_global_object_extra[] = {
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
     JS_PROP_CLASS_DEF("HttpServer", &js_http_server_class),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
+    JS_PROP_CLASS_DEF("TCPSocket", &js_tcp_socket_class),
+    JS_PROP_CLASS_DEF("TCPListener", &js_tcp_listener_class),
+    JS_PROP_CLASS_DEF("UDPSocket", &js_udp_socket_class),
 #endif
     JS_CFUNC_DEF("help", 0, js_help),
     JS_CFUNC_DEF("sleep", 1, js_sleep),
