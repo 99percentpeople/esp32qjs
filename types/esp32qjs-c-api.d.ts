@@ -1104,6 +1104,7 @@ namespace ESP32QJS {
     readonly tls: boolean;
     readonly http: boolean;
     readonly httpServer: boolean;
+    readonly rpc: boolean;
     readonly runtimeLogs: boolean;
   }
 
@@ -1467,6 +1468,29 @@ namespace ESP32QJS {
      * already active runtime deadline; they never extend it.
      */
     withTimeout<T>(timeoutMs: number, callback: () => T): T;
+  }
+
+  type RuntimeLogSource = "runtime" | "exception" | "esp-idf" | "javascript";
+
+  interface RuntimeLogEntry {
+    sequence: number;
+    uptimeMs: number;
+    source: RuntimeLogSource;
+    text: string;
+  }
+
+  interface RuntimeLogReadResult {
+    bootId: string;
+    entries: RuntimeLogEntry[];
+    dropped: number;
+  }
+
+  interface RuntimeLogsModule {
+    read(
+      afterSequence: number,
+      limit: number,
+      maxBytes: number,
+    ): RuntimeLogReadResult;
   }
 
   /**
@@ -2420,7 +2444,7 @@ namespace ESP32QJS {
     readonly DEFAULT_TIMEOUT_MS: number;
     status(): WiFiStatus;
     connect(ssid: string, password: string, timeoutMs?: number): WiFiStatus;
-    disconnect(): WiFiStatus;
+    disconnect(timeoutMs?: number): WiFiStatus;
     scan(): WiFiScanResult[];
   }
 
@@ -2494,8 +2518,93 @@ namespace ESP32QJS {
   interface HttpModule {
     readonly DEFAULT_TIMEOUT_MS?: number;
     readonly MAX_BODY_BYTES?: number;
-    fetch?: HttpFetchFunction;
+    fetch?(input: FetchInput, options?: FetchOptions): Response;
     server?(options?: HttpServerOptions): HttpServer;
+  }
+
+  type RPCPrimitive = null | boolean | number | string;
+  type RPCValue =
+    | RPCPrimitive
+    | ByteView
+    | ByteSpanSource
+    | RPCValue[]
+    | { [key: string]: RPCValue };
+
+  interface RPCCodecOptions {
+    /** Ordered application schema fields mapped to deterministic CBOR integer keys. */
+    fields: string[];
+    /** Fields whose nested maps retain text keys. */
+    dynamicFields?: string[];
+    /** Allow text keys in the root payload map. Defaults to false. */
+    allowStringKeys?: boolean;
+    /** Directory used for temporary files created by inbound streamed values. */
+    streamDirectory?: string;
+  }
+
+  interface RPCMessage {
+    opcode: number;
+    requestId: number;
+    flags: number;
+    logicalLength: number;
+    payload: RPCValue;
+  }
+
+  interface RPCDecoderStatus {
+    open: true;
+    messages: number;
+    errors: number;
+    streamActive: boolean;
+    streamReceivedBytes: number;
+    streamExpectedBytes: number;
+  }
+
+  interface RPCSourceInfo {
+    size: number;
+    crc32: string | null;
+  }
+
+  interface RPCStatus {
+    protocol: "esp32qjs.rpc/1";
+    activeCodecs: number;
+    activeDecoders: number;
+    messages: number;
+    errors: number;
+  }
+
+  class RPCCodec {
+    private constructor();
+    createDecoder(): RPCDecoder;
+    encode(
+      opcode: number,
+      requestId: number,
+      flags: number,
+      payload: RPCValue,
+    ): ByteView[] | ByteSpanSource;
+    close(): boolean;
+  }
+
+  class RPCDecoder {
+    private constructor();
+    feed(data: ByteSource): RPCMessage[];
+    reset(): boolean;
+    status(): RPCDecoderStatus;
+    close(): boolean;
+  }
+
+  interface RPCModule {
+    readonly PROTOCOL: "esp32qjs.rpc/1";
+    readonly RESPONSE: 4;
+    readonly ERROR: 8;
+    readonly MAX_FRAME_BYTES: 7740;
+    readonly MAX_MESSAGE_BYTES: 65536;
+    readonly MAX_STREAM_BYTES: 33554432;
+    readonly SEGMENT_PAYLOAD_BYTES: 7680;
+    createCodec(options: RPCCodecOptions): RPCCodec;
+    bytes(value: ByteSource): ByteView;
+    fileSource(path: string): ByteSpanSource;
+    sourceInfo(source: ByteSpanSource): RPCSourceInfo;
+    adoptFile(source: ByteSpanSource, path: string): boolean;
+    status(): RPCStatus;
   }
 }
 
@@ -2503,6 +2612,10 @@ namespace ESP32QJS {
   const Request: typeof ESP32QJS.Request;
   const Response: typeof ESP32QJS.Response;
   const Stream: typeof ESP32QJS.Stream;
+  const _ByteView: { readonly prototype: ESP32QJS.ByteView };
+  const _ByteSpanSource: { readonly prototype: ESP32QJS.ByteSpanSource };
+  const _BitmapSpanSource: { readonly prototype: ESP32QJS.BitmapSpanSource };
+  const FsVolume: { readonly prototype: ESP32QJS.FsVolume };
   const HttpServer: typeof ESP32QJS.HttpServer;
   const DisplayFont: ESP32QJS.DisplayFontConstructor;
   const Bitmap: typeof ESP32QJS.Bitmap;
@@ -2512,6 +2625,16 @@ namespace ESP32QJS {
   const I2SChannel: typeof ESP32QJS.I2SChannel;
   const Camera: typeof ESP32QJS.Camera;
   const CameraFrame: typeof ESP32QJS.CameraFrame;
+  const I2CBus: { readonly prototype: ESP32QJS.I2CBus };
+  const I2CDevice: { readonly prototype: ESP32QJS.I2CDevice };
+  const SPIBus: { readonly prototype: ESP32QJS.SPIBus };
+  const SPIDevice: { readonly prototype: ESP32QJS.SPIDevice };
+  const UARTPort: { readonly prototype: ESP32QJS.UARTPort };
+  const TCPSocket: { readonly prototype: ESP32QJS.TCPSocket };
+  const TCPListener: { readonly prototype: ESP32QJS.TCPListener };
+  const UDPSocket: { readonly prototype: ESP32QJS.UDPSocket };
+  const RPCCodec: typeof ESP32QJS.RPCCodec;
+  const RPCDecoder: typeof ESP32QJS.RPCDecoder;
   const Future: ESP32QJS.FutureFactory;
   const EventQueue: {
     readonly prototype: ESP32QJS.EventQueue<unknown>;
@@ -2591,6 +2714,8 @@ namespace ESP32QJS {
   var dac: ESP32QJS.DacModule;
   /** System runtime information and deadline helpers. */
   var sys: ESP32QJS.SysModule;
+  /** Bounded runtime log ring used by headless Agent profiles. */
+  var runtimeLogs: ESP32QJS.RuntimeLogsModule;
   /** Shared I2C bus helpers. */
   var i2c: ESP32QJS.I2CModule;
   /** SPI master bus/device helpers. */
@@ -2617,6 +2742,8 @@ namespace ESP32QJS {
   var wifi: ESP32QJS.WiFiModule;
   /** HTTP client/server namespace. Exposed when either `sys.info.features.http` or `.httpServer` is enabled. */
   var http: ESP32QJS.HttpModule;
+  /** Generic deterministic CBOR and COBS application-protocol codec. */
+  var rpc: ESP32QJS.RPCModule;
 
 }
 

@@ -108,6 +108,8 @@ void esp32_mquickjs_wifi_clear_connect_future(void)
     wifi_lock();
     s_wifi_state.connect_in_progress = false;
     s_wifi_state.connect_future_registered = false;
+    s_wifi_state.connection_future_operation =
+        ESP32_MQUICKJS_WIFI_OPERATION_NONE;
     memset(&s_wifi_state.connect_future_token, 0, sizeof(s_wifi_state.connect_future_token));
     wifi_unlock();
 }
@@ -211,12 +213,19 @@ static void wifi_event_handler(void *arg,
         wifi_event_sta_disconnected_t *event = event_data;
         bool ignore_disconnect;
         bool should_queue_connect_failure = false;
+        bool intentional_disconnect = false;
         uint32_t connect_generation = 0;
         int32_t reason = event != NULL ? (int32_t)event->reason : 0;
 
         wifi_lock();
         ignore_disconnect = s_wifi_state.ignore_disconnect_once;
         s_wifi_state.ignore_disconnect_once = false;
+        intentional_disconnect = s_wifi_state.connect_future_registered &&
+            s_wifi_state.connection_future_operation ==
+                ESP32_MQUICKJS_WIFI_OPERATION_DISCONNECT;
+        if (intentional_disconnect) {
+            ignore_disconnect = false;
+        }
         s_wifi_state.status.connected = false;
         if (!ignore_disconnect) {
             s_wifi_state.connect_in_progress = false;
@@ -230,10 +239,14 @@ static void wifi_event_handler(void *arg,
         xEventGroupClearBits(s_wifi_state.event_group, WIFI_CONNECTED_BIT);
         if (!ignore_disconnect) {
             wifi_stop_connect_timeout_timer();
-            xEventGroupSetBits(s_wifi_state.event_group, WIFI_FAILED_BIT);
+            if (!intentional_disconnect) {
+                xEventGroupSetBits(s_wifi_state.event_group, WIFI_FAILED_BIT);
+            }
             if (should_queue_connect_failure) {
                 wifi_queue_connect_event(connect_generation,
-                                         ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_FAILURE,
+                                         intentional_disconnect
+                                             ? ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_DISCONNECTED
+                                             : ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_FAILURE,
                                          reason);
             }
         }
@@ -787,10 +800,15 @@ esp_err_t esp32_mquickjs_wifi_start_connect(const char *ssid,
     return err;
 }
 
-static esp_err_t wifi_disconnect(void)
+esp_err_t esp32_mquickjs_wifi_start_disconnect(bool *out_pending)
 {
     esp_err_t err;
     bool was_active;
+
+    if (out_pending == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_pending = false;
 
     if (!s_wifi_state.initialized || !s_wifi_state.started) {
         return ESP_OK;
@@ -800,7 +818,9 @@ static esp_err_t wifi_disconnect(void)
     wifi_lock();
     was_active = s_wifi_state.status.connected || s_wifi_state.connect_in_progress;
     s_wifi_state.connect_in_progress = false;
-    s_wifi_state.ignore_disconnect_once = was_active;
+    s_wifi_state.ignore_disconnect_once =
+        was_active && s_wifi_state.connection_future_operation !=
+                          ESP32_MQUICKJS_WIFI_OPERATION_DISCONNECT;
     s_wifi_state.status.connected = false;
     wifi_clear_ip_info_locked();
     wifi_unlock();
@@ -810,6 +830,9 @@ static esp_err_t wifi_disconnect(void)
     err = esp_wifi_disconnect();
     if (err == ESP_ERR_WIFI_NOT_CONNECT || err == ESP_ERR_WIFI_NOT_STARTED) {
         return ESP_OK;
+    }
+    if (err == ESP_OK) {
+        *out_pending = was_active;
     }
     return err;
 }
@@ -941,6 +964,8 @@ void esp32_mquickjs_deinit_wifi_runtime(JSContext *ctx)
     s_wifi_state.connect_in_progress = false;
     s_wifi_state.scan_future_registered = false;
     s_wifi_state.connect_future_registered = false;
+    s_wifi_state.connection_future_operation =
+        ESP32_MQUICKJS_WIFI_OPERATION_NONE;
     memset(&s_wifi_state.scan_future_token, 0, sizeof(s_wifi_state.scan_future_token));
     memset(&s_wifi_state.connect_future_token, 0, sizeof(s_wifi_state.connect_future_token));
     wifi_unlock();
@@ -1037,16 +1062,34 @@ JSValue js_wifi_connect(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
 
 JSValue js_wifi_disconnect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp_err_t err;
+    JSGCRef global_ref;
+    JSGCRef wifi_ref;
+    JSGCRef disconnect_ref;
+    JSValue *global;
+    JSValue *wifi;
+    JSValue *disconnect;
+    JSValue result;
 
     (void)this_val;
-    (void)argc;
-    (void)argv;
-    err = wifi_disconnect();
-    if (err != ESP_OK) {
-        return JS_ThrowInternalError(ctx, "wifi.disconnect() failed: %s", esp_err_to_name(err));
+    global = JS_PushGCRef(ctx, &global_ref);
+    wifi = JS_PushGCRef(ctx, &wifi_ref);
+    disconnect = JS_PushGCRef(ctx, &disconnect_ref);
+    *global = JS_GetGlobalObject(ctx);
+    *wifi = JS_GetPropertyStr(ctx, *global, "wifi");
+    *disconnect = JS_IsException(*wifi)
+        ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *wifi, "disconnect");
+    if (JS_IsException(*global) || JS_IsException(*wifi) ||
+        JS_IsException(*disconnect)) {
+        result = JS_EXCEPTION;
+    } else {
+        result = esp32_mquickjs_future_call_and_wait(
+            ctx, esp32_mquickjs_get_active_runtime(), *disconnect, *wifi,
+            argc, argv);
     }
-    return wifi_make_status_object(ctx);
+    JS_PopGCRef(ctx, &disconnect_ref);
+    JS_PopGCRef(ctx, &wifi_ref);
+    JS_PopGCRef(ctx, &global_ref);
+    return result;
 }
 
 #endif

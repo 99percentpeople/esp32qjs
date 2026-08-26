@@ -56,6 +56,16 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("esp32_mquickjs_future_call_and_wait", wifi)
         self.assertIn("esp32_mquickjs_future_register_driver", http_driver)
         self.assertIn("esp32_mquickjs_future_register_driver", wifi_driver)
+        self.assertIn("s_wifi_disconnect_future_driver", wifi_driver)
+        self.assertIn('JS_GetPropertyStr(ctx, *wifi, "disconnect")', wifi_driver)
+        self.assertIn("ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_DISCONNECTED", wifi_driver)
+        self.assertIn("ESP32_MQUICKJS_CANCEL_REJECTED", wifi_driver)
+        self.assertIn(
+            "state->kind == WIFI_FUTURE_DISCONNECT", wifi_driver
+        )
+        self.assertIn(
+            "esp32_mquickjs_wifi_clear_connect_future();", wifi_driver
+        )
 
     def test_legacy_deferred_globals_and_gpio_callbacks_are_removed(self):
         stdlib = (MQUICKJS / "src/core/mqjs_stdlib_esp32.c").read_text(

@@ -86,6 +86,13 @@ class TransportArchitectureTests(SourceContractTestCase):
         source = (
             MQUICKJS / "src" / "core" / "esp32_mquickjs_rpc.c"
         ).read_text(encoding="utf-8")
+        stdlib = (
+            MQUICKJS / "src" / "core" / "mqjs_stdlib_esp32.c"
+        ).read_text(encoding="utf-8")
+        declarations = (ROOT / "types" / "esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+        docs = (ROOT / "docs" / "c-api.md").read_text(encoding="utf-8")
         public_header = MQUICKJS / "include" / "esp32qjs_rpc_wire.h"
 
         self.assertIn("config ESP32_MQUICKJS_FEATURE_RPC", kconfig)
@@ -96,6 +103,32 @@ class TransportArchitectureTests(SourceContractTestCase):
         )
         self.assertTrue(public_header.is_file())
         self.assertIn("rpc.createCodec(options)", source)
+        self.assertIn('JS_CLASS_DEF("RPCCodec"', stdlib)
+        self.assertIn('JS_CLASS_DEF("RPCDecoder"', stdlib)
+        self.assertIn('JS_CFUNC_DEF("createDecoder", 0, js_rpc_create_decoder)', stdlib)
+        self.assertIn('JS_CFUNC_DEF("encode", 4, js_rpc_encode)', stdlib)
+        self.assertIn('JS_CFUNC_DEF("feed", 1, js_rpc_feed)', stdlib)
+        self.assertIn('JS_CFUNC_DEF("reset", 0, js_rpc_reset_decoder)', stdlib)
+        for removed_api in (
+            'JS_CFUNC_DEF("releaseCodec"',
+            'JS_CFUNC_DEF("releaseDecoder"',
+            'JS_CFUNC_DEF("resetDecoder"',
+            'JS_CFUNC_DEF("feed", 2',
+            'JS_CFUNC_DEF("encode", 5',
+        ):
+            self.assertNotIn(removed_api, stdlib)
+        self.assertIn("class RPCCodec", declarations)
+        self.assertIn("class RPCDecoder", declarations)
+        self.assertIn("interface RPCModule", declarations)
+        self.assertIn("readonly rpc: boolean", declarations)
+        self.assertIn("var decoder = codec.createDecoder();", docs)
+        self.assertIn("var frames = codec.encode(1, 7, 0,", docs)
+        self.assertIn("var messages = decoder.feed(incomingChunk);", docs)
+        self.assertIn("generation", source)
+        self.assertIn("js_rpc_codec_finalizer", source)
+        self.assertIn("js_rpc_decoder_finalizer", source)
+        self.assertNotIn("expects an active codec id", source)
+        self.assertNotIn("expects an active decoder id", source)
         for application_rule in (
             '"hardwareId"',
             '"tool"',

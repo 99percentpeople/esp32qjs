@@ -1663,6 +1663,18 @@ See [System Management API v1](sys-management-api.md) for exact getter shapes,
 nullability, lifecycle semantics, and the migration map from the removed flat
 `sys.info()` call.
 
+### `runtimeLogs`
+
+When `sys.info.features.runtimeLogs` is enabled, `runtimeLogs` exposes the
+bounded native log ring used by headless applications. It is a diagnostics
+transport, not a persistence API.
+
+- `runtimeLogs.read(afterSequence, limit, maxBytes)`
+  Return `{ bootId, entries, dropped }`. Each entry contains
+  `{ sequence, uptimeMs, source, text }`; `limit` is 1..16 and `maxBytes` is
+  1..2048. `afterSequence` is exclusive, so callers can page without replaying
+  the last entry. `dropped` is the cumulative ring-overflow count.
+
 ## `net` Module
 
 `net` is exposed when `sys.info.features.net` is enabled. It initializes the
@@ -1700,8 +1712,11 @@ Wi-Fi credentials are kept in RAM. Rebooting the board clears the active station
   Return `{ initialized, started, connected, scanning, ssid, hostname, ip, netmask, gateway, lastDisconnectReason, lastDisconnectReasonName }`.
 - `wifi.connect(ssid, password, timeoutMs = wifi.DEFAULT_TIMEOUT_MS)`
   Start station mode through the native Future driver and return the updated status object.
-- `wifi.disconnect()`
-  Disconnect the station and return the updated status object.
+- `wifi.disconnect(timeoutMs = wifi.DEFAULT_TIMEOUT_MS)`
+  Disconnect through the native Future driver and return only after the
+  station state has converged to disconnected. Once submitted to ESP-IDF the
+  disconnect side effect cannot be cancelled; a queued call remains
+  cancellable before it starts.
 - `wifi.scan()`
   Run an event-driven AP scan, including hidden access points, and return an array of `{ ssid, bssid, rssi, channel, authMode, hidden }`. Hidden beacon records have an empty `ssid` and require the caller to obtain and enter the exact SSID separately.
 
@@ -1833,26 +1848,27 @@ dispatch, authentication, authorization, retries, queues, workspace paths, or
 an application schema.
 
 - `rpc.createCodec(options)`
-  Create a codec and return its numeric handle. `options.fields` is the
+  Create and return an `RPCCodec` object. `options.fields` is the
   non-empty ordered list that maps application field names to CBOR integer
   keys. `dynamicFields` optionally names fields whose nested JSON-like maps use
   CBOR text keys exclusively, including numeric-looking JavaScript property
   names. `allowStringKeys` applies the same text-key rule at the root when true.
   `streamDirectory` optionally selects where incoming transparent streams are
-  spooled; without it, that codec rejects streamed input.
-- `rpc.releaseCodec(codecId)`
-  Release a codec. All decoders created from it must be released first.
-- `rpc.createDecoder(codecId)` / `rpc.releaseDecoder(decoderId)`
-  Allocate or release incremental connection state. Keep one decoder per
-  physical connection; each decoder accepts arbitrary input chunk boundaries.
-- `rpc.feed(decoderId, data)`
+  spooled; without it, that codec rejects streamed input. `close()` releases
+  the codec after all of its decoders have been closed.
+- `codec.createDecoder()`
+  Create an `RPCDecoder` object for incremental connection state. Keep one
+  decoder per physical connection; each decoder accepts arbitrary input chunk
+  boundaries. `close()` releases it deterministically; its finalizer provides
+  the same cleanup if application code drops the object.
+- `decoder.feed(data)`
   Feed one raw transport chunk and return zero or more complete
   `{ opcode, requestId, flags, logicalLength, payload }` messages. The caller
   never parses or reassembles segments.
-- `rpc.resetDecoder(decoderId)`
+- `decoder.reset()` / `decoder.status()`
   Discard an incomplete message and any temporary streamed input while keeping
-  the decoder handle.
-- `rpc.encode(codecId, opcode, requestId, flags, payload)`
+  the decoder object, or inspect its message/error and active-stream counters.
+- `codec.encode(opcode, requestId, flags, payload)`
   Encode one logical message. A regular payload returns an array of owning
   `ByteView` frames. If the final CBOR value is a `ByteSpanSource`, it returns a
   one-shot `ByteSpanSource` that produces already framed bytes lazily. The
@@ -1883,16 +1899,16 @@ var codec = rpc.createCodec({
   dynamicFields: ["result"],
   streamDirectory: "/data"
 });
-var decoder = rpc.createDecoder(codec);
-var frames = rpc.encode(codec, 1, 7, 0, {
+var decoder = codec.createDecoder();
+var frames = codec.encode(1, 7, 0, {
   data: rpc.bytes([0, 1, 2, 255])
 });
 
 // A TCP/serial receive callback may pass chunks of any size.
-var messages = rpc.feed(decoder, incomingChunk);
+var messages = decoder.feed(incomingChunk);
 
-rpc.releaseDecoder(decoder);
-rpc.releaseCodec(codec);
+decoder.close();
+codec.close();
 ```
 
 The public C wire contract and incremental decoder are declared in
@@ -1971,6 +1987,8 @@ print(responses[0].status, responses[1].status);
 ```
 
 ### HTTP Server API
+
+`http.server(options?)` returns a generation-checked `HttpServer` object.
 
 - `server.route(method, path)`
   Register a declarative route. Supported methods are `GET`, `POST`, `PUT`,

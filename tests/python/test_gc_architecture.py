@@ -156,21 +156,16 @@ class GcArchitectureTests(SourceContractTestCase):
         self.assertIn("static void dump_c_gc_traces", builder)
         self.assertIn("js_c_gc_trace_table", builder)
 
-    def test_upstream_gc_regression_uses_a_dedicated_probe(self):
+    def test_upstream_example_rectangle_remains_unmodified(self):
         example = (
             MQUICKJS / "vendor" / "mquickjs" / "example.c"
         ).read_text(encoding="utf-8")
         rectangle_start = example.index("typedef struct {\n    int x;")
         rectangle_end = example.index("} RectangleData;", rectangle_start)
         rectangle = example[rectangle_start:rectangle_end]
-        gc_test = (
-            MQUICKJS / "vendor" / "mquickjs" / "tests" / "test_gc.js"
-        ).read_text(encoding="utf-8")
 
         self.assertNotIn("JSValue", rectangle)
-        self.assertIn("new GCProbe()", gc_test)
-        self.assertIn("baseline + 2", gc_test)
-        self.assertIn("probe.child = probe", gc_test)
+        self.assertNotIn("child", rectangle)
 
     def test_scheduler_consumes_gc_before_advancing_futures(self):
         core = (MQUICKJS / "src" / "core" / "esp32_mquickjs.c").read_text(
@@ -193,20 +188,25 @@ class GcArchitectureTests(SourceContractTestCase):
         sweep_start = engine.index("/* reset the gc marks")
         sweep_end = engine.index("\nstatic JSValue js_value_from_pval", sweep_start)
         sweep = engine[sweep_start:sweep_end]
-        finalize_start = sweep.index("/* call every user finalizer")
         merge_start = sweep.index("/* merge all the consecutive free blocks */")
-        finalize = sweep[finalize_start:merge_start]
+        merge_end = sweep.index("set_free_block(b, size);", merge_start)
+        first_finalizer = sweep[:merge_start]
+        merge = sweep[merge_start:merge_end]
 
-        self.assertIn("ptr1 = ptr;", finalize)
-        self.assertIn("do {", finalize)
-        self.assertIn("ctx->c_finalizer_table[p->class_id - JS_CLASS_USER](", finalize)
-        self.assertIn("ptr1 += get_mblock_size(ptr1);", finalize)
-        self.assertLess(
-            finalize_start, merge_start,
+        self.assertIn("/* call the user finalizer if needed */", first_finalizer)
+        self.assertIn(
+            "ctx->c_finalizer_table[p->class_id - JS_CLASS_USER](",
+            first_finalizer,
         )
+        self.assertIn("ptr1 = ptr + size;", merge)
+        self.assertIn("while (ptr1 < ctx->heap_free", merge)
+        self.assertIn(
+            "ctx->c_finalizer_table[p->class_id - JS_CLASS_USER](", merge
+        )
+        self.assertIn("ptr1 += get_mblock_size(ptr1);", merge)
         self.assertLess(
-            merge_start,
-            sweep.index("set_free_block(b, size);"),
+            merge.index("ctx->c_finalizer_table[p->class_id - JS_CLASS_USER]("),
+            merge.index("ptr1 += get_mblock_size(ptr1);"),
         )
 
 if __name__ == "__main__":

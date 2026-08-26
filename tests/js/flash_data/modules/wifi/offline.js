@@ -2,6 +2,7 @@ test("wifi/offline", function () {
   var aps;
   var status = wifi.status();
   var disconnected;
+  var disconnectFuture;
   var scanError = "";
   var connectError = "";
   var syncOptionsError = "";
@@ -104,6 +105,12 @@ test("wifi/offline", function () {
 
   disconnected = wifi.disconnect();
   test.ok(disconnected && typeof disconnected === "object", "wifi.disconnect should return a status object");
+  disconnectFuture = Future.call(wifi.disconnect, wifi, [100]);
+  test.ok(disconnectFuture instanceof Future,
+    "Future.call(wifi.disconnect) should use the native driver");
+  disconnected = disconnectFuture.wait(500);
+  test.equal(disconnected.connected, false,
+    "native disconnect Future should settle at disconnected state");
 
   return { connected: status.connected, started: status.started, aps: aps.length };
 });

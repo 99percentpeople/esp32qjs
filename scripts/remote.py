@@ -202,6 +202,11 @@ JS_TEST_MODULES = (
         required_features=("socket",),
     ),
     JsTestModule(
+        "rpc",
+        (JsTestCase("modules/rpc/offline.js"),),
+        required_features=("rpc",),
+    ),
+    JsTestModule(
         "websocket",
         (
             JsTestCase("modules/websocket/offline.js"),

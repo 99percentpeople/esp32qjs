@@ -28,7 +28,12 @@
 #define JS_CLASS_RMT_SYMBOL_BUFFER (JS_CLASS_USER + 22)
 #define JS_CLASS_RMT_CHANNEL (JS_CLASS_USER + 23)
 #define JS_CLASS_FS_VOLUME (JS_CLASS_USER + 24)
-#define JS_CLASS_COUNT (JS_CLASS_USER + 25)
+#define JS_CLASS_TCP_SOCKET (JS_CLASS_USER + 26)
+#define JS_CLASS_TCP_LISTENER (JS_CLASS_USER + 27)
+#define JS_CLASS_UDP_SOCKET (JS_CLASS_USER + 28)
+#define JS_CLASS_RPC_CODEC (JS_CLASS_USER + 29)
+#define JS_CLASS_RPC_DECODER (JS_CLASS_USER + 30)
+#define JS_CLASS_COUNT (JS_CLASS_USER + 31)
 
 #define js_global_object js_global_object_base
 #define js_c_function_decl js_c_function_decl_base
@@ -882,9 +887,33 @@ static const JSClassDef js_usb_serial_obj =
 #endif
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_RPC
+static const JSPropDef js_rpc_codec_proto[] = {
+    JS_CFUNC_DEF("createDecoder", 0, js_rpc_create_decoder),
+    JS_CFUNC_DEF("encode", 4, js_rpc_encode),
+    JS_CFUNC_DEF("close", 0, js_rpc_codec_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_rpc_codec_class =
+    JS_CLASS_DEF("RPCCodec", 0, js_rpc_codec_constructor,
+                 JS_CLASS_RPC_CODEC, NULL, js_rpc_codec_proto, NULL,
+                 js_rpc_codec_finalizer);
+
+static const JSPropDef js_rpc_decoder_proto[] = {
+    JS_CFUNC_DEF("feed", 1, js_rpc_feed),
+    JS_CFUNC_DEF("reset", 0, js_rpc_reset_decoder),
+    JS_CFUNC_DEF("status", 0, js_rpc_decoder_status),
+    JS_CFUNC_DEF("close", 0, js_rpc_decoder_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_rpc_decoder_class =
+    JS_CLASS_DEF("RPCDecoder", 0, js_rpc_decoder_constructor,
+                 JS_CLASS_RPC_DECODER, NULL, js_rpc_decoder_proto, NULL,
+                 js_rpc_decoder_finalizer);
+
 static const JSPropDef js_rpc[] = {
-    JS_PROP_DOUBLE_DEF("FIRST", 1, 0),
-    JS_PROP_DOUBLE_DEF("LAST", 2, 0),
+    JS_PROP_STRING_DEF("PROTOCOL", "esp32qjs.rpc/1", 0),
     JS_PROP_DOUBLE_DEF("RESPONSE", 4, 0),
     JS_PROP_DOUBLE_DEF("ERROR", 8, 0),
     JS_PROP_DOUBLE_DEF("MAX_FRAME_BYTES", 7740, 0),
@@ -892,12 +921,6 @@ static const JSPropDef js_rpc[] = {
     JS_PROP_DOUBLE_DEF("MAX_STREAM_BYTES", 33554432, 0),
     JS_PROP_DOUBLE_DEF("SEGMENT_PAYLOAD_BYTES", 7680, 0),
     JS_CFUNC_DEF("createCodec", 1, js_rpc_create_codec),
-    JS_CFUNC_DEF("releaseCodec", 1, js_rpc_release_codec),
-    JS_CFUNC_DEF("createDecoder", 1, js_rpc_create_decoder),
-    JS_CFUNC_DEF("releaseDecoder", 1, js_rpc_release_decoder),
-    JS_CFUNC_DEF("resetDecoder", 1, js_rpc_reset_decoder),
-    JS_CFUNC_DEF("feed", 2, js_rpc_feed),
-    JS_CFUNC_DEF("encode", 5, js_rpc_encode),
     JS_CFUNC_DEF("bytes", 1, js_rpc_bytes),
     JS_CFUNC_DEF("fileSource", 1, js_rpc_file_source),
     JS_CFUNC_DEF("sourceInfo", 1, js_rpc_source_info),
@@ -980,7 +1003,7 @@ static const JSClassDef js_websocket_client_obj =
 static const JSPropDef js_wifi[] = {
     JS_CGETSET_DEF("DEFAULT_TIMEOUT_MS", js_wifi_get_default_timeout_ms, NULL),
     JS_CFUNC_DEF("connect", 3, js_wifi_connect),
-    JS_CFUNC_DEF("disconnect", 0, js_wifi_disconnect),
+    JS_CFUNC_DEF("disconnect", 1, js_wifi_disconnect),
     JS_CFUNC_DEF("status", 0, js_wifi_status),
     JS_CFUNC_DEF("scan", 0, js_wifi_scan),
     JS_PROP_END,
@@ -1131,6 +1154,10 @@ static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("TCPSocket", &js_tcp_socket_class),
     JS_PROP_CLASS_DEF("TCPListener", &js_tcp_listener_class),
     JS_PROP_CLASS_DEF("UDPSocket", &js_udp_socket_class),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_RPC
+    JS_PROP_CLASS_DEF("RPCCodec", &js_rpc_codec_class),
+    JS_PROP_CLASS_DEF("RPCDecoder", &js_rpc_decoder_class),
 #endif
     JS_CFUNC_DEF("help", 0, js_help),
     JS_CFUNC_DEF("sleep", 1, js_sleep),

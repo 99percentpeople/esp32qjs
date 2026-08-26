@@ -14,6 +14,7 @@
 typedef enum {
     WIFI_FUTURE_SCAN,
     WIFI_FUTURE_CONNECT,
+    WIFI_FUTURE_DISCONNECT,
 } wifi_future_kind_t;
 
 struct esp32_mquickjs_future_driver_state {
@@ -131,6 +132,42 @@ static bool wifi_connect_future_prepare(JSContext *ctx,
     return true;
 }
 
+static bool wifi_disconnect_future_prepare(
+    JSContext *ctx,
+    JSGCRef *this_ref,
+    int argc,
+    JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+
+    (void)this_ref;
+    if (out_state == NULL || argc < 0 || argc > 1) {
+        JS_ThrowTypeError(
+            ctx, "wifi.disconnect(timeoutMs?) expects at most one timeout");
+        return false;
+    }
+    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    if (state == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        return false;
+    }
+    state->kind = WIFI_FUTURE_DISCONNECT;
+    state->timeout_ms = ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS;
+    if (argc == 1 &&
+        (!JS_IsNumber(ctx, argv[0].val) ||
+         esp32_mquickjs_wifi_value_to_timeout_ms(
+             ctx, argv[0].val, ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS,
+             &state->timeout_ms) != 0)) {
+        heap_caps_free(state);
+        JS_ThrowTypeError(
+            ctx, "wifi.disconnect(timeoutMs) expects a non-negative integer");
+        return false;
+    }
+    *out_state = state;
+    return true;
+}
+
 static bool wifi_future_start(JSContext *ctx,
                               esp32_mquickjs_runtime_t *runtime,
                               esp32_mquickjs_future_token_t token,
@@ -141,16 +178,25 @@ static bool wifi_future_start(JSContext *ctx,
         .show_hidden = true,
     };
     esp_err_t err;
+    bool disconnect_pending = false;
 
     if (state == NULL) {
         JS_ThrowInternalError(ctx, "Wi-Fi Future lost its driver state");
         return false;
     }
+    if (state->kind == WIFI_FUTURE_DISCONNECT &&
+        (!wifi->initialized || !wifi->started)) {
+        state->connect_kind =
+            ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_DISCONNECTED;
+        state->completed = true;
+        state->started = true;
+        return true;
+    }
     err = esp32_mquickjs_wifi_ensure_started();
     if (err != ESP_OK) {
         if (state->kind == WIFI_FUTURE_SCAN) {
             esp32_mquickjs_wifi_throw_scan_error(ctx, err);
-        } else if (state->kind == WIFI_FUTURE_CONNECT) {
+        } else {
             esp32_mquickjs_wifi_throw_connect_error(ctx, err);
         }
         return false;
@@ -173,13 +219,18 @@ static bool wifi_future_start(JSContext *ctx,
     } else {
         if (wifi->connect_future_registered) {
             esp32_mquickjs_wifi_unlock();
-            JS_ThrowInternalError(ctx, "wifi.connect() is already in progress");
+            JS_ThrowInternalError(
+                ctx, "a Wi-Fi connection operation is already in progress");
             return false;
         }
         wifi->connect_generation++;
         state->generation = wifi->connect_generation;
         wifi->connect_future_registered = true;
         wifi->connect_future_token = token;
+        wifi->connection_future_operation =
+            state->kind == WIFI_FUTURE_CONNECT
+                ? ESP32_MQUICKJS_WIFI_OPERATION_CONNECT
+                : ESP32_MQUICKJS_WIFI_OPERATION_DISCONNECT;
     }
     esp32_mquickjs_wifi_unlock();
 
@@ -193,7 +244,7 @@ static bool wifi_future_start(JSContext *ctx,
             esp32_mquickjs_wifi_throw_scan_error(ctx, err);
             return false;
         }
-    } else {
+    } else if (state->kind == WIFI_FUTURE_CONNECT) {
         err = esp32_mquickjs_wifi_start_connect(state->ssid,
                                                 state->password,
                                                 state->timeout_ms);
@@ -201,6 +252,22 @@ static bool wifi_future_start(JSContext *ctx,
             esp32_mquickjs_wifi_clear_connect_future();
             esp32_mquickjs_wifi_throw_connect_error(ctx, err);
             return false;
+        }
+    } else {
+        if (wifi->connect_queue != NULL) {
+            xQueueReset(wifi->connect_queue);
+        }
+        err = esp32_mquickjs_wifi_start_disconnect(&disconnect_pending);
+        if (err != ESP_OK) {
+            esp32_mquickjs_wifi_clear_connect_future();
+            JS_ThrowInternalError(ctx, "wifi.disconnect() failed: %s",
+                                  esp_err_to_name(err));
+            return false;
+        }
+        if (!disconnect_pending) {
+            state->connect_kind =
+                ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_DISCONNECTED;
+            state->completed = true;
         }
     }
     state->started = true;
@@ -262,6 +329,13 @@ static JSValue wifi_future_finish(JSContext *ctx,
         return esp32_mquickjs_wifi_make_scan_results_array(ctx);
     }
     esp32_mquickjs_wifi_clear_connect_future();
+    if (state->kind == WIFI_FUTURE_DISCONNECT) {
+        if (state->connect_kind ==
+            ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_DISCONNECTED) {
+            return esp32_mquickjs_wifi_make_status_object(ctx);
+        }
+        return JS_ThrowInternalError(ctx, "wifi.disconnect() did not converge");
+    }
     if (state->connect_kind == ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_SUCCESS) {
         return esp32_mquickjs_wifi_make_status_object(ctx);
     }
@@ -283,6 +357,10 @@ static esp32_mquickjs_cancel_result_t wifi_future_cancel(
         return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     state->cancel_requested = true;
+    if (state->kind == WIFI_FUTURE_DISCONNECT && state->started) {
+        state->cancel_requested = false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
+    }
     if (state->kind == WIFI_FUTURE_SCAN) {
         (void)esp_wifi_scan_stop();
         esp32_mquickjs_wifi_lock();
@@ -308,7 +386,18 @@ static void wifi_future_destroy(esp32_mquickjs_future_driver_state_t *state)
         return;
     }
     if (state->started && !state->completed) {
-        (void)wifi_future_cancel(state);
+        if (state->kind == WIFI_FUTURE_DISCONNECT) {
+            /*
+             * esp_wifi_disconnect() cannot be rolled back once submitted.  The
+             * Future may still be destroyed during runtime teardown, though,
+             * so detach its generation/token before releasing the driver
+             * state.  A later STA_DISCONNECTED event will then update Wi-Fi
+             * status without waking a stale Future token.
+             */
+            esp32_mquickjs_wifi_clear_connect_future();
+        } else {
+            (void)wifi_future_cancel(state);
+        }
     }
     heap_caps_free(state);
 }
@@ -342,6 +431,16 @@ static const esp32_mquickjs_future_driver_t s_wifi_connect_future_driver = {
     .timeout_ms = wifi_future_timeout_ms,
 };
 
+static const esp32_mquickjs_future_driver_t s_wifi_disconnect_future_driver = {
+    .capture = wifi_disconnect_future_prepare,
+    .start = wifi_future_start,
+    .poll = wifi_future_poll,
+    .finish = wifi_future_finish,
+    .cancel = wifi_future_cancel,
+    .destroy = wifi_future_destroy,
+    .timeout_ms = wifi_future_timeout_ms,
+};
+
 bool esp32_mquickjs_init_wifi_future_runtime(JSContext *ctx,
                                              esp32_mquickjs_runtime_t *runtime)
 {
@@ -349,22 +448,28 @@ bool esp32_mquickjs_init_wifi_future_runtime(JSContext *ctx,
     JSGCRef wifi_ref;
     JSGCRef scan_ref;
     JSGCRef connect_ref;
+    JSGCRef disconnect_ref;
     JSValue *global;
     JSValue *wifi;
     JSValue *scan;
     JSValue *connect;
+    JSValue *disconnect;
     bool result = false;
 
     global = JS_PushGCRef(ctx, &global_ref);
     wifi = JS_PushGCRef(ctx, &wifi_ref);
     scan = JS_PushGCRef(ctx, &scan_ref);
     connect = JS_PushGCRef(ctx, &connect_ref);
+    disconnect = JS_PushGCRef(ctx, &disconnect_ref);
     *global = JS_GetGlobalObject(ctx);
     *wifi = JS_GetPropertyStr(ctx, *global, "wifi");
     *scan = JS_IsException(*wifi) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *wifi, "scan");
     *connect = JS_IsException(*wifi) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *wifi, "connect");
+    *disconnect = JS_IsException(*wifi)
+        ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *wifi, "disconnect");
     if (!JS_IsException(*global) && !JS_IsException(*wifi) &&
         !JS_IsException(*scan) && !JS_IsException(*connect) &&
+        !JS_IsException(*disconnect) &&
         esp32_mquickjs_future_register_driver(ctx,
                                               runtime,
                                               *scan,
@@ -372,11 +477,16 @@ bool esp32_mquickjs_init_wifi_future_runtime(JSContext *ctx,
         esp32_mquickjs_future_register_driver(ctx,
                                               runtime,
                                               *connect,
-                                              &s_wifi_connect_future_driver)) {
+                                              &s_wifi_connect_future_driver) &&
+        esp32_mquickjs_future_register_driver(
+            ctx, runtime, *disconnect,
+            &s_wifi_disconnect_future_driver)) {
         result = true;
-    } else if (!JS_IsException(*scan) && !JS_IsException(*connect)) {
+    } else if (!JS_IsException(*scan) && !JS_IsException(*connect) &&
+               !JS_IsException(*disconnect)) {
         JS_ThrowInternalError(ctx, "failed to register Wi-Fi Future drivers");
     }
+    JS_PopGCRef(ctx, &disconnect_ref);
     JS_PopGCRef(ctx, &connect_ref);
     JS_PopGCRef(ctx, &scan_ref);
     JS_PopGCRef(ctx, &wifi_ref);

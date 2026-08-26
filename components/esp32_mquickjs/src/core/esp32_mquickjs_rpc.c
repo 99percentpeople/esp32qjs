@@ -31,6 +31,11 @@ typedef struct rpc_file_source_object rpc_file_source_object_t;
 typedef struct rpc_codec_slot rpc_codec_slot_t;
 
 typedef struct {
+    uint8_t slot;
+    uint32_t generation;
+} rpc_handle_ref_t;
+
+typedef struct {
     rpc_file_source_object_t *owner;
     FILE *file;
     uint8_t buffer[RPC_FILE_SOURCE_CHUNK_BYTES];
@@ -72,6 +77,7 @@ struct rpc_file_source_object {
 
 typedef struct {
     bool used;
+    uint32_t generation;
     rpc_codec_slot_t *codec;
     esp32_mquickjs_rpc_wire_decoder_t wire;
     FILE *stream_file;
@@ -85,6 +91,8 @@ typedef struct {
 
 struct rpc_codec_slot {
     bool used;
+    bool close_pending;
+    uint32_t generation;
     bool allow_string_keys;
     char **fields;
     bool *dynamic_fields;
@@ -522,7 +530,7 @@ static bool rpc_encode_map(JSContext *ctx,
         if (key == NULL || memchr(key, '\0', key_len) != NULL) {
             if (key != NULL && !JS_HasException(ctx)) {
                 JS_ThrowTypeError(ctx,
-                                  "rpc.encode() map keys must not contain NUL");
+                                  "RPCCodec.encode() map keys must not contain NUL");
             }
             JS_PopGCRef(ctx, &key_ref);
             goto done;
@@ -539,7 +547,7 @@ static bool rpc_encode_map(JSContext *ctx,
         if (!keys[i].integer_key && !string_keys_allowed) {
             JS_PopGCRef(ctx, &key_ref);
             JS_ThrowTypeError(ctx,
-                              "rpc.encode() schema field has no integer key: %s",
+                              "RPCCodec.encode() schema field has no integer key: %s",
                               keys[i].name);
             goto done;
         }
@@ -567,7 +575,7 @@ static bool rpc_encode_map(JSContext *ctx,
             if (field_id_key_len < 0 ||
                 (size_t)field_id_key_len >= sizeof(field_id_key)) {
                 JS_ThrowInternalError(ctx,
-                                      "rpc.encode() could not format a field id");
+                                      "RPCCodec.encode() could not format a field id");
                 goto done;
             }
             for (j = 0; j < length; ++j) {
@@ -632,7 +640,7 @@ static bool rpc_encode_value(JSContext *ctx,
                              bool string_keys_allowed)
 {
     if (depth > RPC_CBOR_DEPTH) {
-        JS_ThrowRangeError(ctx, "rpc.encode() payload exceeds the nesting limit");
+        JS_ThrowRangeError(ctx, "RPCCodec.encode() payload exceeds the nesting limit");
         return false;
     }
     if (JS_IsNull(value)) {
@@ -645,7 +653,7 @@ static bool rpc_encode_value(JSContext *ctx,
     if (JS_IsNumber(ctx, value)) {
         double number;
         if (JS_ToNumber(ctx, &number, value) != 0 || !isfinite(number)) {
-            JS_ThrowTypeError(ctx, "rpc.encode() requires finite numbers");
+            JS_ThrowTypeError(ctx, "RPCCodec.encode() requires finite numbers");
             return false;
         }
         if (floor(number) == number && fabs(number) <= RPC_SAFE_INTEGER) {
@@ -683,7 +691,7 @@ static bool rpc_encode_value(JSContext *ctx,
             if (!JS_HasException(ctx)) {
                 JS_ThrowTypeError(
                     ctx,
-                    "rpc.encode() requires one final ByteSpanSource with a known length");
+                    "RPCCodec.encode() requires one final ByteSpanSource with a known length");
             }
             return false;
         }
@@ -697,7 +705,7 @@ static bool rpc_encode_value(JSContext *ctx,
         const uint8_t *data = NULL;
         size_t length = 0;
         bool ok;
-        if (!esp32_mquickjs_byte_view_acquire_read(ctx, value, "rpc.encode()",
+        if (!esp32_mquickjs_byte_view_acquire_read(ctx, value, "RPCCodec.encode()",
                                                    &data, &length)) {
             return false;
         }
@@ -714,7 +722,7 @@ static bool rpc_encode_value(JSContext *ctx,
         return rpc_encode_map(ctx, codec, value, buffer, depth,
                               string_keys_allowed);
     }
-    JS_ThrowTypeError(ctx, "rpc.encode() payload contains an unsupported value");
+    JS_ThrowTypeError(ctx, "RPCCodec.encode() payload contains an unsupported value");
     return false;
 }
 
@@ -882,7 +890,7 @@ static JSValue rpc_decode_map(JSContext *ctx,
     return JS_PopGCRef(ctx, &object_ref);
 failed:
     if (!JS_HasException(ctx)) {
-        JS_ThrowTypeError(ctx, "rpc.feed() received invalid deterministic CBOR");
+        JS_ThrowTypeError(ctx, "RPCDecoder.feed() received invalid deterministic CBOR");
     }
     JS_PopGCRef(ctx, &object_ref);
     return JS_EXCEPTION;
@@ -962,7 +970,7 @@ static JSValue rpc_decode_value(JSContext *ctx,
         }
     }
 invalid:
-    return JS_ThrowTypeError(ctx, "rpc.feed() received invalid deterministic CBOR");
+    return JS_ThrowTypeError(ctx, "RPCDecoder.feed() received invalid deterministic CBOR");
 }
 
 static JSValue rpc_decode_payload(JSContext *ctx,
@@ -980,7 +988,7 @@ static JSValue rpc_decode_payload(JSContext *ctx,
     bool stream_used = false;
     JSValue result;
     if (cbor_parser_init(data, length, 0, &parser, &root) != CborNoError) {
-        return JS_ThrowTypeError(ctx, "rpc.feed() received malformed CBOR");
+        return JS_ThrowTypeError(ctx, "RPCDecoder.feed() received malformed CBOR");
     }
     if (logical_length == length) {
         validation_flags |= (uint32_t)CborValidateCompleteData;
@@ -992,9 +1000,9 @@ static JSValue rpc_decode_payload(JSContext *ctx,
          validation_error != CborErrorUnexpectedEOF)) {
         if (validation_error == CborErrorInvalidUtf8TextString) {
             return JS_ThrowTypeError(ctx,
-                                     "rpc.feed() received invalid CBOR text");
+                                     "RPCDecoder.feed() received invalid CBOR text");
         }
-        return JS_ThrowTypeError(ctx, "rpc.feed() received malformed CBOR");
+        return JS_ThrowTypeError(ctx, "RPCDecoder.feed() received malformed CBOR");
     }
     result = rpc_decode_value(ctx, codec, data, length, logical_length, &offset, 0,
                               codec->allow_string_keys, stream_value,
@@ -1003,7 +1011,7 @@ static JSValue rpc_decode_payload(JSContext *ctx,
     if (offset != logical_length ||
         (logical_length != length && !stream_used) ||
         (logical_length == length && stream_used)) {
-        return JS_ThrowTypeError(ctx, "rpc.feed() received trailing CBOR data");
+        return JS_ThrowTypeError(ctx, "RPCDecoder.feed() received trailing CBOR data");
     }
     return result;
 }
@@ -1011,30 +1019,67 @@ static JSValue rpc_decode_payload(JSContext *ctx,
 static void rpc_codec_cleanup(rpc_codec_slot_t *codec)
 {
     size_t i;
+    uint32_t generation;
 
     if (codec == NULL) {
         return;
     }
+    generation = codec->generation;
     for (i = 0; i < codec->field_count; ++i) {
         free(codec->fields[i]);
     }
     free(codec->fields);
     free(codec->dynamic_fields);
     memset(codec, 0, sizeof(*codec));
+    codec->generation = generation;
 }
 
 static rpc_codec_slot_t *rpc_codec_from_value(JSContext *ctx,
                                                JSValue value,
                                                const char *api_name)
 {
-    uint32_t id;
+    rpc_handle_ref_t *ref;
+    rpc_codec_slot_t *codec;
 
-    if (JS_ToUint32(ctx, &id, value) != 0 || id == 0 || id > RPC_CODEC_SLOTS ||
-        !s_rpc_codecs[id - 1U].used) {
-        JS_ThrowReferenceError(ctx, "%s expects an active codec id", api_name);
+    if (JS_GetClassID(ctx, value) != JS_CLASS_RPC_CODEC ||
+        (ref = JS_GetOpaque(ctx, value)) == NULL ||
+        ref->slot >= RPC_CODEC_SLOTS) {
+        JS_ThrowTypeError(ctx, "%s expects an RPCCodec object", api_name);
         return NULL;
     }
-    return &s_rpc_codecs[id - 1U];
+    codec = &s_rpc_codecs[ref->slot];
+    if (!codec->used || codec->generation != ref->generation ||
+        codec->close_pending) {
+        JS_ThrowReferenceError(ctx, "%s cannot use a closed or stale RPCCodec",
+                               api_name);
+        return NULL;
+    }
+    return codec;
+}
+
+static JSValue rpc_new_handle(JSContext *ctx,
+                              int class_id,
+                              uint8_t slot,
+                              uint32_t generation)
+{
+    JSGCRef object_ref;
+    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    rpc_handle_ref_t *ref;
+
+    *object = JS_NewObjectClassUser(ctx, class_id);
+    if (JS_IsException(*object)) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_EXCEPTION;
+    }
+    ref = calloc(1, sizeof(*ref));
+    if (ref == NULL) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    ref->slot = slot;
+    ref->generation = generation;
+    JS_SetOpaque(ctx, *object, ref);
+    return JS_PopGCRef(ctx, &object_ref);
 }
 
 static bool rpc_codec_copy_fields(JSContext *ctx,
@@ -1177,8 +1222,14 @@ JSValue js_rpc_create_codec(JSContext *ctx,
     }
     for (slot = 0; slot < RPC_CODEC_SLOTS; ++slot) {
         if (!s_rpc_codecs[slot].used) {
+            uint32_t generation = s_rpc_codecs[slot].generation + 1U;
+
+            if (generation == 0) {
+                generation = 1;
+            }
             codec = &s_rpc_codecs[slot];
             memset(codec, 0, sizeof(*codec));
+            codec->generation = generation;
             codec->used = true;
             break;
         }
@@ -1225,7 +1276,11 @@ JSValue js_rpc_create_codec(JSContext *ctx,
         memcpy(codec->stream_directory, directory, directory_len);
         codec->stream_directory[directory_len] = '\0';
     }
-    result = JS_NewUint32(ctx, (uint32_t)slot + 1U);
+    result = rpc_new_handle(ctx, JS_CLASS_RPC_CODEC, (uint8_t)slot,
+                            codec->generation);
+    if (JS_IsException(result)) {
+        goto failed;
+    }
     goto done;
 
 failed:
@@ -1238,37 +1293,111 @@ done:
     return result;
 }
 
-JSValue js_rpc_release_codec(JSContext *ctx,
-                             JSValue *this_val,
-                             int argc,
-                             JSValue *argv)
+JSValue js_rpc_codec_close(JSContext *ctx,
+                           JSValue *this_val,
+                           int argc,
+                           JSValue *argv)
 {
+    rpc_handle_ref_t *ref;
     rpc_codec_slot_t *codec;
 
-    (void)this_val;
-    if (argc != 1 ||
-        (codec = rpc_codec_from_value(ctx, argv[0], "rpc.releaseCodec()")) == NULL) {
+    (void)argc;
+    (void)argv;
+    if (this_val == NULL || JS_GetClassID(ctx, *this_val) != JS_CLASS_RPC_CODEC) {
+        return JS_ThrowTypeError(ctx, "RPCCodec.close() expects an RPCCodec object");
+    }
+    ref = JS_GetOpaque(ctx, *this_val);
+    if (ref == NULL) {
+        return JS_FALSE;
+    }
+    codec = rpc_codec_from_value(ctx, *this_val, "RPCCodec.close()");
+    if (codec == NULL) {
         return JS_EXCEPTION;
     }
     if (codec->decoders != 0) {
         return JS_ThrowReferenceError(ctx,
-                                      "rpc.releaseCodec() codec still has active decoders");
+                                      "RPCCodec.close() codec still has active decoders");
     }
     rpc_codec_cleanup(codec);
+    JS_SetOpaque(ctx, *this_val, NULL);
+    free(ref);
     return JS_NewBool(true);
+}
+
+JSValue js_rpc_codec_constructor(JSContext *ctx,
+                                 JSValue *this_val,
+                                 int argc,
+                                 JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_ThrowTypeError(ctx, "RPCCodec cannot be constructed directly");
+}
+
+void js_rpc_codec_finalizer(JSContext *ctx, void *opaque)
+{
+    rpc_handle_ref_t *ref = opaque;
+    rpc_codec_slot_t *codec;
+
+    (void)ctx;
+    if (ref == NULL || ref->slot >= RPC_CODEC_SLOTS) {
+        free(ref);
+        return;
+    }
+    codec = &s_rpc_codecs[ref->slot];
+    if (codec->used && codec->generation == ref->generation) {
+        if (codec->decoders == 0) {
+            rpc_codec_cleanup(codec);
+        } else {
+            codec->close_pending = true;
+        }
+    }
+    free(ref);
 }
 
 static rpc_decoder_slot_t *rpc_decoder_from_value(JSContext *ctx,
                                                    JSValue value,
                                                    const char *api_name)
 {
-    uint32_t id;
-    if (JS_ToUint32(ctx, &id, value) != 0 || id == 0 || id > RPC_DECODER_SLOTS ||
-        !s_rpc_decoders[id - 1U].used) {
-        JS_ThrowReferenceError(ctx, "%s expects an active decoder id", api_name);
+    rpc_handle_ref_t *ref;
+    rpc_decoder_slot_t *decoder;
+
+    if (JS_GetClassID(ctx, value) != JS_CLASS_RPC_DECODER ||
+        (ref = JS_GetOpaque(ctx, value)) == NULL ||
+        ref->slot >= RPC_DECODER_SLOTS) {
+        JS_ThrowTypeError(ctx, "%s expects an RPCDecoder object", api_name);
         return NULL;
     }
-    return &s_rpc_decoders[id - 1U];
+    decoder = &s_rpc_decoders[ref->slot];
+    if (!decoder->used || decoder->generation != ref->generation) {
+        JS_ThrowReferenceError(
+            ctx, "%s cannot use a closed or stale RPCDecoder", api_name);
+        return NULL;
+    }
+    return decoder;
+}
+
+static void rpc_decoder_cleanup(rpc_decoder_slot_t *slot)
+{
+    rpc_codec_slot_t *codec;
+    uint32_t generation;
+
+    if (slot == NULL || !slot->used) {
+        return;
+    }
+    codec = slot->codec;
+    generation = slot->generation;
+    rpc_decoder_stream_cleanup(slot);
+    esp32_mquickjs_rpc_wire_decoder_reset(&slot->wire);
+    memset(slot, 0, sizeof(*slot));
+    slot->generation = generation;
+    if (codec != NULL && codec->decoders != 0) {
+        codec->decoders--;
+    }
+    if (codec != NULL && codec->close_pending && codec->decoders == 0) {
+        rpc_codec_cleanup(codec);
+    }
 }
 
 static bool rpc_decoder_stream_begin(rpc_decoder_slot_t *slot,
@@ -1427,55 +1556,146 @@ JSValue js_rpc_create_decoder(JSContext *ctx, JSValue *this_val, int argc, JSVal
 {
     rpc_codec_slot_t *codec;
     size_t i;
-    (void)this_val;
-    if (argc != 1 ||
-        (codec = rpc_codec_from_value(ctx, argv[0], "rpc.createDecoder()")) == NULL) {
+
+    (void)argv;
+    if (argc != 0 || this_val == NULL ||
+        (codec = rpc_codec_from_value(
+             ctx, *this_val, "RPCCodec.createDecoder()")) == NULL) {
         return JS_EXCEPTION;
     }
     for (i = 0; i < RPC_DECODER_SLOTS; ++i) {
         if (!s_rpc_decoders[i].used) {
+            uint32_t generation = s_rpc_decoders[i].generation + 1U;
+            JSValue result;
+
+            if (generation == 0) {
+                generation = 1;
+            }
             memset(&s_rpc_decoders[i], 0, sizeof(s_rpc_decoders[i]));
+            s_rpc_decoders[i].generation = generation;
             s_rpc_decoders[i].used = true;
             s_rpc_decoders[i].codec = codec;
             codec->decoders++;
             esp32_mquickjs_rpc_wire_decoder_init(&s_rpc_decoders[i].wire);
-            return JS_NewUint32(ctx, (uint32_t)i + 1U);
+            result = rpc_new_handle(ctx, JS_CLASS_RPC_DECODER, (uint8_t)i,
+                                    generation);
+            if (JS_IsException(result)) {
+                rpc_decoder_cleanup(&s_rpc_decoders[i]);
+            }
+            return result;
         }
     }
-    return JS_ThrowInternalError(ctx, "rpc.createDecoder() has no free decoder slot");
+    return JS_ThrowInternalError(
+        ctx, "RPCCodec.createDecoder() has no free decoder slot");
 }
 
-JSValue js_rpc_release_decoder(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_rpc_decoder_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
+    rpc_handle_ref_t *ref;
     rpc_decoder_slot_t *slot;
-    rpc_codec_slot_t *codec;
-    (void)this_val;
-    if (argc != 1 || (slot = rpc_decoder_from_value(ctx, argv[0],
-                                                     "rpc.releaseDecoder()")) == NULL) {
+
+    (void)argc;
+    (void)argv;
+    if (this_val == NULL || JS_GetClassID(ctx, *this_val) != JS_CLASS_RPC_DECODER) {
+        return JS_ThrowTypeError(
+            ctx, "RPCDecoder.close() expects an RPCDecoder object");
+    }
+    ref = JS_GetOpaque(ctx, *this_val);
+    if (ref == NULL) {
+        return JS_FALSE;
+    }
+    slot = rpc_decoder_from_value(ctx, *this_val, "RPCDecoder.close()");
+    if (slot == NULL) {
         return JS_EXCEPTION;
     }
-    codec = slot->codec;
-    rpc_decoder_stream_cleanup(slot);
-    esp32_mquickjs_rpc_wire_decoder_reset(&slot->wire);
-    memset(slot, 0, sizeof(*slot));
-    if (codec != NULL && codec->decoders != 0) {
-        codec->decoders--;
-    }
+    rpc_decoder_cleanup(slot);
+    JS_SetOpaque(ctx, *this_val, NULL);
+    free(ref);
     return JS_NewBool(true);
+}
+
+JSValue js_rpc_decoder_constructor(JSContext *ctx,
+                                   JSValue *this_val,
+                                   int argc,
+                                   JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_ThrowTypeError(ctx, "RPCDecoder cannot be constructed directly");
+}
+
+void js_rpc_decoder_finalizer(JSContext *ctx, void *opaque)
+{
+    rpc_handle_ref_t *ref = opaque;
+    rpc_decoder_slot_t *slot;
+
+    (void)ctx;
+    if (ref == NULL || ref->slot >= RPC_DECODER_SLOTS) {
+        free(ref);
+        return;
+    }
+    slot = &s_rpc_decoders[ref->slot];
+    if (slot->used && slot->generation == ref->generation) {
+        rpc_decoder_cleanup(slot);
+    }
+    free(ref);
 }
 
 JSValue js_rpc_reset_decoder(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     rpc_decoder_slot_t *slot;
-    (void)this_val;
-    if (argc != 1 || (slot = rpc_decoder_from_value(ctx, argv[0],
-                                                     "rpc.resetDecoder()")) == NULL) {
+
+    (void)argv;
+    if (argc != 0 || this_val == NULL ||
+        (slot = rpc_decoder_from_value(
+             ctx, *this_val, "RPCDecoder.reset()")) == NULL) {
         return JS_EXCEPTION;
     }
     rpc_decoder_stream_cleanup(slot);
     esp32_mquickjs_rpc_wire_decoder_reset(&slot->wire);
     esp32_mquickjs_rpc_wire_decoder_init(&slot->wire);
     return JS_NewBool(true);
+}
+
+JSValue js_rpc_decoder_status(JSContext *ctx,
+                              JSValue *this_val,
+                              int argc,
+                              JSValue *argv)
+{
+    rpc_decoder_slot_t *slot;
+    JSGCRef result_ref;
+    JSValue *result;
+
+    (void)argv;
+    if (argc != 0 || this_val == NULL ||
+        (slot = rpc_decoder_from_value(
+             ctx, *this_val, "RPCDecoder.status()")) == NULL) {
+        return JS_EXCEPTION;
+    }
+    result = JS_PushGCRef(ctx, &result_ref);
+    *result = JS_NewObject(ctx);
+    if (JS_IsException(*result) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "open", JS_TRUE) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "messages", JS_NewUint32(ctx, slot->messages)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "errors", JS_NewUint32(ctx, slot->errors)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "streamActive",
+            JS_NewBool(slot->stream_file != NULL ||
+                       slot->stream_path[0] != '\0')) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "streamReceivedBytes",
+            JS_NewUint32(ctx, (uint32_t)slot->stream_received)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "streamExpectedBytes",
+            JS_NewUint32(ctx, (uint32_t)slot->stream_expected))) {
+        JS_PopGCRef(ctx, &result_ref);
+        return JS_EXCEPTION;
+    }
+    return JS_PopGCRef(ctx, &result_ref);
 }
 
 JSValue js_rpc_feed(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -1488,11 +1708,12 @@ JSValue js_rpc_feed(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     JSValue *messages;
     rpc_feed_context_t feed;
     size_t emitted;
-    (void)this_val;
-    if (argc != 2 || (slot = rpc_decoder_from_value(ctx, argv[0], "rpc.feed()")) == NULL) {
+    if (argc != 1 || this_val == NULL ||
+        (slot = rpc_decoder_from_value(
+             ctx, *this_val, "RPCDecoder.feed()")) == NULL) {
         return JS_EXCEPTION;
     }
-    if (!esp32_mquickjs_get_byte_source(ctx, argv[1], "rpc.feed()", &source,
+    if (!esp32_mquickjs_get_byte_source(ctx, argv[0], "RPCDecoder.feed()", &source,
                                         &owned, &error)) {
         return JS_IsUndefined(error) ? JS_EXCEPTION : error;
     }
@@ -1543,7 +1764,7 @@ static bool rpc_encoded_stream_open(JSContext *ctx,
         return false;
     }
     if (!esp32_mquickjs_open_byte_span_source(
-            ctx, stream->source_ref.val, "rpc.encode() stream",
+            ctx, stream->source_ref.val, "RPCCodec.encode() stream",
             &stream->source, out_error)) {
         return false;
     }
@@ -1567,14 +1788,14 @@ static bool rpc_encoded_stream_load_source(JSContext *ctx,
             if (!JS_HasException(ctx) &&
                 stream->source_produced != stream->source_len) {
                 JS_ThrowInternalError(ctx,
-                                      "rpc.encode() ByteSpanSource length changed");
+                                      "RPCCodec.encode() ByteSpanSource length changed");
             }
             return false;
         }
         if (stream->span.length == 0) {
             if (++empty > 16) {
                 JS_ThrowInternalError(
-                    ctx, "rpc.encode() ByteSpanSource yielded too many empty spans");
+                    ctx, "RPCCodec.encode() ByteSpanSource yielded too many empty spans");
                 return false;
             }
             continue;
@@ -1582,7 +1803,7 @@ static bool rpc_encoded_stream_load_source(JSContext *ctx,
         if (stream->span.data == NULL ||
             stream->span.length > stream->source_len - stream->source_produced) {
             JS_ThrowInternalError(ctx,
-                                  "rpc.encode() ByteSpanSource length changed");
+                                  "RPCCodec.encode() ByteSpanSource length changed");
             return false;
         }
     }
@@ -1648,7 +1869,7 @@ static bool rpc_encoded_stream_next(JSContext *ctx,
             (uint16_t)stream->prefix_len, stream->segment,
             (uint16_t)segment_len, stream->frame, sizeof(stream->frame),
             &wire_len) != ESP32_MQUICKJS_RPC_WIRE_OK) {
-        JS_ThrowInternalError(ctx, "rpc.encode() could not frame streamed data");
+        JS_ThrowInternalError(ctx, "RPCCodec.encode() could not frame streamed data");
         return false;
     }
     out->data = stream->frame;
@@ -1751,16 +1972,16 @@ JSValue js_rpc_encode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
     JSValue *frames;
     size_t offset = 0;
     uint32_t index = 0;
-    (void)this_val;
-    if (argc != 5 ||
-        (codec = rpc_codec_from_value(ctx, argv[0], "rpc.encode()")) == NULL ||
-        JS_ToUint32(ctx, &opcode, argv[1]) != 0 || opcode == 0 ||
-        opcode > UINT16_MAX || JS_ToUint32(ctx, &request_id, argv[2]) != 0 ||
-        JS_ToUint32(ctx, &flags, argv[3]) != 0 ||
+    if (argc != 4 || this_val == NULL ||
+        (codec = rpc_codec_from_value(
+             ctx, *this_val, "RPCCodec.encode()")) == NULL ||
+        JS_ToUint32(ctx, &opcode, argv[0]) != 0 || opcode == 0 ||
+        opcode > UINT16_MAX || JS_ToUint32(ctx, &request_id, argv[1]) != 0 ||
+        JS_ToUint32(ctx, &flags, argv[2]) != 0 ||
         (flags & ~(ESP32_MQUICKJS_RPC_FLAG_RESPONSE |
                    ESP32_MQUICKJS_RPC_FLAG_ERROR)) != 0) {
         return JS_ThrowTypeError(ctx,
-                                 "rpc.encode(codecId, opcode, requestId, flags, payload) received invalid arguments");
+                                 "RPCCodec.encode(opcode, requestId, flags, payload) received invalid arguments");
     }
     payload_data = malloc(ESP32_MQUICKJS_RPC_MESSAGE_BYTES);
     if (payload_data == NULL) return JS_ThrowOutOfMemory(ctx);
@@ -1769,12 +1990,12 @@ JSValue js_rpc_encode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
         .capacity = ESP32_MQUICKJS_RPC_MESSAGE_BYTES,
         .stream_value = JS_UNDEFINED,
     };
-    if (!rpc_encode_value(ctx, codec, argv[4], &payload, 0,
+    if (!rpc_encode_value(ctx, codec, argv[3], &payload, 0,
                           codec->allow_string_keys) ||
         payload.failed) {
         free(payload_data);
         if (!JS_HasException(ctx)) {
-            return JS_ThrowRangeError(ctx, "rpc.encode() payload exceeds 65536 bytes");
+            return JS_ThrowRangeError(ctx, "RPCCodec.encode() payload exceeds 65536 bytes");
         }
         return JS_EXCEPTION;
     }
@@ -1791,7 +2012,7 @@ JSValue js_rpc_encode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
                 CborNoError) {
             free(payload_data);
             return JS_ThrowInternalError(ctx,
-                                         "rpc.encode() produced invalid CBOR");
+                                         "RPCCodec.encode() produced invalid CBOR");
         }
         /* Delegate the CBOR text contract to the bundled codec. */
         validation_error = cbor_value_validate(&root, validation_flags);
@@ -1801,17 +2022,17 @@ JSValue js_rpc_encode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
             free(payload_data);
             if (validation_error == CborErrorInvalidUtf8TextString) {
                 return JS_ThrowTypeError(
-                    ctx, "rpc.encode() text values must be valid CBOR text");
+                    ctx, "RPCCodec.encode() text values must be valid CBOR text");
             }
             return JS_ThrowInternalError(ctx,
-                                         "rpc.encode() produced invalid CBOR");
+                                         "RPCCodec.encode() produced invalid CBOR");
         }
     }
     if (payload.has_stream) {
         if (payload.length > ESP32_MQUICKJS_RPC_STREAM_PREFIX_BYTES ||
             payload.length + payload.stream_length > UINT32_MAX) {
             free(payload_data);
-            return JS_ThrowRangeError(ctx, "rpc.encode() stream exceeds its size limit");
+            return JS_ThrowRangeError(ctx, "RPCCodec.encode() stream exceeds its size limit");
         }
         return rpc_make_encoded_stream(ctx, (uint16_t)opcode, request_id,
                                        (uint8_t)flags, &payload);
@@ -1843,7 +2064,7 @@ JSValue js_rpc_encode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
             free(wire);
             free(payload_data);
             JS_PopGCRef(ctx, &frames_ref);
-            return JS_ThrowInternalError(ctx, "rpc.encode() wire error: %s",
+            return JS_ThrowInternalError(ctx, "RPCCodec.encode() wire error: %s",
                                          esp32_mquickjs_rpc_wire_error_name(wire_error));
         }
         view = JS_PushGCRef(ctx, &view_ref);
@@ -2004,12 +2225,13 @@ JSValue js_rpc_status(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
 void esp32_mquickjs_deinit_rpc_runtime(void)
 {
     size_t i;
+
     for (i = 0; i < RPC_DECODER_SLOTS; ++i) {
-        rpc_decoder_stream_cleanup(&s_rpc_decoders[i]);
-        esp32_mquickjs_rpc_wire_decoder_reset(&s_rpc_decoders[i].wire);
+        rpc_decoder_cleanup(&s_rpc_decoders[i]);
     }
-    memset(s_rpc_decoders, 0, sizeof(s_rpc_decoders));
     for (i = 0; i < RPC_CODEC_SLOTS; ++i) {
-        rpc_codec_cleanup(&s_rpc_codecs[i]);
+        if (s_rpc_codecs[i].used) {
+            rpc_codec_cleanup(&s_rpc_codecs[i]);
+        }
     }
 }

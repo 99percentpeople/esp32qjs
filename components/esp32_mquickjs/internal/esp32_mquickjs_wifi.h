@@ -34,6 +34,7 @@ typedef struct {
     bool scan_in_progress;
     bool scan_future_registered;
     bool connect_future_registered;
+    uint32_t connection_future_operation;
     EventGroupHandle_t event_group;
     QueueHandle_t scan_queue;
     QueueHandle_t connect_queue;
@@ -55,6 +56,13 @@ enum {
     ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_SUCCESS = 1,
     ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_FAILURE = 2,
     ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_TIMEOUT = 3,
+    ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_DISCONNECTED = 4,
+};
+
+enum {
+    ESP32_MQUICKJS_WIFI_OPERATION_NONE = 0,
+    ESP32_MQUICKJS_WIFI_OPERATION_CONNECT = 1,
+    ESP32_MQUICKJS_WIFI_OPERATION_DISCONNECT = 2,
 };
 
 bool esp32_mquickjs_init_wifi_runtime(JSContext *ctx,
@@ -74,6 +82,7 @@ esp_err_t esp32_mquickjs_wifi_ensure_started(void);
 esp_err_t esp32_mquickjs_wifi_start_connect(const char *ssid,
                                             const char *password,
                                             uint32_t timeout_ms);
+esp_err_t esp32_mquickjs_wifi_start_disconnect(bool *out_pending);
 
 esp32_mquickjs_wifi_state_t *esp32_mquickjs_wifi_state(void);
 void esp32_mquickjs_wifi_lock(void);
