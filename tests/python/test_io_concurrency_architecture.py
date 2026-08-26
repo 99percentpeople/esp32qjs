@@ -457,6 +457,32 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertNotIn("volatile bool worker_completed;", websocket)
         self.assertNotIn("volatile int sent;", websocket)
 
+    def test_websocket_publishes_one_atomic_lifecycle_to_callbacks(self):
+        websocket = (
+            MQUICKJS / "src/modules/websocket/esp32_mquickjs_websocket.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("volatile", websocket)
+        self.assertIn(
+            "_Atomic esp32_mquickjs_websocket_lifecycle_t lifecycle",
+            websocket,
+        )
+        self.assertIn("WEBSOCKET_LIFECYCLE_CLOSING", websocket)
+        self.assertIn("websocket_callback_begin(&generation)", websocket)
+        self.assertIn("websocket_callback_set_connected", websocket)
+        self.assertIn("websocket_generation_is_active(generation)", websocket)
+        self.assertIn("memory_order_acq_rel", websocket)
+        self.assertIn("_Atomic uint32_t dropped_events", websocket)
+        self.assertIn("_Atomic uint32_t oversized_messages", websocket)
+        self.assertIn("websocket_reset_fragment();\n    websocket_drain_queue();", websocket)
+        self.assertLess(
+            websocket.index("esp_websocket_client_destroy(client)"),
+            websocket.index(
+                "websocket_reset_fragment();",
+                websocket.index("static void websocket_finalize_close_source("),
+            ),
+        )
+
     def test_socket_hostname_resolution_runs_in_the_lwip_task(self):
         socket = (
             MQUICKJS / "src/modules/socket/esp32_mquickjs_socket.c"
