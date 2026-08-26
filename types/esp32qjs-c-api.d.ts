@@ -1472,19 +1472,21 @@ namespace ESP32QJS {
   /**
    * I2C bus state.
    */
-  interface I2CStatus {
+  interface I2CBusStatus {
     opened: boolean;
+    controller: number;
     sda: number;
     scl: number;
     freqHz: number;
     timeoutMs: number;
     internalPullup: boolean;
+    deviceCount: number;
   }
 
   /**
    * I2C open options.
    */
-  interface I2COpenOptions {
+  interface I2COpenBusOptions {
     sda?: number;
     scl?: number;
     freqHz?: number;
@@ -1492,7 +1494,7 @@ namespace ESP32QJS {
     internalPullup?: boolean;
   }
 
-  interface I2CWriteChunksStats {
+  interface I2CBatchResult {
     chunks: number;
     bytes: number;
     totalUs: number;
@@ -1503,32 +1505,42 @@ namespace ESP32QJS {
    *
    * @example
    * ```js
-   * var bus = i2c.open({ sda: 5, scl: 6, freqHz: 400000 });
+   * var bus = i2c.openBus({ sda: 5, scl: 6, freqHz: 400000 });
    * print(JSON.stringify(bus.scan()));
    * ```
    */
   interface I2CBus {
     close(): boolean;
-    status(): I2CStatus;
+    status(): I2CBusStatus;
     scan(): number[];
-    /** Write one byte source to a 7-bit device address. */
-    write(addr: number, data: ByteSource): number;
-    /**
-     * Write byte-source chunks with one temporary device handle.
-     *
-     * This is useful for chunks returned by `Bitmap.readRectChunks(...)`
-     * and for other producers that already split payloads.
-     */
-    writeChunks(
-      addr: number,
-      chunks: ArrayLike<ByteSource>,
-    ): I2CWriteChunksStats;
-    read(addr: number, length: number): ByteView;
-    writeRead(
-      addr: number,
-      writeData: ByteSource,
-      readLength: number,
-    ): ByteView;
+    openDevice(options: I2CDeviceOptions): I2CDevice;
+  }
+
+  interface I2CDeviceOptions {
+    address: number;
+    freqHz?: number;
+    timeoutMs?: number;
+  }
+
+  interface I2CDeviceStatus {
+    opened: boolean;
+    controller: number;
+    address: number;
+    freqHz: number;
+    timeoutMs: number;
+  }
+
+  interface I2CDevice {
+    close(): boolean;
+    status(): I2CDeviceStatus;
+    /** Execute one I2C transaction containing one byte source. */
+    write(data: ByteSource): number;
+    /** Send native segments within one START/STOP transaction. */
+    writeSegments(segments: ArrayLike<ByteSource>): number;
+    /** Execute byte sources as independent, ordered transactions. */
+    writeBatch(chunks: ArrayLike<ByteSource>): I2CBatchResult;
+    read(length: number): ByteView;
+    writeRead(writeData: ByteSource, readLength: number): ByteView;
   }
 
   /**
@@ -1539,7 +1551,7 @@ namespace ESP32QJS {
     readonly DEFAULT_SCL: number;
     readonly DEFAULT_FREQ_HZ: number;
     readonly DEFAULT_TIMEOUT_MS: number;
-    open(options?: I2COpenOptions): I2CBus;
+    openBus(options?: I2COpenBusOptions): I2CBus;
   }
 
   /**
@@ -1716,8 +1728,37 @@ namespace ESP32QJS {
     totalUs: number;
   }
 
+  interface UARTWatchOptions {
+    /** Readable threshold. Defaults to 1. */
+    minBytes?: number;
+    /** Emit idle readiness after this many quiet milliseconds; zero disables it. */
+    idleMs?: number;
+    /** EventQueue capacity in 1..64. Defaults to 8. */
+    capacity?: number;
+    /** Include UART hardware error events. Defaults to true. */
+    includeErrors?: boolean;
+  }
+
+  interface UARTReadableEvent {
+    type: "readable";
+    sequence: number;
+    timestampUs: number;
+    availableBytes: number;
+    reason: "threshold" | "idle";
+  }
+
+  interface UARTErrorEvent {
+    type: "error";
+    sequence: number;
+    timestampUs: number;
+    code: "fifoOverflow" | "bufferFull" | "break" | "parity" | "frame";
+    droppedBytes?: number;
+  }
+
+  type UARTEvent = UARTReadableEvent | UARTErrorEvent;
+
   /**
-   * Open synchronous UART port handle.
+   * Cooperative Future-backed UART port handle.
    */
   interface UARTPort {
     close(): boolean;
@@ -1725,10 +1766,11 @@ namespace ESP32QJS {
     write(data: ByteSource): number;
     writeChunks(chunks: ArrayLike<ByteSource>): UARTWriteStats;
     writeSource(source: ByteSpanSource): UARTWriteStats;
-    read(length: number, timeoutMs?: number): ByteView;
+    read(length: number, timeoutMs?: number): ByteView | null;
     available(): number;
     flush(timeoutMs?: number): boolean;
     clearRx(): boolean;
+    watch(options?: UARTWatchOptions): EventQueue<UARTEvent>;
   }
 
   /**
@@ -1783,6 +1825,7 @@ namespace ESP32QJS {
   interface RMTReceiveResult {
     length: number;
     truncated: boolean;
+    timestampUs: number;
   }
 
   interface RMTChannelStatus extends RMTChannelOpenOptions {

@@ -161,7 +161,7 @@ namespace ESP32QJS {
     open(): this;
     command(command: number | ArrayLike<number>, data?: ByteSource): unknown;
     write(data: ByteSource): unknown;
-    writeChunks?(chunks: ArrayLike<ByteSource>, options?: SPIWriteOptions): SPIWriteStats | I2CWriteChunksStats;
+    writeChunks?(chunks: ArrayLike<ByteSource>, options?: SPIWriteOptions): SPIWriteStats | I2CBatchResult;
     writeSource?(source: ByteSpanSource, options?: SPIWriteOptions): SPIWriteStats;
     reset?(): this;
     setBacklight?(enabled: boolean): this;
@@ -172,7 +172,7 @@ namespace ESP32QJS {
 
   interface I2CDisplayTransportOptions {
     bus?: I2CBus;
-    busOptions?: I2COpenOptions;
+    busOptions?: I2COpenBusOptions;
     address?: number;
     commandPrefix?: number;
     dataPrefix?: number;

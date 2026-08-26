@@ -16,7 +16,7 @@ class DisplayArchitectureTests(SourceContractTestCase):
             ".prototype.drawText",
             ".prototype.fillRect",
             "spi.openBus",
-            "i2c.open",
+            "i2c.openBus",
             "gpio.pinMode",
             "gpio.digitalWrite",
         )
@@ -76,7 +76,9 @@ class DisplayArchitectureTests(SourceContractTestCase):
         self.assertIn("this.transport.write(payload)", driver)
         self.assertIn("payload.close()", driver)
         self.assertNotIn("frame.readRect(rect.x, y0, rect.width, y1 - y0).toArray()", driver)
-        self.assertIn("bus.writeSegments", transport)
+        self.assertIn("device.writeSegments", transport)
+        self.assertIn("global.i2c.openBus", transport)
+        self.assertIn("this.bus.openDevice", transport)
         self.assertIn("[[this.dataPrefix & 0xff], body]", transport)
 
     def test_panel_drivers_close_single_byte_view_payloads(self):

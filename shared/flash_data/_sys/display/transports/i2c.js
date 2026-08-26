@@ -68,6 +68,7 @@
     this.state = "created";
     this.suppliedBus = options.bus || null;
     this.bus = null;
+    this.device = null;
     this.ownedBus = false;
     this.busOptions = system.copyObject(options.busOptions || {});
     this.address = own(options, "address") ? options.address | 0 : 0x3c;
@@ -86,10 +87,10 @@
   }
 
   I2CTransport.prototype.requireOpen = function (apiName) {
-    if (this.state !== "open" || !this.bus) {
+    if (this.state !== "open" || !this.device) {
       throw new Error(apiName + " requires an open I2C display transport");
     }
-    return this.bus;
+    return this.device;
   };
 
   I2CTransport.prototype.open = function () {
@@ -112,21 +113,34 @@
       this.bus = this.suppliedBus;
       this.ownedBus = false;
     } else {
-      if (!global.i2c || typeof global.i2c.open !== "function") {
+      if (!global.i2c || typeof global.i2c.openBus !== "function") {
         throw new Error("I2C display transport requires the i2c module");
       }
-      this.bus = global.i2c.open(this.busOptions);
+      this.bus = global.i2c.openBus(this.busOptions);
       this.ownedBus = true;
+    }
+    try {
+      this.device = this.bus.openDevice({ address: this.address });
+    } catch (error) {
+      if (this.ownedBus) {
+        try {
+          this.bus.close();
+        } catch (closeError) {
+        }
+      }
+      this.bus = null;
+      this.ownedBus = false;
+      throw error;
     }
     this.state = "open";
     return this;
   };
 
   I2CTransport.prototype.command = function (command, data) {
-    var bus = this.requireOpen("I2CTransport.command()");
+    var device = this.requireOpen("I2CTransport.command()");
     var payload = bytesWithPrefix(this.commandPrefix, command, data);
     var started = nowUs();
-    var result = bus.write(this.address, payload);
+    var result = device.write(payload);
 
     this._stats.commands += 1;
     this._stats.writes += 1;
@@ -139,23 +153,12 @@
   };
 
   I2CTransport.prototype.write = function (data) {
-    var bus = this.requireOpen("I2CTransport.write()");
+    var device = this.requireOpen("I2CTransport.write()");
     var body = typeof data === "number" ? [data] : data;
     var byteLength = body && typeof body.byteLength === "number"
       ? body.byteLength : body.length;
-    var payload = null;
     var started = nowUs();
-    var result;
-
-    if (typeof bus.writeSegments === "function") {
-      result = bus.writeSegments(this.address, [[this.dataPrefix & 0xff], body]);
-    } else {
-      if (body && typeof body.toArray === "function") {
-        body = body.toArray();
-      }
-      payload = bytesWithPrefix(this.dataPrefix, body);
-      result = bus.write(this.address, payload);
-    }
+    var result = device.writeSegments([[this.dataPrefix & 0xff], body]);
 
     this._stats.writes += 1;
     this._stats.chunks += 1;
@@ -167,7 +170,7 @@
   };
 
   I2CTransport.prototype.writeChunks = function (chunks) {
-    var bus = this.requireOpen("I2CTransport.writeChunks()");
+    var device = this.requireOpen("I2CTransport.writeChunks()");
     var payloads = [];
     var bytes = 0;
     var started = nowUs();
@@ -178,15 +181,7 @@
       payloads.push(bytesWithPrefix(this.dataPrefix, chunks[i]));
       bytes += payloads[payloads.length - 1].length;
     }
-    result = typeof bus.writeChunks === "function"
-      ? bus.writeChunks(this.address, payloads)
-      : null;
-    if (!result) {
-      for (i = 0; i < payloads.length; i += 1) {
-        bus.write(this.address, payloads[i]);
-      }
-      result = { chunks: payloads.length, bytes: bytes };
-    }
+    result = device.writeBatch(payloads);
     this._stats.writes += 1;
     this._stats.chunks += result.chunks || payloads.length;
     this._stats.bytes += result.bytes || bytes;
@@ -223,13 +218,23 @@
     if (this.state === "closed") {
       return true;
     }
-    if (this.bus && this.ownedBus) {
+    if (this.device) {
       try {
-        this.bus.close();
+        this.device.close();
       } catch (error) {
         firstError = error;
       }
     }
+    if (this.bus && this.ownedBus) {
+      try {
+        this.bus.close();
+      } catch (busCloseError) {
+        if (!firstError) {
+          firstError = busCloseError;
+        }
+      }
+    }
+    this.device = null;
     this.bus = null;
     this.ownedBus = false;
     this.state = "closed";

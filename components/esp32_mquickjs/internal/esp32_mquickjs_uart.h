@@ -19,6 +19,7 @@ JSValue js_uart_port_read(JSContext *ctx, JSValue *this_val, int argc, JSValue *
 JSValue js_uart_port_available(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_uart_port_flush(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_uart_port_clear_rx(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_uart_port_watch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 
 JSValue js_uart_open(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_uart_get_default_port(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

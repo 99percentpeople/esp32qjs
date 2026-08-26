@@ -10,6 +10,8 @@ test("spi/basic", function () {
   var emptyRead;
   var staleBusError = "";
   var staleDeviceError = "";
+  var bulkFuture;
+  var bulkStats;
 
   test.ok(typeof spi.HOST_2 === "number", "spi.HOST_2 should be numeric");
   if (info.features.spi) {
@@ -55,6 +57,12 @@ test("spi/basic", function () {
   test.equal(deviceStatus.cs, spi.DEFAULT_CS, "SPIDevice.status().cs should use DEFAULT_CS");
   test.equal(device.write([]), 0, "SPIDevice.write([]) should succeed");
   test.equal(device.writeChunks([]).chunks, 0, "SPIDevice.writeChunks([]) should succeed");
+  bulkFuture = Future.call(device.writeChunks, device, [[]]);
+  test.ok(bulkFuture instanceof Future,
+    "Future.call(SPIDevice.writeChunks) should return immediately with a Future");
+  bulkStats = bulkFuture.wait(500);
+  test.equal(bulkStats.chunks, 0,
+    "native SPI bulk Future should settle empty writes");
   var writeSourceRejected = false;
   try {
     device.writeSource([]);

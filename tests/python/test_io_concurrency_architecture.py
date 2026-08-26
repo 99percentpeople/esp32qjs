@@ -681,8 +681,8 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         uart = (
             MQUICKJS / "src/modules/uart/esp32_mquickjs_uart.c"
         ).read_text(encoding="utf-8")
-        write_start = uart.index("static esp32_mquickjs_uart_write_result_t uart_write_cooperative(")
-        write_end = uart.index("\nstatic JSValue uart_write_error(", write_start)
+        write_start = uart.index("static void uart_write_future_step(")
+        write_end = uart.index("\nstatic void uart_future_step(", write_start)
         write = uart[write_start:write_end]
         notifier_start = uart.index("static void IRAM_ATTR uart_notify_from_isr(")
         notifier_end = uart.index("\nstatic void uart_set_notifier(", notifier_start)
@@ -690,20 +690,114 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
 
         self.assertIn("uart_get_tx_buffer_free_size", write)
         self.assertIn("uart_tx_chars", write)
-        self.assertIn("esp32_mquickjs_poll(ctx, runtime)", write)
-        self.assertIn("esp32_mquickjs_wait_for_activity(runtime, wait_ms)", write)
         self.assertNotIn("portMAX_DELAY", write)
         self.assertIn("esp32_mquickjs_future_wake_from_isr", notifier)
         self.assertIn("esp32_mquickjs_notify_active_runtime_from_isr", notifier)
         self.assertIn("esp_timer_start_once(state->poll_timer", uart)
         self.assertIn("slot->write_busy", uart)
+        self.assertIn("uart_future_resource_key", uart)
+        self.assertIn("&slot->rx_lane_key", uart)
+        self.assertIn("&slot->tx_lane_key", uart)
+        self.assertIn("slot->future_reservations++", uart)
         self.assertIn("esp32_mquickjs_byte_view_acquire_read", uart)
-        self.assertIn("scope->deadline_us", write)
+        self.assertIn("state->write_scope.deadline_us", write)
         self.assertIn("scope->bytes_written", uart)
         self.assertIn('"bytesWritten"', uart)
         self.assertIn("slot->timeout_ms", uart)
         self.assertNotIn("UART_WRITE_STALL_TIMEOUT_MS", uart)
         self.assertNotIn("span_copy", uart)
+
+    def test_bus_objects_and_continuous_uart_events_match_phase_three_contract(self):
+        i2c = (
+            MQUICKJS / "src/modules/i2c/esp32_mquickjs_i2c.c"
+        ).read_text(encoding="utf-8")
+        spi = (
+            MQUICKJS / "src/modules/spi/esp32_mquickjs_spi.c"
+        ).read_text(encoding="utf-8")
+        uart = (
+            MQUICKJS / "src/modules/uart/esp32_mquickjs_uart.c"
+        ).read_text(encoding="utf-8")
+        stdlib = (MQUICKJS / "src/core/mqjs_stdlib_esp32.c").read_text(
+            encoding="utf-8"
+        )
+        declarations = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+        i2c_worker = i2c[
+            i2c.index("static void i2c_future_worker(") : i2c.index(
+                "\nstatic bool i2c_future_start("
+            )
+        ]
+        i2c_key = i2c[
+            i2c.index("static esp32_mquickjs_resource_key_t i2c_future_resource_key(") : i2c.index(
+                "\n#define I2C_FUTURE_DRIVER"
+            )
+        ]
+        spi_key = spi[
+            spi.index("static esp32_mquickjs_resource_key_t spi_future_resource_key(") : spi.index(
+                "\n#define SPI_FUTURE_DRIVER"
+            )
+        ]
+        uart_convert = uart[
+            uart.index("static JSValue uart_watch_event_to_js(") : uart.index(
+                "\nJSValue js_uart_port_watch("
+            )
+        ]
+        uart_errors = uart[
+            uart.index("static bool uart_watch_error_from_driver(") : uart.index(
+                "\nstatic void uart_watch_publish_error("
+            )
+        ]
+
+        self.assertIn('JS_CFUNC_DEF("openBus", 1, js_i2c_open_bus)', stdlib)
+        self.assertNotIn('JS_CFUNC_DEF("open", 1, js_i2c_open)', stdlib)
+        self.assertIn('JS_CFUNC_DEF("openDevice", 1, js_i2c_bus_open_device)', stdlib)
+        self.assertIn('JS_CFUNC_DEF("writeSegments", 1, js_i2c_device_write_segments)', stdlib)
+        self.assertIn('JS_CFUNC_DEF("writeBatch", 1, js_i2c_device_write_batch)', stdlib)
+        self.assertIn("i2c_future_resource_key", i2c)
+        self.assertIn("device->future_reservations++", i2c)
+        self.assertIn("i2c_get_slot(&state->bus_ref)", i2c_key)
+        self.assertIn("I2C_FUTURE_WRITE_BATCH", i2c_worker)
+        self.assertIn("i2c_master_transmit(device", i2c_worker)
+        self.assertIn("I2C_FUTURE_WRITE_SEGMENTS", i2c_worker)
+        self.assertIn("i2c_master_multi_buffer_transmit(", i2c_worker)
+        self.assertEqual(i2c.count("I2C_FUTURE_DRIVER(s_i2c_"), 6)
+
+        self.assertIn('"transfer", "write", "read", "writeChunks", "writeSource"', spi)
+        self.assertIn("spi_future_bulk_step", spi)
+        self.assertIn("spi_device_queue_trans", spi)
+        self.assertIn("spi_future_resource_key", spi)
+        self.assertIn("esp32_mquickjs_open_byte_span_source", spi)
+        self.assertIn("spi_get_bus_slot_by_ids", spi_key)
+        self.assertEqual(spi.count("SPI_FUTURE_DRIVER(s_spi_"), 5)
+
+        self.assertIn('JS_CFUNC_DEF("watch", 1, js_uart_port_watch)', stdlib)
+        self.assertIn("esp32_mquickjs_event_queue_new", uart)
+        self.assertIn("UART_WATCH_EVENT_READABLE", uart)
+        self.assertIn("UART_WATCH_ERROR_FIFO_OVERFLOW", uart)
+        self.assertIn("slot->readable_queued", uart)
+        self.assertIn("uart_watch_publish_readable(slot, true)", uart)
+        self.assertIn("one watcher per port", uart)
+        self.assertIn("ESP32_MQUICKJS_EVENT_QUEUE_DROP_NEWEST", uart)
+        for driver_error in (
+            "UART_FIFO_OVF",
+            "UART_BUFFER_FULL",
+            "UART_BREAK",
+            "UART_PARITY_ERR",
+            "UART_FRAME_ERR",
+        ):
+            self.assertIn(driver_error, uart_errors)
+        self.assertIn("if (event->kind == UART_WATCH_EVENT_READABLE)", uart_convert)
+        self.assertIn("rearm = slot->watcher != NULL", uart_convert)
+        self.assertIn("uart_watch_publish_readable(slot, true)", uart_convert)
+
+        self.assertIn("openBus(options?: I2COpenBusOptions)", declarations)
+        self.assertIn("openDevice(options: I2CDeviceOptions)", declarations)
+        self.assertIn("writeSegments(segments: ArrayLike<ByteSource>)", declarations)
+        self.assertIn("writeBatch(chunks: ArrayLike<ByteSource>)", declarations)
+        self.assertIn("watch(options?: UARTWatchOptions)", declarations)
+        self.assertIn('type: "readable"', declarations)
+        self.assertIn('type: "error"', declarations)
 
     def test_uart_usb_and_websocket_sends_have_native_future_drivers(self):
         uart = (

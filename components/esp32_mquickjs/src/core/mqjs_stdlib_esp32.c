@@ -10,6 +10,7 @@
 #define JS_CLASS_STREAM (JS_CLASS_USER + 4)
 #define JS_CLASS_HTTP_SERVER (JS_CLASS_USER + 5)
 #define JS_CLASS_I2C_BUS (JS_CLASS_USER + 7)
+#define JS_CLASS_I2C_DEVICE (JS_CLASS_USER + 25)
 #define JS_CLASS_SPI_BUS (JS_CLASS_USER + 8)
 #define JS_CLASS_SPI_DEVICE (JS_CLASS_USER + 9)
 #define JS_CLASS_UART_PORT (JS_CLASS_USER + 10)
@@ -648,23 +649,33 @@ static const JSPropDef js_i2c_bus_proto[] = {
     JS_CFUNC_DEF("close", 0, js_i2c_bus_close),
     JS_CFUNC_DEF("status", 0, js_i2c_bus_status),
     JS_CFUNC_DEF("scan", 0, js_i2c_bus_scan),
-    JS_CFUNC_DEF("write", 2, js_i2c_bus_write),
-    JS_CFUNC_DEF("writeChunks", 2, js_i2c_bus_write_chunks),
-    JS_CFUNC_DEF("writeSegments", 2, js_i2c_bus_write_segments),
-    JS_CFUNC_DEF("read", 2, js_i2c_bus_read),
-    JS_CFUNC_DEF("writeRead", 3, js_i2c_bus_writeRead),
+    JS_CFUNC_DEF("openDevice", 1, js_i2c_bus_open_device),
     JS_PROP_END,
 };
 
 static const JSClassDef js_i2c_bus_class =
     JS_CLASS_DEF("I2CBus", 0, js_i2c_bus_constructor, JS_CLASS_I2C_BUS, NULL, js_i2c_bus_proto, NULL, js_i2c_bus_finalizer);
 
+static const JSPropDef js_i2c_device_proto[] = {
+    JS_CFUNC_DEF("close", 0, js_i2c_device_close),
+    JS_CFUNC_DEF("status", 0, js_i2c_device_status),
+    JS_CFUNC_DEF("write", 1, js_i2c_device_write),
+    JS_CFUNC_DEF("writeSegments", 1, js_i2c_device_write_segments),
+    JS_CFUNC_DEF("writeBatch", 1, js_i2c_device_write_batch),
+    JS_CFUNC_DEF("read", 1, js_i2c_device_read),
+    JS_CFUNC_DEF("writeRead", 2, js_i2c_device_write_read),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_i2c_device_class =
+    JS_CLASS_DEF("I2CDevice", 0, js_i2c_device_constructor, JS_CLASS_I2C_DEVICE, NULL, js_i2c_device_proto, NULL, js_i2c_device_finalizer);
+
 static const JSPropDef js_i2c[] = {
     JS_CGETSET_DEF("DEFAULT_SDA", js_i2c_get_default_sda, NULL),
     JS_CGETSET_DEF("DEFAULT_SCL", js_i2c_get_default_scl, NULL),
     JS_CGETSET_DEF("DEFAULT_FREQ_HZ", js_i2c_get_default_freq_hz, NULL),
     JS_CGETSET_DEF("DEFAULT_TIMEOUT_MS", js_i2c_get_default_timeout_ms, NULL),
-    JS_CFUNC_DEF("open", 1, js_i2c_open),
+    JS_CFUNC_DEF("openBus", 1, js_i2c_open_bus),
     JS_PROP_END,
 };
 
@@ -729,6 +740,7 @@ static const JSPropDef js_uart_port_proto[] = {
     JS_CFUNC_DEF("available", 0, js_uart_port_available),
     JS_CFUNC_DEF("flush", 1, js_uart_port_flush),
     JS_CFUNC_DEF("clearRx", 0, js_uart_port_clear_rx),
+    JS_CFUNC_DEF("watch", 1, js_uart_port_watch),
     JS_PROP_END,
 };
 
@@ -1052,6 +1064,7 @@ static const JSPropDef js_global_object_extra[] = {
 #if CONFIG_ESP32_MQUICKJS_FEATURE_I2C
     JS_PROP_CLASS_DEF("i2c", &js_i2c_obj),
     JS_PROP_CLASS_DEF("I2CBus", &js_i2c_bus_class),
+    JS_PROP_CLASS_DEF("I2CDevice", &js_i2c_device_class),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_SPI
     JS_PROP_CLASS_DEF("spi", &js_spi_obj),

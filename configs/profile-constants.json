@@ -39,7 +39,7 @@
       "category": "I2C",
       "type": "gpio",
       "allowMinusOne": false,
-      "consumer": "i2c.open().sda"
+      "consumer": "i2c.openBus().sda"
     },
     {
       "key": "ESP32QJS_I2C_SCL",
@@ -47,7 +47,7 @@
       "category": "I2C",
       "type": "gpio",
       "allowMinusOne": false,
-      "consumer": "i2c.open().scl"
+      "consumer": "i2c.openBus().scl"
     },
     {
       "key": "ESP32QJS_I2C_FREQ_HZ",
@@ -56,7 +56,7 @@
       "type": "integer",
       "minimum": 10000,
       "maximum": 1000000,
-      "consumer": "i2c.open().freqHz"
+      "consumer": "i2c.openBus().freqHz"
     },
     {
       "key": "ESP32QJS_I2C_TIMEOUT_MS",
@@ -65,14 +65,14 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 5000,
-      "consumer": "i2c.open().timeoutMs"
+      "consumer": "i2c.openBus().timeoutMs"
     },
     {
       "key": "ESP32QJS_I2C_INTERNAL_PULLUP",
       "label": "Enable I2C internal pull-ups",
       "category": "I2C",
       "type": "boolean",
-      "consumer": "i2c.open().internalPullup"
+      "consumer": "i2c.openBus().internalPullup"
     },
     {
       "key": "ESP32QJS_SPI_HOST",

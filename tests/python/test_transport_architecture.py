@@ -145,22 +145,27 @@ class TransportArchitectureTests(SourceContractTestCase):
             "ready timers must not starve the finite USB TX stall deadline",
         )
 
-    def test_i2c_reuses_the_active_address_handle(self):
+    def test_i2c_device_owns_a_stable_driver_handle(self):
         source = (
             MQUICKJS / "src" / "modules" / "i2c" / "esp32_mquickjs_i2c.c"
         ).read_text(encoding="utf-8")
+        open_start = source.index("JSValue js_i2c_bus_open_device(")
+        open_end = source.index("\nJSValue js_i2c_device_constructor(", open_start)
+        open_device = source[open_start:open_end]
         worker_start = source.index("static void i2c_future_worker(")
         worker_end = source.index("\nstatic bool i2c_future_start(", worker_start)
         worker = source[worker_start:worker_end]
 
-        self.assertIn("cached_device_handle", source)
-        self.assertIn("cached_device_address", source)
-        self.assertIn("i2c_get_cached_device", worker)
+        self.assertIn("i2c_master_bus_add_device", open_device)
+        self.assertIn("&device->handle", open_device)
+        self.assertIn("device->next = bus->devices", open_device)
+        self.assertIn("bus->devices = device", open_device)
+        self.assertIn("device_slot->handle", worker)
+        self.assertIn("i2c_get_device(&state->device_ref", worker)
         self.assertNotIn("i2c_master_bus_add_device", worker)
         self.assertNotIn("i2c_master_bus_rm_device", worker)
-        self.assertIn(
-            "i2c_master_bus_rm_device(slot->cached_device_handle)", source
-        )
+        self.assertIn("i2c_master_bus_rm_device(device->handle)", source)
+        self.assertNotIn("cached_device_handle", source)
 
 
 if __name__ == "__main__":

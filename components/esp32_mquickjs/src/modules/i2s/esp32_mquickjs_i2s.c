@@ -60,6 +60,9 @@ typedef struct {
     bool rx_cancel_requested;
     bool tx_cancel_requested;
     bool release_pending;
+    uint32_t future_reservations;
+    uint8_t rx_lane_key;
+    uint8_t tx_lane_key;
     int32_t port;
     uint32_t generation;
     esp32_mquickjs_i2s_mode_t mode;
@@ -104,6 +107,8 @@ struct esp32_mquickjs_future_driver_state {
     uint64_t deadline_us;
     esp_err_t err;
     bool owner_retained;
+    bool reservation_held;
+    bool write_operation;
     bool started;
     bool completed;
     bool cancelled;
@@ -337,7 +342,8 @@ static void i2s_cleanup_slot(esp32_mquickjs_i2s_slot_t *slot)
 {
     int32_t port;
 
-    if (slot == NULL || !slot->allocated || i2s_slot_busy(slot)) {
+    if (slot == NULL || !slot->allocated || i2s_slot_busy(slot) ||
+        slot->future_reservations > 0) {
         return;
     }
     port = slot->port;
@@ -381,7 +387,7 @@ static void i2s_request_close(esp32_mquickjs_i2s_slot_t *slot)
         slot->tx_cancel_requested = true;
         i2s_wake_tx(slot);
     }
-    if (!i2s_slot_busy(slot)) {
+    if (!i2s_slot_busy(slot) && slot->future_reservations == 0) {
         i2s_cleanup_slot(slot);
     }
 }
@@ -627,10 +633,6 @@ static bool i2s_read_prepare(
         JS_ThrowInternalError(ctx, "I2SChannel.read() requires start() first");
         return false;
     }
-    if (slot->rx_busy) {
-        JS_ThrowInternalError(ctx, "I2S channel already has a pending read");
-        return false;
-    }
     bytes_per_frame = ((size_t)slot->slot_bits / 8U) * slot->channels;
     if (frame_count > I2S_MAX_READ_BYTES / bytes_per_frame) {
         JS_ThrowRangeError(ctx,
@@ -655,6 +657,8 @@ static bool i2s_read_prepare(
     state->requested_bytes = (size_t)frame_count * bytes_per_frame;
     state->frame_count = frame_count;
     state->timeout_ms = timeout_ms;
+    slot->future_reservations++;
+    state->reservation_held = true;
     owner = JS_AddGCRef(ctx, &state->owner_ref);
     *owner = this_ref->val;
     state->owner_retained = true;
@@ -725,14 +729,20 @@ static bool i2s_read_start(JSContext *ctx,
         JS_ThrowReferenceError(ctx, "I2S channel closed before read started");
         return false;
     }
+    state->runtime = runtime;
+    state->token = token;
+    if (slot->release_pending) {
+        state->cancelled = true;
+        state->completed = true;
+        (void)esp32_mquickjs_future_wake(runtime, token);
+        return true;
+    }
     if (slot->rx_busy) {
         JS_ThrowInternalError(ctx, "I2S channel already has a pending read");
         return false;
     }
     slot->rx_cancel_requested = false;
     i2s_publish_rx_wake_target(slot, runtime, token);
-    state->runtime = runtime;
-    state->token = token;
     state->started = true;
     if (state->timeout_ms > 0) {
         state->deadline_us = (uint64_t)esp_timer_get_time() +
@@ -849,15 +859,35 @@ static void i2s_read_destroy(esp32_mquickjs_future_driver_state_t *state)
         }
         i2s_clear_rx_wake_target(slot);
         slot->rx_cancel_requested = false;
-        if (slot->release_pending) {
-            i2s_cleanup_slot(slot);
-        }
     }
     if (state->owner_retained) {
         JS_DeleteGCRef(state->ctx, &state->owner_ref);
     }
     heap_caps_free(state->data);
+    if (slot != NULL && state->reservation_held) {
+        if (slot->future_reservations > 0) {
+            slot->future_reservations--;
+        }
+        if (slot->release_pending && slot->future_reservations == 0 &&
+            !i2s_slot_busy(slot)) {
+            i2s_cleanup_slot(slot);
+        }
+    }
     heap_caps_free(state);
+}
+
+static esp32_mquickjs_resource_key_t i2s_future_resource_key(
+    const esp32_mquickjs_future_driver_state_t *state)
+{
+    esp32_mquickjs_i2s_slot_t *slot = state != NULL
+        ? i2s_get_slot(&state->channel_ref) : NULL;
+
+    if (slot == NULL) {
+        return NULL;
+    }
+    return state->write_operation
+               ? (esp32_mquickjs_resource_key_t)&slot->tx_lane_key
+               : (esp32_mquickjs_resource_key_t)&slot->rx_lane_key;
 }
 
 static const esp32_mquickjs_future_driver_t s_i2s_read_driver = {
@@ -867,6 +897,7 @@ static const esp32_mquickjs_future_driver_t s_i2s_read_driver = {
     .finish = i2s_read_finish,
     .cancel = i2s_read_cancel,
     .destroy = i2s_read_destroy,
+    .resource_key = i2s_future_resource_key,
 };
 
 static bool i2s_append_write_bytes(JSContext *ctx, uint8_t **buffer,
@@ -996,10 +1027,6 @@ static bool i2s_write_prepare(
         JS_ThrowInternalError(ctx, "I2SChannel.write() requires start() first");
         return false;
     }
-    if (slot->tx_busy) {
-        JS_ThrowInternalError(ctx, "I2S channel already has a pending write");
-        return false;
-    }
     timeout_ms = slot->timeout_ms;
     if (argc == 2 && !JS_IsUndefined(argv[1].val) &&
         !i2s_to_u32(ctx, argv[1].val, &timeout_ms)) {
@@ -1032,6 +1059,9 @@ static bool i2s_write_prepare(
     state->frame_count =
         (uint32_t)(state->requested_bytes / bytes_per_frame);
     state->timeout_ms = timeout_ms;
+    state->write_operation = true;
+    slot->future_reservations++;
+    state->reservation_held = true;
     owner = JS_AddGCRef(ctx, &state->owner_ref);
     *owner = this_ref->val;
     state->owner_retained = true;
@@ -1101,6 +1131,14 @@ static bool i2s_write_start(JSContext *ctx,
                                "I2S channel closed before write started");
         return false;
     }
+    state->runtime = runtime;
+    state->token = token;
+    if (slot->release_pending) {
+        state->cancelled = true;
+        state->completed = true;
+        (void)esp32_mquickjs_future_wake(runtime, token);
+        return true;
+    }
     if (slot->tx_busy) {
         JS_ThrowInternalError(ctx,
                               "I2S channel already has a pending write");
@@ -1108,8 +1146,6 @@ static bool i2s_write_start(JSContext *ctx,
     }
     slot->tx_cancel_requested = false;
     i2s_publish_tx_wake_target(slot, runtime, token);
-    state->runtime = runtime;
-    state->token = token;
     state->started = true;
     if (state->timeout_ms > 0) {
         state->deadline_us = (uint64_t)esp_timer_get_time() +
@@ -1201,14 +1237,20 @@ static void i2s_write_destroy(
         }
         i2s_clear_tx_wake_target(slot);
         slot->tx_cancel_requested = false;
-        if (slot->release_pending) {
-            i2s_cleanup_slot(slot);
-        }
     }
     if (state->owner_retained) {
         JS_DeleteGCRef(state->ctx, &state->owner_ref);
     }
     heap_caps_free(state->data);
+    if (slot != NULL && state->reservation_held) {
+        if (slot->future_reservations > 0) {
+            slot->future_reservations--;
+        }
+        if (slot->release_pending && slot->future_reservations == 0 &&
+            !i2s_slot_busy(slot)) {
+            i2s_cleanup_slot(slot);
+        }
+    }
     heap_caps_free(state);
 }
 
@@ -1219,6 +1261,7 @@ static const esp32_mquickjs_future_driver_t s_i2s_write_driver = {
     .finish = i2s_write_finish,
     .cancel = i2s_write_cancel,
     .destroy = i2s_write_destroy,
+    .resource_key = i2s_future_resource_key,
 };
 
 static bool i2s_register_future_driver(JSContext *ctx,
@@ -1256,7 +1299,8 @@ bool esp32_mquickjs_init_i2s_runtime(JSContext *ctx,
     int i;
 
     for (i = 0; i < I2S_LL_GET(INST_NUM); ++i) {
-        if (s_i2s_slots[i].allocated && !i2s_slot_busy(&s_i2s_slots[i])) {
+        if (s_i2s_slots[i].allocated && !i2s_slot_busy(&s_i2s_slots[i]) &&
+            s_i2s_slots[i].future_reservations == 0) {
             i2s_cleanup_slot(&s_i2s_slots[i]);
         }
         i2s_reset_slot(&s_i2s_slots[i], i);
@@ -1342,7 +1386,7 @@ JSValue js_i2s_channel_stop(JSContext *ctx, JSValue *this_val,
     if (!slot->running) {
         return JS_TRUE;
     }
-    if (i2s_slot_busy(slot)) {
+    if (i2s_slot_busy(slot) || slot->future_reservations > 0) {
         return JS_ThrowInternalError(ctx,
                                      "I2SChannel.stop() refused while I/O is pending");
     }
@@ -1425,8 +1469,8 @@ JSValue js_i2s_channel_close(JSContext *ctx, JSValue *this_val,
     if (ref == NULL) {
         return JS_TRUE;
     }
-    JS_SetOpaque(ctx, *this_val, NULL);
     slot = i2s_get_slot(ref);
+    JS_SetOpaque(ctx, *this_val, NULL);
     if (slot != NULL) {
         i2s_request_close(slot);
     }

@@ -76,7 +76,8 @@ config ESP32_MQUICKJS_FEATURE_I2C
     default n
     depends on SOC_I2C_SUPPORTED
     help
-        Enable I2C bus bindings and related default pin settings.
+        Enable Future-backed I2C controller and persistent device handles,
+        exposed through i2c.openBus() and I2CBus.openDevice().
 
 config ESP32_MQUICKJS_FEATURE_SPI
     bool "Enable spi module"
@@ -91,8 +92,8 @@ config ESP32_MQUICKJS_FEATURE_UART
     default n
     depends on SOC_UART_SUPPORTED
     help
-        Enable synchronous UART port bindings such as uart.open(),
-        UARTPort.write(), and UARTPort.read().
+        Enable cooperative Future-backed UART ports, independent RX/TX
+        resource lanes, and readiness/error EventQueue watchers.
 
 config ESP32_MQUICKJS_FEATURE_RMT
     bool "Enable rmt module"
@@ -397,7 +398,7 @@ config ESP32_MQUICKJS_I2C_DEFAULT_SDA_PIN
     default -1
     depends on ESP32_MQUICKJS_FEATURE_I2C
     help
-        Default SDA pin used by i2c.open() when no pin override is provided.
+        Default SDA pin used by i2c.openBus() when no pin override is provided.
 
 config ESP32_MQUICKJS_I2C_DEFAULT_SCL_PIN
     int "Default I2C SCL GPIO"
@@ -405,7 +406,7 @@ config ESP32_MQUICKJS_I2C_DEFAULT_SCL_PIN
     default -1
     depends on ESP32_MQUICKJS_FEATURE_I2C
     help
-        Default SCL pin used by i2c.open() when no pin override is provided.
+        Default SCL pin used by i2c.openBus() when no pin override is provided.
 
 config ESP32_MQUICKJS_I2C_DEFAULT_FREQ_HZ
     int "Default I2C clock frequency (Hz)"
@@ -413,7 +414,7 @@ config ESP32_MQUICKJS_I2C_DEFAULT_FREQ_HZ
     default 400000
     depends on ESP32_MQUICKJS_FEATURE_I2C
     help
-        Default I2C bus speed used by i2c.open().
+        Default I2C bus speed used by i2c.openBus().
 
 config ESP32_MQUICKJS_I2C_DEFAULT_TIMEOUT_MS
     int "Default I2C transfer timeout (ms)"
@@ -421,8 +422,8 @@ config ESP32_MQUICKJS_I2C_DEFAULT_TIMEOUT_MS
     default 100
     depends on ESP32_MQUICKJS_FEATURE_I2C
     help
-        Default timeout used by I2CBus.scan(), I2CBus.write(), I2CBus.read(),
-        and I2CBus.writeRead().
+        Default timeout inherited by I2CBus.scan() and devices created by
+        I2CBus.openDevice().
 
 config ESP32_MQUICKJS_I2C_ENABLE_INTERNAL_PULLUP
     bool "Enable internal pull-up for I2C"
@@ -551,12 +552,12 @@ config ESP32_MQUICKJS_UART_DEFAULT_TX_BUFFER_SIZE
         TX ring buffer and writes directly through the hardware FIFO.
 
 config ESP32_MQUICKJS_UART_DEFAULT_TIMEOUT_MS
-    int "Default UART read/flush timeout (ms)"
+    int "Default UART I/O timeout (ms)"
     range 0 5000
     default 100
     depends on ESP32_MQUICKJS_FEATURE_UART
     help
-        Default timeout used by UARTPort.read() and UARTPort.flush().
+        Default timeout used by UARTPort read, write, and flush operations.
 
 config ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS
     int "Default Wi-Fi connect timeout (ms)"

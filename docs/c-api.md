@@ -462,38 +462,54 @@ print(headers.get("content-type"));
   Default bus speed, `400000`.
 - `i2c.DEFAULT_TIMEOUT_MS`
   Default transfer timeout in milliseconds.
-- `i2c.open(options?)`
-  Open an I2C master bus and return an `I2CBus` instance. `options` can include `{ sda, scl, freqHz, timeoutMs, internalPullup }`. Each call returns a distinct bus handle; close it when the caller is done with that bus.
+- `i2c.openBus(options?)`
+  Open an I2C master controller and return an `I2CBus`. `options` can include `{ sda, scl, freqHz, timeoutMs, internalPullup }`. The legacy `i2c.open()` entry point is not part of the v1 contract.
 
 `I2CBus` methods:
 
 - `bus.status()`
-  Return `{ opened, sda, scl, freqHz, timeoutMs, internalPullup }`.
+  Return `{ opened, controller, sda, scl, freqHz, timeoutMs, internalPullup, deviceCount }`.
 - `bus.close()`
   Close the bus handle. After closing, the `I2CBus` instance becomes stale and its other methods throw. If a caller forgets to close it, GC finalization will also release the native handle eventually, but explicit `close()` remains the intended lifecycle boundary.
 - `bus.scan()`
   Probe `0x03..0x77` and return an array of 7-bit device addresses.
-- `bus.write(addr, data)`
-  Write an array-like sequence of bytes or native byte view and return the number of bytes written.
-- `bus.writeChunks(addr, chunks)`
-  Write an array-like list of byte-source chunks to one I2C device while reusing the same device handle. This is intended for data already split by producers such as `bitmap.readRectChunks(...)`. It returns `{ chunks, bytes, totalUs }`.
-- `bus.writeSegments(addr, segments)`
-  Write byte-source segments as one I2C transaction without first joining them
-  into a JavaScript byte array. This is intended for protocols that prepend a
-  control byte to a native `ByteView`. It returns `{ chunks, bytes, totalUs }`.
-- `bus.read(addr, length)`
+- `bus.openDevice({ address, freqHz?, timeoutMs? })`
+  Create an `I2CDevice` with a persistent ESP-IDF device handle. The device inherits the bus frequency and timeout unless overridden.
+
+`I2CDevice` methods:
+
+- `device.status()`
+  Return `{ opened, controller, address, freqHz, timeoutMs }`.
+- `device.close()`
+  Close the device handle. Close devices before their owning bus.
+- `device.write(data)`
+  Execute one transaction containing one `ByteSource` and return its byte count.
+- `device.writeSegments(segments)`
+  Send all native segments inside one START/STOP transaction without joining them into a JavaScript array. It returns the total byte count.
+- `device.writeBatch(chunks)`
+  Execute chunks as independent ordered transactions and return `{ chunks, bytes, totalUs }`.
+- `device.read(length)`
   Read `length` bytes into an owned `ByteView`. Close the view after use.
-- `bus.writeRead(addr, writeData, readLength)`
+- `device.writeRead(writeData, readLength)`
   Write bytes, then read bytes in one transaction and return an owned
   `ByteView`.
+
+`scan()`, `write()`, `writeSegments()`, `writeBatch()`, `read()`, and
+`writeRead()` are native Future operations. Operations for the same controller
+use one bounded FIFO resource lane; separate controllers may progress
+independently. I2C master readiness still uses `gpio.watch()` rather than a
+bus-specific watcher.
 
 Example:
 
 ```js
-var bus = i2c.open({ sda: 5, scl: 6, freqHz: 400000 });
+var bus = i2c.openBus({ sda: 5, scl: 6, freqHz: 400000 });
+var device;
 print(JSON.stringify(bus.status()));
 print(JSON.stringify(bus.scan())); // [60] for an SSD1306 at 0x3c
-print(bus.write(0x3c, [0x00, 0xAF])); // SSD1306 display on
+device = bus.openDevice({ address: 0x3c });
+print(device.write([0x00, 0xAF])); // SSD1306 display on
+device.close();
 bus.close();
 ```
 
@@ -538,11 +554,11 @@ bus.close();
 - `device.close()`
   Remove the device from its parent SPI bus and make the JS object stale.
 - `device.transfer(data)`
-  Perform one cooperative full-duplex transaction from an array-like sequence
+  Perform one full-duplex transaction from an array-like sequence
   of bytes or native byte view and return the received bytes as an owned
   `ByteView`.
 - `device.write(data)`
-  Perform one synchronous write-only transaction from an array-like sequence of bytes or native byte view and return the number of transmitted bytes.
+  Perform one write-only transaction from an array-like sequence of bytes or native byte view and return the number of transmitted bytes.
 - `device.writeChunks(chunks, options?)`
   Queue an array-like list of byte-source chunks for write-only SPI transfers. `options.queueDepth` defaults to `2` and is capped by the device queue size. DMA-capable chunks are queued directly; other chunks are copied into DMA-capable staging buffers. The method returns `{ chunks, bytes, prepUs, queueUs, waitUs, transferUs, totalUs, queueDepth, direct }`.
 - `device.writeSource(source, options?)`
@@ -550,6 +566,13 @@ bus.close();
 - `device.read(length, fillByte = 0)`
   Clock `length` bytes and return an owned `ByteView` from MISO. `fillByte`
   controls the dummy value shifted out on MOSI while reading.
+
+All five transaction methods are registered native Future drivers. Direct calls
+wait cooperatively; `Future.call()` returns after capture and before hardware
+I/O. Operations share one bounded FIFO lane per SPI host, so devices on one
+controller stay ordered while separate hosts may progress independently. A
+bulk write incrementally consumes its captured chunks or `ByteSpanSource` and
+can keep up to the selected queue depth of ESP-IDF DMA transactions in flight.
 
 Example:
 
@@ -604,15 +627,15 @@ cooperatively and `Future.call()` returns control immediately.
   Return `{ opened, port, tx, rx, baud, dataBits, parity, stopBits, rxBufferSize, txBufferSize, timeoutMs }`.
 - `port.close()`
   Close the driver and make the JS object stale. It refuses with a busy error
-  while a read, write, or flush is active; it does not implicitly cancel an
-  operation. GC finalization also releases forgotten ports eventually, but
+  while a read, write, or flush is active or queued; it does not implicitly
+  cancel an operation. GC finalization also releases forgotten ports eventually, but
   explicit `close()` remains the intended lifecycle boundary.
 - `port.write(data)`
   Write an array-like sequence of bytes or native byte view and return the
   number of bytes accepted by the UART driver. TX backpressure keeps the
   synchronous call surface but waits cooperatively on UART write-ready events;
-  timers and ready Futures continue to run. Only one write may be active per
-  port. The port's configured `timeoutMs` is the total deadline for enqueueing
+  timers and ready Futures continue to run. The TX lane executes writes in
+  FIFO order. The port's configured `timeoutMs` is the total deadline for enqueueing
   the complete value; `timeoutMs: 0` performs one immediate non-blocking
   attempt. If a write fails after producing output, the thrown error exposes
   the exact partial count as `error.bytesWritten`; callers must not retry the
@@ -631,14 +654,31 @@ applications so the current JavaScript call stack does not wait.
 
 - `port.read(length, timeoutMs = uart.DEFAULT_TIMEOUT_MS)`
   Read up to `length` bytes and return the bytes actually received as a
-  owned `ByteView`. RX readiness is interrupt-driven; the timeout uses a
-  one-shot native timer rather than readiness polling.
+  owned `ByteView`. It returns `null` when a positive-length read times out
+  before receiving data. RX readiness is interrupt-driven; the timeout uses a
+  one-shot native timer rather than readiness polling. Reads use a FIFO RX lane
+  independent from the TX lane.
 - `port.available()`
   Return the number of bytes currently buffered for reading.
 - `port.flush(timeoutMs = uart.DEFAULT_TIMEOUT_MS)`
   Wait for pending TX bytes to leave the UART driver and hardware FIFO.
 - `port.clearRx()`
   Discard buffered RX bytes.
+- `port.watch(options?)`
+  Return an `EventQueue` for continuous RX readiness and UART hardware errors.
+  Options are `{ minBytes = 1, idleMs = 0, capacity = 8, includeErrors = true }`;
+  `capacity` must be in `1..64`. Each port permits one watcher. Closing the
+  watcher leaves the port open.
+
+Watcher events do not contain received payload bytes. A readable event is
+`{ type: "readable", sequence, timestampUs, availableBytes, reason }`, where
+`reason` is `"threshold"` or `"idle"`. Error events are
+`{ type: "error", sequence, timestampUs, code }`, with `code` equal to
+`"fifoOverflow"`, `"bufferFull"`, `"break"`, `"parity"`, or `"frame"`.
+Readable events are coalesced: while one is queued, additional received bytes
+do not allocate another event. After consumption, the watcher rearms if data
+remains buffered. Use `watcher.stats().dropped` and sequence gaps to detect
+queue pressure.
 
 Example:
 
@@ -650,9 +690,20 @@ var port = uart.open({
   baud: 115200,
 });
 
+var events = port.watch({ minBytes: 1, idleMs: 20 });
 port.write([0x41, 0x54, 0x0d, 0x0a]);
 port.flush();
-print(JSON.stringify(port.read(64, 500)));
+if (events.receive(500) !== null) {
+  var input = port.read(64, 0);
+  if (input !== null) {
+    try {
+      print(JSON.stringify(input.toArray()));
+    } finally {
+      input.close();
+    }
+  }
+}
+events.close();
 port.close();
 ```
 
@@ -691,10 +742,16 @@ operation is pending and cannot be changed during that lease.
 TX uses `transmit(symbols, { loopCount?, endLevel?, timeoutMs? })`; loop counts
 must be finite. `timeoutMs` defaults to 1000 for both directions. RX uses
 `receive(symbols, { minPulseNs?, idleThresholdNs, timeoutMs? })`, fills the
-caller's buffer, updates its logical length, and returns `{ length, truncated }`
-or `null` at timeout. Only one operation may be pending per channel. Use
-`Future.call()` for non-blocking composition; timeout, cancellation, close, and
-runtime teardown cancel the whole hardware operation.
+caller's buffer, updates its logical length, and returns
+`{ length, truncated, timestampUs }` or `null` at timeout. Operations enter one
+bounded FIFO resource lane per
+channel; different channels may progress independently. Use `Future.call()`
+for non-blocking composition. A queued operation can be cancelled without
+touching hardware; cancellation of an active operation synchronously aborts the
+RMT channel before settlement. `close()` detaches the JavaScript handle,
+cancels an active operation after a confirmed hardware abort, prevents queued
+operations from reaching hardware, and releases the channel after all captured
+Future states have drained.
 
 ```js
 var symbols = rmt.createSymbols(2);
@@ -754,13 +811,16 @@ is not exposed.
   Return direction, port, running/read/write state, PCM layout, DMA
   configuration, receive queue overruns, and `sendQueueOverflows`.
 - `channel.close()`
-  Mark the channel closed immediately and idempotently. Pending reads and
-  writes are cancelled; native handles are released after their Future leases
-  finish. Runtime teardown uses the same path.
+  Detach the JavaScript handle idempotently, request cancellation of active
+  reads and writes, prevent queued operations from reaching DMA, and release
+  the native handles after all captured Future states finish releasing their
+  reservations.
 
-Only one read and one write may be pending at a time. Duplex allows those two
-directions concurrently. Direct calls are synchronous; use `Future.call()` when
-the current runtime position must remain non-blocking. Open each long-lived
+Reads use one bounded FIFO RX lane and writes use an independent bounded FIFO
+TX lane. Duplex allows one operation from each direction to be active
+concurrently while preserving FIFO ordering within each direction. Direct calls
+wait cooperatively; use `Future.call()` when the current runtime position must
+remain non-blocking. Open each long-lived
 audio channel once after Wi-Fi initialization, then reuse `start()` / `stop()`;
 do not close and reopen it for every recording or playback attempt. On PSRAM
 boards, transient PCM operation buffers are allocated from PSRAM so the

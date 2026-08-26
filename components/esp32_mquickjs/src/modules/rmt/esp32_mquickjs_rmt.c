@@ -19,6 +19,7 @@
 #include "esp_attr.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "soc/soc_caps.h"
 
@@ -58,6 +59,7 @@ typedef struct {
     bool running;
     bool busy;
     bool release_pending;
+    uint32_t future_reservations;
     uint8_t index;
     uint32_t generation;
     esp32_mquickjs_rmt_direction_t direction;
@@ -85,11 +87,13 @@ struct esp32_mquickjs_future_driver_state {
     uint32_t timeout_ms;
     uint32_t min_pulse_ns;
     uint32_t idle_threshold_ns;
+    uint64_t timestamp_us;
     int loop_count;
     bool end_level;
     size_t received_symbols;
     _Atomic bool completed;
     bool buffer_leased;
+    bool channel_reserved;
     bool started;
     bool cancelled;
     bool timed_out;
@@ -99,6 +103,9 @@ struct esp32_mquickjs_future_driver_state {
 
 static esp32_mquickjs_rmt_channel_slot_t s_rmt_channels[RMT_MAX_CHANNELS];
 static uint32_t s_rmt_next_generation = 1;
+static portMUX_TYPE s_rmt_callback_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static void rmt_request_close(esp32_mquickjs_rmt_channel_slot_t *slot);
 
 static uint32_t rmt_take_generation(void)
 {
@@ -248,7 +255,8 @@ static void rmt_channel_cleanup(esp32_mquickjs_rmt_channel_slot_t *slot)
 {
     uint8_t index;
 
-    if (slot == NULL || !slot->allocated || slot->busy) {
+    if (slot == NULL || !slot->allocated || slot->busy ||
+        slot->future_reservations > 0) {
         return;
     }
     index = slot->index;
@@ -265,20 +273,80 @@ static void rmt_channel_cleanup(esp32_mquickjs_rmt_channel_slot_t *slot)
     slot->index = index;
 }
 
-static void rmt_abort_active(esp32_mquickjs_rmt_channel_slot_t *slot)
+static esp_err_t rmt_abort_active(esp32_mquickjs_rmt_channel_slot_t *slot)
 {
     esp_err_t err;
 
     if (slot == NULL || !slot->running || slot->handle == NULL) {
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
-    (void)rmt_disable(slot->handle);
+    err = rmt_disable(slot->handle);
+    if (err != ESP_OK) {
+        return err;
+    }
     slot->running = false;
     if (!slot->release_pending) {
         err = rmt_enable(slot->handle);
         if (err == ESP_OK) {
             slot->running = true;
         }
+    }
+    return ESP_OK;
+}
+
+static esp32_mquickjs_rmt_future_state_t *rmt_active_operation(
+    esp32_mquickjs_rmt_channel_slot_t *slot)
+{
+    esp32_mquickjs_rmt_future_state_t *state = NULL;
+
+    portENTER_CRITICAL(&s_rmt_callback_lock);
+    if (slot != NULL) {
+        state = slot->active;
+    }
+    portEXIT_CRITICAL(&s_rmt_callback_lock);
+    return state;
+}
+
+static bool rmt_complete_cancelled(
+    esp32_mquickjs_rmt_channel_slot_t *slot,
+    esp32_mquickjs_rmt_future_state_t *state,
+    bool timed_out)
+{
+    esp32_mquickjs_runtime_t *runtime = NULL;
+    esp32_mquickjs_future_token_t token = {0};
+    bool completed = false;
+
+    portENTER_CRITICAL(&s_rmt_callback_lock);
+    if (slot != NULL && state != NULL && slot->active == state &&
+        !atomic_load_explicit(&state->completed, memory_order_relaxed)) {
+        state->cancelled = !timed_out;
+        state->timed_out = timed_out;
+        atomic_store_explicit(&state->completed, true, memory_order_release);
+        runtime = slot->runtime;
+        token = slot->token;
+        completed = true;
+    }
+    portEXIT_CRITICAL(&s_rmt_callback_lock);
+    if (runtime != NULL) {
+        (void)esp32_mquickjs_future_wake(runtime, token);
+    }
+    return completed;
+}
+
+static void rmt_request_close(esp32_mquickjs_rmt_channel_slot_t *slot)
+{
+    esp32_mquickjs_rmt_future_state_t *state;
+
+    if (slot == NULL || !slot->allocated) {
+        return;
+    }
+    slot->release_pending = true;
+    state = rmt_active_operation(slot);
+    if (state != NULL && rmt_abort_active(slot) == ESP_OK) {
+        (void)rmt_complete_cancelled(slot, state, false);
+    }
+    if (!slot->busy && slot->future_reservations == 0) {
+        rmt_channel_cleanup(slot);
     }
 }
 
@@ -366,18 +434,25 @@ static bool IRAM_ATTR rmt_on_transmit_done(
     void *user_ctx)
 {
     esp32_mquickjs_rmt_channel_slot_t *slot = user_ctx;
-    esp32_mquickjs_rmt_future_state_t *state;
+    esp32_mquickjs_rmt_future_state_t *state = NULL;
+    esp32_mquickjs_runtime_t *runtime = NULL;
+    esp32_mquickjs_future_token_t token = {0};
     int task_woken = pdFALSE;
 
     (void)channel;
     (void)event;
-    if (slot != NULL && (state = slot->active) != NULL) {
+    portENTER_CRITICAL_ISR(&s_rmt_callback_lock);
+    if (slot != NULL && (state = slot->active) != NULL &&
+        !atomic_load_explicit(&state->completed, memory_order_relaxed)) {
         state->err = ESP_OK;
         atomic_store_explicit(&state->completed, true, memory_order_release);
-        if (slot->runtime != NULL) {
-            (void)esp32_mquickjs_future_wake_from_isr(
-                slot->runtime, slot->token, &task_woken);
-        }
+        runtime = slot->runtime;
+        token = slot->token;
+    }
+    portEXIT_CRITICAL_ISR(&s_rmt_callback_lock);
+    if (runtime != NULL) {
+        (void)esp32_mquickjs_future_wake_from_isr(
+            runtime, token, &task_woken);
     }
     return task_woken == pdTRUE;
 }
@@ -387,20 +462,29 @@ static bool IRAM_ATTR rmt_on_receive_done(
     void *user_ctx)
 {
     esp32_mquickjs_rmt_channel_slot_t *slot = user_ctx;
-    esp32_mquickjs_rmt_future_state_t *state;
+    esp32_mquickjs_rmt_future_state_t *state = NULL;
+    esp32_mquickjs_runtime_t *runtime = NULL;
+    esp32_mquickjs_future_token_t token = {0};
+    uint64_t timestamp_us = (uint64_t)esp_timer_get_time();
     int task_woken = pdFALSE;
 
     (void)channel;
+    portENTER_CRITICAL_ISR(&s_rmt_callback_lock);
     if (slot != NULL && event != NULL &&
-        (state = slot->active) != NULL) {
+        (state = slot->active) != NULL &&
+        !atomic_load_explicit(&state->completed, memory_order_relaxed)) {
         state->received_symbols = event->num_symbols;
         state->truncated = event->num_symbols >= state->buffer->capacity;
+        state->timestamp_us = timestamp_us;
         state->err = ESP_OK;
         atomic_store_explicit(&state->completed, true, memory_order_release);
-        if (slot->runtime != NULL) {
-            (void)esp32_mquickjs_future_wake_from_isr(
-                slot->runtime, slot->token, &task_woken);
-        }
+        runtime = slot->runtime;
+        token = slot->token;
+    }
+    portEXIT_CRITICAL_ISR(&s_rmt_callback_lock);
+    if (runtime != NULL) {
+        (void)esp32_mquickjs_future_wake_from_isr(
+            runtime, token, &task_woken);
     }
     return task_woken == pdTRUE;
 }
@@ -449,10 +533,6 @@ static bool rmt_prepare_common(
         JS_ThrowInternalError(ctx, "RMT operation requires start() first");
         return false;
     }
-    if (slot->busy) {
-        JS_ThrowInternalError(ctx, "RMT channel already has a pending operation");
-        return false;
-    }
     buffer = rmt_symbol_buffer_from_value(
         ctx, symbols_value,
         operation == ESP32_MQUICKJS_RMT_OP_TRANSMIT
@@ -484,6 +564,8 @@ static bool rmt_prepare_common(
     state->timeout_ms = RMT_DEFAULT_TIMEOUT_MS;
     state->err = ESP_OK;
     atomic_init(&state->completed, false);
+    slot->future_reservations++;
+    state->channel_reserved = true;
     buffer->leases++;
     state->buffer_leased = true;
     owner = JS_AddGCRef(ctx, &state->channel_owner_ref);
@@ -552,6 +634,15 @@ fail:
     if (state->buffer_leased && state->buffer->leases > 0) {
         state->buffer->leases--;
     }
+    {
+        esp32_mquickjs_rmt_channel_slot_t *slot =
+            rmt_channel_get_slot(&state->channel_ref);
+
+        if (state->channel_reserved && slot != NULL &&
+            slot->future_reservations > 0) {
+            slot->future_reservations--;
+        }
+    }
     JS_DeleteGCRef(ctx, &state->symbols_owner_ref);
     JS_DeleteGCRef(ctx, &state->channel_owner_ref);
     heap_caps_free(state);
@@ -607,6 +698,15 @@ release:
     if (state->buffer_leased && state->buffer->leases > 0) {
         state->buffer->leases--;
     }
+    {
+        esp32_mquickjs_rmt_channel_slot_t *slot =
+            rmt_channel_get_slot(&state->channel_ref);
+
+        if (state->channel_reserved && slot != NULL &&
+            slot->future_reservations > 0) {
+            slot->future_reservations--;
+        }
+    }
     JS_DeleteGCRef(ctx, &state->symbols_owner_ref);
     JS_DeleteGCRef(ctx, &state->channel_owner_ref);
     heap_caps_free(state);
@@ -622,9 +722,22 @@ static bool rmt_operation_start(
     esp32_mquickjs_rmt_channel_slot_t *slot =
         state != NULL ? rmt_channel_get_slot(&state->channel_ref) : NULL;
 
-    if (state == NULL || slot == NULL || !slot->running) {
+    if (state == NULL || slot == NULL) {
         JS_ThrowReferenceError(ctx,
                                "RMT channel closed before operation started");
+        return false;
+    }
+    state->runtime = runtime;
+    state->token = token;
+    if (slot->release_pending) {
+        state->cancelled = true;
+        atomic_store_explicit(&state->completed, true, memory_order_release);
+        (void)esp32_mquickjs_future_wake(runtime, token);
+        return true;
+    }
+    if (!slot->running) {
+        JS_ThrowReferenceError(ctx,
+                               "RMT channel stopped before operation started");
         return false;
     }
     if (slot->busy) {
@@ -633,11 +746,11 @@ static bool rmt_operation_start(
         return false;
     }
     slot->busy = true;
+    portENTER_CRITICAL(&s_rmt_callback_lock);
     slot->runtime = runtime;
     slot->token = token;
     slot->active = state;
-    state->runtime = runtime;
-    state->token = token;
+    portEXIT_CRITICAL(&s_rmt_callback_lock);
     state->started = true;
     if (state->operation == ESP32_MQUICKJS_RMT_OP_TRANSMIT) {
         rmt_transmit_config_t config = {
@@ -667,9 +780,9 @@ static bool rmt_operation_start(
         return false;
     }
     if (state->timeout_ms == 0) {
-        rmt_abort_active(slot);
-        state->timed_out = true;
-        atomic_store_explicit(&state->completed, true, memory_order_release);
+        if (rmt_abort_active(slot) == ESP_OK) {
+            (void)rmt_complete_cancelled(slot, state, true);
+        }
     }
     (void)esp32_mquickjs_future_wake(runtime, token);
     return true;
@@ -720,7 +833,10 @@ static JSValue rmt_operation_finish(
             !esp32_mquickjs_set_property_ref(
                 ctx, result, "length", JS_NewInt64(ctx, (int64_t)length)) ||
             !esp32_mquickjs_set_property_ref(
-                ctx, result, "truncated", JS_NewBool(state->truncated))) {
+                ctx, result, "truncated", JS_NewBool(state->truncated)) ||
+            !esp32_mquickjs_set_property_ref(
+                ctx, result, "timestampUs",
+                JS_NewInt64(ctx, (int64_t)state->timestamp_us))) {
             JS_PopGCRef(ctx, &result_ref);
             return JS_EXCEPTION;
         }
@@ -749,12 +865,16 @@ static esp32_mquickjs_cancel_result_t rmt_operation_cancel(
         return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     if (slot != NULL && state->started) {
-        rmt_abort_active(slot);
-    }
-    state->cancelled = true;
-    atomic_store_explicit(&state->completed, true, memory_order_release);
-    if (state->runtime != NULL) {
-        (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+        if (rmt_abort_active(slot) != ESP_OK ||
+            !rmt_complete_cancelled(slot, state, false)) {
+            return ESP32_MQUICKJS_CANCEL_REJECTED;
+        }
+    } else {
+        state->cancelled = true;
+        atomic_store_explicit(&state->completed, true, memory_order_release);
+        if (state->runtime != NULL) {
+            (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+        }
     }
     return ESP32_MQUICKJS_CANCELLED;
 }
@@ -772,17 +892,28 @@ static void rmt_operation_destroy(
     slot = rmt_channel_get_slot(&state->channel_ref);
     buffer = state->buffer;
     if (slot != NULL && state->started) {
-        slot->busy = false;
-        slot->runtime = NULL;
-        slot->active = NULL;
-        if (slot->release_pending) {
-            rmt_channel_cleanup(slot);
+        portENTER_CRITICAL(&s_rmt_callback_lock);
+        if (slot->active == state) {
+            slot->runtime = NULL;
+            slot->token = (esp32_mquickjs_future_token_t){0};
+            slot->active = NULL;
         }
+        portEXIT_CRITICAL(&s_rmt_callback_lock);
+        slot->busy = false;
     }
     if (state->buffer_leased && buffer != NULL && buffer->leases > 0) {
         buffer->leases--;
         if (buffer->close_pending && buffer->leases == 0) {
             rmt_symbol_buffer_release(buffer);
+        }
+    }
+    if (slot != NULL && state->channel_reserved) {
+        if (slot->future_reservations > 0) {
+            slot->future_reservations--;
+        }
+        if (slot->release_pending && slot->future_reservations == 0 &&
+            !slot->busy) {
+            rmt_channel_cleanup(slot);
         }
     }
     JS_DeleteGCRef(state->ctx, &state->symbols_owner_ref);
@@ -798,6 +929,16 @@ static uint32_t rmt_operation_timeout_ms(
     return state != NULL ? state->timeout_ms : 0;
 }
 
+static esp32_mquickjs_resource_key_t rmt_operation_resource_key(
+    const esp32_mquickjs_future_driver_state_t *driver_state)
+{
+    const esp32_mquickjs_rmt_future_state_t *state = driver_state;
+    esp32_mquickjs_rmt_channel_slot_t *slot = state != NULL
+        ? rmt_channel_get_slot(&state->channel_ref) : NULL;
+
+    return slot != NULL ? (esp32_mquickjs_resource_key_t)slot : NULL;
+}
+
 static const esp32_mquickjs_future_driver_t s_rmt_transmit_driver = {
     .capture = rmt_transmit_prepare,
     .start = rmt_operation_start,
@@ -806,6 +947,7 @@ static const esp32_mquickjs_future_driver_t s_rmt_transmit_driver = {
     .cancel = rmt_operation_cancel,
     .destroy = rmt_operation_destroy,
     .timeout_ms = rmt_operation_timeout_ms,
+    .resource_key = rmt_operation_resource_key,
 };
 
 static const esp32_mquickjs_future_driver_t s_rmt_receive_driver = {
@@ -816,6 +958,7 @@ static const esp32_mquickjs_future_driver_t s_rmt_receive_driver = {
     .cancel = rmt_operation_cancel,
     .destroy = rmt_operation_destroy,
     .timeout_ms = rmt_operation_timeout_ms,
+    .resource_key = rmt_operation_resource_key,
 };
 
 static bool rmt_register_future_drivers(JSContext *ctx,
@@ -854,7 +997,8 @@ bool esp32_mquickjs_init_rmt_runtime(JSContext *ctx,
     uint8_t i;
 
     for (i = 0; i < RMT_MAX_CHANNELS; ++i) {
-        if (s_rmt_channels[i].allocated && !s_rmt_channels[i].busy) {
+        if (s_rmt_channels[i].allocated && !s_rmt_channels[i].busy &&
+            s_rmt_channels[i].future_reservations == 0) {
             rmt_channel_cleanup(&s_rmt_channels[i]);
         }
         memset(&s_rmt_channels[i], 0, sizeof(s_rmt_channels[i]));
@@ -869,10 +1013,7 @@ void esp32_mquickjs_deinit_rmt_runtime(void)
 
     for (i = 0; i < RMT_MAX_CHANNELS; ++i) {
         if (s_rmt_channels[i].allocated) {
-            s_rmt_channels[i].release_pending = true;
-            if (!s_rmt_channels[i].busy) {
-                rmt_channel_cleanup(&s_rmt_channels[i]);
-            }
+            rmt_request_close(&s_rmt_channels[i]);
         }
     }
 }
@@ -1058,12 +1199,7 @@ void js_rmt_channel_finalizer(JSContext *ctx, void *opaque)
 
     (void)ctx;
     if (slot != NULL) {
-        slot->release_pending = true;
-        if (slot->busy && slot->active != NULL) {
-            (void)rmt_operation_cancel(slot->active);
-        } else {
-            rmt_channel_cleanup(slot);
-        }
+        rmt_request_close(slot);
     }
     heap_caps_free(ref);
 }
@@ -1107,7 +1243,7 @@ JSValue js_rmt_channel_stop(JSContext *ctx, JSValue *this_val,
     if (!slot->running) {
         return JS_TRUE;
     }
-    if (slot->busy) {
+    if (slot->busy || slot->future_reservations > 0) {
         return JS_ThrowInternalError(
             ctx, "RMTChannel.stop() refused while an operation is pending");
     }
@@ -1211,15 +1347,10 @@ JSValue js_rmt_channel_close(JSContext *ctx, JSValue *this_val,
     if (ref == NULL) {
         return JS_TRUE;
     }
-    JS_SetOpaque(ctx, *this_val, NULL);
     slot = rmt_channel_get_slot(ref);
+    JS_SetOpaque(ctx, *this_val, NULL);
     if (slot != NULL) {
-        slot->release_pending = true;
-        if (slot->busy && slot->active != NULL) {
-            (void)rmt_operation_cancel(slot->active);
-        } else {
-            rmt_channel_cleanup(slot);
-        }
+        rmt_request_close(slot);
     }
     heap_caps_free(ref);
     return JS_TRUE;

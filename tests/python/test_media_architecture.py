@@ -59,17 +59,26 @@ class MediaArchitectureTests(SourceContractTestCase):
         source = (MQUICKJS / "src/modules/i2s/esp32_mquickjs_i2s.c").read_text(
             encoding="utf-8"
         )
+        helper_start = source.index("static bool IRAM_ATTR i2s_wake_rx_from_isr(")
+        helper_end = source.index("\nstatic bool i2s_to_u32(", helper_start)
+        helpers = source[helper_start:helper_end]
         start = source.index("static bool IRAM_ATTR i2s_on_receive(")
         end = source.index("\nstatic JSValue i2s_status_object(", start)
         callbacks = source[start:end]
 
-        self.assertIn("esp32_mquickjs_future_wake_from_isr", callbacks)
-        self.assertNotIn("JS_", callbacks)
-        self.assertNotIn("heap_caps_", callbacks)
-        self.assertNotIn("i2s_channel_read", callbacks)
+        self.assertIn("esp32_mquickjs_future_wake_from_isr", helpers)
+        self.assertIn("i2s_wake_rx_from_isr", callbacks)
+        self.assertIn("i2s_wake_tx_from_isr", callbacks)
+        for isr_code in (helpers, callbacks):
+            self.assertNotIn("JS_", isr_code)
+            self.assertNotIn("heap_caps_", isr_code)
+            self.assertNotIn("i2s_channel_read", isr_code)
 
     def test_rmt_uses_native_symbols_and_bounded_future_drivers(self):
         source = (MQUICKJS / "src/modules/rmt/esp32_mquickjs_rmt.c").read_text(
+            encoding="utf-8"
+        )
+        declarations = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
             encoding="utf-8"
         )
         callbacks = source[
@@ -87,9 +96,34 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn("buffer->length == 0", source)
         self.assertIn("state->truncated = true", source)
         self.assertIn(".timeout_ms = rmt_operation_timeout_ms", source)
-        self.assertIn("rmt_abort_active(slot);", source)
-        self.assertIn("rmt_operation_cancel(slot->active)", source)
-        self.assertIn("s_rmt_channels[i].release_pending = true", source)
+        self.assertIn("rmt_abort_active(slot) != ESP_OK", source)
+        self.assertIn("rmt_complete_cancelled(slot, state, false)", source)
+        self.assertIn("rmt_operation_cancel", source)
+        self.assertIn("rmt_operation_resource_key", source)
+        self.assertIn("slot->future_reservations++", source)
+        self.assertIn(".resource_key = rmt_operation_resource_key", source)
+        self.assertIn("rmt_request_close(&s_rmt_channels[i])", source)
+        self.assertIn('"timestampUs"', source)
+        self.assertIn("state->timestamp_us = timestamp_us", callbacks)
+        self.assertIn("portENTER_CRITICAL_ISR(&s_rmt_callback_lock)", callbacks)
+        cancel = source[
+            source.index("static esp32_mquickjs_cancel_result_t rmt_operation_cancel(") : source.index(
+                "\nstatic void rmt_operation_destroy("
+            )
+        ]
+        close = source[
+            source.index("JSValue js_rmt_channel_close(") : source.index(
+                "\nJSValue js_rmt_capabilities("
+            )
+        ]
+        self.assertLess(
+            cancel.index("rmt_abort_active(slot)"),
+            cancel.index("rmt_complete_cancelled(slot, state, false)"),
+        )
+        self.assertIn("return ESP32_MQUICKJS_CANCEL_REJECTED", cancel)
+        self.assertIn("rmt_request_close(slot)", close)
+        self.assertNotIn("refused while an operation is pending", close)
+        self.assertIn("timestampUs: number", declarations)
         self.assertIn("loop_count > INT32_MAX", source)
         self.assertNotIn("NEC", source)
         self.assertIn("esp32_mquickjs_future_wake_from_isr", callbacks)
@@ -152,6 +186,25 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn("slot->rx_cancel_requested = true;", source)
         self.assertIn("slot->tx_cancel_requested = true;", source)
         self.assertIn("i2s_request_close(&s_i2s_slots[i]);", source)
+        read_start = source[
+            source.index("static bool i2s_read_start(") : source.index(
+                "\nstatic esp32_mquickjs_future_poll_t i2s_read_poll("
+            )
+        ]
+        write_start = source[
+            source.index("static bool i2s_write_start(") : source.index(
+                "\nstatic esp32_mquickjs_future_poll_t i2s_write_poll("
+            )
+        ]
+        close = source[
+            source.index("JSValue js_i2s_channel_close(") : source.index(
+                "\nJSValue js_i2s_capabilities("
+            )
+        ]
+        self.assertIn("if (slot->release_pending)", read_start)
+        self.assertIn("if (slot->release_pending)", write_start)
+        self.assertIn("i2s_request_close(slot)", close)
+        self.assertNotIn("refused while I/O is pending", close)
         self.assertIn("slot->generation = i2s_take_generation();", source)
         self.assertIn("esp32_mquickjs_memory_payload_alloc", source)
         self.assertIn("ESP32_MQUICKJS_MEMORY_EXTERNAL", source)
@@ -159,6 +212,13 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn("I2S_NO_MEMORY", source)
         self.assertIn("i2s_del_channel(slot->rx_handle)", source)
         self.assertIn("i2s_del_channel(slot->tx_handle)", source)
+        self.assertIn("i2s_future_resource_key", source)
+        self.assertIn("&slot->rx_lane_key", source)
+        self.assertIn("&slot->tx_lane_key", source)
+        self.assertIn("slot->future_reservations++", source)
+        self.assertEqual(
+            source.count(".resource_key = i2s_future_resource_key"), 2
+        )
 
     def test_camera_capture_and_frame_lease_are_bounded(self):
         source = (MQUICKJS / "src/modules/camera/esp32_mquickjs_camera.c").read_text(

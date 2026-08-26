@@ -392,14 +392,14 @@ The bus-object model is now in place and is close to the intended long-term shap
 What is already good:
 
 - Small and understandable surface.
-- Raw address + read/write operations are enough for JS-side device drivers.
+- Persistent device handles keep addresses and timing policy out of every call.
 - `scan()` is practical for REPL debugging.
-- Generic `writeChunks(...)` accepts byte-source chunks without tying I2C to a display-specific object model.
+- `writeSegments(...)` and `writeBatch(...)` distinguish one segmented transaction from multiple ordered transactions.
 
 What should stay intentional:
 
 - The runtime now uses a bus-object model instead of a single global singleton, and future transport modules should follow that direction.
-- The current `add device -> transact -> remove device` flow on every call is still acceptable for the first stable raw I2C surface, but it should remain an internal detail rather than leaking into the JS API shape.
+- Each `I2CDevice` owns one ESP-IDF device handle until explicit close.
 - Display drivers may pass native byte chunks through this module, but I2C should not inspect `bitmap` internals.
 
 Recommended stable target:
@@ -407,21 +407,25 @@ Recommended stable target:
 - Keep the bus-object model as the stable baseline:
 
 ```js
-var bus = i2c.open({
+var bus = i2c.openBus({
   sda: i2c.DEFAULT_SDA,
   scl: i2c.DEFAULT_SCL,
   freqHz: 400000,
 });
 
+var display = bus.openDevice({ address: 0x3c });
+var sensor = bus.openDevice({ address: 0x68 });
 print(JSON.stringify(bus.status()));
 print(JSON.stringify(bus.scan()));
-bus.write(0x3c, [0x00, 0xae]);
-var id = bus.writeRead(0x68, [0x75], 1);
+display.write([0x00, 0xae]);
+var id = sensor.writeRead([0x75], 1);
+display.close();
+sensor.close();
 bus.close();
 ```
 
 - Keep the top-level `i2c` module as the factory and constants container.
-- Let `open(...)` return an `I2CBus` object instead of only mutating one global singleton.
+- Let `openBus(...)` return an `I2CBus`, then create persistent devices with `openDevice(...)`.
 - Keep explicit `close()` as the primary lifecycle boundary even if the runtime also uses GC finalizers as a fallback to release leaked native handles.
 - Gate the module behind `FEATURE_I2C`.
 
@@ -430,10 +434,17 @@ Recommended stable `I2CBus` methods:
 - `status()`
 - `close()`
 - `scan()`
-- `write(addr, data)`
-- `writeChunks(addr, chunks)`
-- `read(addr, length)`
-- `writeRead(addr, writeData, readLength)`
+- `openDevice(options)`
+
+Recommended stable `I2CDevice` methods:
+
+- `status()`
+- `close()`
+- `write(data)`
+- `writeSegments(segments)`
+- `writeBatch(chunks)`
+- `read(length)`
+- `writeRead(writeData, readLength)`
 
 Remaining freeze work:
 
@@ -444,7 +455,7 @@ Intentional non-goals:
 
 - no register map helpers
 - no sensor drivers
-- no device cache abstraction at the JS API layer unless later proven necessary
+- no register map or device-driver abstraction in the native module
 
 ### `spi`
 
@@ -699,7 +710,7 @@ Recommended implementation order from this plan:
 
 1. Tighten `ledc` status semantics so status objects never imply configuration that did not happen, then decide whether low-speed mode is intentionally fixed for the first stable API.
 2. Validate `dac` lifecycle and status on an `esp32` or `esp32s2` board before calling the module stable.
-3. Finish freeze coverage for the current byte payload paths: `Bitmap.createSpanSource(...)`, `SPIDevice.writeSource(...)`, `bitmap.readRectChunks(...)`, `SPIDevice.writeChunks(...)`, and `I2CBus.writeChunks(...)`.
+3. Finish freeze coverage for the current byte payload paths: `Bitmap.createSpanSource(...)`, `SPIDevice.writeSource(...)`, `bitmap.readRectChunks(...)`, `SPIDevice.writeChunks(...)`, and `I2CDevice.writeBatch(...)`.
 4. Keep `i2c`, `spi`, `uart`, `bitmap`, `wifi`, and `http` reference docs and TypeScript definitions aligned with their current implementation before marking them stable.
 5. Improve JS display demo smoke coverage so native drawing, mapped fonts, transparent text, dirty bounds, and chunked flushes are exercised together.
 6. Consider `bitmap` follow-up features only when a measured workload needs them: multi-rect dirty tracking, compressed-image decoders, or native clipping.

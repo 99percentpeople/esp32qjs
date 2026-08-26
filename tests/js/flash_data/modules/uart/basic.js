@@ -7,6 +7,8 @@ test("uart/basic", function () {
   var staleError = "";
   var writeSourceRejected = false;
   var emptyRead;
+  var watcher;
+  var duplicateWatcherRejected = false;
 
   test.ok(typeof uart.DEFAULT_PORT === "number", "uart.DEFAULT_PORT should be numeric");
   test.ok(typeof uart.DEFAULT_TX === "number", "uart.DEFAULT_TX should be numeric");
@@ -28,6 +30,7 @@ test("uart/basic", function () {
   test.ok(typeof port.available === "function", "UARTPort.available should exist");
   test.ok(typeof port.flush === "function", "UARTPort.flush should exist");
   test.ok(typeof port.clearRx === "function", "UARTPort.clearRx should exist");
+  test.ok(typeof port.watch === "function", "UARTPort.watch should exist");
 
   status = port.status();
   test.ok(status && typeof status === "object", "UARTPort.status() should return an object");
@@ -75,6 +78,19 @@ test("uart/basic", function () {
   }
   test.equal(port.flush(), true, "UARTPort.flush() should succeed");
   test.equal(port.clearRx(), true, "UARTPort.clearRx() should succeed");
+  watcher = port.watch({ minBytes: 1, idleMs: 0, capacity: 2 });
+  test.ok(watcher instanceof EventQueue,
+    "UARTPort.watch() should return an EventQueue");
+  test.equal(watcher.stats().capacity, 2,
+    "UART watcher should preserve requested capacity");
+  try {
+    port.watch();
+  } catch (duplicateWatcherError) {
+    duplicateWatcherRejected = String(duplicateWatcherError).indexOf("one watcher") >= 0;
+  }
+  test.ok(duplicateWatcherRejected,
+    "UARTPort.watch() should reject a second watcher");
+  test.equal(watcher.close(), true, "UART watcher close should succeed");
   test.equal(port.close(), true, "UARTPort.close() should succeed");
 
   try {

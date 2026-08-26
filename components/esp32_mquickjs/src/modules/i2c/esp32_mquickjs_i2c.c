@@ -8,6 +8,7 @@
 #include "esp32_mquickjs_peripheral_lease.h"
 
 #include <stdbool.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdatomic.h>
 #include <string.h>
@@ -25,6 +26,23 @@ typedef struct {
 } esp32_mquickjs_i2c_bus_ref_t;
 
 typedef struct {
+    int32_t bus_id;
+    uint32_t bus_generation;
+    uint32_t device_generation;
+} esp32_mquickjs_i2c_device_ref_t;
+
+typedef struct esp32_mquickjs_i2c_device_slot {
+    uint32_t generation;
+    uint16_t address;
+    uint32_t freq_hz;
+    uint32_t timeout_ms;
+    uint16_t future_reservations;
+    bool release_pending;
+    i2c_master_dev_handle_t handle;
+    struct esp32_mquickjs_i2c_device_slot *next;
+} esp32_mquickjs_i2c_device_slot_t;
+
+typedef struct {
     bool allocated;
     int32_t bus_id;
     uint32_t generation;
@@ -35,16 +53,19 @@ typedef struct {
     bool internal_pullup;
     bool busy;
     bool release_pending;
+    uint16_t future_reservations;
     i2c_master_bus_handle_t bus_handle;
-    i2c_master_dev_handle_t cached_device_handle;
-    uint16_t cached_device_address;
+    esp32_mquickjs_i2c_device_slot_t *devices;
     esp32_mquickjs_peripheral_lease_t lease;
 } esp32_mquickjs_i2c_slot_t;
 
 static esp32_mquickjs_i2c_slot_t s_i2c_slots[SOC_I2C_NUM];
 static uint32_t s_i2c_next_generation = 1;
+static uint32_t s_i2c_next_device_generation = 1;
 
 static esp_err_t i2c_cleanup_slot(esp32_mquickjs_i2c_slot_t *slot);
+static esp_err_t i2c_cleanup_device(esp32_mquickjs_i2c_slot_t *bus,
+                                    esp32_mquickjs_i2c_device_slot_t *device);
 
 static bool js_value_to_gpio_num(JSContext *ctx, JSValue value, gpio_num_t *out_pin)
 {
@@ -121,6 +142,16 @@ static uint32_t i2c_take_generation(void)
     return generation;
 }
 
+static uint32_t i2c_take_device_generation(void)
+{
+    uint32_t generation = s_i2c_next_device_generation++;
+
+    if (generation == 0) {
+        generation = s_i2c_next_device_generation++;
+    }
+    return generation;
+}
+
 static esp32_mquickjs_i2c_slot_t *i2c_alloc_slot(void)
 {
     int32_t i;
@@ -150,23 +181,27 @@ static esp32_mquickjs_i2c_slot_t *i2c_alloc_slot(void)
 static esp_err_t i2c_cleanup_slot(esp32_mquickjs_i2c_slot_t *slot)
 {
     int32_t bus_id;
+    esp32_mquickjs_i2c_device_slot_t *device;
     esp_err_t err;
 
     if (slot == NULL || !slot->allocated) {
         return ESP_OK;
     }
-    if (slot->busy) {
+    if (slot->busy || slot->future_reservations > 0) {
         return ESP_ERR_INVALID_STATE;
     }
 
     bus_id = slot->bus_id;
-    if (slot->cached_device_handle != NULL) {
-        err = i2c_master_bus_rm_device(slot->cached_device_handle);
+    for (device = slot->devices; device != NULL; device = device->next) {
+        if (device->future_reservations > 0) {
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+    while (slot->devices != NULL) {
+        err = i2c_cleanup_device(slot, slot->devices);
         if (err != ESP_OK) {
             return err;
         }
-        slot->cached_device_handle = NULL;
-        slot->cached_device_address = 0;
     }
     if (slot->bus_handle != NULL) {
         err = i2c_del_master_bus(slot->bus_handle);
@@ -177,6 +212,35 @@ static esp_err_t i2c_cleanup_slot(esp32_mquickjs_i2c_slot_t *slot)
     esp32_mquickjs_peripheral_lease_release(&slot->lease);
     i2c_init_slot(slot, bus_id);
     return ESP_OK;
+}
+
+static esp_err_t i2c_cleanup_device(esp32_mquickjs_i2c_slot_t *bus,
+                                    esp32_mquickjs_i2c_device_slot_t *device)
+{
+    esp32_mquickjs_i2c_device_slot_t **link;
+    esp_err_t err;
+
+    if (bus == NULL || device == NULL) {
+        return ESP_OK;
+    }
+    if (device->future_reservations > 0 || bus->busy) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (device->handle != NULL) {
+        err = i2c_master_bus_rm_device(device->handle);
+        if (err != ESP_OK) {
+            return err;
+        }
+        device->handle = NULL;
+    }
+    for (link = &bus->devices; *link != NULL; link = &(*link)->next) {
+        if (*link == device) {
+            *link = device->next;
+            heap_caps_free(device);
+            return ESP_OK;
+        }
+    }
+    return ESP_ERR_NOT_FOUND;
 }
 
 static esp32_mquickjs_i2c_slot_t *i2c_get_slot(const esp32_mquickjs_i2c_bus_ref_t *ref)
@@ -198,6 +262,14 @@ static JSValue i2c_make_status_object(JSContext *ctx, const esp32_mquickjs_i2c_s
 {
     JSGCRef status_ref;
     JSValue *status_obj;
+    const esp32_mquickjs_i2c_device_slot_t *device;
+    uint32_t device_count = 0;
+
+    if (slot != NULL) {
+        for (device = slot->devices; device != NULL; device = device->next) {
+            device_count++;
+        }
+    }
 
     status_obj = JS_PushGCRef(ctx, &status_ref);
     *status_obj = JS_NewObject(ctx);
@@ -208,6 +280,8 @@ static JSValue i2c_make_status_object(JSContext *ctx, const esp32_mquickjs_i2c_s
 
     if (!esp32_mquickjs_set_property_ref(ctx, status_obj, "opened",
                                      JS_NewBool(slot != NULL && slot->allocated)) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "controller",
+                                     JS_NewInt32(ctx, slot != NULL ? slot->bus_id : -1)) ||
         !esp32_mquickjs_set_property_ref(ctx, status_obj, "sda",
                                      JS_NewInt32(ctx, slot != NULL ? (int32_t)slot->sda_pin : ESP32_MQUICKJS_I2C_DEFAULT_SDA_PIN)) ||
         !esp32_mquickjs_set_property_ref(ctx, status_obj, "scl",
@@ -217,7 +291,9 @@ static JSValue i2c_make_status_object(JSContext *ctx, const esp32_mquickjs_i2c_s
         !esp32_mquickjs_set_property_ref(ctx, status_obj, "timeoutMs",
                                      JS_NewUint32(ctx, slot != NULL ? slot->timeout_ms : ESP32_MQUICKJS_I2C_DEFAULT_TIMEOUT_MS)) ||
         !esp32_mquickjs_set_property_ref(ctx, status_obj, "internalPullup",
-                                     JS_NewBool(slot != NULL ? slot->internal_pullup : ESP32_MQUICKJS_I2C_ENABLE_INTERNAL_PULLUP))) {
+                                     JS_NewBool(slot != NULL ? slot->internal_pullup : ESP32_MQUICKJS_I2C_ENABLE_INTERNAL_PULLUP)) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "deviceCount",
+                                     JS_NewUint32(ctx, device_count))) {
         JS_PopGCRef(ctx, &status_ref);
         return JS_EXCEPTION;
     }
@@ -301,6 +377,114 @@ static int i2c_get_this_slot(JSContext *ctx,
     return i2c_get_bound_slot(ctx, this_value, api_name, out_ref, out_slot);
 }
 
+static esp32_mquickjs_i2c_device_slot_t *i2c_get_device(
+    const esp32_mquickjs_i2c_device_ref_t *ref,
+    esp32_mquickjs_i2c_slot_t **out_bus)
+{
+    esp32_mquickjs_i2c_bus_ref_t bus_ref;
+    esp32_mquickjs_i2c_slot_t *bus;
+    esp32_mquickjs_i2c_device_slot_t *device;
+
+    if (ref == NULL) {
+        return NULL;
+    }
+    bus_ref.bus_id = ref->bus_id;
+    bus_ref.generation = ref->bus_generation;
+    bus = i2c_get_slot(&bus_ref);
+    if (bus == NULL) {
+        return NULL;
+    }
+    for (device = bus->devices; device != NULL; device = device->next) {
+        if (device->generation == ref->device_generation) {
+            if (out_bus != NULL) {
+                *out_bus = bus;
+            }
+            return device;
+        }
+    }
+    return NULL;
+}
+
+static JSValue i2c_make_device_object(
+    JSContext *ctx,
+    const esp32_mquickjs_i2c_slot_t *bus,
+    const esp32_mquickjs_i2c_device_slot_t *device)
+{
+    JSGCRef object_ref;
+    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    esp32_mquickjs_i2c_device_ref_t *ref;
+
+    *object = JS_NewObjectClassUser(ctx, JS_CLASS_I2C_DEVICE);
+    if (JS_IsException(*object) || bus == NULL || device == NULL) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_EXCEPTION;
+    }
+    ref = heap_caps_malloc(sizeof(*ref), MALLOC_CAP_8BIT);
+    if (ref == NULL) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    ref->bus_id = bus->bus_id;
+    ref->bus_generation = bus->generation;
+    ref->device_generation = device->generation;
+    JS_SetOpaque(ctx, *object, ref);
+    return JS_PopGCRef(ctx, &object_ref);
+}
+
+static int i2c_device_ref_from_object(
+    JSContext *ctx,
+    JSValue value,
+    const char *api_name,
+    esp32_mquickjs_i2c_device_ref_t *out_ref)
+{
+    const esp32_mquickjs_i2c_device_ref_t *ref;
+
+    if (out_ref == NULL ||
+        JS_GetClassID(ctx, value) != JS_CLASS_I2C_DEVICE) {
+        JS_ThrowTypeError(ctx, "%s expects a valid I2CDevice instance",
+                          api_name);
+        return -1;
+    }
+    ref = JS_GetOpaque(ctx, value);
+    if (ref == NULL) {
+        JS_ThrowTypeError(ctx, "%s expects a valid I2CDevice instance",
+                          api_name);
+        return -1;
+    }
+    *out_ref = *ref;
+    return 0;
+}
+
+static int i2c_get_bound_device(
+    JSContext *ctx,
+    JSValue value,
+    const char *api_name,
+    esp32_mquickjs_i2c_device_ref_t *out_ref,
+    esp32_mquickjs_i2c_slot_t **out_bus,
+    esp32_mquickjs_i2c_device_slot_t **out_device)
+{
+    esp32_mquickjs_i2c_slot_t *bus = NULL;
+    esp32_mquickjs_i2c_device_slot_t *device;
+
+    if (i2c_device_ref_from_object(ctx, value, api_name, out_ref) != 0) {
+        return -1;
+    }
+    device = i2c_get_device(out_ref, &bus);
+    if (device == NULL) {
+        JS_ThrowReferenceError(ctx,
+                               "%s failed because the I2C device is closed",
+                               api_name);
+        return -1;
+    }
+    if (out_bus != NULL) {
+        *out_bus = bus;
+    }
+    if (out_device != NULL) {
+        *out_device = device;
+    }
+    return 0;
+}
+
 static bool js_value_to_i2c_address(JSContext *ctx, JSValue value, uint16_t *out_address)
 {
     uint32_t address = 0;
@@ -313,44 +497,29 @@ static bool js_value_to_i2c_address(JSContext *ctx, JSValue value, uint16_t *out
     return true;
 }
 
-static esp_err_t i2c_get_cached_device(esp32_mquickjs_i2c_slot_t *slot,
-                                       uint16_t address,
-                                       i2c_master_dev_handle_t *out_handle)
+static JSValue i2c_make_device_status(
+    JSContext *ctx,
+    const esp32_mquickjs_i2c_slot_t *bus,
+    const esp32_mquickjs_i2c_device_slot_t *device)
 {
-    i2c_device_config_t device_config = {0};
-    esp_err_t err;
+    JSGCRef status_ref;
+    JSValue *status = JS_PushGCRef(ctx, &status_ref);
 
-    if (slot == NULL || !slot->allocated || slot->bus_handle == NULL ||
-        out_handle == NULL) {
-        return ESP_ERR_INVALID_STATE;
+    *status = JS_NewObject(ctx);
+    if (JS_IsException(*status) ||
+        !esp32_mquickjs_set_property_ref(ctx, status, "opened", JS_TRUE) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, status, "controller", JS_NewInt32(ctx, bus->bus_id)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, status, "address", JS_NewUint32(ctx, device->address)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, status, "freqHz", JS_NewUint32(ctx, device->freq_hz)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, status, "timeoutMs", JS_NewUint32(ctx, device->timeout_ms))) {
+        JS_PopGCRef(ctx, &status_ref);
+        return JS_EXCEPTION;
     }
-    if (slot->cached_device_handle != NULL &&
-        slot->cached_device_address == address) {
-        *out_handle = slot->cached_device_handle;
-        return ESP_OK;
-    }
-    if (slot->cached_device_handle != NULL) {
-        err = i2c_master_bus_rm_device(slot->cached_device_handle);
-        if (err != ESP_OK) {
-            return err;
-        }
-        slot->cached_device_handle = NULL;
-        slot->cached_device_address = 0;
-    }
-
-    device_config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-    device_config.device_address = address;
-    device_config.scl_speed_hz = slot->freq_hz;
-    device_config.scl_wait_us = slot->timeout_ms * 1000U;
-    device_config.flags.disable_ack_check = 0;
-    err = i2c_master_bus_add_device(slot->bus_handle, &device_config,
-                                    &slot->cached_device_handle);
-    if (err != ESP_OK) {
-        return err;
-    }
-    slot->cached_device_address = address;
-    *out_handle = slot->cached_device_handle;
-    return ESP_OK;
+    return JS_PopGCRef(ctx, &status_ref);
 }
 
 static JSValue i2c_make_write_chunks_stats(JSContext *ctx,
@@ -378,7 +547,7 @@ static JSValue i2c_make_write_chunks_stats(JSContext *ctx,
     return JS_PopGCRef(ctx, &stats_ref);
 }
 
-static JSValue i2c_open(JSContext *ctx, int argc, JSValue *argv)
+static JSValue i2c_open_bus(JSContext *ctx, int argc, JSValue *argv)
 {
     gpio_num_t sda_pin = (gpio_num_t)ESP32_MQUICKJS_I2C_DEFAULT_SDA_PIN;
     gpio_num_t scl_pin = (gpio_num_t)ESP32_MQUICKJS_I2C_DEFAULT_SCL_PIN;
@@ -390,13 +559,17 @@ static JSValue i2c_open(JSContext *ctx, int argc, JSValue *argv)
     JSValue result;
     esp_err_t err;
 
+    if (argc > 1) {
+        return JS_ThrowTypeError(ctx,
+                                 "i2c.openBus(options?) expects at most one options object");
+    }
     if (argc >= 1 && !JS_IsUndefined(argv[0])) {
         JSGCRef property_ref;
         JSValue *property;
 
-        if (JS_GetClassID(ctx, argv[0]) < 0) {
+        if (JS_GetClassID(ctx, argv[0]) < 0 || JS_IsArray(ctx, argv[0])) {
             return JS_ThrowTypeError(ctx,
-                                     "i2c.open(options?) expects an object with sda/scl/freqHz/timeoutMs/internalPullup");
+                                     "i2c.openBus(options?) expects an object with sda/scl/freqHz/timeoutMs/internalPullup");
         }
 
         property = JS_PushGCRef(ctx, &property_ref);
@@ -408,7 +581,7 @@ static JSValue i2c_open(JSContext *ctx, int argc, JSValue *argv)
         }
         if (!JS_IsUndefined(*property) && !js_value_to_gpio_num(ctx, *property, &sda_pin)) {
             JS_PopGCRef(ctx, &property_ref);
-            return JS_ThrowTypeError(ctx, "i2c.open({ sda }) expects a valid GPIO");
+            return JS_ThrowTypeError(ctx, "i2c.openBus({ sda }) expects a valid GPIO");
         }
 
         *property = JS_GetPropertyStr(ctx, argv[0], "scl");
@@ -418,7 +591,7 @@ static JSValue i2c_open(JSContext *ctx, int argc, JSValue *argv)
         }
         if (!JS_IsUndefined(*property) && !js_value_to_gpio_num(ctx, *property, &scl_pin)) {
             JS_PopGCRef(ctx, &property_ref);
-            return JS_ThrowTypeError(ctx, "i2c.open({ scl }) expects a valid GPIO");
+            return JS_ThrowTypeError(ctx, "i2c.openBus({ scl }) expects a valid GPIO");
         }
 
         *property = JS_GetPropertyStr(ctx, argv[0], "freqHz");
@@ -426,17 +599,10 @@ static JSValue i2c_open(JSContext *ctx, int argc, JSValue *argv)
             JS_PopGCRef(ctx, &property_ref);
             return JS_EXCEPTION;
         }
-        if (JS_IsUndefined(*property)) {
-            *property = JS_GetPropertyStr(ctx, argv[0], "freq");
-            if (JS_IsException(*property)) {
-                JS_PopGCRef(ctx, &property_ref);
-                return JS_EXCEPTION;
-            }
-        }
         if (!JS_IsUndefined(*property) &&
             (!js_value_to_u32(ctx, *property, &freq_hz) || freq_hz == 0)) {
             JS_PopGCRef(ctx, &property_ref);
-            return JS_ThrowTypeError(ctx, "i2c.open({ freqHz }) expects a positive integer");
+            return JS_ThrowTypeError(ctx, "i2c.openBus({ freqHz }) expects a positive integer");
         }
 
         *property = JS_GetPropertyStr(ctx, argv[0], "timeoutMs");
@@ -446,7 +612,7 @@ static JSValue i2c_open(JSContext *ctx, int argc, JSValue *argv)
         }
         if (!JS_IsUndefined(*property) && !js_value_to_u32(ctx, *property, &timeout_ms)) {
             JS_PopGCRef(ctx, &property_ref);
-            return JS_ThrowTypeError(ctx, "i2c.open({ timeoutMs }) expects a non-negative integer");
+            return JS_ThrowTypeError(ctx, "i2c.openBus({ timeoutMs }) expects a non-negative integer");
         }
 
         *property = JS_GetPropertyStr(ctx, argv[0], "internalPullup");
@@ -456,7 +622,7 @@ static JSValue i2c_open(JSContext *ctx, int argc, JSValue *argv)
         }
         if (!JS_IsUndefined(*property) && !js_value_to_bool(ctx, *property, &internal_pullup)) {
             JS_PopGCRef(ctx, &property_ref);
-            return JS_ThrowTypeError(ctx, "i2c.open({ internalPullup }) expects a boolean-like value");
+            return JS_ThrowTypeError(ctx, "i2c.openBus({ internalPullup }) expects a boolean-like value");
         }
         JS_PopGCRef(ctx, &property_ref);
     }
@@ -464,12 +630,12 @@ static JSValue i2c_open(JSContext *ctx, int argc, JSValue *argv)
     if (!GPIO_IS_VALID_GPIO(sda_pin) || !GPIO_IS_VALID_GPIO(scl_pin)) {
         return JS_ThrowTypeError(
             ctx,
-            "i2c.open() requires configured default SDA/SCL GPIOs or explicit { sda, scl } overrides");
+            "i2c.openBus() requires configured default SDA/SCL GPIOs or explicit { sda, scl } overrides");
     }
 
     slot = i2c_alloc_slot();
     if (slot == NULL) {
-        return JS_ThrowInternalError(ctx, "i2c.open() failed: no available I2C bus slots");
+        return JS_ThrowInternalError(ctx, "i2c.openBus() failed: no available I2C bus slots");
     }
 
     bus_config.i2c_port = (i2c_port_num_t)slot->bus_id;
@@ -482,7 +648,7 @@ static JSValue i2c_open(JSContext *ctx, int argc, JSValue *argv)
     err = i2c_new_master_bus(&bus_config, &slot->bus_handle);
     if (err != ESP_OK) {
         i2c_cleanup_slot(slot);
-        return i2c_throw_error(ctx, err, "i2c.open() failed");
+        return i2c_throw_error(ctx, err, "i2c.openBus() failed");
     }
 
     slot->sda_pin = sda_pin;
@@ -564,7 +730,7 @@ JSValue js_i2c_bus_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
     }
     slot = i2c_get_slot(&bus_ref);
     if (slot != NULL) {
-        if (slot->busy) {
+        if (slot->busy || slot->future_reservations > 0) {
             return JS_ThrowInternalError(ctx,
                                          "I2CBus.close() refused while an operation is pending");
         }
@@ -595,10 +761,191 @@ JSValue js_i2c_bus_status(JSContext *ctx, JSValue *this_val, int argc, JSValue *
     return i2c_make_status_object(ctx, slot);
 }
 
+JSValue js_i2c_bus_open_device(JSContext *ctx, JSValue *this_val,
+                               int argc, JSValue *argv)
+{
+    esp32_mquickjs_i2c_bus_ref_t bus_ref;
+    esp32_mquickjs_i2c_slot_t *bus;
+    esp32_mquickjs_i2c_device_slot_t *device;
+    i2c_device_config_t config = {0};
+    uint16_t address;
+    uint32_t freq_hz;
+    uint32_t timeout_ms;
+    JSGCRef property_ref;
+    JSValue *property;
+    JSValue result;
+    esp_err_t err;
+
+    if (i2c_get_this_slot(ctx, *this_val, "I2CBus.openDevice()",
+                          &bus_ref, &bus) != 0) {
+        return JS_EXCEPTION;
+    }
+    if (argc != 1 || JS_GetClassID(ctx, argv[0]) < 0 ||
+        JS_IsArray(ctx, argv[0])) {
+        return JS_ThrowTypeError(
+            ctx,
+            "I2CBus.openDevice(options) expects { address, freqHz?, timeoutMs? }");
+    }
+    freq_hz = bus->freq_hz;
+    timeout_ms = bus->timeout_ms;
+    property = JS_PushGCRef(ctx, &property_ref);
+    *property = JS_GetPropertyStr(ctx, argv[0], "address");
+    if (JS_IsException(*property) ||
+        !js_value_to_i2c_address(ctx, *property, &address)) {
+        JS_PopGCRef(ctx, &property_ref);
+        return JS_HasException(ctx)
+                   ? JS_EXCEPTION
+                   : JS_ThrowTypeError(
+                         ctx,
+                         "I2CBus.openDevice({ address }) expects a 7-bit address in 0x03..0x77");
+    }
+    *property = JS_GetPropertyStr(ctx, argv[0], "freqHz");
+    if (JS_IsException(*property) ||
+        (!JS_IsUndefined(*property) &&
+         (!js_value_to_u32(ctx, *property, &freq_hz) || freq_hz == 0))) {
+        JS_PopGCRef(ctx, &property_ref);
+        return JS_HasException(ctx)
+                   ? JS_EXCEPTION
+                   : JS_ThrowTypeError(
+                         ctx,
+                         "I2CBus.openDevice({ freqHz }) expects a positive integer");
+    }
+    *property = JS_GetPropertyStr(ctx, argv[0], "timeoutMs");
+    if (JS_IsException(*property) ||
+        (!JS_IsUndefined(*property) &&
+         (!js_value_to_u32(ctx, *property, &timeout_ms) ||
+          timeout_ms == 0 || timeout_ms > (uint32_t)INT_MAX ||
+          timeout_ms > UINT32_MAX / 1000U))) {
+        JS_PopGCRef(ctx, &property_ref);
+        return JS_HasException(ctx)
+                   ? JS_EXCEPTION
+                   : JS_ThrowTypeError(
+                         ctx,
+                         "I2CBus.openDevice({ timeoutMs }) expects a positive supported integer");
+    }
+    JS_PopGCRef(ctx, &property_ref);
+
+    device = heap_caps_calloc(1, sizeof(*device), MALLOC_CAP_8BIT);
+    if (device == NULL) {
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    config.device_address = address;
+    config.scl_speed_hz = freq_hz;
+    config.scl_wait_us = timeout_ms * 1000U;
+    config.flags.disable_ack_check = 0;
+    err = i2c_master_bus_add_device(bus->bus_handle, &config,
+                                    &device->handle);
+    if (err != ESP_OK) {
+        heap_caps_free(device);
+        return i2c_throw_error(ctx, err, "I2CBus.openDevice() failed");
+    }
+    device->generation = i2c_take_device_generation();
+    device->address = address;
+    device->freq_hz = freq_hz;
+    device->timeout_ms = timeout_ms;
+    device->next = bus->devices;
+    bus->devices = device;
+
+    result = i2c_make_device_object(ctx, bus, device);
+    if (JS_IsException(result)) {
+        (void)i2c_cleanup_device(bus, device);
+    }
+    return result;
+}
+
+JSValue js_i2c_device_constructor(JSContext *ctx, JSValue *this_val,
+                                  int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_ThrowTypeError(
+        ctx, "I2CDevice cannot be constructed directly; use I2CBus.openDevice()");
+}
+
+void js_i2c_device_finalizer(JSContext *ctx, void *opaque)
+{
+    esp32_mquickjs_i2c_device_ref_t *ref = opaque;
+    esp32_mquickjs_i2c_slot_t *bus = NULL;
+    esp32_mquickjs_i2c_device_slot_t *device;
+
+    (void)ctx;
+    if (ref == NULL) {
+        return;
+    }
+    device = i2c_get_device(ref, &bus);
+    if (device != NULL) {
+        device->release_pending = true;
+        if (device->future_reservations == 0 && !bus->busy) {
+            (void)i2c_cleanup_device(bus, device);
+        }
+    }
+    heap_caps_free(ref);
+}
+
+JSValue js_i2c_device_close(JSContext *ctx, JSValue *this_val,
+                            int argc, JSValue *argv)
+{
+    esp32_mquickjs_i2c_device_ref_t ref;
+    esp32_mquickjs_i2c_device_ref_t *opaque;
+    esp32_mquickjs_i2c_slot_t *bus = NULL;
+    esp32_mquickjs_i2c_device_slot_t *device;
+    esp_err_t err;
+
+    (void)argv;
+    if (argc != 0 ||
+        i2c_device_ref_from_object(ctx, *this_val, "I2CDevice.close()",
+                                   &ref) != 0) {
+        return argc != 0
+                   ? JS_ThrowTypeError(ctx,
+                                       "I2CDevice.close() expects no arguments")
+                   : JS_EXCEPTION;
+    }
+    device = i2c_get_device(&ref, &bus);
+    if (device != NULL) {
+        if (device->future_reservations > 0 || bus->busy) {
+            return JS_ThrowInternalError(
+                ctx,
+                "I2CDevice.close() refused while an operation is pending");
+        }
+        err = i2c_cleanup_device(bus, device);
+        if (err != ESP_OK) {
+            return i2c_throw_error(ctx, err, "I2CDevice.close() failed");
+        }
+    }
+    opaque = JS_GetOpaque(ctx, *this_val);
+    if (opaque != NULL) {
+        opaque->bus_id = -1;
+        opaque->bus_generation = 0;
+        opaque->device_generation = 0;
+    }
+    return JS_TRUE;
+}
+
+JSValue js_i2c_device_status(JSContext *ctx, JSValue *this_val,
+                             int argc, JSValue *argv)
+{
+    esp32_mquickjs_i2c_device_ref_t ref;
+    esp32_mquickjs_i2c_slot_t *bus;
+    esp32_mquickjs_i2c_device_slot_t *device;
+
+    (void)argv;
+    if (argc != 0) {
+        return JS_ThrowTypeError(ctx,
+                                 "I2CDevice.status() expects no arguments");
+    }
+    if (i2c_get_bound_device(ctx, *this_val, "I2CDevice.status()", &ref,
+                             &bus, &device) != 0) {
+        return JS_EXCEPTION;
+    }
+    return i2c_make_device_status(ctx, bus, device);
+}
+
 typedef enum {
     I2C_FUTURE_SCAN,
     I2C_FUTURE_WRITE,
-    I2C_FUTURE_WRITE_CHUNKS,
+    I2C_FUTURE_WRITE_BATCH,
     I2C_FUTURE_WRITE_SEGMENTS,
     I2C_FUTURE_READ,
     I2C_FUTURE_WRITE_READ,
@@ -609,9 +956,9 @@ struct esp32_mquickjs_future_driver_state {
     JSContext *ctx;
     JSGCRef owner_ref;
     esp32_mquickjs_i2c_bus_ref_t bus_ref;
+    esp32_mquickjs_i2c_device_ref_t device_ref;
     esp32_mquickjs_runtime_t *runtime;
     esp32_mquickjs_future_token_t token;
-    uint16_t address;
     uint32_t timeout_ms;
     uint32_t chunk_count;
     uint32_t completed_chunks;
@@ -628,6 +975,8 @@ struct esp32_mquickjs_future_driver_state {
     esp_err_t err;
     _Atomic bool completed;
     bool owner_retained;
+    bool bus_reserved;
+    bool device_reserved;
     bool started;
     bool cancelled;
 };
@@ -645,6 +994,8 @@ static void i2c_future_release_bus(
     esp32_mquickjs_future_driver_state_t *state)
 {
     esp32_mquickjs_i2c_slot_t *slot;
+    esp32_mquickjs_i2c_device_slot_t *device;
+    esp32_mquickjs_i2c_device_slot_t *next;
 
     if (state == NULL) {
         return;
@@ -653,8 +1004,32 @@ static void i2c_future_release_bus(
     if (slot != NULL && state->started) {
         slot->busy = false;
     }
+    device = i2c_get_device(&state->device_ref, NULL);
+    if (device != NULL && state->device_reserved &&
+        device->future_reservations > 0) {
+        device->future_reservations--;
+    }
+    state->device_reserved = false;
+    if (slot != NULL && state->bus_reserved &&
+        slot->future_reservations > 0) {
+        slot->future_reservations--;
+    }
+    state->bus_reserved = false;
     state->started = false;
     i2c_future_release_owner(state);
+    if (slot != NULL && !slot->busy) {
+        for (device = slot->devices; device != NULL; device = next) {
+            next = device->next;
+            if (device->release_pending &&
+                device->future_reservations == 0) {
+                (void)i2c_cleanup_device(slot, device);
+            }
+        }
+    }
+    if (slot != NULL && slot->release_pending && !slot->busy &&
+        slot->future_reservations == 0) {
+        (void)i2c_cleanup_slot(slot);
+    }
 }
 
 static void i2c_future_release_prepare_state(
@@ -663,7 +1038,7 @@ static void i2c_future_release_prepare_state(
     if (state == NULL) {
         return;
     }
-    i2c_future_release_owner(state);
+    i2c_future_release_bus(state);
     heap_caps_free(state->chunk_lengths);
     heap_caps_free(state->segment_buffers);
     heap_caps_free(state->write_data);
@@ -671,7 +1046,7 @@ static void i2c_future_release_prepare_state(
     heap_caps_free(state);
 }
 
-static esp32_mquickjs_future_driver_state_t *i2c_future_allocate(
+static esp32_mquickjs_future_driver_state_t *i2c_future_allocate_bus(
     JSContext *ctx,
     JSValue this_value,
     i2c_future_kind_t kind)
@@ -694,14 +1069,60 @@ static esp32_mquickjs_future_driver_state_t *i2c_future_allocate(
         heap_caps_free(state);
         return NULL;
     }
-    if (slot->busy) {
+    if (slot->future_reservations == UINT16_MAX) {
         heap_caps_free(state);
-        JS_ThrowInternalError(ctx, "I2C bus is busy");
+        JS_ThrowInternalError(ctx,
+                              "I2CBus operation reservation limit reached");
         return NULL;
     }
     state->kind = kind;
     state->ctx = ctx;
     state->timeout_ms = slot->timeout_ms;
+    slot->future_reservations++;
+    state->bus_reserved = true;
+    owner = JS_AddGCRef(ctx, &state->owner_ref);
+    *owner = this_value;
+    state->owner_retained = true;
+    return state;
+}
+
+static esp32_mquickjs_future_driver_state_t *i2c_future_allocate_device(
+    JSContext *ctx,
+    JSValue this_value,
+    i2c_future_kind_t kind)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+    esp32_mquickjs_i2c_slot_t *bus;
+    esp32_mquickjs_i2c_device_slot_t *device;
+    JSValue *owner;
+
+    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    if (state == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        return NULL;
+    }
+    atomic_init(&state->completed, false);
+    if (i2c_get_bound_device(ctx, this_value, "I2CDevice Future operation",
+                             &state->device_ref, &bus, &device) != 0) {
+        heap_caps_free(state);
+        return NULL;
+    }
+    if (bus->future_reservations == UINT16_MAX ||
+        device->future_reservations == UINT16_MAX) {
+        heap_caps_free(state);
+        JS_ThrowInternalError(
+            ctx, "I2CDevice operation reservation limit reached");
+        return NULL;
+    }
+    state->bus_ref.bus_id = state->device_ref.bus_id;
+    state->bus_ref.generation = state->device_ref.bus_generation;
+    state->kind = kind;
+    state->ctx = ctx;
+    state->timeout_ms = device->timeout_ms;
+    bus->future_reservations++;
+    device->future_reservations++;
+    state->bus_reserved = true;
+    state->device_reserved = true;
     owner = JS_AddGCRef(ctx, &state->owner_ref);
     *owner = this_value;
     state->owner_retained = true;
@@ -759,7 +1180,7 @@ static bool i2c_scan_future_prepare(
         JS_ThrowTypeError(ctx, "I2CBus.scan() expects no arguments");
         return false;
     }
-    *out_state = i2c_future_allocate(ctx, this_ref->val, I2C_FUTURE_SCAN);
+    *out_state = i2c_future_allocate_bus(ctx, this_ref->val, I2C_FUTURE_SCAN);
     return *out_state != NULL;
 }
 
@@ -772,18 +1193,16 @@ static bool i2c_write_future_prepare(
 {
     esp32_mquickjs_future_driver_state_t *state;
 
-    if (out_state == NULL || argc != 2 ||
-        !js_value_to_i2c_address(ctx, argv[0].val, &(uint16_t){0})) {
+    if (out_state == NULL || argc != 1) {
         JS_ThrowTypeError(ctx,
-                          "I2CBus.write(addr, data) expects a 7-bit address and byte data");
+                          "I2CDevice.write(data) expects one byte source");
         return false;
     }
-    state = i2c_future_allocate(ctx, this_ref->val, I2C_FUTURE_WRITE);
+    state = i2c_future_allocate_device(ctx, this_ref->val, I2C_FUTURE_WRITE);
     if (state == NULL) {
         return false;
     }
-    (void)js_value_to_i2c_address(ctx, argv[0].val, &state->address);
-    if (!i2c_future_copy_bytes(ctx, argv[1].val, "I2CBus.write(addr, data)",
+    if (!i2c_future_copy_bytes(ctx, argv[0].val, "I2CDevice.write(data)",
                                &state->write_data, &state->write_length)) {
         i2c_future_release_prepare_state(state);
         return false;
@@ -806,19 +1225,17 @@ static bool i2c_write_sources_future_prepare(
     uint32_t index;
     size_t total = 0;
 
-    if (out_state == NULL || argc != 2 ||
-        !js_value_to_i2c_address(ctx, argv[0].val, &(uint16_t){0})) {
-        JS_ThrowTypeError(ctx, "%s expects a 7-bit address and byte-source chunks",
+    if (out_state == NULL || argc != 1) {
+        JS_ThrowTypeError(ctx, "%s expects byte-source chunks",
                           api_name);
         return false;
     }
-    state = i2c_future_allocate(ctx, this_ref->val, kind);
+    state = i2c_future_allocate_device(ctx, this_ref->val, kind);
     if (state == NULL) {
         return false;
     }
-    (void)js_value_to_i2c_address(ctx, argv[0].val, &state->address);
     if (!esp32_mquickjs_get_byte_source_array_length(
-            ctx, argv[1].val, api_name,
+            ctx, argv[0].val, api_name,
             &state->chunk_count, &error)) {
         if (JS_IsUndefined(error)) {
             JS_ThrowTypeError(ctx, "%s expects an array-like object", api_name);
@@ -841,7 +1258,7 @@ static bool i2c_write_sources_future_prepare(
         uint8_t *grown;
 
         if (!esp32_mquickjs_get_byte_source_chunk(
-                ctx, argv[1].val, index, api_name,
+                ctx, argv[0].val, index, api_name,
                 &chunk, &error)) {
             i2c_future_release_prepare_state(state);
             return false;
@@ -898,13 +1315,13 @@ static bool i2c_write_sources_future_prepare(
     return true;
 }
 
-static bool i2c_write_chunks_future_prepare(
+static bool i2c_write_batch_future_prepare(
     JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv,
     esp32_mquickjs_future_driver_state_t **out_state)
 {
     return i2c_write_sources_future_prepare(
-        ctx, this_ref, argc, argv, I2C_FUTURE_WRITE_CHUNKS,
-        "I2CBus.writeChunks(addr, chunks)", out_state);
+        ctx, this_ref, argc, argv, I2C_FUTURE_WRITE_BATCH,
+        "I2CDevice.writeBatch(chunks)", out_state);
 }
 
 static bool i2c_write_segments_future_prepare(
@@ -913,7 +1330,7 @@ static bool i2c_write_segments_future_prepare(
 {
     return i2c_write_sources_future_prepare(
         ctx, this_ref, argc, argv, I2C_FUTURE_WRITE_SEGMENTS,
-        "I2CBus.writeSegments(addr, segments)", out_state);
+        "I2CDevice.writeSegments(segments)", out_state);
 }
 
 static bool i2c_read_future_prepare(
@@ -926,18 +1343,16 @@ static bool i2c_read_future_prepare(
     esp32_mquickjs_future_driver_state_t *state;
     uint32_t read_length;
 
-    if (out_state == NULL || argc != 2 ||
-        !js_value_to_i2c_address(ctx, argv[0].val, &(uint16_t){0}) ||
-        !js_value_to_u32(ctx, argv[1].val, &read_length)) {
+    if (out_state == NULL || argc != 1 ||
+        !js_value_to_u32(ctx, argv[0].val, &read_length)) {
         JS_ThrowTypeError(ctx,
-                          "I2CBus.read(addr, length) expects a 7-bit address and byte length");
+                          "I2CDevice.read(length) expects a byte length");
         return false;
     }
-    state = i2c_future_allocate(ctx, this_ref->val, I2C_FUTURE_READ);
+    state = i2c_future_allocate_device(ctx, this_ref->val, I2C_FUTURE_READ);
     if (state == NULL) {
         return false;
     }
-    (void)js_value_to_i2c_address(ctx, argv[0].val, &state->address);
     state->read_length = read_length;
     if (read_length > 0) {
         state->read_data = heap_caps_malloc(read_length, MALLOC_CAP_8BIT);
@@ -961,20 +1376,19 @@ static bool i2c_write_read_future_prepare(
     esp32_mquickjs_future_driver_state_t *state;
     uint32_t read_length;
 
-    if (out_state == NULL || argc != 3 ||
-        !js_value_to_i2c_address(ctx, argv[0].val, &(uint16_t){0}) ||
-        !js_value_to_u32(ctx, argv[2].val, &read_length)) {
+    if (out_state == NULL || argc != 2 ||
+        !js_value_to_u32(ctx, argv[1].val, &read_length)) {
         JS_ThrowTypeError(ctx,
-                          "I2CBus.writeRead(addr, writeData, readLength) expects a 7-bit address, write bytes, and read length");
+                          "I2CDevice.writeRead(writeData, readLength) expects write bytes and a read length");
         return false;
     }
-    state = i2c_future_allocate(ctx, this_ref->val, I2C_FUTURE_WRITE_READ);
+    state = i2c_future_allocate_device(ctx, this_ref->val,
+                                       I2C_FUTURE_WRITE_READ);
     if (state == NULL) {
         return false;
     }
-    (void)js_value_to_i2c_address(ctx, argv[0].val, &state->address);
-    if (!i2c_future_copy_bytes(ctx, argv[1].val,
-                               "I2CBus.writeRead(addr, writeData, readLength)",
+    if (!i2c_future_copy_bytes(ctx, argv[0].val,
+                               "I2CDevice.writeRead(writeData, readLength)",
                                &state->write_data, &state->write_length)) {
         i2c_future_release_prepare_state(state);
         return false;
@@ -996,7 +1410,10 @@ static void i2c_future_worker(void *opaque)
 {
     esp32_mquickjs_future_driver_state_t *state = opaque;
     esp32_mquickjs_i2c_slot_t *slot = i2c_get_slot(&state->bus_ref);
-    i2c_master_dev_handle_t device = NULL;
+    esp32_mquickjs_i2c_device_slot_t *device_slot =
+        i2c_get_device(&state->device_ref, NULL);
+    i2c_master_dev_handle_t device = device_slot != NULL
+        ? device_slot->handle : NULL;
     int64_t started_us = esp_timer_get_time();
 
     if (slot == NULL) {
@@ -1022,8 +1439,8 @@ static void i2c_future_worker(void *opaque)
         atomic_store_explicit(&state->completed, true, memory_order_release);
         return;
     }
-    state->err = i2c_get_cached_device(slot, state->address, &device);
-    if (state->err != ESP_OK) {
+    if (device == NULL) {
+        state->err = ESP_ERR_INVALID_STATE;
         atomic_store_explicit(&state->completed, true, memory_order_release);
         return;
     }
@@ -1032,7 +1449,7 @@ static void i2c_future_worker(void *opaque)
                                          state->write_data,
                                          state->write_length,
                                          (int)state->timeout_ms);
-    } else if (state->kind == I2C_FUTURE_WRITE_CHUNKS) {
+    } else if (state->kind == I2C_FUTURE_WRITE_BATCH) {
         uint32_t index;
         size_t offset = 0;
 
@@ -1143,8 +1560,10 @@ static JSValue i2c_future_finish(JSContext *ctx,
     if (state->kind == I2C_FUTURE_WRITE) {
         return JS_NewInt32(ctx, (int32_t)state->write_length);
     }
-    if (state->kind == I2C_FUTURE_WRITE_CHUNKS ||
-        state->kind == I2C_FUTURE_WRITE_SEGMENTS) {
+    if (state->kind == I2C_FUTURE_WRITE_SEGMENTS) {
+        return JS_NewInt64(ctx, (int64_t)state->write_length);
+    }
+    if (state->kind == I2C_FUTURE_WRITE_BATCH) {
         return i2c_make_write_chunks_stats(ctx,
                                            state->completed_chunks,
                                            state->write_length,
@@ -1164,13 +1583,8 @@ static JSValue i2c_future_finish(JSContext *ctx,
 static esp32_mquickjs_cancel_result_t i2c_future_cancel(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL ||
-        atomic_load_explicit(&state->completed, memory_order_acquire) ||
-        state->cancelled) {
-        return ESP32_MQUICKJS_CANCEL_REJECTED;
-    }
-    state->cancelled = true;
-    return ESP32_MQUICKJS_CANCEL_REQUESTED;
+    (void)state;
+    return ESP32_MQUICKJS_CANCEL_REJECTED;
 }
 
 static void i2c_future_destroy(esp32_mquickjs_future_driver_state_t *state)
@@ -1188,6 +1602,12 @@ static uint32_t i2c_future_timeout_ms(
     return state != NULL ? state->timeout_ms : 0;
 }
 
+static esp32_mquickjs_resource_key_t i2c_future_resource_key(
+    const esp32_mquickjs_future_driver_state_t *state)
+{
+    return state != NULL ? i2c_get_slot(&state->bus_ref) : NULL;
+}
+
 #define I2C_FUTURE_DRIVER(name, prepare_fn) \
     static const esp32_mquickjs_future_driver_t name = { \
         .capture = prepare_fn, \
@@ -1197,11 +1617,12 @@ static uint32_t i2c_future_timeout_ms(
         .cancel = i2c_future_cancel, \
         .destroy = i2c_future_destroy, \
         .timeout_ms = i2c_future_timeout_ms, \
+        .resource_key = i2c_future_resource_key, \
     }
 
 I2C_FUTURE_DRIVER(s_i2c_scan_driver, i2c_scan_future_prepare);
 I2C_FUTURE_DRIVER(s_i2c_write_driver, i2c_write_future_prepare);
-I2C_FUTURE_DRIVER(s_i2c_write_chunks_driver, i2c_write_chunks_future_prepare);
+I2C_FUTURE_DRIVER(s_i2c_write_batch_driver, i2c_write_batch_future_prepare);
 I2C_FUTURE_DRIVER(s_i2c_write_segments_driver, i2c_write_segments_future_prepare);
 I2C_FUTURE_DRIVER(s_i2c_read_driver, i2c_read_future_prepare);
 I2C_FUTURE_DRIVER(s_i2c_write_read_driver, i2c_write_read_future_prepare);
@@ -1238,39 +1659,48 @@ static JSValue i2c_future_call_and_wait(JSContext *ctx,
 static bool i2c_register_future_drivers(JSContext *ctx,
                                         esp32_mquickjs_runtime_t *runtime)
 {
-    static const char *names[] = {
-        "scan", "write", "writeChunks", "writeSegments", "read", "writeRead"
+    static const char *device_names[] = {
+        "write", "writeSegments", "writeBatch", "read", "writeRead"
     };
-    static const esp32_mquickjs_future_driver_t *drivers[] = {
-        &s_i2c_scan_driver,
+    static const esp32_mquickjs_future_driver_t *device_drivers[] = {
         &s_i2c_write_driver,
-        &s_i2c_write_chunks_driver,
         &s_i2c_write_segments_driver,
+        &s_i2c_write_batch_driver,
         &s_i2c_read_driver,
         &s_i2c_write_read_driver,
     };
-    JSGCRef object_ref;
-    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    JSGCRef bus_ref;
+    JSGCRef device_ref;
+    JSGCRef method_ref;
+    JSValue *bus = JS_PushGCRef(ctx, &bus_ref);
+    JSValue *device = JS_PushGCRef(ctx, &device_ref);
+    JSValue *method = JS_PushGCRef(ctx, &method_ref);
     size_t index;
-    bool result = true;
+    bool result;
 
-    *object = JS_NewObjectClassUser(ctx, JS_CLASS_I2C_BUS);
-    for (index = 0; result && index < sizeof(names) / sizeof(names[0]); ++index) {
-        JSGCRef method_ref;
-        JSValue *method = JS_PushGCRef(ctx, &method_ref);
-
-        *method = JS_IsException(*object)
-            ? JS_EXCEPTION
-            : JS_GetPropertyStr(ctx, *object, names[index]);
+    *bus = JS_NewObjectClassUser(ctx, JS_CLASS_I2C_BUS);
+    *method = JS_IsException(*bus)
+        ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *bus, "scan");
+    result = !JS_IsException(*method) &&
+             esp32_mquickjs_future_register_driver(
+                 ctx, runtime, *method, &s_i2c_scan_driver);
+    *device = result
+        ? JS_NewObjectClassUser(ctx, JS_CLASS_I2C_DEVICE) : JS_EXCEPTION;
+    for (index = 0;
+         result && index < sizeof(device_names) / sizeof(device_names[0]);
+         ++index) {
+        *method = JS_GetPropertyStr(ctx, *device, device_names[index]);
         result = !JS_IsException(*method) &&
                  esp32_mquickjs_future_register_driver(ctx, runtime,
-                                                       *method, drivers[index]);
-        JS_PopGCRef(ctx, &method_ref);
+                                                       *method,
+                                                       device_drivers[index]);
     }
-    if (!result && !JS_IsException(*object)) {
+    if (!result && !JS_IsException(*bus)) {
         JS_ThrowInternalError(ctx, "failed to register I2C Future drivers");
     }
-    JS_PopGCRef(ctx, &object_ref);
+    JS_PopGCRef(ctx, &method_ref);
+    JS_PopGCRef(ctx, &device_ref);
+    JS_PopGCRef(ctx, &bus_ref);
     return result;
 }
 
@@ -1279,36 +1709,38 @@ JSValue js_i2c_bus_scan(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
     return i2c_future_call_and_wait(ctx, *this_val, "scan", argc, argv);
 }
 
-JSValue js_i2c_bus_write(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_i2c_device_write(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     return i2c_future_call_and_wait(ctx, *this_val, "write", argc, argv);
 }
 
-JSValue js_i2c_bus_write_chunks(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_i2c_device_write_batch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    return i2c_future_call_and_wait(ctx, *this_val, "writeChunks", argc, argv);
+    return i2c_future_call_and_wait(ctx, *this_val, "writeBatch", argc, argv);
 }
 
-JSValue js_i2c_bus_write_segments(JSContext *ctx, JSValue *this_val,
-                                  int argc, JSValue *argv)
+JSValue js_i2c_device_write_segments(JSContext *ctx, JSValue *this_val,
+                                     int argc, JSValue *argv)
 {
     return i2c_future_call_and_wait(ctx, *this_val, "writeSegments", argc, argv);
 }
 
-JSValue js_i2c_bus_read(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_i2c_device_read(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     return i2c_future_call_and_wait(ctx, *this_val, "read", argc, argv);
 }
 
-JSValue js_i2c_bus_writeRead(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_i2c_device_write_read(JSContext *ctx, JSValue *this_val,
+                                 int argc, JSValue *argv)
 {
     return i2c_future_call_and_wait(ctx, *this_val, "writeRead", argc, argv);
 }
 
-JSValue js_i2c_open(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_i2c_open_bus(JSContext *ctx, JSValue *this_val,
+                        int argc, JSValue *argv)
 {
     (void)this_val;
-    return i2c_open(ctx, argc, argv);
+    return i2c_open_bus(ctx, argc, argv);
 }
 
 JSValue js_i2c_get_default_sda(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
