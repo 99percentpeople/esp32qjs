@@ -508,7 +508,7 @@ static bool websocket_make_event_object(
     if (event->kind == WEBSOCKET_CALLBACK_MESSAGE) {
         *data = event->binary
                     ? esp32_mquickjs_new_owned_byte_view(
-                          ctx, event->data, event->data_len)
+                          ctx, (uint8_t *)event->data, event->data_len)
                     : JS_NewStringLen(ctx, event->data, event->data_len);
         if (event->binary && !JS_IsException(*data)) {
             event->data = NULL;

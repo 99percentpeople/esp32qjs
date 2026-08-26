@@ -207,7 +207,6 @@ static bool reserve_commands(JSContext *ctx, display_command_buffer_t *command_b
 
 static bool reserve_text(JSContext *ctx, display_command_buffer_t *command_buffer, size_t extra)
 {
-    char *next;
     size_t needed;
     size_t next_capacity;
 
