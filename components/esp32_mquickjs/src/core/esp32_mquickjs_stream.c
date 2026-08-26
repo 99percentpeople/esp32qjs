@@ -1424,16 +1424,16 @@ static JSValue stream_future_finish(
     return JS_TRUE;
 }
 
-static bool stream_future_cancel(
+static esp32_mquickjs_cancel_result_t stream_future_cancel(
     esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL || atomic_load_explicit(
                              &state->completed, memory_order_acquire) ||
         atomic_exchange_explicit(&state->cancelled, true,
                                  memory_order_acq_rel)) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
-    return true;
+    return ESP32_MQUICKJS_CANCEL_REQUESTED;
 }
 
 static void stream_future_destroy(
@@ -1444,7 +1444,7 @@ static void stream_future_destroy(
 
 #define STREAM_FUTURE_DRIVER(name, prepare_fn) \
     static const esp32_mquickjs_future_driver_t name = { \
-        .prepare = prepare_fn, \
+        .capture = prepare_fn, \
         .start = stream_future_start, \
         .poll = stream_future_poll, \
         .finish = stream_future_finish, \

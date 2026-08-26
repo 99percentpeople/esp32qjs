@@ -6,6 +6,7 @@ test("wifi/offline", function () {
   var connectError = "";
   var syncOptionsError = "";
   var syncServersError = "";
+  var invalidSync;
   var syncZeroTimeoutError = "";
   var syncLargeTimeoutError = "";
   var syncFractionalTimeoutError = "";
@@ -52,8 +53,11 @@ test("wifi/offline", function () {
   test.ok(syncOptionsError.indexOf("options object") >= 0,
     "sys.time.sync should require an options object");
 
+  invalidSync = Future.call(sys.time.sync, sys.time, [{ servers: [] }]);
+  test.equal(invalidSync.status(), "rejected",
+    "native Future arguments should be captured before Future.call returns");
   try {
-    Future.call(sys.time.sync, sys.time, [{ servers: [] }]).wait(1000);
+    invalidSync.wait(1000);
   } catch (syncServersFailure) {
     syncServersError = String(syncServersFailure && syncServersFailure.message
       ? syncServersFailure.message : syncServersFailure);

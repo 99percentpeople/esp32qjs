@@ -1051,16 +1051,16 @@ static JSValue bitmap_transform_finish(
     return result;
 }
 
-static bool bitmap_transform_cancel(
+static esp32_mquickjs_cancel_result_t bitmap_transform_cancel(
     esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL ||
         atomic_load_explicit(&state->completed, memory_order_acquire) ||
         atomic_load_explicit(&state->cancelled, memory_order_acquire)) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     atomic_store_explicit(&state->cancelled, true, memory_order_release);
-    return true;
+    return ESP32_MQUICKJS_CANCEL_REQUESTED;
 }
 
 static void bitmap_transform_destroy(
@@ -1076,7 +1076,7 @@ static void bitmap_transform_destroy(
 }
 
 static const esp32_mquickjs_future_driver_t s_bitmap_convert_driver = {
-    .prepare = bitmap_convert_prepare,
+    .capture = bitmap_convert_prepare,
     .start = bitmap_transform_start,
     .poll = bitmap_transform_poll,
     .finish = bitmap_transform_finish,
@@ -1085,7 +1085,7 @@ static const esp32_mquickjs_future_driver_t s_bitmap_convert_driver = {
 };
 
 static const esp32_mquickjs_future_driver_t s_bitmap_blit_driver = {
-    .prepare = bitmap_blit_prepare,
+    .capture = bitmap_blit_prepare,
     .start = bitmap_transform_start,
     .poll = bitmap_transform_poll,
     .finish = bitmap_transform_finish,

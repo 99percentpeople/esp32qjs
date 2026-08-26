@@ -131,8 +131,12 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn("state->requested_bytes % bytes_per_frame != 0", source)
         self.assertIn("i2s_channel_write(", source)
         self.assertIn("i2s_channel_read(", source)
-        self.assertIn("static bool i2s_read_cancel", source)
-        self.assertIn("static bool i2s_write_cancel", source)
+        self.assertIn(
+            "static esp32_mquickjs_cancel_result_t i2s_read_cancel", source
+        )
+        self.assertIn(
+            "static esp32_mquickjs_cancel_result_t i2s_write_cancel", source
+        )
         self.assertIn("state->timed_out = true;", source)
         self.assertIn("state->deadline_us", source)
         self.assertNotIn("state->timeout_timer", source)
@@ -173,7 +177,9 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn("state->timeout_ms", capture_worker)
         self.assertNotIn("esp_camera_fb_get()", capture_worker)
         capture_cancel = source[
-            source.index("static bool camera_capture_cancel") : source.index(
+            source.index(
+                "static esp32_mquickjs_cancel_result_t camera_capture_cancel"
+            ) : source.index(
                 "\nstatic void camera_capture_destroy"
             )
         ]
@@ -206,11 +212,13 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn("s_camera.capture_state = state;", source)
         self.assertIn("camera_capture_cancel(s_camera.capture_state)", source)
         close_cancel = source[
-            source.index("static bool camera_close_cancel") : source.index(
+            source.index(
+                "static esp32_mquickjs_cancel_result_t camera_close_cancel"
+            ) : source.index(
                 "\nstatic void camera_close_destroy"
             )
         ]
-        self.assertIn("return false;", close_cancel)
+        self.assertIn("return ESP32_MQUICKJS_CANCEL_REJECTED;", close_cancel)
         self.assertIn(
             "Future.call(cam.close, cam, [])",
             (ROOT / "docs/c-api.md").read_text(encoding="utf-8"),

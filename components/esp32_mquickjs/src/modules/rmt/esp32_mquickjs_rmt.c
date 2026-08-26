@@ -737,7 +737,7 @@ static JSValue rmt_operation_finish(
     return JS_PopGCRef(ctx, &result_ref);
 }
 
-static bool rmt_operation_cancel(
+static esp32_mquickjs_cancel_result_t rmt_operation_cancel(
     esp32_mquickjs_future_driver_state_t *driver_state)
 {
     esp32_mquickjs_rmt_future_state_t *state = driver_state;
@@ -746,7 +746,7 @@ static bool rmt_operation_cancel(
 
     if (state == NULL || atomic_load_explicit(
                              &state->completed, memory_order_acquire)) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     if (slot != NULL && state->started) {
         rmt_abort_active(slot);
@@ -756,7 +756,7 @@ static bool rmt_operation_cancel(
     if (state->runtime != NULL) {
         (void)esp32_mquickjs_future_wake(state->runtime, state->token);
     }
-    return true;
+    return ESP32_MQUICKJS_CANCELLED;
 }
 
 static void rmt_operation_destroy(
@@ -799,7 +799,7 @@ static uint32_t rmt_operation_timeout_ms(
 }
 
 static const esp32_mquickjs_future_driver_t s_rmt_transmit_driver = {
-    .prepare = rmt_transmit_prepare,
+    .capture = rmt_transmit_prepare,
     .start = rmt_operation_start,
     .poll = rmt_operation_poll,
     .finish = rmt_operation_finish,
@@ -809,7 +809,7 @@ static const esp32_mquickjs_future_driver_t s_rmt_transmit_driver = {
 };
 
 static const esp32_mquickjs_future_driver_t s_rmt_receive_driver = {
-    .prepare = rmt_receive_prepare,
+    .capture = rmt_receive_prepare,
     .start = rmt_operation_start,
     .poll = rmt_operation_poll,
     .finish = rmt_operation_finish,

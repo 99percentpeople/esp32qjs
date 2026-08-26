@@ -390,18 +390,18 @@ static JSValue time_future_finish(
     return JS_PopGCRef(ctx, &result_ref);
 }
 
-static bool time_future_cancel(
+static esp32_mquickjs_cancel_result_t time_future_cancel(
     esp32_mquickjs_future_driver_state_t *state)
 {
     bool deinit_sntp = false;
 
     if (state == NULL) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     time_lock();
     if (state->completed || state->cancel_requested) {
         time_unlock();
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     state->cancel_requested = true;
     state->completed = true;
@@ -418,7 +418,7 @@ static bool time_future_cancel(
         esp_netif_sntp_deinit();
     }
     (void)esp32_mquickjs_future_wake(state->runtime, state->token);
-    return true;
+    return ESP32_MQUICKJS_CANCELLED;
 }
 
 static void time_future_destroy(
@@ -444,7 +444,7 @@ static uint32_t time_future_timeout_ms(
 }
 
 static const esp32_mquickjs_future_driver_t s_time_future_driver = {
-    .prepare = time_future_prepare,
+    .capture = time_future_prepare,
     .start = time_future_start,
     .poll = time_future_poll,
     .finish = time_future_finish,

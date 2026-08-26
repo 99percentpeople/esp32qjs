@@ -274,6 +274,74 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             "ready work must not bypass a finite wait deadline",
         )
 
+    def test_native_future_drivers_capture_at_creation_and_confirm_cancellation(self):
+        future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
+            encoding="utf-8"
+        )
+        header = (MQUICKJS / "internal/esp32_mquickjs_future.h").read_text(
+            encoding="utf-8"
+        )
+        call_start = future.index("JSValue js_future_call(")
+        call = future[call_start:]
+        dispatch_start = future.index("static void future_dispatch_call(")
+        dispatch_end = future.index("\nstatic void future_sleep_timer_callback", dispatch_start)
+        dispatch = future[dispatch_start:dispatch_end]
+        cancel_start = future.index("static bool future_cancel_slot(")
+        cancel_end = future.index("\nstatic void future_advance_timeout", cancel_start)
+        cancel = future[cancel_start:cancel_end]
+        poll_start = future.index("static bool future_poll_ready(")
+        poll_end = future.index("\nstatic bool future_poll_active_drivers", poll_start)
+        poll = future[poll_start:poll_end]
+
+        self.assertIn("bool (*capture)(JSContext *ctx", header)
+        self.assertNotIn("bool (*prepare)(JSContext *ctx", header)
+        self.assertIn("ESP32_MQUICKJS_CANCEL_REJECTED", header)
+        self.assertIn("ESP32_MQUICKJS_CANCELLED", header)
+        self.assertIn("ESP32_MQUICKJS_CANCEL_REQUESTED", header)
+        self.assertLess(
+            call.index("future_capture_call_driver(ctx, state, slot)"),
+            call.index("future_submit(slot)"),
+        )
+        self.assertNotIn("->capture(", dispatch)
+        self.assertIn("result == ESP32_MQUICKJS_CANCEL_REJECTED", cancel)
+        self.assertIn("result == ESP32_MQUICKJS_CANCEL_REQUESTED", cancel)
+        self.assertIn("slot->cancel_requested = true", cancel)
+        self.assertIn("if (slot->cancel_requested)", poll)
+        self.assertIn("FUTURE_STATE_CANCELLED", poll)
+
+        http = (
+            MQUICKJS / "src/modules/http/esp32_mquickjs_http_future.c"
+        ).read_text(encoding="utf-8")
+        http_cancel_start = http.index(
+            "static esp32_mquickjs_cancel_result_t http_future_cancel("
+        )
+        http_cancel_end = http.index("\nstatic void http_future_destroy", http_cancel_start)
+        http_cancel = http[http_cancel_start:http_cancel_end]
+        self.assertLess(
+            http_cancel.index("esp32_mquickjs_http_operation_cancel"),
+            http_cancel.index("state->cancel_requested = true"),
+        )
+        self.assertIn("return ESP32_MQUICKJS_CANCEL_REQUESTED;", http_cancel)
+
+        socket = (
+            MQUICKJS / "src/modules/socket/esp32_mquickjs_socket.c"
+        ).read_text(encoding="utf-8")
+        self.assertIn("_Atomic bool cancel_requested;", socket)
+        self.assertIn(
+            "atomic_store_explicit(&state->tls_request->cancel_requested",
+            socket,
+        )
+        socket_cancel_start = socket.index(
+            "static esp32_mquickjs_cancel_result_t socket_future_cancel("
+        )
+        socket_cancel_end = socket.index(
+            "\nstatic void socket_future_destroy", socket_cancel_start
+        )
+        socket_cancel = socket[socket_cancel_start:socket_cancel_end]
+        self.assertIn(
+            "return ESP32_MQUICKJS_CANCEL_REQUESTED;", socket_cancel
+        )
+
     def test_future_drivers_make_progress_when_a_wake_token_is_lost(self):
         future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
             encoding="utf-8"

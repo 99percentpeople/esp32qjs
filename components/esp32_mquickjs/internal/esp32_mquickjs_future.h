@@ -14,8 +14,20 @@ typedef enum {
     ESP32_MQUICKJS_FUTURE_READY,
 } esp32_mquickjs_future_poll_t;
 
+typedef enum {
+    /* The operation cannot be cancelled and remains pending. */
+    ESP32_MQUICKJS_CANCEL_REJECTED,
+    /* The operation is already stopped and may settle immediately. */
+    ESP32_MQUICKJS_CANCELLED,
+    /* Cancellation was accepted; poll() confirms when teardown is complete. */
+    ESP32_MQUICKJS_CANCEL_REQUESTED,
+} esp32_mquickjs_cancel_result_t;
+
 typedef struct {
-    bool (*prepare)(JSContext *ctx,
+    /* Capture immutable arguments and native leases during Future.call().
+       This callback must not start I/O or block on hardware. On failure it
+       must release any partial state and leave out_state set to NULL. */
+    bool (*capture)(JSContext *ctx,
                     JSGCRef *this_ref,
                     int argc,
                     JSGCRef *argv,
@@ -26,7 +38,8 @@ typedef struct {
                   esp32_mquickjs_future_driver_state_t *state);
     esp32_mquickjs_future_poll_t (*poll)(esp32_mquickjs_future_driver_state_t *state);
     JSValue (*finish)(JSContext *ctx, esp32_mquickjs_future_driver_state_t *state);
-    bool (*cancel)(esp32_mquickjs_future_driver_state_t *state);
+    esp32_mquickjs_cancel_result_t (*cancel)(
+        esp32_mquickjs_future_driver_state_t *state);
     void (*destroy)(esp32_mquickjs_future_driver_state_t *state);
     uint32_t (*timeout_ms)(const esp32_mquickjs_future_driver_state_t *state);
 } esp32_mquickjs_future_driver_t;

@@ -1770,10 +1770,11 @@ static JSValue spi_future_finish(JSContext *ctx,
     return js_bytes_to_array(ctx, state->rx_data, state->length);
 }
 
-static bool spi_future_cancel(esp32_mquickjs_future_driver_state_t *state)
+static esp32_mquickjs_cancel_result_t spi_future_cancel(
+    esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL || state->completed || state->cancelled) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     state->cancelled = true;
     if (!state->queued) {
@@ -1782,7 +1783,9 @@ static bool spi_future_cancel(esp32_mquickjs_future_driver_state_t *state)
     if (state->runtime != NULL) {
         (void)esp32_mquickjs_future_wake(state->runtime, state->token);
     }
-    return true;
+    return state->queued
+        ? ESP32_MQUICKJS_CANCEL_REQUESTED
+        : ESP32_MQUICKJS_CANCELLED;
 }
 
 static void spi_future_destroy(esp32_mquickjs_future_driver_state_t *state)
@@ -1798,7 +1801,7 @@ static void spi_future_destroy(esp32_mquickjs_future_driver_state_t *state)
 
 #define SPI_FUTURE_DRIVER(name, prepare_fn) \
     static const esp32_mquickjs_future_driver_t name = { \
-        .prepare = prepare_fn, \
+        .capture = prepare_fn, \
         .start = spi_future_start, \
         .poll = spi_future_poll, \
         .finish = spi_future_finish, \

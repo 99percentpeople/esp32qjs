@@ -396,15 +396,16 @@ static JSValue event_queue_future_finish(JSContext *ctx,
     return state->queue->to_js(ctx, state->event, state->queue->opaque);
 }
 
-static bool event_queue_future_cancel(esp32_mquickjs_future_driver_state_t *state)
+static esp32_mquickjs_cancel_result_t event_queue_future_cancel(
+    esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL || atomic_load_explicit(
                              &state->completed, memory_order_acquire)) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     atomic_store_explicit(&state->completed, true, memory_order_release);
     event_queue_clear_receiver(state->queue, state->token);
-    return true;
+    return ESP32_MQUICKJS_CANCELLED;
 }
 
 static void event_queue_future_destroy(esp32_mquickjs_future_driver_state_t *state)
@@ -425,7 +426,7 @@ static void event_queue_future_destroy(esp32_mquickjs_future_driver_state_t *sta
 }
 
 static const esp32_mquickjs_future_driver_t s_event_queue_future_driver = {
-    .prepare = event_queue_future_prepare,
+    .capture = event_queue_future_prepare,
     .start = event_queue_future_start,
     .poll = event_queue_future_poll,
     .finish = event_queue_future_finish,

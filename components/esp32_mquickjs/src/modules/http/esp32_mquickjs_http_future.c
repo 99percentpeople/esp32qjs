@@ -253,15 +253,19 @@ static JSValue http_future_finish(JSContext *ctx,
     return esp32_mquickjs_http_make_response_object(ctx, state->response);
 }
 
-static bool http_future_cancel(esp32_mquickjs_future_driver_state_t *state)
+static esp32_mquickjs_cancel_result_t http_future_cancel(
+    esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL ||
         atomic_load_explicit(&state->completed, memory_order_acquire) ||
         state->cancel_requested) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
+    }
+    if (!esp32_mquickjs_http_operation_cancel(state->operation)) {
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     state->cancel_requested = true;
-    return esp32_mquickjs_http_operation_cancel(state->operation);
+    return ESP32_MQUICKJS_CANCEL_REQUESTED;
 }
 
 static void http_future_destroy(esp32_mquickjs_future_driver_state_t *state)
@@ -288,7 +292,7 @@ static uint32_t http_future_timeout_ms(
 }
 
 static const esp32_mquickjs_future_driver_t s_http_future_driver = {
-    .prepare = http_future_prepare,
+    .capture = http_future_prepare,
     .start = http_future_start,
     .poll = http_future_poll,
     .finish = http_future_finish,

@@ -1176,15 +1176,16 @@ static JSValue i2c_future_finish(JSContext *ctx,
     return js_bytes_to_array(ctx, state->read_data, state->read_length);
 }
 
-static bool i2c_future_cancel(esp32_mquickjs_future_driver_state_t *state)
+static esp32_mquickjs_cancel_result_t i2c_future_cancel(
+    esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL ||
         atomic_load_explicit(&state->completed, memory_order_acquire) ||
         state->cancelled) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     state->cancelled = true;
-    return true;
+    return ESP32_MQUICKJS_CANCEL_REQUESTED;
 }
 
 static void i2c_future_destroy(esp32_mquickjs_future_driver_state_t *state)
@@ -1204,7 +1205,7 @@ static uint32_t i2c_future_timeout_ms(
 
 #define I2C_FUTURE_DRIVER(name, prepare_fn) \
     static const esp32_mquickjs_future_driver_t name = { \
-        .prepare = prepare_fn, \
+        .capture = prepare_fn, \
         .start = i2c_future_start, \
         .poll = i2c_future_poll, \
         .finish = i2c_future_finish, \

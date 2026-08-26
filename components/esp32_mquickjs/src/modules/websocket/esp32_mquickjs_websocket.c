@@ -992,16 +992,16 @@ static JSValue websocket_send_future_finish(
     return JS_NewInt32(ctx, state->sent);
 }
 
-static bool websocket_send_future_cancel(
+static esp32_mquickjs_cancel_result_t websocket_send_future_cancel(
     esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL ||
         atomic_load_explicit(&state->worker_completed, memory_order_acquire) ||
         atomic_load_explicit(&state->cancelled, memory_order_acquire)) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     atomic_store_explicit(&state->cancelled, true, memory_order_release);
-    return true;
+    return ESP32_MQUICKJS_CANCEL_REQUESTED;
 }
 
 static void websocket_send_future_destroy(
@@ -1025,7 +1025,7 @@ static uint32_t websocket_send_future_timeout_ms(
 }
 
 static const esp32_mquickjs_future_driver_t s_websocket_send_driver = {
-    .prepare = websocket_send_future_prepare,
+    .capture = websocket_send_future_prepare,
     .start = websocket_send_future_start,
     .poll = websocket_send_future_poll,
     .finish = websocket_send_future_finish,

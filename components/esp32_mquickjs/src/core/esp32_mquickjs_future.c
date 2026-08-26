@@ -66,6 +66,7 @@ typedef struct {
     bool result_retained;
     bool input_refs_retained;
     bool driver_active;
+    bool cancel_requested;
     bool observed;
     future_state_t state;
     future_kind_t kind;
@@ -804,42 +805,70 @@ static void future_apply_driver_deadline(future_slot_t *slot)
     }
 }
 
+static bool future_capture_call_driver(JSContext *ctx,
+                                       future_runtime_t *state,
+                                       future_slot_t *slot)
+{
+    const esp32_mquickjs_future_driver_t *driver;
+
+    if (slot == NULL || !slot->call_refs_retained) {
+        return false;
+    }
+    driver = future_find_driver(state, slot->function.val);
+    if (driver == NULL) {
+        return true;
+    }
+    slot->driver = driver;
+    slot->kind = FUTURE_KIND_DRIVER;
+    if (driver->capture == NULL ||
+        !driver->capture(ctx,
+                         &slot->receiver,
+                         slot->argument_count,
+                         slot->arguments,
+                         &slot->driver_state)) {
+        slot->driver = NULL;
+        slot->kind = FUTURE_KIND_CALL;
+        future_reject_current_exception(ctx, slot);
+        return false;
+    }
+    slot->driver_active = true;
+    future_apply_driver_deadline(slot);
+    future_release_call_refs(ctx, slot);
+    return true;
+}
+
 static void future_dispatch_call(JSContext *ctx,
                                  esp32_mquickjs_runtime_t *runtime,
                                  future_slot_t *slot)
 {
     future_runtime_t *state = future_runtime(runtime);
-    const esp32_mquickjs_future_driver_t *driver;
     JSValue *argv = NULL;
     uint64_t saved_deadline_us;
     JSValue result;
     int i;
 
-    if (slot == NULL || slot->state != FUTURE_STATE_QUEUED || !slot->call_refs_retained) {
+    if (slot == NULL || slot->state != FUTURE_STATE_QUEUED) {
         return;
     }
-    driver = future_find_driver(state, slot->function.val);
-    if (driver != NULL) {
-        slot->driver = driver;
-        if (driver->prepare == NULL ||
-            !driver->prepare(ctx,
-                             &slot->receiver,
-                             slot->argument_count,
-                             slot->arguments,
-                             &slot->driver_state)) {
-            future_reject_current_exception(ctx, slot);
+    if (slot->kind == FUTURE_KIND_DRIVER) {
+        if (!slot->driver_active || slot->driver == NULL ||
+            slot->driver_state == NULL || slot->driver->start == NULL) {
+            future_reject_message(ctx, slot, "Future native driver was not captured");
+            future_destroy_driver(slot);
+            future_release_if_terminal(ctx, slot);
             return;
         }
-        future_apply_driver_deadline(slot);
-        future_release_call_refs(ctx, slot);
-        slot->kind = FUTURE_KIND_DRIVER;
         slot->state = FUTURE_STATE_PENDING;
-        slot->driver_active = true;
-        if (!driver->start(ctx, runtime, future_token(slot), slot->driver_state)) {
+        if (!slot->driver->start(ctx, runtime, future_token(slot),
+                                 slot->driver_state)) {
             future_reject_current_exception(ctx, slot);
             future_destroy_driver(slot);
             future_release_if_terminal(ctx, slot);
         }
+        return;
+    }
+    if (slot->kind != FUTURE_KIND_CALL || !slot->call_refs_retained) {
+        future_reject_message(ctx, slot, "Future has an invalid call operation");
         return;
     }
 
@@ -927,6 +956,7 @@ static void future_dispatch_submission(JSContext *ctx,
     }
     switch (slot->kind) {
         case FUTURE_KIND_CALL:
+        case FUTURE_KIND_DRIVER:
             future_dispatch_call(ctx, runtime, slot);
             break;
         case FUTURE_KIND_SLEEP:
@@ -1077,18 +1107,31 @@ static void future_advance_race(JSContext *ctx, future_slot_t *slot)
 
 static bool future_cancel_slot(JSContext *ctx, future_slot_t *slot)
 {
+    esp32_mquickjs_cancel_result_t result;
+
     if (slot == NULL || future_is_terminal(slot->state)) {
         return false;
     }
-    if (slot->driver_active && slot->driver != NULL && slot->driver->cancel != NULL) {
-        (void)slot->driver->cancel(slot->driver_state);
+    if (slot->state == FUTURE_STATE_QUEUED) {
+        future_destroy_driver(slot);
+        future_settle(ctx, slot, FUTURE_STATE_CANCELLED, JS_UNDEFINED);
+        return true;
     }
-    future_release_call_refs(ctx, slot);
-    future_release_input_refs(ctx, slot);
-    future_stop_timer(slot);
-    slot->state = FUTURE_STATE_CANCELLED;
-    future_publish_terminal(ctx, slot);
-    future_release_if_terminal(ctx, slot);
+    if (slot->driver_active) {
+        if (slot->cancel_requested || slot->driver == NULL ||
+            slot->driver->cancel == NULL) {
+            return false;
+        }
+        result = slot->driver->cancel(slot->driver_state);
+        if (result == ESP32_MQUICKJS_CANCEL_REJECTED) {
+            return false;
+        }
+        if (result == ESP32_MQUICKJS_CANCEL_REQUESTED) {
+            slot->cancel_requested = true;
+            return true;
+        }
+    }
+    future_settle(ctx, slot, FUTURE_STATE_CANCELLED, JS_UNDEFINED);
     return true;
 }
 
@@ -1240,8 +1283,16 @@ static bool future_expire_deadlines(JSContext *ctx,
         }
         timeout_ms = esp32_mquickjs_future_elapsed_timeout_ms(
             slot->submitted_us, slot->deadline_us);
-        if (slot->driver_active && slot->driver != NULL && slot->driver->cancel != NULL) {
-            (void)slot->driver->cancel(slot->driver_state);
+        if (slot->driver_active && slot->state == FUTURE_STATE_QUEUED) {
+            future_destroy_driver(slot);
+        } else if (slot->driver_active && slot->driver != NULL &&
+                   slot->driver->cancel != NULL && !slot->cancel_requested) {
+            esp32_mquickjs_cancel_result_t cancel_result =
+                slot->driver->cancel(slot->driver_state);
+
+            if (cancel_result == ESP32_MQUICKJS_CANCEL_REQUESTED) {
+                slot->cancel_requested = true;
+            }
         }
         snprintf(message, sizeof(message), "Future operation timed out after %" PRIu32 " ms", timeout_ms);
         future_reject_message(ctx, slot, message);
@@ -1274,6 +1325,11 @@ static bool future_poll_ready(JSContext *ctx,
         future_destroy_driver(slot);
         future_publish_terminal(ctx, slot);
         future_release_if_terminal(ctx, slot);
+        return true;
+    }
+    if (slot->cancel_requested) {
+        future_destroy_driver(slot);
+        future_settle(ctx, slot, FUTURE_STATE_CANCELLED, JS_UNDEFINED);
         return true;
     }
     result = slot->driver->finish(ctx, slot->driver_state);
@@ -1380,10 +1436,20 @@ bool esp32_mquickjs_prepare_future_runtime_destroy(JSContext *ctx,
             continue;
         }
         if (slot->driver_active) {
+            if (slot->state == FUTURE_STATE_QUEUED) {
+                future_clear_slot(ctx, slot);
+                continue;
+            }
             if (!future_is_terminal(slot->state) && slot->driver != NULL &&
-                slot->driver->cancel != NULL) {
-                (void)slot->driver->cancel(slot->driver_state);
-                slot->state = FUTURE_STATE_CANCELLED;
+                slot->driver->cancel != NULL && !slot->cancel_requested) {
+                esp32_mquickjs_cancel_result_t cancel_result =
+                    slot->driver->cancel(slot->driver_state);
+
+                if (cancel_result == ESP32_MQUICKJS_CANCELLED) {
+                    slot->state = FUTURE_STATE_CANCELLED;
+                } else if (cancel_result == ESP32_MQUICKJS_CANCEL_REQUESTED) {
+                    slot->cancel_requested = true;
+                }
             }
             if (slot->driver == NULL || slot->driver->poll == NULL ||
                 slot->driver->poll(slot->driver_state) != ESP32_MQUICKJS_FUTURE_READY) {
@@ -1724,27 +1790,32 @@ void js_future_gc_trace(JSContext *ctx, void *opaque,
 JSValue js_future_call(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
+    future_runtime_t *state = future_runtime(runtime);
     JSGCRef function_ref;
     JSGCRef receiver_ref;
     JSGCRef args_ref;
+    JSGCRef result_ref;
     JSValue *function = JS_PushGCRef(ctx, &function_ref);
     JSValue *receiver = JS_PushGCRef(ctx, &receiver_ref);
     JSValue *args = JS_PushGCRef(ctx, &args_ref);
+    JSValue *result = JS_PushGCRef(ctx, &result_ref);
     future_slot_t *slot;
-    JSValue result;
+    JSValue return_value;
 
     (void)this_val;
     *function = argc >= 1 ? argv[0] : JS_UNDEFINED;
     *receiver = argc >= 2 && !JS_IsUndefined(argv[1])
         ? argv[1] : JS_GetGlobalObject(ctx);
     *args = argc >= 3 ? argv[2] : JS_UNDEFINED;
+    *result = JS_EXCEPTION;
     if (argc < 1 || argc > 3 || !JS_IsFunction(ctx, *function)) {
-        result = JS_ThrowTypeError(ctx, "Future.call(fn, thisValue?, args?) expects a function");
+        *result = JS_ThrowTypeError(ctx,
+                                    "Future.call(fn, thisValue?, args?) expects a function");
         goto done;
     }
     slot = future_allocate_slot(ctx, runtime, FUTURE_KIND_CALL);
     if (slot == NULL) {
-        result = JS_ThrowInternalError(ctx, "Future capacity is exhausted");
+        *result = JS_ThrowInternalError(ctx, "Future capacity is exhausted");
         goto done;
     }
     if (!future_retain_call(ctx,
@@ -1753,24 +1824,27 @@ JSValue js_future_call(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
                             *receiver,
                             *args)) {
         future_clear_slot(ctx, slot);
-        result = JS_EXCEPTION;
         goto done;
     }
-    result = future_make_handle(ctx, slot);
-    if (JS_IsException(result)) {
+    *result = future_make_handle(ctx, slot);
+    if (JS_IsException(*result)) {
+        goto done;
+    }
+    if (!future_capture_call_driver(ctx, state, slot)) {
         goto done;
     }
     if (!future_submit(slot)) {
         future_abandon_handle(slot);
         future_clear_slot(ctx, slot);
-        result = JS_ThrowInternalError(ctx, "Future submission queue is full");
+        *result = JS_ThrowInternalError(ctx, "Future submission queue is full");
     }
 
 done:
+    return_value = JS_PopGCRef(ctx, &result_ref);
     JS_PopGCRef(ctx, &args_ref);
     JS_PopGCRef(ctx, &receiver_ref);
     JS_PopGCRef(ctx, &function_ref);
-    return result;
+    return return_value;
 }
 
 static JSValue future_make_combinator(JSContext *ctx,

@@ -274,12 +274,13 @@ static JSValue wifi_future_finish(JSContext *ctx,
                                  esp32_mquickjs_wifi_reason_to_string(state->connect_reason));
 }
 
-static bool wifi_future_cancel(esp32_mquickjs_future_driver_state_t *state)
+static esp32_mquickjs_cancel_result_t wifi_future_cancel(
+    esp32_mquickjs_future_driver_state_t *state)
 {
     esp32_mquickjs_wifi_state_t *wifi = esp32_mquickjs_wifi_state();
 
     if (state == NULL || state->completed || state->cancel_requested) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     state->cancel_requested = true;
     if (state->kind == WIFI_FUTURE_SCAN) {
@@ -298,7 +299,7 @@ static bool wifi_future_cancel(esp32_mquickjs_future_driver_state_t *state)
     }
     state->completed = true;
     (void)esp32_mquickjs_future_wake(state->runtime, state->token);
-    return true;
+    return ESP32_MQUICKJS_CANCELLED;
 }
 
 static void wifi_future_destroy(esp32_mquickjs_future_driver_state_t *state)
@@ -322,7 +323,7 @@ static uint32_t wifi_future_timeout_ms(
 }
 
 static const esp32_mquickjs_future_driver_t s_wifi_scan_future_driver = {
-    .prepare = wifi_scan_future_prepare,
+    .capture = wifi_scan_future_prepare,
     .start = wifi_future_start,
     .poll = wifi_future_poll,
     .finish = wifi_future_finish,
@@ -332,7 +333,7 @@ static const esp32_mquickjs_future_driver_t s_wifi_scan_future_driver = {
 };
 
 static const esp32_mquickjs_future_driver_t s_wifi_connect_future_driver = {
-    .prepare = wifi_connect_future_prepare,
+    .capture = wifi_connect_future_prepare,
     .start = wifi_future_start,
     .poll = wifi_future_poll,
     .finish = wifi_future_finish,

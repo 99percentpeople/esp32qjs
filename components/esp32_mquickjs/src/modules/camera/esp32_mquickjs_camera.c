@@ -894,20 +894,22 @@ static JSValue camera_capture_finish(
     return result;
 }
 
-static bool camera_capture_cancel(
+static esp32_mquickjs_cancel_result_t camera_capture_cancel(
     esp32_mquickjs_future_driver_state_t *state)
 {
     bool interrupted;
 
     if (state == NULL || camera_future_cancelled(state)) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     interrupted = !camera_future_completed(state);
     camera_future_mark_cancelled(state);
     if (state->started && camera_slot_matches(state->camera_generation)) {
         s_camera.release_pending = true;
     }
-    return interrupted;
+    return interrupted
+        ? ESP32_MQUICKJS_CANCEL_REQUESTED
+        : ESP32_MQUICKJS_CANCELLED;
 }
 
 static void camera_capture_destroy(
@@ -933,7 +935,7 @@ static void camera_capture_destroy(
 }
 
 static const esp32_mquickjs_future_driver_t s_camera_capture_driver = {
-    .prepare = camera_capture_prepare,
+    .capture = camera_capture_prepare,
     .start = camera_capture_start,
     .poll = camera_capture_poll,
     .finish = camera_capture_finish,
@@ -1072,14 +1074,11 @@ static JSValue camera_close_finish(
     return JS_TRUE;
 }
 
-static bool camera_close_cancel(
+static esp32_mquickjs_cancel_result_t camera_close_cancel(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL || camera_future_completed(state)) {
-        return false;
-    }
-    camera_future_mark_cancelled(state);
-    return false;
+    (void)state;
+    return ESP32_MQUICKJS_CANCEL_REJECTED;
 }
 
 static void camera_close_destroy(
@@ -1095,7 +1094,7 @@ static void camera_close_destroy(
 }
 
 static const esp32_mquickjs_future_driver_t s_camera_close_driver = {
-    .prepare = camera_close_prepare,
+    .capture = camera_close_prepare,
     .start = camera_close_start,
     .poll = camera_close_poll,
     .finish = camera_close_finish,

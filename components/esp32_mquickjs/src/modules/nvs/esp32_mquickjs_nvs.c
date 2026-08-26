@@ -427,15 +427,16 @@ static JSValue nvs_future_finish(JSContext *ctx,
     return JS_NewBool(state->result);
 }
 
-static bool nvs_future_cancel(esp32_mquickjs_future_driver_state_t *state)
+static esp32_mquickjs_cancel_result_t nvs_future_cancel(
+    esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL ||
         atomic_load_explicit(&state->completed, memory_order_acquire) ||
         state->cancelled) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     state->cancelled = true;
-    return true;
+    return ESP32_MQUICKJS_CANCEL_REQUESTED;
 }
 
 static void nvs_future_destroy(esp32_mquickjs_future_driver_state_t *state)
@@ -445,7 +446,7 @@ static void nvs_future_destroy(esp32_mquickjs_future_driver_state_t *state)
 
 #define NVS_FUTURE_DRIVER(name, prepare_fn) \
     static const esp32_mquickjs_future_driver_t name = { \
-        .prepare = prepare_fn, \
+        .capture = prepare_fn, \
         .start = nvs_future_start, \
         .poll = nvs_future_poll, \
         .finish = nvs_future_finish, \

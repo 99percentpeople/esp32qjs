@@ -644,6 +644,7 @@ typedef struct {
 typedef struct {
     _Atomic uint32_t references;
     _Atomic bool completed;
+    _Atomic bool cancel_requested;
     _Atomic int phase;
     esp_tls_cfg_t config;
     esp_tls_t *tls;
@@ -1339,17 +1340,27 @@ static void socket_tls_connect_worker(void *opaque)
         return;
     }
     worker_uses_caps = request->worker_uses_caps;
-    request->tls = esp_tls_init();
-    if (request->tls == NULL) {
+    if (atomic_load_explicit(&request->cancel_requested,
+                             memory_order_acquire)) {
+        request->result = -1;
+    } else {
+        request->tls = esp_tls_init();
+    }
+    if (request->tls == NULL && request->result == 0) {
         esp32_mquickjs_tls_error_set(
             &request->error, ESP_ERR_NO_MEM, ESP_OK, 0, 0);
         request->result = -1;
-    } else {
+    } else if (request->tls != NULL) {
         for (;;) {
             esp_tls_conn_state_t tls_state = ESP_TLS_INIT;
             uint64_t now_us = (uint64_t)esp_timer_get_time();
             uint64_t remaining_ms;
 
+            if (atomic_load_explicit(&request->cancel_requested,
+                                     memory_order_acquire)) {
+                request->result = -1;
+                break;
+            }
             if (now_us >= request->deadline_us) {
                 esp32_mquickjs_tls_error_capture(
                     &request->error, request->tls, ESP_ERR_TIMEOUT);
@@ -1447,6 +1458,7 @@ static bool socket_future_begin_tls_connect(
     }
     atomic_init(&request->references, 2);
     atomic_init(&request->completed, false);
+    atomic_init(&request->cancel_requested, false);
     atomic_init(&request->phase, SOCKET_CONNECT_CONNECTING);
     request->deadline_us = state->deadline_us;
     request->port = state->port;
@@ -1946,7 +1958,23 @@ static bool socket_future_start(JSContext *ctx,
 static esp32_mquickjs_future_poll_t socket_future_poll(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    socket_future_step(state);
+    if (state != NULL && state->cancelled) {
+        bool background_pending =
+            (state->resolver != NULL &&
+             !atomic_load_explicit(&state->resolver->completed,
+                                   memory_order_acquire));
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+        background_pending = background_pending ||
+            (state->tls_request != NULL &&
+             !atomic_load_explicit(&state->tls_request->completed,
+                                   memory_order_acquire));
+#endif
+        if (!background_pending) {
+            state->completed = true;
+        }
+    } else {
+        socket_future_step(state);
+    }
     if (state != NULL && state->completed) {
         socket_future_stop_timer(state);
         return ESP32_MQUICKJS_FUTURE_READY;
@@ -2097,18 +2125,36 @@ static JSValue socket_future_finish(JSContext *ctx,
     return JS_ThrowInternalError(ctx, "invalid socket Future kind");
 }
 
-static bool socket_future_cancel(esp32_mquickjs_future_driver_state_t *state)
+static esp32_mquickjs_cancel_result_t socket_future_cancel(
+    esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL || state->completed || state->cancelled) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     state->cancelled = true;
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+    if (state->tls_request != NULL) {
+        atomic_store_explicit(&state->tls_request->cancel_requested,
+                              true,
+                              memory_order_release);
+    }
+#endif
+    if ((state->resolver != NULL &&
+         !atomic_load_explicit(&state->resolver->completed,
+                               memory_order_acquire))
+#if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
+        || (state->tls_request != NULL &&
+            !atomic_load_explicit(&state->tls_request->completed,
+                                  memory_order_acquire))
+#endif
+    ) {
+        return ESP32_MQUICKJS_CANCEL_REQUESTED;
+    }
     state->completed = true;
-    socket_future_stop_timer(state);
     if (state->runtime != NULL) {
         (void)esp32_mquickjs_future_wake(state->runtime, state->token);
     }
-    return true;
+    return ESP32_MQUICKJS_CANCELLED;
 }
 
 static void socket_future_destroy(esp32_mquickjs_future_driver_state_t *state)
@@ -2150,7 +2196,7 @@ static uint32_t socket_future_timeout_ms(
 
 #define SOCKET_FUTURE_DRIVER(name, prepare_fn) \
     static const esp32_mquickjs_future_driver_t name = { \
-        .prepare = prepare_fn, \
+        .capture = prepare_fn, \
         .start = socket_future_start, \
         .poll = socket_future_poll, \
         .finish = socket_future_finish, \

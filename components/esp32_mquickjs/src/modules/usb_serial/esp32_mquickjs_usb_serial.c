@@ -1030,18 +1030,18 @@ static JSValue usb_serial_future_finish(
     return JS_NewInt64(ctx, (int64_t)state->logical_length);
 }
 
-static bool usb_serial_future_cancel(
+static esp32_mquickjs_cancel_result_t usb_serial_future_cancel(
     esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL || state->completed || state->cancelled) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     state->cancelled = true;
     state->completed = true;
     if (state->runtime != NULL) {
         (void)esp32_mquickjs_future_wake(state->runtime, state->token);
     }
-    return true;
+    return ESP32_MQUICKJS_CANCELLED;
 }
 
 static void usb_serial_future_destroy(
@@ -1058,7 +1058,7 @@ static void usb_serial_future_destroy(
 }
 
 static const esp32_mquickjs_future_driver_t s_usb_serial_send_driver = {
-    .prepare = usb_serial_future_prepare,
+    .capture = usb_serial_future_prepare,
     .start = usb_serial_future_start,
     .poll = usb_serial_future_poll,
     .finish = usb_serial_future_finish,

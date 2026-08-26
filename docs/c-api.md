@@ -64,7 +64,11 @@ sys.time.sync({ servers: ["pool.ntp.org"], timeoutMs: 10000 });
 
 - `Future.call(fn, thisValue?, args?)`
   Queue a callable without invoking it before return. It starts at the next
-  scheduler idle point and remains runtime-owned through settlement.
+  scheduler idle point and remains runtime-owned through settlement. For a
+  registered native driver, the call synchronously validates and captures
+  immutable arguments, generations, buffers, and leases before returning, but
+  does not start I/O or wait on hardware. Capture errors produce an already
+  rejected Future.
 - `Future.all(futures)`
   Fulfill with results in input order. Other inputs are not cancelled when one fails.
   The combinator handles rejection from every attached input.
@@ -79,7 +83,10 @@ sys.time.sync({ servers: ["pool.ntp.org"], timeoutMs: 10000 });
   rejection is handled by the timeout wrapper even when it settles first.
 - `future.status()` / `future.wait(timeoutMs?)` / `future.cancel()`
   Inspect, cooperatively wait for, or cancel a Future. A wait timeout does not
-  cancel the operation.
+  cancel the operation. Cancelling queued work settles it immediately. A
+  running native operation may reject cancellation (`false`), confirm it
+  immediately (`true` and `"cancelled"`), or accept a request (`true`) while
+  remaining `"pending"` until its driver reports that teardown is complete.
 - `future.map(fn)`
   Transform a fulfilled value without flattening a returned Future. Rejections
   and cancellations propagate without invoking `fn`.

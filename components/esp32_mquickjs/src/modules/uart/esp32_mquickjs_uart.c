@@ -2002,17 +2002,18 @@ static JSValue uart_future_finish(JSContext *ctx,
         : JS_TRUE;
 }
 
-static bool uart_future_cancel(esp32_mquickjs_future_driver_state_t *state)
+static esp32_mquickjs_cancel_result_t uart_future_cancel(
+    esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL || state->completed || state->cancelled) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     state->cancelled = true;
     state->completed = true;
     if (state->runtime != NULL) {
         (void)esp32_mquickjs_future_wake(state->runtime, state->token);
     }
-    return true;
+    return ESP32_MQUICKJS_CANCELLED;
 }
 
 static void uart_future_destroy(esp32_mquickjs_future_driver_state_t *state)
@@ -2031,7 +2032,7 @@ static void uart_future_destroy(esp32_mquickjs_future_driver_state_t *state)
 }
 
 static const esp32_mquickjs_future_driver_t s_uart_read_driver = {
-    .prepare = uart_read_future_prepare,
+    .capture = uart_read_future_prepare,
     .start = uart_future_start,
     .poll = uart_future_poll,
     .finish = uart_future_finish,
@@ -2040,7 +2041,7 @@ static const esp32_mquickjs_future_driver_t s_uart_read_driver = {
 };
 
 static const esp32_mquickjs_future_driver_t s_uart_flush_driver = {
-    .prepare = uart_flush_future_prepare,
+    .capture = uart_flush_future_prepare,
     .start = uart_future_start,
     .poll = uart_future_poll,
     .finish = uart_future_finish,
@@ -2050,7 +2051,7 @@ static const esp32_mquickjs_future_driver_t s_uart_flush_driver = {
 
 #define UART_WRITE_FUTURE_DRIVER(name, prepare_fn)              \
     static const esp32_mquickjs_future_driver_t name = {        \
-        .prepare = prepare_fn,                                  \
+        .capture = prepare_fn,                                  \
         .start = uart_future_start,                              \
         .poll = uart_future_poll,                                \
         .finish = uart_future_finish,                            \

@@ -721,17 +721,18 @@ static JSValue i2s_read_finish(JSContext *ctx,
     return JS_PopGCRef(ctx, &result_ref);
 }
 
-static bool i2s_read_cancel(esp32_mquickjs_future_driver_state_t *state)
+static esp32_mquickjs_cancel_result_t i2s_read_cancel(
+    esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL || state->completed || state->cancelled) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     state->cancelled = true;
     state->completed = true;
     if (state->runtime != NULL) {
         (void)esp32_mquickjs_future_wake(state->runtime, state->token);
     }
-    return true;
+    return ESP32_MQUICKJS_CANCELLED;
 }
 
 static void i2s_read_destroy(esp32_mquickjs_future_driver_state_t *state)
@@ -761,7 +762,7 @@ static void i2s_read_destroy(esp32_mquickjs_future_driver_state_t *state)
 }
 
 static const esp32_mquickjs_future_driver_t s_i2s_read_driver = {
-    .prepare = i2s_read_prepare,
+    .capture = i2s_read_prepare,
     .start = i2s_read_start,
     .poll = i2s_read_poll,
     .finish = i2s_read_finish,
@@ -1074,18 +1075,18 @@ static JSValue i2s_write_finish(
     return JS_PopGCRef(ctx, &result_ref);
 }
 
-static bool i2s_write_cancel(
+static esp32_mquickjs_cancel_result_t i2s_write_cancel(
     esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL || state->completed || state->cancelled) {
-        return false;
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     state->cancelled = true;
     state->completed = true;
     if (state->runtime != NULL) {
         (void)esp32_mquickjs_future_wake(state->runtime, state->token);
     }
-    return true;
+    return ESP32_MQUICKJS_CANCELLED;
 }
 
 static void i2s_write_destroy(
@@ -1116,7 +1117,7 @@ static void i2s_write_destroy(
 }
 
 static const esp32_mquickjs_future_driver_t s_i2s_write_driver = {
-    .prepare = i2s_write_prepare,
+    .capture = i2s_write_prepare,
     .start = i2s_write_start,
     .poll = i2s_write_poll,
     .finish = i2s_write_finish,
