@@ -11,8 +11,21 @@ test("fs/filesystem", function () {
   var mirrorChanges;
   var pendingChange;
   var change;
+  var systemFs;
+  var sameRootFs;
+  var pendingRead;
+  var stream;
+  var pendingStreamRead;
+  var streamText;
+  var leaked;
+  var index;
 
   test.equal(fs.ROOT, "/littlefs", "fs root");
+  systemFs = fs;
+  sameRootFs = systemFs.volume("/littlefs");
+  test.equal(sameRootFs.ROOT, "/littlefs", "volume captures its root");
+  globalThis.fs = sameRootFs;
+  test.equal(systemFs.ROOT, "/littlefs", "existing volume remains immutable");
   info = fs.info();
   test.equal(info.root, fs.ROOT, "fs info root");
   test.ok(info.totalBytes > 0, "fs info total bytes");
@@ -39,6 +52,15 @@ test("fs/filesystem", function () {
   test.equal(appended, 1, "appendText byte count");
   test.equal(changes.receive(0).type, "write", "watch append type");
   test.equal(fs.readText(filePath), "hello!", "appendText round-trip");
+  pendingRead = Future.call(systemFs.readText, systemFs, [filePath]);
+  test.equal(pendingRead.wait(1000), "hello!",
+    "explicit Future captures its FsVolume receiver");
+
+  stream = Future.call(fs.open, fs, [filePath, "r"]).wait(1000);
+  pendingStreamRead = Future.call(stream.read, stream, [16]);
+  streamText = pendingStreamRead.wait(1000);
+  test.equal(streamText, "hello!", "Stream.read uses a Future driver");
+  Future.call(stream.close, stream, []).wait(1000);
 
   stat = fs.stat(filePath);
   test.equal(stat.name, "tmp-test.txt", "stat name");
@@ -61,6 +83,13 @@ test("fs/filesystem", function () {
   test.equal(changes.receive(0).type, "remove", "watch directory removal");
   test.ok(!fs.exists(dirPath), "removed directory should not exist");
   test.ok(changes.close(), "watch queue should close");
+
+  for (index = 0; index < 20; index += 1) {
+    leaked = fs.open("index.js", "r");
+    leaked = null;
+    gc();
+  }
+  test.ok(true, "Stream finalizers release unclosed slots");
 
   return { entries: entries.length };
 });

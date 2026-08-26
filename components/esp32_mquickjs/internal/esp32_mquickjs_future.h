@@ -31,6 +31,8 @@ typedef struct {
     uint32_t (*timeout_ms)(const esp32_mquickjs_future_driver_state_t *state);
 } esp32_mquickjs_future_driver_t;
 
+/* A generic worker callback publishes its result and returns. The generic
+   worker pool is solely responsible for waking the Future once afterward. */
 typedef void (*esp32_mquickjs_future_worker_fn_t)(void *opaque);
 
 typedef struct {

@@ -9,7 +9,7 @@ MQUICKJS = ROOT / "components" / "esp32_mquickjs"
 
 
 class FilesystemRootArchitectureTests(SourceContractTestCase):
-    def test_core_uses_a_generic_filesystem_root(self):
+    def test_core_uses_immutable_generic_filesystem_volumes(self):
         files = (
             MQUICKJS / "include" / "esp32_mquickjs.h",
             MQUICKJS / "internal" / "esp32_mquickjs_core.h",
@@ -19,7 +19,11 @@ class FilesystemRootArchitectureTests(SourceContractTestCase):
         )
         source = "\n".join(path.read_text(encoding="utf-8") for path in files)
 
-        self.assertIn("fs.setRoot(path)", source)
+        self.assertIn('JS_CLASS_DEF("FsVolume"', source)
+        self.assertIn('JS_CFUNC_DEF("volume", 1, js_fs_volume)', source)
+        self.assertIn("fs_volume_root(ctx, receiver, api_name)", source)
+        self.assertNotIn("js_fs_set_root", source)
+        self.assertNotIn("char fs_root[ESP32_MQUICKJS_FS_ROOT_MAX];\n    char startup_fs_root", source)
         self.assertNotIn("/workspace", source.lower())
         self.assertNotIn("ESP32QJS_WORKSPACE", source)
         self.assertNotIn("ESP32QJS_APP_NATIVE", source)

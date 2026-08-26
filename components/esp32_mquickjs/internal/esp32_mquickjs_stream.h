@@ -10,6 +10,10 @@ JSValue js_stream_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
 JSValue js_stream_seek(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_stream_tell(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_stream_eof(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+void js_stream_finalizer(JSContext *ctx, void *opaque);
+
+bool esp32_mquickjs_init_stream_runtime(JSContext *ctx,
+                                        esp32_mquickjs_runtime_t *runtime);
 
 bool esp32_mquickjs_fs_parse_stream_ref(JSContext *ctx,
                                         JSValue stream_value,
@@ -21,6 +25,11 @@ JSValue esp32_mquickjs_stream_open_file(JSContext *ctx,
                                         JSValue global_obj,
                                         const char *path,
                                         const char *mode);
+JSValue esp32_mquickjs_stream_adopt_file(JSContext *ctx,
+                                         JSValue global_obj,
+                                         const char *path,
+                                         const char *mode,
+                                         void *file_handle);
 
 JSValue esp32_mquickjs_stream_open_memory_owned(JSContext *ctx,
                                                 JSValue global_obj,
@@ -72,5 +81,8 @@ esp_err_t esp32_mquickjs_fs_stream_read(const esp32_mquickjs_fs_stream_ref_t *re
                                         void *buf,
                                         size_t buf_len,
                                         size_t *out_len);
+
+esp_err_t esp32_mquickjs_fs_stream_acquire(
+    const esp32_mquickjs_fs_stream_ref_t *ref);
 
 esp_err_t esp32_mquickjs_fs_stream_close(const esp32_mquickjs_fs_stream_ref_t *ref);

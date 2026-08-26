@@ -26,7 +26,8 @@
 #define JS_CLASS_CAMERA_FRAME (JS_CLASS_USER + 21)
 #define JS_CLASS_RMT_SYMBOL_BUFFER (JS_CLASS_USER + 22)
 #define JS_CLASS_RMT_CHANNEL (JS_CLASS_USER + 23)
-#define JS_CLASS_COUNT (JS_CLASS_USER + 24)
+#define JS_CLASS_FS_VOLUME (JS_CLASS_USER + 24)
+#define JS_CLASS_COUNT (JS_CLASS_USER + 25)
 
 #define js_global_object js_global_object_base
 #define js_c_function_decl js_c_function_decl_base
@@ -126,7 +127,8 @@ static const JSPropDef js_stream_proto[] = {
 };
 
 static const JSClassDef js_stream_class =
-    JS_CLASS_DEF("Stream", 0, js_stream_constructor, JS_CLASS_STREAM, js_stream, js_stream_proto, NULL, NULL);
+    JS_CLASS_DEF("Stream", 0, js_stream_constructor, JS_CLASS_STREAM, js_stream,
+                 js_stream_proto, NULL, js_stream_finalizer);
 
 static const JSPropDef js_byte_view_proto[] = {
     JS_CGETSET_DEF("length", js_byte_view_get_length, NULL),
@@ -265,9 +267,9 @@ static const JSClassDef js_bitmap_obj =
 #endif
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
-static const JSPropDef js_fs[] = {
+static const JSPropDef js_fs_volume_proto[] = {
     JS_CGETSET_DEF("ROOT", js_fs_get_root, NULL),
-    JS_CFUNC_DEF("setRoot", 1, js_fs_set_root),
+    JS_CFUNC_DEF("volume", 1, js_fs_volume),
     JS_CFUNC_DEF("info", 0, js_fs_info),
     JS_CFUNC_DEF("watch", 0, js_fs_watch),
     JS_CFUNC_DEF("open", 2, js_fs_open),
@@ -283,8 +285,10 @@ static const JSPropDef js_fs[] = {
     JS_PROP_END,
 };
 
-static const JSClassDef js_fs_obj =
-    JS_OBJECT_DEF("fs", js_fs);
+static const JSClassDef js_fs_volume_class =
+    JS_CLASS_DEF("FsVolume", 0, js_fs_volume_constructor,
+                 JS_CLASS_FS_VOLUME, NULL, js_fs_volume_proto, NULL,
+                 js_fs_volume_finalizer);
 
 static const JSPropDef js_framework[] = {
     JS_CFUNC_DEF("load", 1, js_framework_load),
@@ -1019,7 +1023,7 @@ static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("bitmap", &js_bitmap_obj),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
-    JS_PROP_CLASS_DEF("fs", &js_fs_obj),
+    JS_PROP_CLASS_DEF("FsVolume", &js_fs_volume_class),
     JS_PROP_CLASS_DEF("framework", &js_framework_obj),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_NVS

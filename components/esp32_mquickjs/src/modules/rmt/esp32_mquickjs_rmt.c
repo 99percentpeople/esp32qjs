@@ -6,6 +6,7 @@
 #include "esp32_mquickjs_future.h"
 
 #include <math.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -86,8 +87,8 @@ struct esp32_mquickjs_future_driver_state {
     uint32_t idle_threshold_ns;
     int loop_count;
     bool end_level;
-    volatile size_t received_symbols;
-    volatile bool completed;
+    size_t received_symbols;
+    _Atomic bool completed;
     bool buffer_leased;
     bool started;
     bool cancelled;
@@ -372,7 +373,7 @@ static bool IRAM_ATTR rmt_on_transmit_done(
     (void)event;
     if (slot != NULL && (state = slot->active) != NULL) {
         state->err = ESP_OK;
-        state->completed = true;
+        atomic_store_explicit(&state->completed, true, memory_order_release);
         if (slot->runtime != NULL) {
             (void)esp32_mquickjs_future_wake_from_isr(
                 slot->runtime, slot->token, &task_woken);
@@ -395,7 +396,7 @@ static bool IRAM_ATTR rmt_on_receive_done(
         state->received_symbols = event->num_symbols;
         state->truncated = event->num_symbols >= state->buffer->capacity;
         state->err = ESP_OK;
-        state->completed = true;
+        atomic_store_explicit(&state->completed, true, memory_order_release);
         if (slot->runtime != NULL) {
             (void)esp32_mquickjs_future_wake_from_isr(
                 slot->runtime, slot->token, &task_woken);
@@ -482,6 +483,7 @@ static bool rmt_prepare_common(
     state->operation = operation;
     state->timeout_ms = RMT_DEFAULT_TIMEOUT_MS;
     state->err = ESP_OK;
+    atomic_init(&state->completed, false);
     buffer->leases++;
     state->buffer_leased = true;
     owner = JS_AddGCRef(ctx, &state->channel_owner_ref);
@@ -667,7 +669,7 @@ static bool rmt_operation_start(
     if (state->timeout_ms == 0) {
         rmt_abort_active(slot);
         state->timed_out = true;
-        state->completed = true;
+        atomic_store_explicit(&state->completed, true, memory_order_release);
     }
     (void)esp32_mquickjs_future_wake(runtime, token);
     return true;
@@ -678,7 +680,8 @@ static esp32_mquickjs_future_poll_t rmt_operation_poll(
 {
     esp32_mquickjs_rmt_future_state_t *state = driver_state;
 
-    return state != NULL && state->completed
+    return state != NULL && atomic_load_explicit(
+                                &state->completed, memory_order_acquire)
                ? ESP32_MQUICKJS_FUTURE_READY
                : ESP32_MQUICKJS_FUTURE_PENDING;
 }
@@ -741,14 +744,15 @@ static bool rmt_operation_cancel(
     esp32_mquickjs_rmt_channel_slot_t *slot =
         state != NULL ? rmt_channel_get_slot(&state->channel_ref) : NULL;
 
-    if (state == NULL || state->completed) {
+    if (state == NULL || atomic_load_explicit(
+                             &state->completed, memory_order_acquire)) {
         return false;
     }
     if (slot != NULL && state->started) {
         rmt_abort_active(slot);
     }
     state->cancelled = true;
-    state->completed = true;
+    atomic_store_explicit(&state->completed, true, memory_order_release);
     if (state->runtime != NULL) {
         (void)esp32_mquickjs_future_wake(state->runtime, state->token);
     }

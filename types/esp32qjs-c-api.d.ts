@@ -476,9 +476,9 @@ namespace ESP32QJS {
    * fs.remove("notes.txt");
    * ```
    */
-  interface FsModule {
+  interface FsVolume {
     readonly ROOT: string;
-    setRoot(path: string): string;
+    volume(root: string): FsVolume;
     info(): FsInfo;
     watch(): EventQueue<FsChangeEvent>;
     open(path: string, mode?: FsOpenMode): Stream;
@@ -2493,8 +2493,8 @@ namespace ESP32QJS {
   function setInterval(fn: () => void, ms: number): ESP32QJS.TimerHandle;
   function clearInterval(handle: ESP32QJS.TimerHandle): void;
 
-  /** File-system helpers bound to `/littlefs`. */
-  var fs: ESP32QJS.FsModule;
+  /** Immutable filesystem volume; initially bound to `/littlefs`. */
+  var fs: ESP32QJS.FsVolume;
   /** Read-only system framework loader rooted below `/_sys`. */
   var framework: ESP32QJS.FrameworkModule;
   /** Bounded strings in the default NVS partition. */

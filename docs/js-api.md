@@ -154,8 +154,9 @@ ships none; each comes from one of two overlay sources:
   });
   ```
 
-  `framework.load` keeps working after the agent switches `fs.setRoot()` to the
-  workspace because it always resolves against `/littlefs/_sys`.
+  `framework.load` keeps working after the agent installs a workspace
+  `FsVolume` as global `fs` because it always resolves against
+  `/littlefs/_sys`.
 
 - Application overlays, such as the `wlk1501spi8p` profile carried by the
   bundled `demo` app under `apps/demo/flash_data/_sys/display/`:

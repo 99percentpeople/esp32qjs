@@ -14,6 +14,7 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -55,6 +56,10 @@ typedef struct esp32_mquickjs_fs_runtime {
     SemaphoreHandle_t lock;
     esp32_mquickjs_fs_change_source_t *sources;
 } esp32_mquickjs_fs_runtime_t;
+
+typedef struct {
+    char root[ESP32_MQUICKJS_FS_ROOT_MAX];
+} esp32_mquickjs_fs_volume_t;
 
 static bool s_littlefs_mounted;
 static SemaphoreHandle_t s_fs_worker_lock;
@@ -216,6 +221,23 @@ static esp32_mquickjs_littlefs_mount_t *find_littlefs_mount_by_root(
     return matched;
 }
 
+static esp32_mquickjs_littlefs_mount_t *find_littlefs_mount_exact(
+    const char *base_path)
+{
+    size_t i;
+
+    if (base_path == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < ESP32_MQUICKJS_MAX_LITTLEFS_MOUNTS; ++i) {
+        if (s_littlefs_mounts[i].active &&
+            strcmp(s_littlefs_mounts[i].base_path, base_path) == 0) {
+            return &s_littlefs_mounts[i];
+        }
+    }
+    return NULL;
+}
+
 static bool remember_littlefs_mount(const char *partition_label,
                                     const char *base_path)
 {
@@ -261,19 +283,18 @@ static void forget_littlefs_mount(const char *partition_label)
     }
 }
 
-static const char *active_fs_base_path(void)
+static const char *fs_volume_root(JSContext *ctx,
+                                  JSValue value,
+                                  const char *api_name)
 {
-    esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
+    esp32_mquickjs_fs_volume_t *volume;
 
-    if (runtime != NULL) {
-        if (runtime->load_root_depth > 0 && runtime->load_root[0] != '\0') {
-            return runtime->load_root;
-        }
-        if (runtime->fs_root[0] != '\0') {
-            return runtime->fs_root;
-        }
+    if (JS_GetClassID(ctx, value) != JS_CLASS_FS_VOLUME ||
+        (volume = JS_GetOpaque(ctx, value)) == NULL) {
+        JS_ThrowTypeError(ctx, "%s expects an FsVolume receiver", api_name);
+        return NULL;
     }
-    return ESP32_MQUICKJS_LITTLEFS_BASE_PATH;
+    return volume->root;
 }
 
 static const char *startup_fs_base_path(const esp32_mquickjs_runtime_t *runtime)
@@ -292,6 +313,32 @@ static bool fs_root_is_available(const char *base_path)
            strlen(base_path) < ESP32_MQUICKJS_FS_ROOT_MAX &&
            strstr(base_path, "..") == NULL &&
            stat(base_path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+static JSValue fs_make_volume(JSContext *ctx, const char *root)
+{
+    JSGCRef object_ref;
+    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    esp32_mquickjs_fs_volume_t *volume;
+
+    if (find_littlefs_mount_exact(root) == NULL) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_ThrowRangeError(
+            ctx, "fs.volume(root) requires an exact mounted filesystem root");
+    }
+    *object = JS_NewObjectClassUser(ctx, JS_CLASS_FS_VOLUME);
+    if (JS_IsException(*object)) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_EXCEPTION;
+    }
+    volume = heap_caps_calloc(1, sizeof(*volume), MALLOC_CAP_8BIT);
+    if (volume == NULL) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    snprintf(volume->root, sizeof(volume->root), "%s", root);
+    JS_SetOpaque(ctx, *object, volume);
+    return JS_PopGCRef(ctx, &object_ref);
 }
 
 static uint8_t *load_script_file(const char *path, size_t *out_len)
@@ -353,14 +400,19 @@ static JSValue fs_throw_error(JSContext *ctx,
 }
 
 static int js_value_to_fs_path(JSContext *ctx,
+                               JSValue volume_value,
                                JSValue value,
                                const char *api_name,
                                char *out_path,
                                size_t out_path_size)
 {
     JSCStringBuf path_buf;
-    const char *base_path = active_fs_base_path();
+    const char *base_path = fs_volume_root(ctx, volume_value, api_name);
     const char *path;
+
+    if (base_path == NULL) {
+        return -1;
+    }
 
     if (!JS_IsString(ctx, value)) {
         JS_ThrowTypeError(ctx, "%s expects a filesystem path string", api_name);
@@ -538,10 +590,29 @@ JSValue esp32_mquickjs_load_from_active_fs(JSContext *ctx,
                                            esp32_mquickjs_runtime_t *runtime,
                                            const char *script_path)
 {
-    return load_from_fs(ctx,
-                        runtime,
-                        active_fs_base_path(),
-                        script_path);
+    JSGCRef global_ref;
+    JSGCRef fs_ref;
+    JSValue *global_obj = JS_PushGCRef(ctx, &global_ref);
+    JSValue *fs_obj = JS_PushGCRef(ctx, &fs_ref);
+    const char *root;
+    JSValue result;
+
+    if (runtime != NULL && runtime->load_root_depth > 0 &&
+        runtime->load_root[0] != '\0') {
+        JS_PopGCRef(ctx, &fs_ref);
+        JS_PopGCRef(ctx, &global_ref);
+        return load_from_fs(ctx, runtime, runtime->load_root, script_path);
+    }
+    *global_obj = JS_GetGlobalObject(ctx);
+    *fs_obj = JS_IsException(*global_obj)
+        ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *global_obj, "fs");
+    root = JS_IsException(*fs_obj)
+        ? NULL : fs_volume_root(ctx, *fs_obj, "load(path)");
+    result = root == NULL
+        ? JS_EXCEPTION : load_from_fs(ctx, runtime, root, script_path);
+    JS_PopGCRef(ctx, &fs_ref);
+    JS_PopGCRef(ctx, &global_ref);
+    return result;
 }
 
 JSValue esp32_mquickjs_load_startup_from_active_fs(
@@ -615,36 +686,50 @@ JSValue esp32_mquickjs_load_from_root(JSContext *ctx,
 
 JSValue js_fs_get_root(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    (void)this_val;
+    const char *root;
+
     (void)argc;
     (void)argv;
-    return JS_NewString(ctx, active_fs_base_path());
+    root = fs_volume_root(ctx, *this_val, "FsVolume.ROOT");
+    return root == NULL ? JS_EXCEPTION : JS_NewString(ctx, root);
 }
 
-JSValue js_fs_set_root(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+JSValue js_fs_volume(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
     JSCStringBuf path_buf;
     const char *path;
 
-    (void)this_val;
-    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
-        return JS_ThrowTypeError(ctx, "fs.setRoot(path) expects a mounted root path");
+    if (fs_volume_root(ctx, *this_val, "fs.volume(root)") == NULL) {
+        return JS_EXCEPTION;
     }
-    if (runtime == NULL) {
-        return JS_ThrowInternalError(ctx, "JavaScript runtime is not active");
+    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "fs.volume(root) expects a mounted root path");
     }
     path = JS_ToCString(ctx, argv[0], &path_buf);
-    if (!fs_root_is_available(path)) {
-        return JS_ThrowRangeError(ctx, "fs.setRoot(path) requires an available root directory");
+    if (path == NULL) {
+        return JS_EXCEPTION;
     }
-    snprintf(runtime->fs_root, sizeof(runtime->fs_root), "%s", path);
-    return JS_NewString(ctx, runtime->fs_root);
+    return fs_make_volume(ctx, path);
+}
+
+JSValue js_fs_volume_constructor(JSContext *ctx, JSValue *this_val,
+                                 int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_ThrowTypeError(ctx, "FsVolume cannot be constructed directly; use fs.volume(root)");
+}
+
+void js_fs_volume_finalizer(JSContext *ctx, void *opaque)
+{
+    (void)ctx;
+    heap_caps_free(opaque);
 }
 
 JSValue js_fs_info(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    const char *root = active_fs_base_path();
+    const char *root = fs_volume_root(ctx, *this_val, "fs.info()");
     esp32_mquickjs_littlefs_mount_t *mount;
     size_t total = 0;
     size_t used = 0;
@@ -652,8 +737,10 @@ JSValue js_fs_info(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     JSValue *result;
     esp_err_t ret;
 
-    (void)this_val;
     (void)argv;
+    if (root == NULL) {
+        return JS_EXCEPTION;
+    }
     if (argc != 0) {
         return JS_ThrowTypeError(ctx, "fs.info() expects no arguments");
     }
@@ -703,14 +790,16 @@ JSValue js_fs_watch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
     esp32_mquickjs_fs_runtime_t *state = fs_runtime(runtime);
-    const char *root = active_fs_base_path();
+    const char *root = fs_volume_root(ctx, *this_val, "fs.watch()");
     JSGCRef queue_ref;
     JSValue *queue_object;
     esp32_mquickjs_event_queue_t *changes;
     esp32_mquickjs_fs_change_source_t *source;
 
-    (void)this_val;
     (void)argv;
+    if (root == NULL) {
+        return JS_EXCEPTION;
+    }
     if (argc != 0) {
         return JS_ThrowTypeError(ctx, "fs.watch() expects no arguments");
     }
@@ -788,49 +877,10 @@ JSValue js_framework_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *
     return result;
 }
 
-JSValue js_fs_open(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
-    JSCStringBuf mode_buf;
-    const char *mode = "r";
-
-    (void)this_val;
-
-    if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "fs.open(path, mode?) expects a path");
-    }
-    if (js_value_to_fs_path(ctx, argv[0], "fs.open(path, mode?)", path, sizeof(path)) != 0) {
-        return JS_EXCEPTION;
-    }
-    if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
-        if (!JS_IsString(ctx, argv[1])) {
-            return JS_ThrowTypeError(ctx, "fs.open(path, mode) expects mode to be a string");
-        }
-        mode = JS_ToCString(ctx, argv[1], &mode_buf);
-        if (mode == NULL) {
-            return JS_EXCEPTION;
-        }
-    }
-
-    {
-        JSGCRef global_ref;
-        JSValue *global_obj = JS_PushGCRef(ctx, &global_ref);
-        JSValue result;
-
-        *global_obj = JS_GetGlobalObject(ctx);
-        if (JS_IsException(*global_obj)) {
-            JS_PopGCRef(ctx, &global_ref);
-            return JS_EXCEPTION;
-        }
-        result = esp32_mquickjs_stream_open_file(ctx, *global_obj, path, mode);
-        JS_PopGCRef(ctx, &global_ref);
-        return result;
-    }
-}
-
 #define ESP32_MQUICKJS_FS_FUTURE_MAX_ENTRIES 64U
 
 typedef enum {
+    FS_FUTURE_OPEN,
     FS_FUTURE_LIST,
     FS_FUTURE_STAT,
     FS_FUTURE_EXISTS,
@@ -849,10 +899,10 @@ typedef struct {
 
 struct esp32_mquickjs_future_driver_state {
     fs_future_kind_t kind;
-    esp32_mquickjs_runtime_t *runtime;
-    esp32_mquickjs_future_token_t token;
     char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
     char to_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+    char mode[8];
+    FILE *file;
     char *data;
     size_t data_length;
     struct stat stat_value;
@@ -860,9 +910,22 @@ struct esp32_mquickjs_future_driver_state {
     size_t entry_count;
     int error_number;
     bool result;
-    volatile bool completed;
+    _Atomic bool completed;
     bool cancelled;
 };
+
+static bool fs_stream_mode_valid(const char *mode)
+{
+    return mode != NULL &&
+           (strcmp(mode, "r") == 0 || strcmp(mode, "rb") == 0 ||
+            strcmp(mode, "w") == 0 || strcmp(mode, "wb") == 0 ||
+            strcmp(mode, "a") == 0 || strcmp(mode, "ab") == 0 ||
+            strcmp(mode, "r+") == 0 || strcmp(mode, "rb+") == 0 ||
+            strcmp(mode, "r+b") == 0 || strcmp(mode, "w+") == 0 ||
+            strcmp(mode, "wb+") == 0 || strcmp(mode, "w+b") == 0 ||
+            strcmp(mode, "a+") == 0 || strcmp(mode, "ab+") == 0 ||
+            strcmp(mode, "a+b") == 0);
+}
 
 static void fs_future_release(esp32_mquickjs_future_driver_state_t *state)
 {
@@ -871,11 +934,15 @@ static void fs_future_release(esp32_mquickjs_future_driver_state_t *state)
     }
     heap_caps_free(state->data);
     heap_caps_free(state->entries);
+    if (state->file != NULL) {
+        fclose(state->file);
+    }
     heap_caps_free(state);
 }
 
 static bool fs_future_prepare_common(
     JSContext *ctx,
+    JSValue receiver,
     fs_future_kind_t kind,
     int argc,
     JSGCRef *argv,
@@ -887,7 +954,8 @@ static bool fs_future_prepare_common(
     if (out_state == NULL) {
         return false;
     }
-    api_name = kind == FS_FUTURE_LIST ? "fs.list(path?)" :
+    api_name = kind == FS_FUTURE_OPEN ? "fs.open(path, mode?)" :
+               kind == FS_FUTURE_LIST ? "fs.list(path?)" :
                kind == FS_FUTURE_STAT ? "fs.stat(path)" :
                kind == FS_FUTURE_EXISTS ? "fs.exists(path)" :
                kind == FS_FUTURE_READ_TEXT ? "fs.readText(path)" :
@@ -896,8 +964,9 @@ static bool fs_future_prepare_common(
                kind == FS_FUTURE_REMOVE ? "fs.remove(path)" :
                kind == FS_FUTURE_RENAME ? "fs.rename(fromPath, toPath)" :
                "fs.mkdir(path)";
-    if ((kind == FS_FUTURE_LIST && argc > 1) ||
-        (kind != FS_FUTURE_LIST && kind != FS_FUTURE_RENAME &&
+    if ((kind == FS_FUTURE_OPEN && (argc < 1 || argc > 2)) ||
+        (kind == FS_FUTURE_LIST && argc > 1) ||
+        (kind != FS_FUTURE_OPEN && kind != FS_FUTURE_LIST && kind != FS_FUTURE_RENAME &&
          kind != FS_FUTURE_WRITE_TEXT && kind != FS_FUTURE_APPEND_TEXT && argc != 1) ||
         (kind == FS_FUTURE_RENAME && argc != 2) ||
         ((kind == FS_FUTURE_WRITE_TEXT || kind == FS_FUTURE_APPEND_TEXT) && argc != 2)) {
@@ -909,16 +978,52 @@ static bool fs_future_prepare_common(
         JS_ThrowOutOfMemory(ctx);
         return false;
     }
+    atomic_init(&state->completed, false);
     state->kind = kind;
+    if (kind == FS_FUTURE_OPEN) {
+        JSCStringBuf mode_buf;
+        const char *mode = "r";
+
+        if (argc == 2 && !JS_IsUndefined(argv[1].val) &&
+            !JS_IsNull(argv[1].val)) {
+            if (!JS_IsString(ctx, argv[1].val)) {
+                fs_future_release(state);
+                JS_ThrowTypeError(ctx, "%s expects mode to be a string", api_name);
+                return false;
+            }
+            mode = JS_ToCString(ctx, argv[1].val, &mode_buf);
+            if (mode == NULL) {
+                fs_future_release(state);
+                return false;
+            }
+        }
+        if (strlen(mode) >= sizeof(state->mode)) {
+            fs_future_release(state);
+            JS_ThrowTypeError(ctx, "unsupported stream mode: %s", mode);
+            return false;
+        }
+        if (!fs_stream_mode_valid(mode)) {
+            fs_future_release(state);
+            JS_ThrowTypeError(ctx, "unsupported stream mode: %s", mode);
+            return false;
+        }
+        snprintf(state->mode, sizeof(state->mode), "%s", mode);
+    }
     if (kind == FS_FUTURE_LIST && argc == 0) {
-        snprintf(state->path, sizeof(state->path), "%s", active_fs_base_path());
-    } else if (js_value_to_fs_path(ctx, argv[0].val, api_name,
+        const char *root = fs_volume_root(ctx, receiver, api_name);
+
+        if (root == NULL) {
+            fs_future_release(state);
+            return false;
+        }
+        snprintf(state->path, sizeof(state->path), "%s", root);
+    } else if (js_value_to_fs_path(ctx, receiver, argv[0].val, api_name,
                                    state->path, sizeof(state->path)) != 0) {
         fs_future_release(state);
         return false;
     }
     if (kind == FS_FUTURE_RENAME &&
-        js_value_to_fs_path(ctx, argv[1].val, api_name,
+        js_value_to_fs_path(ctx, receiver, argv[1].val, api_name,
                             state->to_path, sizeof(state->to_path)) != 0) {
         fs_future_release(state);
         return false;
@@ -955,11 +1060,12 @@ static bool fs_future_prepare_common(
     static bool name(JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv, \
                      esp32_mquickjs_future_driver_state_t **out_state) \
     { \
-        (void)this_ref; \
-        return fs_future_prepare_common(ctx, kind_value, argc, argv, out_state); \
+        return fs_future_prepare_common(ctx, this_ref->val, kind_value, argc, \
+                                        argv, out_state); \
     }
 
 FS_PREPARE(fs_list_future_prepare, FS_FUTURE_LIST)
+FS_PREPARE(fs_open_future_prepare, FS_FUTURE_OPEN)
 FS_PREPARE(fs_stat_future_prepare, FS_FUTURE_STAT)
 FS_PREPARE(fs_exists_future_prepare, FS_FUTURE_EXISTS)
 FS_PREPARE(fs_read_text_future_prepare, FS_FUTURE_READ_TEXT)
@@ -980,7 +1086,18 @@ static void fs_future_worker(void *opaque)
     }
     xSemaphoreTake(s_fs_worker_lock, portMAX_DELAY);
     errno = 0;
-    if (state->kind == FS_FUTURE_LIST) {
+    if (state->kind == FS_FUTURE_OPEN) {
+        bool path_existed = access(state->path, F_OK) == 0;
+
+        state->file = fopen(state->path, state->mode);
+        if (state->file == NULL) {
+            state->error_number = errno;
+        } else if (state->mode[0] == 'w' ||
+                   (state->mode[0] == 'a' && !path_existed)) {
+            esp32_mquickjs_fs_notify_change(
+                ESP32_MQUICKJS_FS_CHANGE_WRITE, state->path, NULL);
+        }
+    } else if (state->kind == FS_FUTURE_LIST) {
         DIR *dir = opendir(state->path);
 
         if (dir == NULL) {
@@ -1088,8 +1205,7 @@ static void fs_future_worker(void *opaque)
             ESP32_MQUICKJS_FS_CHANGE_MKDIR, state->path, NULL);
     }
     xSemaphoreGive(s_fs_worker_lock);
-    state->completed = true;
-    (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+    atomic_store_explicit(&state->completed, true, memory_order_release);
 }
 
 static bool fs_future_start(JSContext *ctx,
@@ -1100,8 +1216,6 @@ static bool fs_future_start(JSContext *ctx,
     if (state == NULL) {
         return false;
     }
-    state->runtime = runtime;
-    state->token = token;
     if (!esp32_mquickjs_future_submit_worker(runtime, token,
                                              fs_future_worker, state)) {
         JS_ThrowInternalError(ctx, "filesystem Future worker queue is busy");
@@ -1113,14 +1227,16 @@ static bool fs_future_start(JSContext *ctx,
 static esp32_mquickjs_future_poll_t fs_future_poll(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    return state != NULL && state->completed
+    return state != NULL && atomic_load_explicit(
+                                &state->completed, memory_order_acquire)
         ? ESP32_MQUICKJS_FUTURE_READY
         : ESP32_MQUICKJS_FUTURE_PENDING;
 }
 
 static const char *fs_future_action(const esp32_mquickjs_future_driver_state_t *state)
 {
-    return state->kind == FS_FUTURE_LIST ? "list()" :
+    return state->kind == FS_FUTURE_OPEN ? "open()" :
+           state->kind == FS_FUTURE_LIST ? "list()" :
            state->kind == FS_FUTURE_STAT ? "stat()" :
            state->kind == FS_FUTURE_READ_TEXT ? "readText()" :
            state->kind == FS_FUTURE_WRITE_TEXT ? "writeText()" :
@@ -1138,6 +1254,25 @@ static JSValue fs_future_finish(JSContext *ctx,
     if (state->error_number != 0) {
         return fs_throw_error(ctx, fs_future_action(state), state->path,
                               state->error_number);
+    }
+    if (state->kind == FS_FUTURE_OPEN) {
+        JSGCRef global_ref;
+        JSValue *global_obj = JS_PushGCRef(ctx, &global_ref);
+        JSValue result;
+
+        *global_obj = JS_GetGlobalObject(ctx);
+        result = JS_IsException(*global_obj)
+            ? JS_EXCEPTION
+            : esp32_mquickjs_stream_adopt_file(ctx, *global_obj, state->path,
+                                               state->mode, state->file);
+        if (!JS_IsException(result)) {
+            state->file = NULL;
+        } else {
+            /* adopt_file consumes the FILE handle on every path. */
+            state->file = NULL;
+        }
+        JS_PopGCRef(ctx, &global_ref);
+        return result;
     }
     if (state->kind == FS_FUTURE_LIST) {
         JSGCRef entries_ref;
@@ -1174,7 +1309,9 @@ static JSValue fs_future_finish(JSContext *ctx,
 
 static bool fs_future_cancel(esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL || state->completed || state->cancelled) {
+    if (state == NULL ||
+        atomic_load_explicit(&state->completed, memory_order_acquire) ||
+        state->cancelled) {
         return false;
     }
     state->cancelled = true;
@@ -1197,6 +1334,7 @@ static void fs_future_destroy(esp32_mquickjs_future_driver_state_t *state)
     }
 
 FS_FUTURE_DRIVER(s_fs_list_driver, fs_list_future_prepare);
+FS_FUTURE_DRIVER(s_fs_open_driver, fs_open_future_prepare);
 FS_FUTURE_DRIVER(s_fs_stat_driver, fs_stat_future_prepare);
 FS_FUTURE_DRIVER(s_fs_exists_driver, fs_exists_future_prepare);
 FS_FUTURE_DRIVER(s_fs_read_text_driver, fs_read_text_future_prepare);
@@ -1212,11 +1350,11 @@ bool esp32_mquickjs_init_fs_runtime(JSContext *ctx,
                                     esp32_mquickjs_runtime_t *runtime)
 {
     static const char *names[] = {
-        "list", "stat", "exists", "readText", "writeText",
+        "open", "list", "stat", "exists", "readText", "writeText",
         "appendText", "remove", "rename", "mkdir",
     };
     static const esp32_mquickjs_future_driver_t *drivers[] = {
-        &s_fs_list_driver, &s_fs_stat_driver, &s_fs_exists_driver,
+        &s_fs_open_driver, &s_fs_list_driver, &s_fs_stat_driver, &s_fs_exists_driver,
         &s_fs_read_text_driver, &s_fs_write_text_driver,
         &s_fs_append_text_driver, &s_fs_remove_driver,
         &s_fs_rename_driver, &s_fs_mkdir_driver,
@@ -1255,7 +1393,12 @@ bool esp32_mquickjs_init_fs_runtime(JSContext *ctx,
     fs_obj = JS_PushGCRef(ctx, &fs_ref);
     *global_obj = JS_GetGlobalObject(ctx);
     *fs_obj = JS_IsException(*global_obj)
-        ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *global_obj, "fs");
+        ? JS_EXCEPTION : fs_make_volume(ctx, ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
+    if (!JS_IsException(*fs_obj)) {
+        result = esp32_mquickjs_set_property_ref(ctx, global_obj, "fs", *fs_obj);
+    } else {
+        result = false;
+    }
     for (index = 0; result && index < sizeof(names) / sizeof(names[0]); ++index) {
         JSGCRef method_ref;
         JSValue *method = JS_PushGCRef(ctx, &method_ref);
@@ -1326,6 +1469,7 @@ static JSValue fs_future_call_and_wait(JSContext *ctx,
     }
 
 FS_DIRECT_WRAPPER(js_fs_list, "list")
+FS_DIRECT_WRAPPER(js_fs_open, "open")
 FS_DIRECT_WRAPPER(js_fs_stat, "stat")
 FS_DIRECT_WRAPPER(js_fs_exists, "exists")
 FS_DIRECT_WRAPPER(js_fs_readText, "readText")

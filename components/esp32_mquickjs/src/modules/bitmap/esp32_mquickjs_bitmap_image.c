@@ -12,6 +12,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <string.h>
 
 #include "esp_heap_caps.h"
@@ -39,8 +40,8 @@ struct esp32_mquickjs_future_driver_state {
     bool target_rooted;
     bool convert;
     bool started;
-    volatile bool completed;
-    volatile bool cancelled;
+    _Atomic bool completed;
+    _Atomic bool cancelled;
     bitmap_source_owner_t source_owner;
     esp32_mquickjs_bitmap_view_t source;
     esp32_mquickjs_bitmap_target_t target;
@@ -805,6 +806,8 @@ static bool prepare_convert(
         JS_ThrowOutOfMemory(ctx);
         return false;
     }
+    atomic_init(&state->completed, false);
+    atomic_init(&state->cancelled, false);
     state->ctx = ctx;
     state->convert = true;
     if (!source_from_value(ctx, argv[0].val, BITMAP_CONVERT_API, state) ||
@@ -887,6 +890,8 @@ static bool prepare_blit(
         JS_ThrowOutOfMemory(ctx);
         return false;
     }
+    atomic_init(&state->completed, false);
+    atomic_init(&state->cancelled, false);
     state->ctx = ctx;
     state->target_bitmap = target;
     if (!source_from_value(ctx, argv[0].val, BITMAP_BLIT_API, state) ||
@@ -965,7 +970,8 @@ static bool transform_cancelled(void *opaque)
 {
     esp32_mquickjs_future_driver_state_t *state = opaque;
 
-    return state == NULL || state->cancelled;
+    return state == NULL || atomic_load_explicit(
+                                &state->cancelled, memory_order_acquire);
 }
 
 static void bitmap_transform_worker(void *opaque)
@@ -978,7 +984,7 @@ static void bitmap_transform_worker(void *opaque)
     state->result = esp32_mquickjs_bitmap_transform(
         &state->source, &state->target, &state->options,
         transform_cancelled, state, &state->rows_completed, &state->dirty);
-    state->completed = true;
+    atomic_store_explicit(&state->completed, true, memory_order_release);
 }
 
 static bool bitmap_transform_start(
@@ -1005,7 +1011,8 @@ static bool bitmap_transform_start(
 static esp32_mquickjs_future_poll_t bitmap_transform_poll(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    return state != NULL && state->completed
+    return state != NULL && atomic_load_explicit(
+                                &state->completed, memory_order_acquire)
                ? ESP32_MQUICKJS_FUTURE_READY
                : ESP32_MQUICKJS_FUTURE_PENDING;
 }
@@ -1028,7 +1035,7 @@ static JSValue bitmap_transform_finish(
                    (int)state->options.destination_height);
     }
     if (state->result == ESP32_MQUICKJS_BITMAP_TRANSFORM_CANCELLED ||
-        state->cancelled) {
+        atomic_load_explicit(&state->cancelled, memory_order_acquire)) {
         return JS_ThrowInternalError(ctx, "Bitmap transform cancelled");
     }
     if (!state->convert) {
@@ -1047,10 +1054,12 @@ static JSValue bitmap_transform_finish(
 static bool bitmap_transform_cancel(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL || state->completed || state->cancelled) {
+    if (state == NULL ||
+        atomic_load_explicit(&state->completed, memory_order_acquire) ||
+        atomic_load_explicit(&state->cancelled, memory_order_acquire)) {
         return false;
     }
-    state->cancelled = true;
+    atomic_store_explicit(&state->cancelled, true, memory_order_release);
     return true;
 }
 

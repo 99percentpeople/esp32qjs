@@ -179,7 +179,6 @@ struct esp32_mquickjs_runtime {
     uint64_t scoped_deadline_us;
     uint16_t native_wait_depth;
     uint16_t load_root_depth;
-    char fs_root[ESP32_MQUICKJS_FS_ROOT_MAX];
     char startup_fs_root[ESP32_MQUICKJS_FS_ROOT_MAX];
     char load_root[ESP32_MQUICKJS_FS_ROOT_MAX];
     char boot_id[ESP32_MQUICKJS_BOOT_ID_LENGTH + 1U];

@@ -126,6 +126,59 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("esp32_mquickjs_future_register_driver", nvs)
         self.assertIn("s_nvs_worker_lock", nvs)
 
+        fs_worker = filesystem[
+            filesystem.index("static void fs_future_worker") : filesystem.index(
+                "\nstatic bool fs_future_start"
+            )
+        ]
+        nvs_worker = nvs[
+            nvs.index("static void nvs_future_worker") : nvs.index(
+                "\nstatic bool nvs_future_start"
+            )
+        ]
+        self.assertNotIn("esp32_mquickjs_future_wake", fs_worker)
+        self.assertNotIn("esp32_mquickjs_future_wake", nvs_worker)
+        self.assertIn("memory_order_release", fs_worker)
+        self.assertIn("memory_order_release", nvs_worker)
+
+    def test_file_stream_operations_use_real_future_drivers(self):
+        stream = (MQUICKJS / "src/core/esp32_mquickjs_stream.c").read_text(
+            encoding="utf-8"
+        )
+        stdlib = (MQUICKJS / "src/core/mqjs_stdlib_esp32.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("esp32_mquickjs_init_stream_runtime", stream)
+        self.assertIn("esp32_mquickjs_future_submit_worker", stream)
+        self.assertIn("s_stream_read_driver", stream)
+        self.assertIn("s_stream_write_driver", stream)
+        self.assertIn("s_stream_flush_driver", stream)
+        self.assertIn("s_stream_close_driver", stream)
+        self.assertIn("s_stream_seek_driver", stream)
+        self.assertIn("_Atomic bool completed", stream)
+        self.assertIn("memory_order_release", stream)
+        self.assertIn("memory_order_acquire", stream)
+        self.assertIn("js_stream_finalizer", stdlib)
+
+    def test_cross_task_future_completion_uses_c11_atomics(self):
+        sources = [
+            MQUICKJS / "src/core/esp32_mquickjs_event_queue.c",
+            MQUICKJS / "src/core/esp32_mquickjs_stream.c",
+            MQUICKJS / "src/modules/fs/esp32_mquickjs_fs.c",
+            MQUICKJS / "src/modules/nvs/esp32_mquickjs_nvs.c",
+            MQUICKJS / "src/modules/i2c/esp32_mquickjs_i2c.c",
+            MQUICKJS / "src/modules/rmt/esp32_mquickjs_rmt.c",
+            MQUICKJS / "src/modules/camera/esp32_mquickjs_camera.c",
+            MQUICKJS / "src/modules/bitmap/esp32_mquickjs_bitmap_image.c",
+        ]
+
+        for path in sources:
+            source = path.read_text(encoding="utf-8")
+            self.assertNotIn("volatile bool completed", source)
+            self.assertIn("memory_order_release", source)
+            self.assertIn("memory_order_acquire", source)
+
     def test_filesystem_changes_use_the_generic_event_queue(self):
         filesystem = (
             MQUICKJS / "src/modules/fs/esp32_mquickjs_fs.c"

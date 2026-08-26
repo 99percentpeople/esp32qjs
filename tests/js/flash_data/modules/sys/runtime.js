@@ -306,7 +306,7 @@ test("sys/runtime", function () {
 
   if (features.fs) {
     test.equal(runtimeInfo.filesystem.root, fs.ROOT,
-      "runtime filesystem configuration should report the active root");
+      "runtime filesystem configuration should report the primary root");
   } else {
     test.equal(typeof globalThis.fs, "undefined", "fs should be hidden when disabled");
   }

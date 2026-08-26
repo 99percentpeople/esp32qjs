@@ -33,7 +33,10 @@ JSValue js_gc(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_framework_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_fs_get_root(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
-JSValue js_fs_set_root(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_fs_volume(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_fs_volume_constructor(JSContext *ctx, JSValue *this_val,
+                                 int argc, JSValue *argv);
+void js_fs_volume_finalizer(JSContext *ctx, void *opaque);
 JSValue js_sleep(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_runtime_defer_idle(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_setTimeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

@@ -169,7 +169,7 @@ class MediaArchitectureTests(SourceContractTestCase):
         ]
         self.assertIn("esp_camera_available_frames()", capture_worker)
         self.assertIn("cam_take(1)", capture_worker)
-        self.assertIn("state->cancelled", capture_worker)
+        self.assertIn("camera_future_cancelled(state)", capture_worker)
         self.assertIn("state->timeout_ms", capture_worker)
         self.assertNotIn("esp_camera_fb_get()", capture_worker)
         capture_cancel = source[

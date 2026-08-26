@@ -34,7 +34,7 @@ config ESP32QJS_SECONDARY_LITTLEFS
     help
         Mount a second application-defined LittleFS partition. The runtime
         only provides the mount; application code decides whether and when to
-        select it as the active filesystem root.
+        create and retain an FsVolume for it.
 
 config ESP32QJS_SECONDARY_LITTLEFS_PARTITION_LABEL
     string "Secondary LittleFS partition label"

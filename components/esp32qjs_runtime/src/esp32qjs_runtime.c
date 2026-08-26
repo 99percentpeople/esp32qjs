@@ -517,7 +517,7 @@ static bool runtime_host_status(void *opaque,
     status->littlefs_mounted = runtime->littlefs_mounted;
     runtime_copy_string(status->fs_root,
                         sizeof(status->fs_root),
-                        runtime->engine.fs_root,
+                        ESP32_MQUICKJS_LITTLEFS_BASE_PATH,
                         ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
     status->mount_secondary_littlefs = runtime->config.mount_secondary_littlefs;
     status->require_secondary_littlefs = runtime->config.require_secondary_littlefs;
@@ -751,8 +751,7 @@ static void runtime_run_startup(esp32qjs_runtime_t *runtime)
     runtime_boot_guard_note_returned(runtime);
 }
 
-static bool runtime_create_generation(esp32qjs_runtime_t *runtime,
-                                      const char *active_fs_root)
+static bool runtime_create_generation(esp32qjs_runtime_t *runtime)
 {
     if (runtime == NULL || runtime->ctx != NULL) {
         return false;
@@ -783,13 +782,6 @@ static bool runtime_create_generation(esp32qjs_runtime_t *runtime,
                         sizeof(runtime->engine.startup_fs_root),
                         ESP32_MQUICKJS_LITTLEFS_BASE_PATH,
                         ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
-    if (active_fs_root != NULL && active_fs_root[0] != '\0') {
-        runtime_copy_string(runtime->engine.fs_root,
-                            sizeof(runtime->engine.fs_root),
-                            active_fs_root,
-                            ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
-    }
-
 #if CONFIG_ESP32QJS_ENABLE_REPL
     if (runtime->config.enable_repl) {
         runtime->engine.prepare_output = esp32qjs_interactive_prepare_output;
@@ -1020,7 +1012,6 @@ static bool runtime_destroy_generation(esp32qjs_runtime_t *runtime,
 static bool runtime_restart_generation(esp32qjs_runtime_t *runtime,
                                        const char *reason)
 {
-    char active_fs_root[ESP32_MQUICKJS_FS_ROOT_MAX];
     char previous_reason[ESP32_MQUICKJS_CONTROL_REASON_MAX + 1U];
     uint32_t previous_generation;
     uint32_t previous_restart_count;
@@ -1029,10 +1020,6 @@ static bool runtime_restart_generation(esp32qjs_runtime_t *runtime,
     if (runtime == NULL || reason == NULL) {
         return false;
     }
-    runtime_copy_string(active_fs_root,
-                        sizeof(active_fs_root),
-                        runtime->engine.fs_root,
-                        ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
     runtime_set_state(runtime, ESP32_MQUICKJS_RUNTIME_QUIESCING);
     deadline_us = (uint64_t)esp_timer_get_time() +
                   ((uint64_t)runtime->config.restart_timeout_ms * 1000ULL);
@@ -1057,7 +1044,7 @@ static bool runtime_restart_generation(esp32qjs_runtime_t *runtime,
     portEXIT_CRITICAL(&runtime->lifecycle_lock);
 
     runtime_set_state(runtime, ESP32_MQUICKJS_RUNTIME_STARTING);
-    if (!runtime_create_generation(runtime, active_fs_root)) {
+    if (!runtime_create_generation(runtime)) {
         portENTER_CRITICAL(&runtime->lifecycle_lock);
         runtime->generation = previous_generation;
         runtime->restart_count = previous_restart_count;
@@ -1288,7 +1275,7 @@ esp_err_t esp32qjs_runtime_create(const esp32qjs_runtime_config_t *config,
     }
 
     runtime_set_state(runtime, ESP32_MQUICKJS_RUNTIME_STARTING);
-    if (!runtime_create_generation(runtime, ESP32_MQUICKJS_LITTLEFS_BASE_PATH)) {
+    if (!runtime_create_generation(runtime)) {
         runtime_release_unstarted(runtime);
         return ESP_FAIL;
     }

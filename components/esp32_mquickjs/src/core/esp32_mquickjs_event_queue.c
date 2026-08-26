@@ -3,6 +3,7 @@
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_event_queue_drain.h"
 
+#include <stdatomic.h>
 #include <string.h>
 
 #include "esp_heap_caps.h"
@@ -24,7 +25,7 @@ struct esp32_mquickjs_event_queue {
     esp32_mquickjs_future_token_t receiver;
     uint32_t dropped;
     bool receiver_registered;
-    volatile bool closed;
+    _Atomic bool closed;
     struct esp32_mquickjs_event_queue *next;
 };
 
@@ -42,8 +43,8 @@ struct esp32_mquickjs_future_driver_state {
     void *event;
     uint32_t timeout_ms;
     bool received;
-    volatile bool timed_out;
-    volatile bool completed;
+    _Atomic bool timed_out;
+    _Atomic bool completed;
     bool queue_retained;
 };
 
@@ -161,7 +162,8 @@ bool esp32_mquickjs_event_queue_send(esp32_mquickjs_event_queue_t *queue,
     void *dropped_event = NULL;
     bool sent = false;
 
-    if (queue == NULL || event == NULL || queue->events == NULL || queue->closed) {
+    if (queue == NULL || event == NULL || queue->events == NULL ||
+        atomic_load_explicit(&queue->closed, memory_order_acquire)) {
         return false;
     }
     if (xQueueSend(queue->events, event, 0) == pdTRUE) {
@@ -199,7 +201,8 @@ bool esp32_mquickjs_event_queue_send_from_isr(esp32_mquickjs_event_queue_t *queu
     esp32_mquickjs_future_token_t token = {0};
     bool registered;
 
-    if (queue == NULL || event == NULL || queue->events == NULL || queue->closed) {
+    if (queue == NULL || event == NULL || queue->events == NULL ||
+        atomic_load_explicit(&queue->closed, memory_order_acquire)) {
         return false;
     }
     sent = xQueueSendFromISR(queue->events, event, &higher_priority_woken);
@@ -238,11 +241,11 @@ bool esp32_mquickjs_event_queue_close(esp32_mquickjs_event_queue_t *queue)
         return false;
     }
     portENTER_CRITICAL(&queue->lock);
-    if (queue->closed) {
+    if (atomic_load_explicit(&queue->closed, memory_order_acquire)) {
         portEXIT_CRITICAL(&queue->lock);
         return false;
     }
-    queue->closed = true;
+    atomic_store_explicit(&queue->closed, true, memory_order_release);
     close = queue->close;
     opaque = queue->opaque;
     queue->close = NULL;
@@ -256,7 +259,8 @@ bool esp32_mquickjs_event_queue_close(esp32_mquickjs_event_queue_t *queue)
 
 bool esp32_mquickjs_event_queue_is_closed(const esp32_mquickjs_event_queue_t *queue)
 {
-    return queue == NULL || queue->closed;
+    return queue == NULL || atomic_load_explicit(
+                                &queue->closed, memory_order_acquire);
 }
 
 uint32_t esp32_mquickjs_event_queue_dropped(const esp32_mquickjs_event_queue_t *queue)
@@ -268,10 +272,11 @@ static void event_queue_timer_cb(void *arg)
 {
     esp32_mquickjs_future_driver_state_t *state = arg;
 
-    if (state == NULL || state->completed) {
+    if (state == NULL || atomic_load_explicit(
+                             &state->completed, memory_order_acquire)) {
         return;
     }
-    state->timed_out = true;
+    atomic_store_explicit(&state->timed_out, true, memory_order_release);
     (void)esp32_mquickjs_future_wake(state->runtime, state->token);
 }
 
@@ -306,6 +311,8 @@ static bool event_queue_future_prepare(JSContext *ctx,
     *JS_AddGCRef(ctx, &state->queue_ref) = this_ref->val;
     state->queue_retained = true;
     state->timeout_ms = timeout_ms < 0 ? UINT32_MAX : (uint32_t)timeout_ms;
+    atomic_init(&state->timed_out, false);
+    atomic_init(&state->completed, false);
     *out_state = state;
     return true;
 }
@@ -333,13 +340,15 @@ static bool event_queue_future_start(JSContext *ctx,
         JS_ThrowInternalError(ctx, "EventQueue.receive() already has a pending receiver");
         return false;
     }
-    if (uxQueueMessagesWaiting(state->queue->events) > 0 || state->queue->closed) {
+    if (uxQueueMessagesWaiting(state->queue->events) > 0 ||
+        atomic_load_explicit(&state->queue->closed, memory_order_acquire)) {
         (void)esp32_mquickjs_future_wake(runtime, token);
         return true;
     }
     if (state->timeout_ms != UINT32_MAX) {
         if (state->timeout_ms == 0) {
-            state->timed_out = true;
+            atomic_store_explicit(&state->timed_out, true,
+                                  memory_order_release);
             (void)esp32_mquickjs_future_wake(runtime, token);
         } else if (esp_timer_create(&timer_args, &state->timer) != ESP_OK ||
                    esp_timer_start_once(state->timer,
@@ -359,16 +368,19 @@ static bool event_queue_future_start(JSContext *ctx,
 static esp32_mquickjs_future_poll_t event_queue_future_poll(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL || state->completed) {
+    if (state == NULL || atomic_load_explicit(
+                             &state->completed, memory_order_acquire)) {
         return ESP32_MQUICKJS_FUTURE_READY;
     }
     if (xQueueReceive(state->queue->events, state->event, 0) == pdTRUE) {
         state->received = true;
-        state->completed = true;
-    } else if (state->timed_out || state->queue->closed) {
-        state->completed = true;
+        atomic_store_explicit(&state->completed, true, memory_order_release);
+    } else if (atomic_load_explicit(&state->timed_out, memory_order_acquire) ||
+               atomic_load_explicit(&state->queue->closed,
+                                    memory_order_acquire)) {
+        atomic_store_explicit(&state->completed, true, memory_order_release);
     }
-    if (state->completed) {
+    if (atomic_load_explicit(&state->completed, memory_order_acquire)) {
         event_queue_clear_receiver(state->queue, state->token);
         return ESP32_MQUICKJS_FUTURE_READY;
     }
@@ -386,10 +398,11 @@ static JSValue event_queue_future_finish(JSContext *ctx,
 
 static bool event_queue_future_cancel(esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL || state->completed) {
+    if (state == NULL || atomic_load_explicit(
+                             &state->completed, memory_order_acquire)) {
         return false;
     }
-    state->completed = true;
+    atomic_store_explicit(&state->completed, true, memory_order_release);
     event_queue_clear_receiver(state->queue, state->token);
     return true;
 }
@@ -500,7 +513,7 @@ bool esp32_mquickjs_get_event_queue_status(
 
         portENTER_CRITICAL(&queue->lock);
         dropped = queue->dropped;
-        closed = queue->closed;
+        closed = atomic_load_explicit(&queue->closed, memory_order_acquire);
         portEXIT_CRITICAL(&queue->lock);
         status->dropped += dropped;
         if (!closed) {
@@ -549,6 +562,7 @@ JSValue esp32_mquickjs_event_queue_new(JSContext *ctx,
     queue->close = close;
     queue->opaque = opaque;
     queue->lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
+    atomic_init(&queue->closed, false);
     object = JS_NewObjectClassUser(ctx, JS_CLASS_EVENT_QUEUE);
     if (JS_IsException(object)) {
         vQueueDelete(queue->events);

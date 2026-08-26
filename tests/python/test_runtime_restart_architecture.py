@@ -107,7 +107,9 @@ class RuntimeRestartArchitectureTests(SourceContractTestCase):
             "var startupState = runtimeState.startup;"
         )
         workspace_load = agent_index.index('load("index.js");')
-        workspace_root = agent_index.index('fs.setRoot("/workspace");')
+        workspace_root = agent_index.index(
+            'workspaceFs = systemFs.volume("/workspace");'
+        )
         self.assertLess(startup_status, workspace_root)
         self.assertLess(workspace_root, service_attach)
         self.assertLess(service_attach, workspace_load)
@@ -117,7 +119,11 @@ class RuntimeRestartArchitectureTests(SourceContractTestCase):
         self.assertIn(
             "if (workspaceMounted && !startupState.safeModeActive", agent_index
         )
-        self.assertEqual(agent_index.count('fs.setRoot("/workspace");'), 1)
+        self.assertEqual(
+            agent_index.count('workspaceFs = systemFs.volume("/workspace");'), 1
+        )
+        self.assertIn("globalThis.fs = workspaceFs;", agent_index)
+        self.assertIn("systemFs: systemFs", agent_index)
         self.assertNotIn("sys.safeMode", agent_index)
 
     def test_startup_guard_uses_private_nvs_and_ignores_intentional_control(self):

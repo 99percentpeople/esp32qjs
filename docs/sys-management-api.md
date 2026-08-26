@@ -835,7 +835,8 @@ Runtime restart performs a clean generation replacement:
 6. deinitialize per-generation modules and free the MQuickJS context;
 7. recreate the context in the existing dedicated JS heap buffer;
 8. reinstall built-ins and application globals;
-9. restore the active filesystem root and runtime hooks;
+9. reinstall the initial `/littlefs` volume and runtime hooks; application
+   bootstrap recreates any additional volume handles;
 10. increment generation counters and run the configured startup script.
 
 The existing `Future` scheduler remains the only deferred-work model. Runtime
@@ -1028,7 +1029,7 @@ There are no compatibility aliases.
 | `features` | `sys.info.features` |
 | `userLedPin` | `gpio.USER_LED_PIN` or `sys.config(...)` |
 | `userLedActiveLow` | `gpio.USER_LED_ACTIVE_LOW` or `sys.config(...)` |
-| `scriptsDir` | `sys.info.runtime.filesystem.root` |
+| `scriptsDir` | `sys.info.runtime.filesystem.root` for the primary system mount |
 | `flashSize` | `sys.info.hardware.flash.sizeBytes` |
 | `psramEnabled` | `sys.info.hardware.psram.enabled` |
 | `psramMode` | `sys.info.hardware.psram.mode` |

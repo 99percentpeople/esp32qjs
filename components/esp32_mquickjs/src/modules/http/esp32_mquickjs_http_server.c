@@ -1284,6 +1284,14 @@ static int http_server_make_response(JSContext *ctx,
         }
     }
 
+    if (out_response->has_body_stream &&
+        esp32_mquickjs_fs_stream_acquire(
+            &out_response->body_stream_ref) != ESP_OK) {
+        JS_ThrowInternalError(
+            ctx, "Response.body stream is already in use");
+        goto fail;
+    }
+
     JS_PopGCRef(ctx, &status_text_ref);
     JS_PopGCRef(ctx, &body_ref);
     JS_PopGCRef(ctx, &headers_ref);

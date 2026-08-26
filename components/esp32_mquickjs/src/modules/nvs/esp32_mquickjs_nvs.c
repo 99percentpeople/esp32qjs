@@ -7,6 +7,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdatomic.h>
 #include <string.h>
 
 #include "esp_heap_caps.h"
@@ -116,8 +117,6 @@ typedef enum {
 
 struct esp32_mquickjs_future_driver_state {
     nvs_future_kind_t kind;
-    esp32_mquickjs_runtime_t *runtime;
-    esp32_mquickjs_future_token_t token;
     char namespace_name[ESP32_MQUICKJS_NVS_MAX_NAME_BYTES + 1U];
     char key[ESP32_MQUICKJS_NVS_MAX_NAME_BYTES + 1U];
     char *value;
@@ -125,7 +124,7 @@ struct esp32_mquickjs_future_driver_state {
     esp_err_t err;
     bool found;
     bool result;
-    volatile bool completed;
+    _Atomic bool completed;
     bool cancelled;
 };
 
@@ -153,6 +152,7 @@ static esp32_mquickjs_future_driver_state_t *nvs_future_allocate(
         JS_ThrowOutOfMemory(ctx);
         return NULL;
     }
+    atomic_init(&state->completed, false);
     state->kind = kind;
     return state;
 }
@@ -369,8 +369,7 @@ static void nvs_future_worker(void *opaque)
     }
     xSemaphoreGive(s_nvs_worker_lock);
     state->err = err;
-    state->completed = true;
-    (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+    atomic_store_explicit(&state->completed, true, memory_order_release);
 }
 
 static bool nvs_future_start(JSContext *ctx,
@@ -381,8 +380,6 @@ static bool nvs_future_start(JSContext *ctx,
     if (state == NULL) {
         return false;
     }
-    state->runtime = runtime;
-    state->token = token;
     if (!esp32_mquickjs_future_submit_worker(
             runtime, token, nvs_future_worker, state)) {
         JS_ThrowInternalError(ctx, "NVS Future worker queue is busy");
@@ -394,7 +391,8 @@ static bool nvs_future_start(JSContext *ctx,
 static esp32_mquickjs_future_poll_t nvs_future_poll(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    return state != NULL && state->completed
+    return state != NULL && atomic_load_explicit(
+                                &state->completed, memory_order_acquire)
         ? ESP32_MQUICKJS_FUTURE_READY
         : ESP32_MQUICKJS_FUTURE_PENDING;
 }
@@ -431,7 +429,9 @@ static JSValue nvs_future_finish(JSContext *ctx,
 
 static bool nvs_future_cancel(esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL || state->completed || state->cancelled) {
+    if (state == NULL ||
+        atomic_load_explicit(&state->completed, memory_order_acquire) ||
+        state->cancelled) {
         return false;
     }
     state->cancelled = true;

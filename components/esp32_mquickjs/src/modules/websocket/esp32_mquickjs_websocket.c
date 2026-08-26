@@ -839,8 +839,6 @@ JSValue js_websocket_send(JSContext *ctx,
 }
 
 struct esp32_mquickjs_future_driver_state {
-    esp32_mquickjs_runtime_t *runtime;
-    esp32_mquickjs_future_token_t token;
     esp_websocket_client_handle_t client;
     char *text;
     size_t text_length;
@@ -939,7 +937,6 @@ static void websocket_send_future_worker(void *opaque)
     }
     atomic_store_explicit(
         &state->worker_completed, true, memory_order_release);
-    (void)esp32_mquickjs_future_wake(state->runtime, state->token);
 }
 
 static bool websocket_send_future_start(
@@ -956,8 +953,6 @@ static bool websocket_send_future_start(
             ctx, "websocketClient changed before send started");
         return false;
     }
-    state->runtime = runtime;
-    state->token = token;
     state->started = true;
     s_websocket_state.sending = true;
     if (!esp32_mquickjs_future_submit_worker(

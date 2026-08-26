@@ -838,9 +838,7 @@ bool esp32_mquickjs_get_host_status(esp32_mquickjs_runtime_t *runtime,
     snprintf(status->fs_root,
              sizeof(status->fs_root),
              "%s",
-             runtime->fs_root[0] != '\0'
-                 ? runtime->fs_root
-                 : ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
+             ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
     return true;
 }
 
@@ -1195,10 +1193,6 @@ JSContext *esp32_mquickjs_create(void *mem_start,
     runtime->scoped_deadline_us = 0;
     runtime->native_wait_depth = 0;
     runtime->load_root_depth = 0;
-    snprintf(runtime->fs_root,
-             sizeof(runtime->fs_root),
-             "%s",
-             ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
     snprintf(runtime->startup_fs_root,
              sizeof(runtime->startup_fs_root),
              "%s",
@@ -1401,7 +1395,6 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
     runtime->native_wait_depth = 0;
     runtime->littlefs_mounted = false;
     runtime->load_root_depth = 0;
-    runtime->fs_root[0] = '\0';
     runtime->startup_fs_root[0] = '\0';
     runtime->load_root[0] = '\0';
     runtime->repl_enabled = false;
@@ -1546,6 +1539,10 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
 
     esp32_mquickjs_memory_init();
     if (!esp32_mquickjs_init_secure_random(ctx)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
+    if (!esp32_mquickjs_init_stream_runtime(ctx, runtime)) {
         esp32_mquickjs_print_exception(ctx);
         return false;
     }

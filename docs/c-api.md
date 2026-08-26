@@ -19,8 +19,9 @@ This document covers the APIs exported directly by the firmware runtime.
 - `fetch(input, options?)`
   Run an HTTP request through a hidden native Future and return a `Response`.
 - `load(path)`
-  Evaluate a script from the active filesystem root. It starts at `/littlefs`;
-  applications may select any mounted root with `fs.setRoot(path)`.
+  Evaluate a script from the immutable volume currently stored in global `fs`.
+  The initial volume is rooted at `/littlefs`; applications can install another
+  mounted volume with `globalThis.fs = fs.volume(path)`.
 - `framework.load(path)`
   Evaluate a bundled framework script below `/littlefs/_sys`, regardless of
   the active application root. Nested `load(...)` calls made while evaluating the
@@ -131,19 +132,20 @@ clearInterval(handle);
 
 ## `fs` Module
 
-All `fs` operations are restricted to the active filesystem root.
+All `fs` operations are restricted to the immutable root captured by their
+`FsVolume` receiver.
 
 - `fs.ROOT`
-  Dynamic current filesystem root. It starts at `"/littlefs"`.
-- `fs.setRoot(path)`
-  Select an existing mounted directory as the root for relative `fs` operations
-  and `load()`. The framework validates the mount/path only; the application
-  owns policy about which root to select.
+  Read-only root of this volume. The initial global volume uses `"/littlefs"`.
+- `fs.volume(root)`
+  Create an immutable `FsVolume` for an exact mounted filesystem root. The
+  framework validates the mount only; applications own policy about which
+  volume to retain or install globally.
 - `fs.info()`
-  Return live LittleFS capacity for the active root as
+  Return live LittleFS capacity for this volume as
   `{ root, totalBytes, usedBytes, freeBytes }`.
 - `fs.watch()`
-  Return an `EventQueue` for filesystem changes under the active root. Events are
+  Return an `EventQueue` for filesystem changes under this volume. Events are
   `{ type, path }`, with `toPath` on `rename`; `type` is `write`, `remove`,
   `rename`, or `mkdir`. Paths are relative to the root captured when the queue
   is created. Independent watchers may coexist; close each queue when it is no
@@ -162,6 +164,9 @@ All `fs` operations are restricted to the active filesystem root.
   their decoding policy.
 - `fs.open(path, mode?)`
   Open a file stream. Supported modes are `r`, `rb`, `w`, `wb`, `a`, `ab`, `r+`, `w+`, and `a+`.
+  File open and file-stream `read`, `write`, `flush`, `seek`, and `close` use
+  native Future drivers, so `Future.call(...)` does not block the JavaScript
+  runtime task on VFS calls. Direct calls cooperatively wait on the same driver.
 - `fs.writeText(path, text)`
   Overwrite a text file and return the number of bytes written.
 - `fs.appendText(path, text)`
@@ -177,8 +182,11 @@ Example:
 
 ```js
 var changes = fs.watch();
+var systemFs = fs;
+var dataFs = fs.volume("/littlefs");
 var nextChange = Future.call(changes.receive, changes, [5000]);
 fs.writeText("notes.txt", "hello\n");
+var pending = Future.call(dataFs.readText, dataFs, ["notes.txt"]);
 print(JSON.stringify(nextChange.wait()));
 print(JSON.stringify(fs.info()));
 print(fs.readText("notes.txt"));
@@ -187,6 +195,7 @@ print(JSON.stringify(fs.list(".")));
 fs.rename("notes.txt", "notes-old.txt");
 fs.remove("notes-old.txt");
 changes.close();
+pending.wait();
 ```
 
 ## Secondary LittleFS
@@ -194,9 +203,16 @@ changes.close();
 Profiles may enable `CONFIG_ESP32QJS_SECONDARY_LITTLEFS` and configure its
 partition label and base path. The runtime mounts that partition through the
 same generic LittleFS API but does not assign it any business meaning or select
-it automatically. Application bootstrap code can call `fs.setRoot(path)` after
-loading its system services. Bundled `_sys` modules remain available through
-`framework.load(path)`.
+it automatically. Application bootstrap code can create a volume after loading
+its system services, retain both handles, and optionally assign the application
+volume to `globalThis.fs`. Bundled `_sys` modules remain available through
+`framework.load(path)`:
+
+```js
+var systemFs = fs;
+var dataFs = systemFs.volume("/data");
+globalThis.fs = dataFs;
+```
 
 ## `nvs` Module
 

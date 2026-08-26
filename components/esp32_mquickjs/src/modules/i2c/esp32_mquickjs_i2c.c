@@ -9,6 +9,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <string.h>
 
 #include "driver/gpio.h"
@@ -648,7 +649,7 @@ struct esp32_mquickjs_future_driver_state {
     size_t read_length;
     uint64_t total_us;
     esp_err_t err;
-    volatile bool completed;
+    _Atomic bool completed;
     bool owner_retained;
     bool started;
     bool cancelled;
@@ -707,6 +708,7 @@ static esp32_mquickjs_future_driver_state_t *i2c_future_allocate(
         JS_ThrowOutOfMemory(ctx);
         return NULL;
     }
+    atomic_init(&state->completed, false);
     if (i2c_get_this_slot(ctx,
                           this_value,
                           "I2CBus Future operation",
@@ -1022,7 +1024,7 @@ static void i2c_future_worker(void *opaque)
 
     if (slot == NULL) {
         state->err = ESP_ERR_INVALID_STATE;
-        state->completed = true;
+        atomic_store_explicit(&state->completed, true, memory_order_release);
         return;
     }
     if (state->kind == I2C_FUTURE_SCAN) {
@@ -1040,12 +1042,12 @@ static void i2c_future_worker(void *opaque)
             }
         }
         state->total_us = (uint64_t)(esp_timer_get_time() - started_us);
-        state->completed = true;
+        atomic_store_explicit(&state->completed, true, memory_order_release);
         return;
     }
     state->err = i2c_get_cached_device(slot, state->address, &device);
     if (state->err != ESP_OK) {
-        state->completed = true;
+        atomic_store_explicit(&state->completed, true, memory_order_release);
         return;
     }
     if (state->kind == I2C_FUTURE_WRITE) {
@@ -1096,7 +1098,7 @@ static void i2c_future_worker(void *opaque)
                                                  (int)state->timeout_ms);
     }
     state->total_us = (uint64_t)(esp_timer_get_time() - started_us);
-    state->completed = true;
+    atomic_store_explicit(&state->completed, true, memory_order_release);
 }
 
 static bool i2c_future_start(JSContext *ctx,
@@ -1130,7 +1132,8 @@ static bool i2c_future_start(JSContext *ctx,
 static esp32_mquickjs_future_poll_t i2c_future_poll(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    return state != NULL && state->completed
+    return state != NULL && atomic_load_explicit(
+                                &state->completed, memory_order_acquire)
         ? ESP32_MQUICKJS_FUTURE_READY
         : ESP32_MQUICKJS_FUTURE_PENDING;
 }
@@ -1175,7 +1178,9 @@ static JSValue i2c_future_finish(JSContext *ctx,
 
 static bool i2c_future_cancel(esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL || state->completed || state->cancelled) {
+    if (state == NULL ||
+        atomic_load_explicit(&state->completed, memory_order_acquire) ||
+        state->cancelled) {
         return false;
     }
     state->cancelled = true;
