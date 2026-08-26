@@ -1931,8 +1931,12 @@ It uses a bounded `EventQueue` handle and does not invoke application callbacks.
 
 - `websocketClient.open(options)`
   Start a connection and return a handle. Required `options.url` uses `ws://`
-  or `wss://`; the remaining network, reconnect, authorization, and size options
-  are unchanged.
+  or `wss://`. Optional controls are `authorization`, `subprotocol`,
+  `autoReconnect`, `reconnectMs` (0..120000), `networkTimeoutMs`
+  (1000..120000), `sendTimeoutMs` (0..5000), `pingIntervalSec` (1..3600),
+  and `maxMessageBytes` (256 up to the firmware limit). WSS always verifies
+  the public CA chain, hostname, and certificate dates; there is no option to
+  disable verification.
 - `handle.receive(timeoutMs?)`
   Return the next `{ type: "open" | "message" | "close" | "error", ... }`
   event, or `null` at the timeout. Every event carries `sequence` and
@@ -1943,6 +1947,13 @@ It uses a bounded `EventQueue` handle and does not invoke application callbacks.
   counters, or close the event source. The send operation has
   a native Future driver; use `Future.call(handle.send, handle, [text])` to
   return before network backpressure clears. Only one send may be active.
+  Closing marks the handle closed immediately and moves the potentially
+  blocking ESP-IDF stop/destroy work to the shared native worker pool. It does
+  not wait for ESP-IDF's connection task. While cleanup is pending,
+  `status().closing` is `true` and a new `open()` is rejected; once it becomes
+  `false`, the client is fully released and may be opened again. The first
+  close returns `true`; repeated closes return `false`. A close/error event
+  reports `reconnecting: false` when `autoReconnect` is disabled.
 
 ```js
 var client = websocketClient.open({

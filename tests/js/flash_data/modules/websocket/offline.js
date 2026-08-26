@@ -9,6 +9,8 @@ test("websocket/offline", function () {
     "WebSocket message limit should be exposed");
   test.ok(!status.open && !status.connected,
     "WebSocket client should start closed");
+  test.equal(status.closing, false,
+    "WebSocket client should not start in cleanup");
 
   try {
     websocketClient.open({ url: "http://example.com" });

@@ -2281,7 +2281,6 @@ namespace ESP32QJS {
     sendTimeoutMs?: number;
     pingIntervalSec?: number;
     maxMessageBytes?: number;
-    useCertBundle?: boolean;
   }
 
   type WebSocketClientEvent =
@@ -2304,6 +2303,7 @@ namespace ESP32QJS {
   interface WebSocketClientStatus {
     open: boolean;
     connected: boolean;
+    closing: boolean;
     maxMessageBytes: number;
     openedEvents: number;
     receivedMessages: number;

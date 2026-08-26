@@ -31,6 +31,8 @@ test("websocket/network", function () {
     if (event && event.type === "message") echoed = event.data;
     test.equal(echoed, payload,
       "WebSocket server should echo the complete text frame");
+    test.ok(client.close(), "first WebSocket handle close should succeed");
+    test.ok(!client.close(), "WebSocket handle close should be idempotent");
   } finally {
     if (client) client.close();
     websocketClient.close();

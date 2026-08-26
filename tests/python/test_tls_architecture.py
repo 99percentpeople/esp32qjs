@@ -75,6 +75,7 @@ class TlsArchitectureTests(SourceContractTestCase):
         self.assertIn("esp32_mquickjs_tls_crt_bundle_attach", socket)
         self.assertIn("esp32_mquickjs_tls_crt_bundle_attach", websocket)
         self.assertNotIn("= esp_crt_bundle_attach", websocket)
+        self.assertNotIn("useCertBundle", websocket)
         self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET", helper)
         self.assertIn("esp32_mquickjs_tls_error_capture", socket)
         self.assertIn("esp_http_client_get_and_clear_last_tls_error", http)

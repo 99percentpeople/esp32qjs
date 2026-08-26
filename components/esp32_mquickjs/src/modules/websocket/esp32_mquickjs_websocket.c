@@ -19,6 +19,7 @@
 #include "esp_websocket_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/task.h"
 
 #define WEBSOCKET_URL_MAX_LEN 512U
 #define WEBSOCKET_AUTHORIZATION_MAX_LEN 512U
@@ -57,6 +58,7 @@ typedef struct {
     int64_t timestamp_us;
     int32_t code;
     bool binary;
+    bool reconnecting;
     char message[WEBSOCKET_ERROR_TEXT_LEN];
 } esp32_mquickjs_websocket_callback_event_t;
 
@@ -81,8 +83,11 @@ typedef struct {
     _Atomic uint32_t dropped_events;
     _Atomic uint32_t oversized_messages;
     _Atomic uint32_t event_sequence;
+    _Atomic bool close_worker_completed;
+    bool auto_reconnect;
     bool sending;
     bool close_pending;
+    bool close_worker_submitted;
 } esp32_mquickjs_websocket_state_t;
 
 static esp32_mquickjs_websocket_state_t s_websocket_state;
@@ -112,6 +117,7 @@ static void websocket_reset_state(void)
     atomic_init(&s_websocket_state.dropped_events, 0);
     atomic_init(&s_websocket_state.oversized_messages, 0);
     atomic_init(&s_websocket_state.event_sequence, 0);
+    atomic_init(&s_websocket_state.close_worker_completed, false);
 }
 
 static bool websocket_callback_begin(uint32_t *generation)
@@ -233,6 +239,8 @@ static void websocket_enqueue_simple(esp32_mquickjs_websocket_callback_kind_t ki
     esp32_mquickjs_websocket_callback_event_t event = {
         .kind = kind,
         .code = code,
+        .reconnecting = s_websocket_state.auto_reconnect &&
+                        websocket_generation_is_active(generation),
     };
 
     if (message != NULL) {
@@ -412,14 +420,31 @@ static void websocket_event_handler(void *handler_args,
     }
 }
 
-static void websocket_finalize_close_source(void)
+static void websocket_finish_close_source(void)
 {
-    esp_websocket_client_handle_t client = s_websocket_state.client;
+    s_websocket_state.client = NULL;
+    websocket_reset_fragment();
+    websocket_drain_queue();
+    s_websocket_state.auto_reconnect = false;
+    s_websocket_state.close_pending = false;
+    s_websocket_state.close_worker_submitted = false;
+    atomic_store_explicit(&s_websocket_state.close_worker_completed, false,
+                          memory_order_release);
+    atomic_store_explicit(&s_websocket_state.lifecycle,
+                          WEBSOCKET_LIFECYCLE_IDLE,
+                          memory_order_release);
+}
+
+static void websocket_close_worker(void *opaque)
+{
+    esp_websocket_client_handle_t client = opaque;
 
     if (client != NULL) {
         if (esp_websocket_client_is_connected(client)) {
             if (esp_websocket_client_close(
-                    client, pdMS_TO_TICKS(WEBSOCKET_DEFAULT_SEND_TIMEOUT_MS)) != ESP_OK) {
+                    client,
+                    pdMS_TO_TICKS(WEBSOCKET_DEFAULT_SEND_TIMEOUT_MS)) !=
+                ESP_OK) {
                 (void)esp_websocket_client_stop(client);
             }
         } else {
@@ -428,14 +453,47 @@ static void websocket_finalize_close_source(void)
         (void)esp_websocket_unregister_events(
             client, WEBSOCKET_EVENT_ANY, websocket_event_handler);
         (void)esp_websocket_client_destroy(client);
-        s_websocket_state.client = NULL;
     }
-    websocket_reset_fragment();
-    websocket_drain_queue();
-    s_websocket_state.close_pending = false;
-    atomic_store_explicit(&s_websocket_state.lifecycle,
-                          WEBSOCKET_LIFECYCLE_IDLE,
+    atomic_store_explicit(&s_websocket_state.close_worker_completed, true,
                           memory_order_release);
+}
+
+static bool websocket_schedule_close_worker(void)
+{
+    if (s_websocket_state.client == NULL) {
+        websocket_finish_close_source();
+        return true;
+    }
+    if (s_websocket_state.close_worker_submitted) {
+        return true;
+    }
+    atomic_store_explicit(&s_websocket_state.close_worker_completed, false,
+                          memory_order_release);
+    if (!esp32_mquickjs_submit_background_worker(
+            websocket_close_worker, s_websocket_state.client)) {
+        return false;
+    }
+    s_websocket_state.close_worker_submitted = true;
+    return true;
+}
+
+static bool websocket_poll_close(void)
+{
+    if (atomic_load_explicit(&s_websocket_state.lifecycle,
+                             memory_order_acquire) !=
+            WEBSOCKET_LIFECYCLE_CLOSING ||
+        s_websocket_state.sending) {
+        return false;
+    }
+    if (!s_websocket_state.close_worker_submitted) {
+        return websocket_schedule_close_worker();
+    }
+    if (!atomic_load_explicit(&s_websocket_state.close_worker_completed,
+                              memory_order_acquire)) {
+        return false;
+    }
+    websocket_finish_close_source();
+    return true;
 }
 
 static void websocket_close_source(void *opaque)
@@ -449,7 +507,8 @@ static void websocket_close_source(void *opaque)
         s_websocket_state.close_pending = true;
         return;
     }
-    websocket_finalize_close_source();
+    s_websocket_state.close_pending = true;
+    (void)websocket_schedule_close_worker();
 }
 
 static void websocket_close_internal(void)
@@ -461,6 +520,25 @@ static void websocket_close_internal(void)
     } else {
         websocket_close_source(NULL);
     }
+}
+
+static void websocket_wait_for_close(void)
+{
+    esp32_mquickjs_runtime_t *runtime = s_websocket_state.runtime;
+    esp32_mquickjs_native_wait_t wait;
+
+    esp32_mquickjs_native_wait_begin(runtime, &wait);
+    while (atomic_load_explicit(&s_websocket_state.lifecycle,
+                                memory_order_acquire) ==
+           WEBSOCKET_LIFECYCLE_CLOSING) {
+        if (websocket_poll_close()) {
+            continue;
+        }
+        (void)esp32_mquickjs_cooperate(runtime);
+        (void)esp32_mquickjs_future_cooperate(runtime);
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    esp32_mquickjs_native_wait_end(runtime, &wait);
 }
 
 static bool websocket_make_event_object(
@@ -528,9 +606,7 @@ static bool websocket_make_event_object(
          !esp32_mquickjs_set_property_ref(ctx, object, "message",
                                           JS_NewString(ctx, event->message)) ||
          !esp32_mquickjs_set_property_ref(ctx, object, "reconnecting",
-                                          JS_NewBool(
-                                              websocket_generation_is_active(
-                                              event->generation))))) {
+                                          JS_NewBool(event->reconnecting)))) {
         JS_PopGCRef(ctx, &data_ref);
         JS_PopGCRef(ctx, &object_ref);
         return false;
@@ -573,8 +649,9 @@ static bool websocket_poller(JSContext *ctx,
     (void)opaque;
     (void)ctx;
     (void)runtime;
+    handled = websocket_poll_close();
     if (ctx == NULL || s_websocket_state.queue == NULL) {
-        return false;
+        return handled;
     }
 
     while (xQueueReceive(s_websocket_state.queue, &event, 0) == pdTRUE) {
@@ -675,14 +752,15 @@ bool esp32_mquickjs_init_websocket_runtime(JSContext *ctx,
 
 void esp32_mquickjs_deinit_websocket_runtime(JSContext *ctx)
 {
-    (void)ctx;
     if (!s_websocket_state.initialized) {
         return;
     }
     websocket_close_internal();
+    websocket_wait_for_close();
     if (s_websocket_state.queue != NULL) {
         vQueueDelete(s_websocket_state.queue);
     }
+    (void)ctx;
     websocket_reset_state();
 }
 
@@ -707,7 +785,6 @@ JSValue js_websocket_open(JSContext *ctx,
     size_t subprotocol_len = 0;
     char *headers = NULL;
     bool auto_reconnect;
-    bool use_cert_bundle;
     int reconnect_ms;
     int network_timeout_ms;
     int send_timeout_ms;
@@ -726,6 +803,7 @@ JSValue js_websocket_open(JSContext *ctx,
     if (!s_websocket_state.initialized) {
         return JS_ThrowInternalError(ctx, "websocketClient is not initialized");
     }
+    (void)websocket_poll_close();
     if (atomic_load_explicit(&s_websocket_state.lifecycle,
                              memory_order_acquire) !=
             WEBSOCKET_LIFECYCLE_IDLE ||
@@ -811,8 +889,6 @@ JSValue js_websocket_open(JSContext *ctx,
 
     if (!websocket_get_bool_option(ctx, argv[0], "autoReconnect", true,
                                    &auto_reconnect) ||
-        !websocket_get_bool_option(ctx, argv[0], "useCertBundle", true,
-                                   &use_cert_bundle) ||
         !websocket_get_int_option(ctx, argv[0], "reconnectMs",
                                   WEBSOCKET_DEFAULT_RECONNECT_MS, 0, 120000,
                                   &reconnect_ms) ||
@@ -855,7 +931,7 @@ JSValue js_websocket_open(JSContext *ctx,
     config.task_stack = CONFIG_ESP32_MQUICKJS_WEBSOCKET_TASK_STACK_SIZE;
     config.task_prio = 5;
     config.buffer_size = 1024;
-    if (use_cert_bundle && strncmp(url_copy, "wss://", 6) == 0) {
+    if (strncmp(url_copy, "wss://", 6) == 0) {
         config.crt_bundle_attach = esp32_mquickjs_tls_crt_bundle_attach;
     }
 
@@ -874,6 +950,8 @@ JSValue js_websocket_open(JSContext *ctx,
     s_websocket_state.client = client;
     s_websocket_state.max_message_bytes = (size_t)max_message_bytes;
     s_websocket_state.send_timeout_ms = (uint32_t)send_timeout_ms;
+    s_websocket_state.auto_reconnect =
+        auto_reconnect && reconnect_ms > 0;
     queue_object = JS_PushGCRef(ctx, &queue_ref);
     send = JS_PushGCRef(ctx, &send_ref);
     status = JS_PushGCRef(ctx, &status_ref);
@@ -931,15 +1009,16 @@ JSValue js_websocket_close(JSContext *ctx,
                            int argc,
                            JSValue *argv)
 {
-    bool was_open =
-        atomic_load_explicit(&s_websocket_state.lifecycle,
-                             memory_order_acquire) !=
-            WEBSOCKET_LIFECYCLE_IDLE ||
-        s_websocket_state.client != NULL;
+    esp32_mquickjs_websocket_lifecycle_t lifecycle;
+    bool was_open;
 
     (void)this_val;
     (void)argc;
     (void)argv;
+    (void)websocket_poll_close();
+    lifecycle = atomic_load_explicit(&s_websocket_state.lifecycle,
+                                     memory_order_acquire);
+    was_open = websocket_lifecycle_is_active(lifecycle);
     websocket_close_internal();
     return JS_NewBool(was_open);
 }
@@ -1141,7 +1220,7 @@ JSValue js_websocket_send(JSContext *ctx,
     s_websocket_state.sending = false;
     heap_caps_free(data);
     if (s_websocket_state.close_pending) {
-        websocket_finalize_close_source();
+        (void)websocket_schedule_close_worker();
     }
     if (sent < 0 || (size_t)sent != length) {
         return JS_ThrowInternalError(ctx, "websocketClient.send() failed");
@@ -1317,7 +1396,7 @@ static void websocket_send_future_destroy(
     if (state != NULL && state->started) {
         s_websocket_state.sending = false;
         if (s_websocket_state.close_pending) {
-            websocket_finalize_close_source();
+            (void)websocket_schedule_close_worker();
         }
     }
     websocket_send_future_release(state);
@@ -1385,6 +1464,7 @@ JSValue js_websocket_status(JSContext *ctx,
     (void)this_val;
     (void)argc;
     (void)argv;
+    (void)websocket_poll_close();
     lifecycle = atomic_load_explicit(&s_websocket_state.lifecycle,
                                      memory_order_acquire);
     status = JS_PushGCRef(ctx, &status_ref);
@@ -1398,6 +1478,10 @@ JSValue js_websocket_status(JSContext *ctx,
                                          JS_NewBool(
                                              lifecycle ==
                                              WEBSOCKET_LIFECYCLE_CONNECTED)) ||
+        !esp32_mquickjs_set_property_ref(ctx, status, "closing",
+                                         JS_NewBool(
+                                             lifecycle ==
+                                             WEBSOCKET_LIFECYCLE_CLOSING)) ||
         !esp32_mquickjs_set_property_ref(ctx, status, "maxMessageBytes",
                                          JS_NewInt32(ctx, (int32_t)s_websocket_state.max_message_bytes)) ||
         !esp32_mquickjs_set_property_ref(ctx, status, "openedEvents",

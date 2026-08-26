@@ -109,6 +109,7 @@ typedef struct {
     esp32_mquickjs_future_token_t token;
     esp32_mquickjs_future_worker_fn_t function;
     void *opaque;
+    bool wake_future;
 } future_worker_item_t;
 
 static QueueHandle_t s_future_worker_queue;
@@ -125,7 +126,9 @@ static void future_worker_task(void *opaque)
         }
         if (item.function != NULL) {
             item.function(item.opaque);
-            (void)esp32_mquickjs_future_wake(item.runtime, item.token);
+            if (item.wake_future) {
+                (void)esp32_mquickjs_future_wake(item.runtime, item.token);
+            }
         }
     }
 }
@@ -1713,10 +1716,26 @@ bool esp32_mquickjs_future_submit_worker(
         .token = token,
         .function = function,
         .opaque = opaque,
+        .wake_future = true,
     };
 
     return runtime != NULL && function != NULL &&
            s_future_worker_pool_initialized && s_future_worker_queue != NULL &&
+           xQueueSend(s_future_worker_queue, &item, 0) == pdTRUE;
+}
+
+bool esp32_mquickjs_submit_background_worker(
+    esp32_mquickjs_future_worker_fn_t function,
+    void *opaque)
+{
+    future_worker_item_t item = {
+        .function = function,
+        .opaque = opaque,
+        .wake_future = false,
+    };
+
+    return function != NULL && s_future_worker_pool_initialized &&
+           s_future_worker_queue != NULL &&
            xQueueSend(s_future_worker_queue, &item, 0) == pdTRUE;
 }
 

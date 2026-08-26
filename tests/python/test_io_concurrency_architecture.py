@@ -557,14 +557,49 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("memory_order_acq_rel", websocket)
         self.assertIn("_Atomic uint32_t dropped_events", websocket)
         self.assertIn("_Atomic uint32_t oversized_messages", websocket)
+        self.assertIn("_Atomic bool close_worker_completed", websocket)
         self.assertIn("websocket_reset_fragment();\n    websocket_drain_queue();", websocket)
-        self.assertLess(
-            websocket.index("esp_websocket_client_destroy(client)"),
-            websocket.index(
-                "websocket_reset_fragment();",
-                websocket.index("static void websocket_finalize_close_source("),
-            ),
+        close_source_start = websocket.index("static void websocket_close_source(")
+        close_source_end = websocket.index(
+            "\nstatic void websocket_close_internal(", close_source_start
         )
+        close_source = websocket[close_source_start:close_source_end]
+        self.assertIn("websocket_schedule_close_worker()", close_source)
+        self.assertNotIn("esp_websocket_client_stop(", close_source)
+        self.assertNotIn("esp_websocket_client_destroy(", close_source)
+        self.assertIn("static void websocket_close_worker(", websocket)
+        self.assertIn("esp_websocket_client_stop(client)", websocket)
+        self.assertIn("esp_websocket_client_destroy(client)", websocket)
+        self.assertIn("esp32_mquickjs_submit_background_worker(", websocket)
+        self.assertIn('status, "closing"', websocket)
+        self.assertIn(
+            "&s_websocket_state.close_worker_completed, true,\n"
+            "                          memory_order_release",
+            websocket,
+        )
+        self.assertIn(
+            "&s_websocket_state.close_worker_completed,\n"
+            "                              memory_order_acquire",
+            websocket,
+        )
+        self.assertIn("JS_NewBool(event->reconnecting)", websocket)
+        self.assertIn(
+            ".reconnecting = s_websocket_state.auto_reconnect", websocket
+        )
+
+    def test_background_cleanup_uses_generic_workers_without_fake_future_wakes(self):
+        header = (MQUICKJS / "internal/esp32_mquickjs_future.h").read_text(
+            encoding="utf-8"
+        )
+        future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("esp32_mquickjs_submit_background_worker(", header)
+        self.assertIn("bool wake_future;", future)
+        self.assertIn("if (item.wake_future)", future)
+        self.assertIn(".wake_future = true", future)
+        self.assertIn(".wake_future = false", future)
 
     def test_socket_hostname_resolution_runs_in_the_lwip_task(self):
         socket = (

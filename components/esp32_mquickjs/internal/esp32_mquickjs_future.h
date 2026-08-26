@@ -50,8 +50,8 @@ typedef struct {
         const esp32_mquickjs_future_driver_state_t *state);
 } esp32_mquickjs_future_driver_t;
 
-/* A generic worker callback publishes its result and returns. The generic
-   worker pool is solely responsible for waking the Future once afterward. */
+/* A generic worker callback publishes its result and returns. For work owned
+   by a Future, the generic pool is solely responsible for one wake afterward. */
 typedef void (*esp32_mquickjs_future_worker_fn_t)(void *opaque);
 
 typedef struct {
@@ -82,6 +82,11 @@ bool esp32_mquickjs_future_wake_from_isr(esp32_mquickjs_runtime_t *runtime,
 bool esp32_mquickjs_future_submit_worker(
     esp32_mquickjs_runtime_t *runtime,
     esp32_mquickjs_future_token_t token,
+    esp32_mquickjs_future_worker_fn_t function,
+    void *opaque);
+/* Submit cleanup or other native maintenance that has no owning Future.
+   The callback must publish any completion state before it returns. */
+bool esp32_mquickjs_submit_background_worker(
     esp32_mquickjs_future_worker_fn_t function,
     void *opaque);
 bool esp32_mquickjs_future_poll(JSContext *ctx,
