@@ -14,6 +14,10 @@ test("fs/filesystem", function () {
   var systemFs;
   var sameRootFs;
   var pendingRead;
+  var laneWrite;
+  var laneAppend;
+  var laneRead;
+  var laneResults;
   var stream;
   var pendingStreamRead;
   var streamText;
@@ -56,15 +60,24 @@ test("fs/filesystem", function () {
   test.equal(pendingRead.wait(1000), "hello!",
     "explicit Future captures its FsVolume receiver");
 
+  laneWrite = Future.call(systemFs.writeText, systemFs,
+    [filePath, "lane-first"]);
+  laneAppend = Future.call(systemFs.appendText, systemFs,
+    [filePath, "-second"]);
+  laneRead = Future.call(systemFs.readText, systemFs, [filePath]);
+  laneResults = Future.all([laneWrite, laneAppend, laneRead]).wait(2000);
+  test.equal(laneResults[2], "lane-first-second",
+    "same-volume Futures should execute in submission order");
+
   stream = Future.call(fs.open, fs, [filePath, "r"]).wait(1000);
   pendingStreamRead = Future.call(stream.read, stream, [16]);
   streamText = pendingStreamRead.wait(1000);
-  test.equal(streamText, "hello!", "Stream.read uses a Future driver");
+  test.equal(streamText, "lane-first-second", "Stream.read uses a Future driver");
   Future.call(stream.close, stream, []).wait(1000);
 
   stat = fs.stat(filePath);
   test.equal(stat.name, "tmp-test.txt", "stat name");
-  test.equal(stat.size, 6, "stat size");
+  test.equal(stat.size, 17, "stat size");
 
   fs.rename(filePath, renamedPath);
   change = changes.receive(0);

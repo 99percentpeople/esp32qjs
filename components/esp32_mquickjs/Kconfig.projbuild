@@ -349,6 +349,15 @@ config ESP32_MQUICKJS_FUTURE_WORKER_QUEUE_LEN
         Bounded number of prepared native operations waiting for a generic
         Future worker. Submissions fail with BUSY when this queue is full.
 
+config ESP32_MQUICKJS_FUTURE_RESOURCE_LANE_QUEUE_LEN
+    int "Per-resource Future waiting queue length"
+    range 1 32
+    default 8
+    help
+        Maximum number of captured native operations that may wait behind an
+        active operation with the same resource key. Equal keys execute in
+        strict FIFO order without occupying a blocking I/O worker while queued.
+
 config ESP32_MQUICKJS_MAX_SCRIPT_PATH
     int "Maximum script path length"
     range 128 1024

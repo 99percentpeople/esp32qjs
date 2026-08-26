@@ -100,6 +100,15 @@ slot is immediately reusable. Synchronous native adapters use a separate
 reserved slot pool, keeping transport and cancellation paths responsive when
 public Future capacity is full.
 
+A native driver may expose a non-null resource key. Operations with equal keys
+enter a bounded FIFO lane: the core captures their arguments and leases at
+`Future.call()` time, but starts only one operation for that resource at a
+time. Waiting operations do not occupy worker tasks, while drivers with
+different keys may run concurrently. The per-resource waiting limit is
+`CONFIG_ESP32_MQUICKJS_FUTURE_RESOURCE_LANE_QUEUE_LEN`; exceeding it rejects
+the new Future with `Future resource lane queue is full`. Cancelling a queued
+Future releases its captured state without starting the driver.
+
 Finite synchronous hardware operations are cooperative scheduler yield points.
 While one is waiting for an interrupt, readiness event, or timeout, timer
 callbacks and ready Futures may run before the hardware method returns. This is

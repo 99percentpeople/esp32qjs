@@ -111,7 +111,7 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertNotIn("esp_netif_init()", start)
         self.assertNotIn("esp_event_loop_create_default()", start)
 
-    def test_storage_waits_use_the_bounded_future_worker_pool(self):
+    def test_storage_uses_resource_lanes_before_the_bounded_worker_pool(self):
         filesystem = (
             MQUICKJS / "src/modules/fs/esp32_mquickjs_fs.c"
         ).read_text(encoding="utf-8")
@@ -121,10 +121,12 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
 
         self.assertIn("esp32_mquickjs_future_submit_worker", filesystem)
         self.assertIn("esp32_mquickjs_future_register_driver", filesystem)
-        self.assertIn("s_fs_worker_lock", filesystem)
+        self.assertIn("fs_future_resource_key", filesystem)
+        self.assertNotIn("s_fs_worker_lock", filesystem)
         self.assertIn("esp32_mquickjs_future_submit_worker", nvs)
         self.assertIn("esp32_mquickjs_future_register_driver", nvs)
-        self.assertIn("s_nvs_worker_lock", nvs)
+        self.assertIn("nvs_future_resource_key", nvs)
+        self.assertNotIn("s_nvs_worker_lock", nvs)
 
         fs_worker = filesystem[
             filesystem.index("static void fs_future_worker") : filesystem.index(
@@ -138,8 +140,39 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         ]
         self.assertNotIn("esp32_mquickjs_future_wake", fs_worker)
         self.assertNotIn("esp32_mquickjs_future_wake", nvs_worker)
+        self.assertNotIn("xSemaphoreTake", fs_worker)
+        self.assertNotIn("xSemaphoreTake", nvs_worker)
         self.assertIn("memory_order_release", fs_worker)
         self.assertIn("memory_order_release", nvs_worker)
+
+    def test_resource_lanes_are_bounded_fifo_and_do_not_occupy_workers(self):
+        future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
+            encoding="utf-8"
+        )
+        header = (MQUICKJS / "internal/esp32_mquickjs_future.h").read_text(
+            encoding="utf-8"
+        )
+        kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
+        dispatch_start = future.index("static void future_dispatch_call(")
+        dispatch_end = future.index("\nstatic void future_sleep_timer_callback", dispatch_start)
+        dispatch = future[dispatch_start:dispatch_end]
+        waiting_start = future.index("static bool future_dispatch_waiting_lanes(")
+        waiting_end = future.index(
+            "\nbool esp32_mquickjs_init_future_runtime", waiting_start
+        )
+        waiting = future[waiting_start:waiting_end]
+
+        self.assertIn("esp32_mquickjs_resource_key_t", header)
+        self.assertIn("(*resource_key)(", header)
+        self.assertIn("future_lane_in_use(state, slot)", dispatch)
+        self.assertIn("slot->lane_waiting = true", dispatch)
+        self.assertNotIn("->start(", dispatch[: dispatch.index("slot->lane_waiting = true")])
+        self.assertIn("submission_sequence", waiting)
+        self.assertIn("future_start_captured_driver", waiting)
+        self.assertIn(
+            "CONFIG_ESP32_MQUICKJS_FUTURE_RESOURCE_LANE_QUEUE_LEN", dispatch
+        )
+        self.assertIn("ESP32_MQUICKJS_FUTURE_RESOURCE_LANE_QUEUE_LEN", kconfig)
 
     def test_file_stream_operations_use_real_future_drivers(self):
         stream = (MQUICKJS / "src/core/esp32_mquickjs_stream.c").read_text(
@@ -153,6 +186,9 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("esp32_mquickjs_future_submit_worker", stream)
         self.assertIn("s_stream_read_driver", stream)
         self.assertIn("s_stream_write_driver", stream)
+        self.assertIn("stream_future_resource_key", stream)
+        self.assertIn("slot->future_reservations++", stream)
+        self.assertNotIn("slot->busy", stream)
         self.assertIn("s_stream_flush_driver", stream)
         self.assertIn("s_stream_close_driver", stream)
         self.assertIn("s_stream_seek_driver", stream)

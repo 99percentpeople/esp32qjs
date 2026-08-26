@@ -11,8 +11,6 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -26,7 +24,7 @@
 #endif
 
 static bool s_nvs_initialized;
-static SemaphoreHandle_t s_nvs_worker_lock;
+static const char s_nvs_resource_lane;
 static bool nvs_register_future_drivers(JSContext *ctx,
                                         esp32_mquickjs_runtime_t *runtime);
 
@@ -96,11 +94,6 @@ bool esp32_mquickjs_init_nvs_runtime(JSContext *ctx,
         err = nvs_flash_init();
         if (err != ESP_OK) {
             nvs_throw_error(ctx, "init", err);
-            return false;
-        }
-        s_nvs_worker_lock = xSemaphoreCreateMutex();
-        if (s_nvs_worker_lock == NULL) {
-            JS_ThrowOutOfMemory(ctx);
             return false;
         }
         s_nvs_initialized = true;
@@ -299,7 +292,6 @@ static void nvs_future_worker(void *opaque)
     if (state == NULL) {
         return;
     }
-    xSemaphoreTake(s_nvs_worker_lock, portMAX_DELAY);
     if (state->kind == NVS_FUTURE_GET_STRING) {
         size_t required = 0;
 
@@ -367,7 +359,6 @@ static void nvs_future_worker(void *opaque)
             }
         }
     }
-    xSemaphoreGive(s_nvs_worker_lock);
     state->err = err;
     atomic_store_explicit(&state->completed, true, memory_order_release);
 }
@@ -444,6 +435,12 @@ static void nvs_future_destroy(esp32_mquickjs_future_driver_state_t *state)
     nvs_future_release(state);
 }
 
+static esp32_mquickjs_resource_key_t nvs_future_resource_key(
+    const esp32_mquickjs_future_driver_state_t *state)
+{
+    return state != NULL ? &s_nvs_resource_lane : NULL;
+}
+
 #define NVS_FUTURE_DRIVER(name, prepare_fn) \
     static const esp32_mquickjs_future_driver_t name = { \
         .capture = prepare_fn, \
@@ -452,6 +449,7 @@ static void nvs_future_destroy(esp32_mquickjs_future_driver_state_t *state)
         .finish = nvs_future_finish, \
         .cancel = nvs_future_cancel, \
         .destroy = nvs_future_destroy, \
+        .resource_key = nvs_future_resource_key, \
     }
 
 NVS_FUTURE_DRIVER(s_nvs_get_driver, nvs_get_future_prepare);

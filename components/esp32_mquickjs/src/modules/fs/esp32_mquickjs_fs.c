@@ -62,7 +62,6 @@ typedef struct {
 } esp32_mquickjs_fs_volume_t;
 
 static bool s_littlefs_mounted;
-static SemaphoreHandle_t s_fs_worker_lock;
 static esp32_mquickjs_littlefs_mount_t
     s_littlefs_mounts[ESP32_MQUICKJS_MAX_LITTLEFS_MOUNTS];
 
@@ -219,6 +218,12 @@ static esp32_mquickjs_littlefs_mount_t *find_littlefs_mount_by_root(
         }
     }
     return matched;
+}
+
+esp32_mquickjs_resource_key_t esp32_mquickjs_fs_resource_key_for_path(
+    const char *path)
+{
+    return find_littlefs_mount_by_root(path);
 }
 
 static esp32_mquickjs_littlefs_mount_t *find_littlefs_mount_exact(
@@ -910,6 +915,7 @@ struct esp32_mquickjs_future_driver_state {
     size_t entry_count;
     int error_number;
     bool result;
+    esp32_mquickjs_resource_key_t resource_key;
     _Atomic bool completed;
     bool cancelled;
 };
@@ -1028,6 +1034,13 @@ static bool fs_future_prepare_common(
         fs_future_release(state);
         return false;
     }
+    state->resource_key = esp32_mquickjs_fs_resource_key_for_path(state->path);
+    if (state->resource_key == NULL) {
+        fs_future_release(state);
+        JS_ThrowInternalError(ctx, "%s could not resolve its filesystem mount",
+                              api_name);
+        return false;
+    }
     if (kind == FS_FUTURE_WRITE_TEXT || kind == FS_FUTURE_APPEND_TEXT) {
         JSCStringBuf text_buf;
         const char *text;
@@ -1084,7 +1097,6 @@ static void fs_future_worker(void *opaque)
     if (state == NULL) {
         return;
     }
-    xSemaphoreTake(s_fs_worker_lock, portMAX_DELAY);
     errno = 0;
     if (state->kind == FS_FUTURE_OPEN) {
         bool path_existed = access(state->path, F_OK) == 0;
@@ -1204,7 +1216,6 @@ static void fs_future_worker(void *opaque)
         esp32_mquickjs_fs_notify_change(
             ESP32_MQUICKJS_FS_CHANGE_MKDIR, state->path, NULL);
     }
-    xSemaphoreGive(s_fs_worker_lock);
     atomic_store_explicit(&state->completed, true, memory_order_release);
 }
 
@@ -1324,6 +1335,12 @@ static void fs_future_destroy(esp32_mquickjs_future_driver_state_t *state)
     fs_future_release(state);
 }
 
+static esp32_mquickjs_resource_key_t fs_future_resource_key(
+    const esp32_mquickjs_future_driver_state_t *state)
+{
+    return state != NULL ? state->resource_key : NULL;
+}
+
 #define FS_FUTURE_DRIVER(name, prepare_fn) \
     static const esp32_mquickjs_future_driver_t name = { \
         .capture = prepare_fn, \
@@ -1332,6 +1349,7 @@ static void fs_future_destroy(esp32_mquickjs_future_driver_state_t *state)
         .finish = fs_future_finish, \
         .cancel = fs_future_cancel, \
         .destroy = fs_future_destroy, \
+        .resource_key = fs_future_resource_key, \
     }
 
 FS_FUTURE_DRIVER(s_fs_list_driver, fs_list_future_prepare);
@@ -1381,14 +1399,6 @@ bool esp32_mquickjs_init_fs_runtime(JSContext *ctx,
         esp32_mquickjs_deinit_fs_runtime(runtime);
         JS_ThrowOutOfMemory(ctx);
         return false;
-    }
-    if (s_fs_worker_lock == NULL) {
-        s_fs_worker_lock = xSemaphoreCreateMutex();
-        if (s_fs_worker_lock == NULL) {
-            esp32_mquickjs_deinit_fs_runtime(runtime);
-            JS_ThrowOutOfMemory(ctx);
-            return false;
-        }
     }
     global_obj = JS_PushGCRef(ctx, &global_ref);
     fs_obj = JS_PushGCRef(ctx, &fs_ref);

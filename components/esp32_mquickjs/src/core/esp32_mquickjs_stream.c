@@ -1,6 +1,7 @@
 #include "esp32_mquickjs_stream.h"
 #include "esp32_mquickjs_memory.h"
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_fs.h"
 #include "esp32_mquickjs_fs_events.h"
 #include "esp32_mquickjs_future.h"
 
@@ -33,9 +34,11 @@ typedef struct {
     bool writable;
     bool binary;
     bool seekable;
-    bool busy;
+    bool externally_acquired;
+    bool close_queued;
     bool release_pending;
     uint16_t owner_count;
+    uint16_t future_reservations;
     char *path;
     union {
         FILE *file;
@@ -118,6 +121,12 @@ static esp32_mquickjs_stream_slot_t *stream_get_slot(const esp32_mquickjs_fs_str
     return slot;
 }
 
+static bool stream_slot_busy(const esp32_mquickjs_stream_slot_t *slot)
+{
+    return slot != NULL &&
+           (slot->externally_acquired || slot->future_reservations > 0);
+}
+
 static void stream_cleanup_slot(esp32_mquickjs_stream_slot_t *slot)
 {
     if (slot == NULL) {
@@ -147,9 +156,11 @@ static void stream_cleanup_slot(esp32_mquickjs_stream_slot_t *slot)
     slot->writable = false;
     slot->binary = false;
     slot->seekable = false;
-    slot->busy = false;
+    slot->externally_acquired = false;
+    slot->close_queued = false;
     slot->release_pending = false;
     slot->owner_count = 0;
+    slot->future_reservations = 0;
     slot->kind = ESP32_MQUICKJS_STREAM_KIND_FILE;
     memset(slot->mode, 0, sizeof(slot->mode));
     memset(&slot->handle, 0, sizeof(slot->handle));
@@ -745,7 +756,7 @@ int esp32_mquickjs_stream_read_all_text(JSContext *ctx,
         return -1;
     }
     slot = stream_get_slot(&ref);
-    if (slot == NULL || !slot->readable || slot->busy) {
+    if (slot == NULL || !slot->readable || stream_slot_busy(slot)) {
         JS_ThrowTypeError(ctx, "%s expects a readable Stream", api_name);
         return -1;
     }
@@ -830,7 +841,7 @@ int esp32_mquickjs_stream_read_all_bytes(JSContext *ctx,
         return -1;
     }
     slot = stream_get_slot(&ref);
-    if (slot == NULL || !slot->readable || slot->busy) {
+    if (slot == NULL || !slot->readable || stream_slot_busy(slot)) {
         JS_ThrowTypeError(ctx, "%s expects a readable Stream", api_name);
         return -1;
     }
@@ -936,7 +947,7 @@ esp_err_t esp32_mquickjs_stream_close_value(JSContext *ctx, JSValue stream_value
         return ESP_ERR_INVALID_ARG;
     }
     slot = stream_get_slot(&ref);
-    if (slot == NULL || slot->busy) {
+    if (slot == NULL || stream_slot_busy(slot)) {
         return ESP_ERR_INVALID_STATE;
     }
     return esp32_mquickjs_fs_stream_close(&ref);
@@ -957,7 +968,7 @@ esp_err_t esp32_mquickjs_fs_stream_read(const esp32_mquickjs_fs_stream_ref_t *re
     }
 
     slot = stream_get_slot(ref);
-    if (slot == NULL || !slot->busy) {
+    if (slot == NULL || !slot->externally_acquired) {
         return ESP_ERR_INVALID_STATE;
     }
     if (stream_slot_read(slot, buf, buf_len, out_len) != 0) {
@@ -971,10 +982,10 @@ esp_err_t esp32_mquickjs_fs_stream_acquire(
 {
     esp32_mquickjs_stream_slot_t *slot = stream_get_slot(ref);
 
-    if (slot == NULL || slot->busy) {
+    if (slot == NULL || stream_slot_busy(slot)) {
         return ESP_ERR_INVALID_STATE;
     }
-    slot->busy = true;
+    slot->externally_acquired = true;
     return ESP_OK;
 }
 
@@ -1010,6 +1021,8 @@ struct esp32_mquickjs_future_driver_state {
     int error_number;
     bool binary;
     bool closed;
+    bool reservation_retained;
+    esp32_mquickjs_resource_key_t resource_key;
     _Atomic bool completed;
     _Atomic bool cancelled;
 };
@@ -1110,8 +1123,15 @@ static void stream_future_release(
     heap_caps_free(state->data);
     slot = stream_get_slot(&state->ref);
     if (slot != NULL) {
-        slot->busy = false;
-        if (state->closed || slot->release_pending) {
+        if (state->reservation_retained && slot->future_reservations > 0) {
+            slot->future_reservations--;
+            state->reservation_retained = false;
+        }
+        if (state->kind == STREAM_FUTURE_CLOSE && !state->closed) {
+            slot->close_queued = false;
+        }
+        if (slot->future_reservations == 0 && !slot->externally_acquired &&
+            (state->closed || slot->release_pending)) {
             stream_cleanup_slot(slot);
         }
     }
@@ -1143,7 +1163,8 @@ static bool stream_future_prepare_common(
         heap_caps_free(state);
         return false;
     }
-    if (slot->busy) {
+    if (slot->externally_acquired || slot->close_queued ||
+        slot->future_reservations == UINT16_MAX) {
         heap_caps_free(state);
         JS_ThrowInternalError(ctx,
                               "Stream operation refused because the stream is busy");
@@ -1153,7 +1174,19 @@ static bool stream_future_prepare_common(
     atomic_init(&state->cancelled, false);
     state->kind = kind;
     state->binary = slot->binary;
-    slot->busy = true;
+    state->resource_key = slot->kind == ESP32_MQUICKJS_STREAM_KIND_FILE
+        ? esp32_mquickjs_fs_resource_key_for_path(slot->path)
+        : slot;
+    if (state->resource_key == NULL) {
+        JS_ThrowInternalError(ctx,
+                              "Stream operation could not resolve its resource lane");
+        goto fail;
+    }
+    slot->future_reservations++;
+    state->reservation_retained = true;
+    if (kind == STREAM_FUTURE_CLOSE) {
+        slot->close_queued = true;
+    }
 
     if (kind == STREAM_FUTURE_READ) {
         int chunk_size = ESP32_MQUICKJS_STREAM_READ_CHUNK_DEFAULT;
@@ -1442,6 +1475,12 @@ static void stream_future_destroy(
     stream_future_release(state);
 }
 
+static esp32_mquickjs_resource_key_t stream_future_resource_key(
+    const esp32_mquickjs_future_driver_state_t *state)
+{
+    return state != NULL ? state->resource_key : NULL;
+}
+
 #define STREAM_FUTURE_DRIVER(name, prepare_fn) \
     static const esp32_mquickjs_future_driver_t name = { \
         .capture = prepare_fn, \
@@ -1450,6 +1489,7 @@ static void stream_future_destroy(
         .finish = stream_future_finish, \
         .cancel = stream_future_cancel, \
         .destroy = stream_future_destroy, \
+        .resource_key = stream_future_resource_key, \
     }
 
 STREAM_FUTURE_DRIVER(s_stream_read_driver, stream_read_future_prepare);
@@ -1528,7 +1568,7 @@ void js_stream_finalizer(JSContext *ctx, void *opaque)
             slot->owner_count--;
         }
         if (slot->owner_count == 0) {
-            if (slot->busy) {
+            if (stream_slot_busy(slot)) {
                 slot->release_pending = true;
             } else {
                 stream_cleanup_slot(slot);
@@ -1584,7 +1624,7 @@ JSValue js_stream_tell(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
     if (stream_get_this_slot(ctx, *this_val, "stream.tell", &stream_ref, &slot) != 0) {
         return JS_EXCEPTION;
     }
-    if (slot->busy) {
+    if (stream_slot_busy(slot)) {
         return JS_ThrowInternalError(ctx, "stream.tell() refused because the stream is busy");
     }
     pos = stream_slot_tell(slot);
@@ -1606,7 +1646,7 @@ JSValue js_stream_eof(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
     if (stream_get_this_slot(ctx, *this_val, "stream.eof", &stream_ref, &slot) != 0) {
         return JS_EXCEPTION;
     }
-    if (slot->busy) {
+    if (stream_slot_busy(slot)) {
         return JS_ThrowInternalError(ctx, "stream.eof() refused because the stream is busy");
     }
     return JS_NewBool(stream_slot_eof(slot));

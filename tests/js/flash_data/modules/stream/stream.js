@@ -10,13 +10,33 @@ test("stream/stream", function () {
   var bytes;
   var binaryPath = "stream-binary-test.bin";
   var binaryStream;
+  var queuedWriteA;
+  var queuedWriteB;
+  var queuedSeek;
+  var queuedRead;
+  var queuedResults;
 
   writeStream = fs.open(path, "w+");
   test.equal(writeStream.kind, "file", "stream kind");
   test.equal(writeStream.mode, "w+", "stream mode");
   test.ok(writeStream.readable, "w+ stream should be readable");
   test.ok(writeStream.writable, "w+ stream should be writable");
-  test.equal(writeStream.write("abcdef"), 6, "write byte count");
+  queuedWriteA = Future.call(writeStream.write, writeStream, ["abc"]);
+  queuedWriteB = Future.call(writeStream.write, writeStream, ["def"]);
+  queuedSeek = Future.call(writeStream.seek, writeStream,
+    [0, Stream.SEEK_SET]);
+  queuedRead = Future.call(writeStream.read, writeStream, [6]);
+  queuedResults = Future.all([
+    queuedWriteA,
+    queuedWriteB,
+    queuedSeek,
+    queuedRead
+  ]).wait(2000);
+  test.equal(queuedResults[0], 3, "first queued write byte count");
+  test.equal(queuedResults[1], 3, "second queued write byte count");
+  test.equal(queuedResults[3], "abcdef",
+    "same-stream Futures should execute in submission order");
+  writeStream.seek(0, Stream.SEEK_END);
   writeStream.flush();
   test.equal(writeStream.tell(), 6, "tell after write");
   writeStream.seek(0, Stream.SEEK_SET);

@@ -23,6 +23,10 @@ typedef enum {
     ESP32_MQUICKJS_CANCEL_REQUESTED,
 } esp32_mquickjs_cancel_result_t;
 
+/* NULL means that the operation does not require resource serialization.
+   Equal non-NULL keys share one bounded FIFO lane within a runtime. */
+typedef const void *esp32_mquickjs_resource_key_t;
+
 typedef struct {
     /* Capture immutable arguments and native leases during Future.call().
        This callback must not start I/O or block on hardware. On failure it
@@ -42,6 +46,8 @@ typedef struct {
         esp32_mquickjs_future_driver_state_t *state);
     void (*destroy)(esp32_mquickjs_future_driver_state_t *state);
     uint32_t (*timeout_ms)(const esp32_mquickjs_future_driver_state_t *state);
+    esp32_mquickjs_resource_key_t (*resource_key)(
+        const esp32_mquickjs_future_driver_state_t *state);
 } esp32_mquickjs_future_driver_t;
 
 /* A generic worker callback publishes its result and returns. The generic

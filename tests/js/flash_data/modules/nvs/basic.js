@@ -2,6 +2,10 @@ test("nvs/basic", function () {
   var namespace = "qjs_test";
   var status = nvs.status();
   var oversized = "";
+  var firstSet;
+  var secondSet;
+  var orderedGet;
+  var orderedResults;
   var i;
 
   function expectError(callback, fragment, label) {
@@ -26,6 +30,16 @@ test("nvs/basic", function () {
     "setString should count multibyte UTF-8");
   test.equal(nvs.getString(namespace, "greeting"), "你好",
     "getString should preserve UTF-8");
+
+  firstSet = Future.call(nvs.setString, nvs,
+    [namespace, "ordered", "first"]);
+  secondSet = Future.call(nvs.setString, nvs,
+    [namespace, "ordered", "second"]);
+  orderedGet = Future.call(nvs.getString, nvs, [namespace, "ordered"]);
+  orderedResults = Future.all([firstSet, secondSet, orderedGet]).wait(2000);
+  test.equal(orderedResults[2], "second",
+    "NVS Futures should execute in submission order");
+  nvs.erase(namespace, "ordered");
   test.ok(nvs.erase(namespace, "greeting"), "erase should remove an existing key");
   test.ok(!nvs.erase(namespace, "greeting"), "erase should report a missing key");
 
