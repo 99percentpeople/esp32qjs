@@ -25,11 +25,11 @@ typedef struct {
 typedef struct {
     esp32_mquickjs_event_queue_t *event_queue;
     gpio_num_t pin;
-    volatile uint32_t generation;
-    volatile uint32_t dropped;
+    uint32_t generation;
+    uint32_t dropped;
     gpio_int_type_t intr_type;
     bool handler_installed;
-    volatile bool attached;
+    bool attached;
 } gpio_interrupt_slot_t;
 
 static bool s_gpio_hold_state[GPIO_NUM_MAX];
@@ -1105,7 +1105,6 @@ void esp32_mquickjs_deinit_gpio_runtime(JSContext *ctx)
             continue;
         }
         (void)gpio_interrupt_release_slot((gpio_num_t)pin, NULL);
-        slot->attached = false;
         slot->handler_installed = false;
     }
 }

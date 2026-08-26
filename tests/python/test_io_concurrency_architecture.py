@@ -216,6 +216,30 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             self.assertIn("memory_order_release", source)
             self.assertIn("memory_order_acquire", source)
 
+    def test_gpio_and_i2s_callbacks_use_explicit_synchronization(self):
+        gpio = (
+            MQUICKJS / "src/modules/gpio/esp32_mquickjs_gpio.c"
+        ).read_text(encoding="utf-8")
+        i2s = (
+            MQUICKJS / "src/modules/i2s/esp32_mquickjs_i2s.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("volatile", gpio)
+        self.assertIn("portENTER_CRITICAL_ISR(&s_gpio_interrupt_lock)", gpio)
+        self.assertIn("portENTER_CRITICAL(&s_gpio_interrupt_lock)", gpio)
+
+        self.assertNotIn("volatile", i2s)
+        self.assertIn("#include <stdatomic.h>", i2s)
+        self.assertIn("_Atomic uint32_t overruns", i2s)
+        self.assertIn("_Atomic uint32_t send_queue_overflows", i2s)
+        self.assertIn("atomic_fetch_add_explicit(&slot->overruns", i2s)
+        self.assertIn("atomic_load_explicit(&slot->overruns", i2s)
+        self.assertIn("portENTER_CRITICAL_ISR(&s_i2s_callback_lock)", i2s)
+        self.assertIn("i2s_publish_rx_wake_target(slot, runtime, token)", i2s)
+        self.assertIn("i2s_clear_rx_wake_target(slot)", i2s)
+        self.assertIn("i2s_publish_tx_wake_target(slot, runtime, token)", i2s)
+        self.assertIn("i2s_clear_tx_wake_target(slot)", i2s)
+
     def test_filesystem_changes_use_the_generic_event_queue(self):
         filesystem = (
             MQUICKJS / "src/modules/fs/esp32_mquickjs_fs.c"

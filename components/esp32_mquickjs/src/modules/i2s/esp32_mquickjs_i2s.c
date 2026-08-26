@@ -10,6 +10,7 @@
 
 #include <math.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -70,8 +71,8 @@ typedef struct {
     uint32_t dma_descriptor_count;
     uint32_t dma_frames_per_descriptor;
     uint32_t timeout_ms;
-    volatile uint32_t overruns;
-    volatile uint32_t send_queue_overflows;
+    _Atomic uint32_t overruns;
+    _Atomic uint32_t send_queue_overflows;
     uint32_t sequence;
     i2s_chan_handle_t rx_handle;
     i2s_chan_handle_t tx_handle;
@@ -86,6 +87,8 @@ typedef struct {
 
 static esp32_mquickjs_i2s_slot_t s_i2s_slots[I2S_LL_GET(INST_NUM)];
 static uint32_t s_i2s_next_generation = 1;
+/* Publishes each callback's busy/runtime/token wake target as one snapshot. */
+static portMUX_TYPE s_i2s_callback_lock = portMUX_INITIALIZER_UNLOCKED;
 
 struct esp32_mquickjs_future_driver_state {
     JSContext *ctx;
@@ -132,6 +135,122 @@ static uint32_t i2s_take_generation(void)
         generation = s_i2s_next_generation++;
     }
     return generation;
+}
+
+static void i2s_reset_slot(esp32_mquickjs_i2s_slot_t *slot, int32_t port)
+{
+    portENTER_CRITICAL(&s_i2s_callback_lock);
+    memset(slot, 0, sizeof(*slot));
+    atomic_init(&slot->overruns, 0);
+    atomic_init(&slot->send_queue_overflows, 0);
+    slot->port = port;
+    portEXIT_CRITICAL(&s_i2s_callback_lock);
+}
+
+static void i2s_publish_rx_wake_target(
+    esp32_mquickjs_i2s_slot_t *slot,
+    esp32_mquickjs_runtime_t *runtime,
+    esp32_mquickjs_future_token_t token)
+{
+    portENTER_CRITICAL(&s_i2s_callback_lock);
+    slot->rx_runtime = runtime;
+    slot->rx_token = token;
+    slot->rx_busy = true;
+    portEXIT_CRITICAL(&s_i2s_callback_lock);
+}
+
+static void i2s_publish_tx_wake_target(
+    esp32_mquickjs_i2s_slot_t *slot,
+    esp32_mquickjs_runtime_t *runtime,
+    esp32_mquickjs_future_token_t token)
+{
+    portENTER_CRITICAL(&s_i2s_callback_lock);
+    slot->tx_runtime = runtime;
+    slot->tx_token = token;
+    slot->tx_busy = true;
+    portEXIT_CRITICAL(&s_i2s_callback_lock);
+}
+
+static void i2s_clear_rx_wake_target(esp32_mquickjs_i2s_slot_t *slot)
+{
+    portENTER_CRITICAL(&s_i2s_callback_lock);
+    slot->rx_busy = false;
+    slot->rx_runtime = NULL;
+    slot->rx_token = (esp32_mquickjs_future_token_t){0};
+    portEXIT_CRITICAL(&s_i2s_callback_lock);
+}
+
+static void i2s_clear_tx_wake_target(esp32_mquickjs_i2s_slot_t *slot)
+{
+    portENTER_CRITICAL(&s_i2s_callback_lock);
+    slot->tx_busy = false;
+    slot->tx_runtime = NULL;
+    slot->tx_token = (esp32_mquickjs_future_token_t){0};
+    portEXIT_CRITICAL(&s_i2s_callback_lock);
+}
+
+static void i2s_wake_rx(esp32_mquickjs_i2s_slot_t *slot)
+{
+    esp32_mquickjs_runtime_t *runtime = NULL;
+    esp32_mquickjs_future_token_t token = {0};
+
+    portENTER_CRITICAL(&s_i2s_callback_lock);
+    if (slot != NULL && slot->rx_busy && slot->rx_runtime != NULL) {
+        runtime = slot->rx_runtime;
+        token = slot->rx_token;
+    }
+    portEXIT_CRITICAL(&s_i2s_callback_lock);
+    if (runtime != NULL) {
+        (void)esp32_mquickjs_future_wake(runtime, token);
+    }
+}
+
+static void i2s_wake_tx(esp32_mquickjs_i2s_slot_t *slot)
+{
+    esp32_mquickjs_runtime_t *runtime = NULL;
+    esp32_mquickjs_future_token_t token = {0};
+
+    portENTER_CRITICAL(&s_i2s_callback_lock);
+    if (slot != NULL && slot->tx_busy && slot->tx_runtime != NULL) {
+        runtime = slot->tx_runtime;
+        token = slot->tx_token;
+    }
+    portEXIT_CRITICAL(&s_i2s_callback_lock);
+    if (runtime != NULL) {
+        (void)esp32_mquickjs_future_wake(runtime, token);
+    }
+}
+
+static bool IRAM_ATTR i2s_wake_rx_from_isr(
+    esp32_mquickjs_i2s_slot_t *slot, int *task_woken)
+{
+    esp32_mquickjs_runtime_t *runtime = NULL;
+    esp32_mquickjs_future_token_t token = {0};
+
+    portENTER_CRITICAL_ISR(&s_i2s_callback_lock);
+    if (slot != NULL && slot->rx_busy && slot->rx_runtime != NULL) {
+        runtime = slot->rx_runtime;
+        token = slot->rx_token;
+    }
+    portEXIT_CRITICAL_ISR(&s_i2s_callback_lock);
+    return runtime != NULL &&
+           esp32_mquickjs_future_wake_from_isr(runtime, token, task_woken);
+}
+
+static bool IRAM_ATTR i2s_wake_tx_from_isr(
+    esp32_mquickjs_i2s_slot_t *slot, int *task_woken)
+{
+    esp32_mquickjs_runtime_t *runtime = NULL;
+    esp32_mquickjs_future_token_t token = {0};
+
+    portENTER_CRITICAL_ISR(&s_i2s_callback_lock);
+    if (slot != NULL && slot->tx_busy && slot->tx_runtime != NULL) {
+        runtime = slot->tx_runtime;
+        token = slot->tx_token;
+    }
+    portEXIT_CRITICAL_ISR(&s_i2s_callback_lock);
+    return runtime != NULL &&
+           esp32_mquickjs_future_wake_from_isr(runtime, token, task_woken);
 }
 
 static bool i2s_to_u32(JSContext *ctx, JSValue value, uint32_t *out)
@@ -245,8 +364,7 @@ static void i2s_cleanup_slot(esp32_mquickjs_i2s_slot_t *slot)
         (void)i2s_del_channel(slot->tx_handle);
     }
     esp32_mquickjs_peripheral_lease_release(&slot->lease);
-    memset(slot, 0, sizeof(*slot));
-    slot->port = port;
+    i2s_reset_slot(slot, port);
 }
 
 static void i2s_request_close(esp32_mquickjs_i2s_slot_t *slot)
@@ -257,17 +375,11 @@ static void i2s_request_close(esp32_mquickjs_i2s_slot_t *slot)
     slot->release_pending = true;
     if (slot->rx_busy) {
         slot->rx_cancel_requested = true;
-        if (slot->rx_runtime != NULL) {
-            (void)esp32_mquickjs_future_wake(slot->rx_runtime,
-                                             slot->rx_token);
-        }
+        i2s_wake_rx(slot);
     }
     if (slot->tx_busy) {
         slot->tx_cancel_requested = true;
-        if (slot->tx_runtime != NULL) {
-            (void)esp32_mquickjs_future_wake(slot->tx_runtime,
-                                             slot->tx_token);
-        }
+        i2s_wake_tx(slot);
     }
     if (!i2s_slot_busy(slot)) {
         i2s_cleanup_slot(slot);
@@ -334,11 +446,7 @@ static bool IRAM_ATTR i2s_on_receive(i2s_chan_handle_t handle,
 
     (void)handle;
     (void)event;
-    if (slot != NULL && slot->rx_busy && slot->rx_runtime != NULL) {
-        (void)esp32_mquickjs_future_wake_from_isr(slot->rx_runtime,
-                                                 slot->rx_token,
-                                                 &task_woken);
-    }
+    (void)i2s_wake_rx_from_isr(slot, &task_woken);
     return task_woken == pdTRUE;
 }
 
@@ -352,11 +460,9 @@ static bool IRAM_ATTR i2s_on_overflow(i2s_chan_handle_t handle,
     (void)handle;
     (void)event;
     if (slot != NULL) {
-        slot->overruns++;
-        if (slot->rx_busy && slot->rx_runtime != NULL) {
-            (void)esp32_mquickjs_future_wake_from_isr(
-                slot->rx_runtime, slot->rx_token, &task_woken);
-        }
+        /* Counters do not publish any associated state. */
+        atomic_fetch_add_explicit(&slot->overruns, 1, memory_order_relaxed);
+        (void)i2s_wake_rx_from_isr(slot, &task_woken);
     }
     return task_woken == pdTRUE;
 }
@@ -370,11 +476,7 @@ static bool IRAM_ATTR i2s_on_sent(i2s_chan_handle_t handle,
 
     (void)handle;
     (void)event;
-    if (slot != NULL && slot->tx_busy && slot->tx_runtime != NULL) {
-        (void)esp32_mquickjs_future_wake_from_isr(slot->tx_runtime,
-                                                 slot->tx_token,
-                                                 &task_woken);
-    }
+    (void)i2s_wake_tx_from_isr(slot, &task_woken);
     return task_woken == pdTRUE;
 }
 
@@ -388,11 +490,10 @@ static bool IRAM_ATTR i2s_on_send_queue_overflow(i2s_chan_handle_t handle,
     (void)handle;
     (void)event;
     if (slot != NULL) {
-        slot->send_queue_overflows++;
-        if (slot->tx_busy && slot->tx_runtime != NULL) {
-            (void)esp32_mquickjs_future_wake_from_isr(
-                slot->tx_runtime, slot->tx_token, &task_woken);
-        }
+        /* Counters do not publish any associated state. */
+        atomic_fetch_add_explicit(&slot->send_queue_overflows, 1,
+                                  memory_order_relaxed);
+        (void)i2s_wake_tx_from_isr(slot, &task_woken);
     }
     return task_woken == pdTRUE;
 }
@@ -401,20 +502,14 @@ static void i2s_rx_timeout(void *opaque)
 {
     esp32_mquickjs_i2s_slot_t *slot = opaque;
 
-    if (slot != NULL && slot->allocated && slot->rx_busy &&
-        slot->rx_runtime != NULL) {
-        (void)esp32_mquickjs_future_wake(slot->rx_runtime, slot->rx_token);
-    }
+    i2s_wake_rx(slot);
 }
 
 static void i2s_tx_timeout(void *opaque)
 {
     esp32_mquickjs_i2s_slot_t *slot = opaque;
 
-    if (slot != NULL && slot->allocated && slot->tx_busy &&
-        slot->tx_runtime != NULL) {
-        (void)esp32_mquickjs_future_wake(slot->tx_runtime, slot->tx_token);
-    }
+    i2s_wake_tx(slot);
 }
 
 static JSValue i2s_status_object(JSContext *ctx,
@@ -450,10 +545,15 @@ static JSValue i2s_status_object(JSContext *ctx,
             JS_NewString(ctx, slot->mode == ESP32_MQUICKJS_I2S_MODE_PDM
                                   ? "pdm" : "standard")) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "overruns",
-                                         JS_NewUint32(ctx, slot->overruns)) ||
+                                         JS_NewUint32(
+                                             ctx, atomic_load_explicit(
+                                                      &slot->overruns,
+                                                      memory_order_relaxed))) ||
         !esp32_mquickjs_set_property_ref(
             ctx, result, "sendQueueOverflows",
-            JS_NewUint32(ctx, slot->send_queue_overflows)) ||
+            JS_NewUint32(
+                ctx, atomic_load_explicit(&slot->send_queue_overflows,
+                                          memory_order_relaxed))) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "readBusy",
                                          JS_NewBool(slot->rx_busy)) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "writeBusy",
@@ -629,10 +729,8 @@ static bool i2s_read_start(JSContext *ctx,
         JS_ThrowInternalError(ctx, "I2S channel already has a pending read");
         return false;
     }
-    slot->rx_busy = true;
     slot->rx_cancel_requested = false;
-    slot->rx_runtime = runtime;
-    slot->rx_token = token;
+    i2s_publish_rx_wake_target(slot, runtime, token);
     state->runtime = runtime;
     state->token = token;
     state->started = true;
@@ -711,7 +809,9 @@ static JSValue i2s_read_finish(JSContext *ctx,
         !esp32_mquickjs_set_property_ref(
             ctx, result, "sequence", JS_NewUint32(ctx, slot->sequence++)) ||
         !esp32_mquickjs_set_property_ref(
-            ctx, result, "overruns", JS_NewUint32(ctx, slot->overruns))) {
+            ctx, result, "overruns",
+            JS_NewUint32(ctx, atomic_load_explicit(&slot->overruns,
+                                                   memory_order_relaxed)))) {
         JS_PopGCRef(ctx, &data_ref);
         JS_PopGCRef(ctx, &result_ref);
         return JS_EXCEPTION;
@@ -747,9 +847,8 @@ static void i2s_read_destroy(esp32_mquickjs_future_driver_state_t *state)
         if (slot->rx_timeout_timer != NULL) {
             (void)esp_timer_stop(slot->rx_timeout_timer);
         }
-        slot->rx_busy = false;
+        i2s_clear_rx_wake_target(slot);
         slot->rx_cancel_requested = false;
-        slot->rx_runtime = NULL;
         if (slot->release_pending) {
             i2s_cleanup_slot(slot);
         }
@@ -1007,10 +1106,8 @@ static bool i2s_write_start(JSContext *ctx,
                               "I2S channel already has a pending write");
         return false;
     }
-    slot->tx_busy = true;
     slot->tx_cancel_requested = false;
-    slot->tx_runtime = runtime;
-    slot->tx_token = token;
+    i2s_publish_tx_wake_target(slot, runtime, token);
     state->runtime = runtime;
     state->token = token;
     state->started = true;
@@ -1102,9 +1199,8 @@ static void i2s_write_destroy(
         if (slot->tx_timeout_timer != NULL) {
             (void)esp_timer_stop(slot->tx_timeout_timer);
         }
-        slot->tx_busy = false;
+        i2s_clear_tx_wake_target(slot);
         slot->tx_cancel_requested = false;
-        slot->tx_runtime = NULL;
         if (slot->release_pending) {
             i2s_cleanup_slot(slot);
         }
@@ -1163,8 +1259,7 @@ bool esp32_mquickjs_init_i2s_runtime(JSContext *ctx,
         if (s_i2s_slots[i].allocated && !i2s_slot_busy(&s_i2s_slots[i])) {
             i2s_cleanup_slot(&s_i2s_slots[i]);
         }
-        memset(&s_i2s_slots[i], 0, sizeof(s_i2s_slots[i]));
-        s_i2s_slots[i].port = i;
+        i2s_reset_slot(&s_i2s_slots[i], i);
     }
     return i2s_register_future_driver(ctx, runtime);
 }
