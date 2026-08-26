@@ -15,6 +15,7 @@ struct esp32_mquickjs_event_queue {
     esp32_mquickjs_runtime_t *runtime;
     QueueHandle_t events;
     size_t event_size;
+    uint32_t capacity;
     esp32_mquickjs_event_queue_overflow_t overflow;
     esp32_mquickjs_event_queue_to_js_fn to_js;
     esp32_mquickjs_event_queue_drop_fn drop;
@@ -263,9 +264,36 @@ bool esp32_mquickjs_event_queue_is_closed(const esp32_mquickjs_event_queue_t *qu
                                 &queue->closed, memory_order_acquire);
 }
 
-uint32_t esp32_mquickjs_event_queue_dropped(const esp32_mquickjs_event_queue_t *queue)
+bool esp32_mquickjs_event_queue_get_stats(
+    esp32_mquickjs_event_queue_t *queue,
+    esp32_mquickjs_event_queue_stats_t *stats)
 {
-    return queue != NULL ? queue->dropped : 0;
+    if (queue == NULL || stats == NULL || queue->events == NULL) {
+        return false;
+    }
+    memset(stats, 0, sizeof(*stats));
+    stats->queued = (uint32_t)uxQueueMessagesWaiting(queue->events);
+    stats->capacity = queue->capacity;
+    portENTER_CRITICAL(&queue->lock);
+    stats->open = !atomic_load_explicit(&queue->closed,
+                                        memory_order_acquire);
+    stats->dropped = queue->dropped;
+    stats->receiver_pending = queue->receiver_registered;
+    portEXIT_CRITICAL(&queue->lock);
+    return true;
+}
+
+uint32_t esp32_mquickjs_event_queue_dropped(esp32_mquickjs_event_queue_t *queue)
+{
+    uint32_t dropped = 0;
+
+    if (queue == NULL) {
+        return 0;
+    }
+    portENTER_CRITICAL(&queue->lock);
+    dropped = queue->dropped;
+    portEXIT_CRITICAL(&queue->lock);
+    return dropped;
 }
 
 static void event_queue_timer_cb(void *arg)
@@ -557,6 +585,7 @@ JSValue esp32_mquickjs_event_queue_new(JSContext *ctx,
     }
     queue->runtime = runtime;
     queue->event_size = event_size;
+    queue->capacity = capacity;
     queue->overflow = overflow;
     queue->to_js = to_js;
     queue->drop = drop;
@@ -623,6 +652,43 @@ JSValue js_event_queue_receive(JSContext *ctx, JSValue *this_val, int argc, JSVa
                                                argv);
     JS_PopGCRef(ctx, &receive_ref);
     return result;
+}
+
+JSValue js_event_queue_stats(JSContext *ctx, JSValue *this_val,
+                             int argc, JSValue *argv)
+{
+    esp32_mquickjs_event_queue_t *queue;
+    esp32_mquickjs_event_queue_stats_t stats;
+    JSGCRef object_ref;
+    JSValue *object;
+
+    (void)argc;
+    (void)argv;
+    if (this_val == NULL ||
+        (queue = event_queue_from_value(ctx, *this_val)) == NULL) {
+        return JS_ThrowTypeError(
+            ctx, "EventQueue.stats() called on an incompatible receiver");
+    }
+    if (!esp32_mquickjs_event_queue_get_stats(queue, &stats)) {
+        return JS_ThrowInternalError(ctx, "EventQueue stats are unavailable");
+    }
+    object = JS_PushGCRef(ctx, &object_ref);
+    *object = JS_NewObject(ctx);
+    if (JS_IsException(*object) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "open",
+                                         JS_NewBool(stats.open)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "queued",
+                                         JS_NewUint32(ctx, stats.queued)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "capacity",
+                                         JS_NewUint32(ctx, stats.capacity)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "dropped",
+                                         JS_NewUint32(ctx, stats.dropped)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "receiverPending",
+                                         JS_NewBool(stats.receiver_pending))) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_EXCEPTION;
+    }
+    return JS_PopGCRef(ctx, &object_ref);
 }
 
 JSValue js_event_queue_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

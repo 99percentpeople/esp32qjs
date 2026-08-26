@@ -21,6 +21,7 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn('JS_CFUNC_DEF("map", 1, js_future_map)', stdlib)
         self.assertIn('JS_CFUNC_DEF("flatMap", 1, js_future_flat_map)', stdlib)
         self.assertIn('JS_CFUNC_DEF("receive", 1, js_event_queue_receive)', stdlib)
+        self.assertIn('JS_CFUNC_DEF("stats", 0, js_event_queue_stats)', stdlib)
         self.assertIn("src/core/esp32_mquickjs_future.c", cmake)
         self.assertIn("src/core/esp32_mquickjs_event_queue.c", cmake)
 
@@ -549,6 +550,33 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("queue.allocations_allowed = false", c_test)
         self.assertIn("assert(queue.drop_calls == 2)", c_test)
         self.assertIn("assert(queue.live_payloads == 0)", c_test)
+
+    def test_event_queue_exposes_queue_local_stats(self):
+        event_queue = (
+            MQUICKJS / "src/core/esp32_mquickjs_event_queue.c"
+        ).read_text(encoding="utf-8")
+        declarations = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("uint32_t capacity;", event_queue)
+        self.assertIn("esp32_mquickjs_event_queue_get_stats(", event_queue)
+        self.assertIn(
+            "stats->queued = (uint32_t)uxQueueMessagesWaiting", event_queue
+        )
+        self.assertIn(
+            "stats->receiver_pending = queue->receiver_registered", event_queue
+        )
+        self.assertIn("JSValue js_event_queue_stats(", event_queue)
+        self.assertIn("stats(): EventQueueStats;", declarations)
+        for field in (
+            "open",
+            "queued",
+            "capacity",
+            "dropped",
+            "receiverPending",
+        ):
+            self.assertIn(f"{field}:", declarations)
 
     def test_uart_write_backpressure_and_read_readiness_are_cooperative(self):
         uart = (

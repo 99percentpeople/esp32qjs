@@ -38,7 +38,16 @@ namespace ESP32QJS {
 
   interface EventQueue<T> {
     receive(timeoutMs?: number): T | null;
+    stats(): EventQueueStats;
     close(): boolean;
+  }
+
+  interface EventQueueStats {
+    open: boolean;
+    queued: number;
+    capacity: number;
+    dropped: number;
+    receiverPending: boolean;
   }
 
   /**

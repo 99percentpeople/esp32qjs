@@ -101,6 +101,7 @@ static const JSClassDef js_future_class =
 
 static const JSPropDef js_event_queue_proto[] = {
     JS_CFUNC_DEF("receive", 1, js_event_queue_receive),
+    JS_CFUNC_DEF("stats", 0, js_event_queue_stats),
     JS_CFUNC_DEF("close", 0, js_event_queue_close),
     JS_PROP_END,
 };

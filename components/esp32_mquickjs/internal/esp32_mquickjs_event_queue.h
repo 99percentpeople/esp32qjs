@@ -21,6 +21,14 @@ typedef struct {
     uint32_t dropped;
 } esp32_mquickjs_event_queue_status_t;
 
+typedef struct {
+    bool open;
+    uint32_t queued;
+    uint32_t capacity;
+    uint32_t dropped;
+    bool receiver_pending;
+} esp32_mquickjs_event_queue_stats_t;
+
 bool esp32_mquickjs_init_event_queue_runtime(JSContext *ctx,
                                               esp32_mquickjs_runtime_t *runtime);
 void esp32_mquickjs_deinit_event_queue_runtime(esp32_mquickjs_runtime_t *runtime);
@@ -43,7 +51,10 @@ bool esp32_mquickjs_event_queue_send_from_isr(esp32_mquickjs_event_queue_t *queu
                                               int *task_woken);
 bool esp32_mquickjs_event_queue_close(esp32_mquickjs_event_queue_t *queue);
 bool esp32_mquickjs_event_queue_is_closed(const esp32_mquickjs_event_queue_t *queue);
-uint32_t esp32_mquickjs_event_queue_dropped(const esp32_mquickjs_event_queue_t *queue);
+bool esp32_mquickjs_event_queue_get_stats(
+    esp32_mquickjs_event_queue_t *queue,
+    esp32_mquickjs_event_queue_stats_t *stats);
+uint32_t esp32_mquickjs_event_queue_dropped(esp32_mquickjs_event_queue_t *queue);
 bool esp32_mquickjs_event_queue_register_receive_alias(
     JSContext *ctx,
     esp32_mquickjs_runtime_t *runtime,
@@ -55,4 +66,5 @@ esp32_mquickjs_event_queue_t *esp32_mquickjs_event_queue_from_value(
 JSValue js_event_queue_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 void js_event_queue_finalizer(JSContext *ctx, void *opaque);
 JSValue js_event_queue_receive(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_event_queue_stats(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_event_queue_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

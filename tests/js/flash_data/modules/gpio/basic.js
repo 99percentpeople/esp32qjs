@@ -103,6 +103,12 @@ test("gpio/basic", function () {
     level: gpio.LOW,
   });
   var interrupts = gpio.watch(pin, gpio.CHANGE);
+  var queueStats = interrupts.stats();
+  test.ok(queueStats.open, "interrupt EventQueue should start open");
+  test.equal(queueStats.queued, 0, "new interrupt EventQueue should be empty");
+  test.ok(queueStats.capacity > 0, "interrupt EventQueue should report capacity");
+  test.equal(queueStats.dropped, 0, "new interrupt EventQueue should not report drops");
+  test.ok(!queueStats.receiverPending, "new interrupt EventQueue should not have a receiver");
   status = gpio.status(pin);
   test.ok(status.interruptAttached, "watch should update status");
   test.equal(status.interruptMode, gpio.CHANGE, "watch should report change mode");
@@ -113,6 +119,9 @@ test("gpio/basic", function () {
   test.equal(interruptEvent.mode, gpio.CHANGE, "interrupt event mode");
   test.ok(typeof interruptEvent.level === "boolean", "interrupt event level should be boolean");
   test.ok(interrupts.close(), "interrupt EventQueue should close");
+  queueStats = interrupts.stats();
+  test.ok(!queueStats.open, "closed interrupt EventQueue should report closed");
+  test.equal(queueStats.queued, 0, "consumed interrupt EventQueue should be empty");
   status = gpio.status(pin);
   test.ok(!status.interruptAttached, "queue close should detach the interrupt");
   test.equal(status.interruptMode, null, "queue close should clear mode");
