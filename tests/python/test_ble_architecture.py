@@ -129,6 +129,30 @@ class BLEArchitectureTests(unittest.TestCase):
         self.assertIn("ble_release_scanner(&s_ble)", scanner_finish)
         self.assertIn("ble_release_advertiser(&s_ble)", advertiser_finish)
 
+    def test_gap_close_completes_when_nimble_reports_already_stopped(self):
+        source = self.source()
+
+        scanner_start = source.index("static bool ble_scanner_close_start")
+        scanner_close = source[
+            scanner_start:
+            source.index("static JSValue ble_scanner_close_finish", scanner_start)
+        ]
+        advertiser_start = source.index("static bool ble_advertiser_close_start")
+        advertiser_close = source[
+            advertiser_start:
+            source.index(
+                "static JSValue ble_advertiser_close_finish", advertiser_start
+            )
+        ]
+        self.assertIn(
+            "if (rc == BLE_HS_EALREADY) s_ble.scanner.active = false;",
+            scanner_close,
+        )
+        self.assertIn(
+            "if (rc == BLE_HS_EALREADY) s_ble.advertiser.active = false;",
+            advertiser_close,
+        )
+
     def test_connect_options_are_applied(self):
         source = self.source()
 

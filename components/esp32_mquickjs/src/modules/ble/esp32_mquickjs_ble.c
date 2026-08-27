@@ -3235,6 +3235,7 @@ static bool ble_scanner_close_start(
     if (s_ble.scanner.active) {
         ble_active_state_bind(&s_ble_scanner_stop_state, state);
         rc = ble_gap_disc_cancel();
+        if (rc == BLE_HS_EALREADY) s_ble.scanner.active = false;
         if (rc == BLE_HS_EALREADY) rc = 0;
     }
     state->host_code = rc;
@@ -3593,6 +3594,7 @@ static bool ble_advertiser_close_start(
     if (s_ble.advertiser.active) {
         ble_active_state_bind(&s_ble_advertiser_stop_state, state);
         rc = ble_gap_adv_stop();
+        if (rc == BLE_HS_EALREADY) s_ble.advertiser.active = false;
         if (rc == BLE_HS_EALREADY) rc = 0;
     }
     state->host_code = rc;
