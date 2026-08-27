@@ -83,6 +83,30 @@ class BLEArchitectureTests(unittest.TestCase):
         self.assertIn("esp32_mquickjs_future_register_driver", source)
         self.assertIn("esp32_mquickjs_event_queue_register_receive_alias", source)
 
+    def test_reopen_waits_for_nimble_deinit_quiescence_without_blocking_start(self):
+        source = self.source()
+        open_start = source[
+            source.index("static bool ble_open_start") :
+            source.index("static JSValue ble_open_finish")
+        ]
+        close_worker = source[
+            source.index("static void ble_close_worker") :
+            source.index("static bool ble_adapter_close_capture")
+        ]
+        open_driver = source[
+            source.index("static const esp32_mquickjs_future_driver_t s_ble_open_driver") :
+            source.index("};", source.index(
+                "static const esp32_mquickjs_future_driver_t s_ble_open_driver"
+            ))
+        ]
+
+        self.assertIn("#define BLE_REOPEN_QUIESCE_MS 50U", source)
+        self.assertIn("ble_note_native_deinit", close_worker)
+        self.assertIn("state->open_not_before_us", open_start)
+        self.assertNotIn("vTaskDelay", open_start)
+        self.assertIn("ble_open_initialize(state)", open_start)
+        self.assertIn(".poll = ble_open_poll", open_driver)
+
     def test_gap_operations_share_one_lane_and_natural_completion_uses_callbacks(self):
         source = self.source()
 

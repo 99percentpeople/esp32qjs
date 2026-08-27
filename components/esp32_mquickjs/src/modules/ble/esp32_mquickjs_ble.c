@@ -38,6 +38,7 @@
 
 #define BLE_DEFAULT_TIMEOUT_MS 10000U
 #define BLE_PAIRING_TIMEOUT_MS 30000U
+#define BLE_REOPEN_QUIESCE_MS 50U
 #define BLE_DEFAULT_MTU 256U
 #define BLE_MAX_DEVICE_NAME 64U
 #define BLE_INVALID_CONN_HANDLE UINT16_MAX
@@ -392,6 +393,7 @@ struct esp32_mquickjs_future_driver_state {
     uint16_t subscription_index;
     uint32_t subscription_generation;
     uint32_t timeout_ms;
+    int64_t open_not_before_us;
     JSGCRef owner_ref;
     bool owner_rooted;
     JSGCRef queue_ref;
@@ -413,6 +415,7 @@ struct esp32_mquickjs_future_driver_state {
     bool gatt_accounted;
     bool gatt_started;
     bool started;
+    bool open_initialization_started;
     bool cancelled;
     bool transferred;
     bool detached;
@@ -424,6 +427,7 @@ struct esp32_mquickjs_future_driver_state {
     _Atomic uint16_t pending_confirmations;
     int host_code;
     int att_code;
+    const char *error_code;
     ble_addr_t peer;
     struct ble_gap_disc_params scan_params;
     int32_t duration_ms;
@@ -444,6 +448,7 @@ static _Atomic uint32_t s_ble_next_scanner_generation = 1;
 static _Atomic uint32_t s_ble_next_advertiser_generation = 1;
 static _Atomic uint32_t s_ble_next_connection_generation = 1;
 static _Atomic uint32_t s_ble_next_subscription_generation = 1;
+static int64_t s_ble_reopen_not_before_us;
 static const uint8_t s_ble_gap_lane_key;
 static const uint8_t s_ble_adapter_lane_key;
 static const uint8_t s_ble_server_lane_key;
@@ -472,6 +477,12 @@ static esp32_mquickjs_resource_key_t ble_gatt_resource_key(
     const esp32_mquickjs_future_driver_state_t *state);
 static esp32_mquickjs_resource_key_t ble_adapter_resource_key(
     const esp32_mquickjs_future_driver_state_t *state);
+
+static void ble_note_native_deinit(void)
+{
+    s_ble_reopen_not_before_us =
+        esp_timer_get_time() + (int64_t)BLE_REOPEN_QUIESCE_MS * 1000;
+}
 
 static uint32_t ble_next_generation(_Atomic uint32_t *counter)
 {
@@ -2824,28 +2835,25 @@ static bool ble_open_capture(
     return true;
 }
 
-static bool ble_open_start(
-    JSContext *ctx, esp32_mquickjs_runtime_t *runtime,
-    esp32_mquickjs_future_token_t token,
+static void ble_open_initialize(
     esp32_mquickjs_future_driver_state_t *state)
 {
     esp_err_t err;
-    if (state == NULL || state->adapter_generation != s_ble.generation ||
+    if (state == NULL || state->open_initialization_started) return;
+    state->open_initialization_started = true;
+    if (state->adapter_generation != s_ble.generation ||
         s_ble.lifecycle != BLE_LIFECYCLE_OPENING) {
-        ble_throw_error(ctx, "BLE_STALE_ADAPTER", BLE_HS_EINVAL, -1, -1, -1);
-        return false;
+        state->host_code = BLE_HS_EINVAL;
+        state->error_code = "BLE_STALE_ADAPTER";
+        goto fail;
     }
-    state->runtime = runtime;
-    state->token = token;
-    state->started = true;
     ble_active_state_bind(&s_ble_open_state, state);
     err = esp32_mquickjs_nvs_flash_ensure_initialized();
     if (err == ESP_OK) err = nimble_port_init();
     if (err != ESP_OK) {
         state->host_code = err;
-        s_ble.lifecycle = BLE_LIFECYCLE_FAILED;
-        ble_throw_error(ctx, "BLE_NOT_OPEN", err, -1, -1, -1);
-        return false;
+        state->error_code = "BLE_NOT_OPEN";
+        goto fail;
     }
     ble_hs_cfg.reset_cb = ble_on_reset;
     ble_hs_cfg.sync_cb = ble_on_sync;
@@ -2859,22 +2867,57 @@ static bool ble_open_start(
                                    BLE_SM_PAIR_KEY_DIST_ID;
     if (ble_svc_gap_device_name_set(s_ble.device_name) != 0 ||
         ble_att_set_preferred_mtu(s_ble.preferred_mtu) != 0) {
-        (void)nimble_port_deinit();
-        s_ble.lifecycle = BLE_LIFECYCLE_FAILED;
-        ble_throw_error(ctx, "BLE_NOT_OPEN", BLE_HS_EINVAL, -1, -1, -1);
-        return false;
+        if (nimble_port_deinit() == ESP_OK) ble_note_native_deinit();
+        state->host_code = BLE_HS_EINVAL;
+        state->error_code = "BLE_NOT_OPEN";
+        goto fail;
     }
     ble_gatt_server_register();
     if (s_ble.server.configured && !s_ble.server.open) {
         int host_code = state->host_code != 0 ? state->host_code : BLE_HS_EUNKNOWN;
-        (void)nimble_port_deinit();
-        s_ble.lifecycle = BLE_LIFECYCLE_FAILED;
-        ble_throw_error(ctx, "BLE_GATT_ERROR", host_code, -1, -1, -1);
-        return false;
+        if (nimble_port_deinit() == ESP_OK) ble_note_native_deinit();
+        state->host_code = host_code;
+        state->error_code = "BLE_GATT_ERROR";
+        goto fail;
     }
     nimble_port_freertos_init(ble_host_task);
     s_ble.host_started = true;
+    return;
+
+fail:
+    s_ble.lifecycle = BLE_LIFECYCLE_FAILED;
+    ble_active_state_bind(&s_ble_open_state, NULL);
+    atomic_store_explicit(&state->completed, true, memory_order_release);
+    (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+}
+
+static bool ble_open_start(
+    JSContext *ctx, esp32_mquickjs_runtime_t *runtime,
+    esp32_mquickjs_future_token_t token,
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || state->adapter_generation != s_ble.generation ||
+        s_ble.lifecycle != BLE_LIFECYCLE_OPENING) {
+        ble_throw_error(ctx, "BLE_STALE_ADAPTER", BLE_HS_EINVAL, -1, -1, -1);
+        return false;
+    }
+    state->runtime = runtime;
+    state->token = token;
+    state->started = true;
+    state->open_not_before_us = s_ble_reopen_not_before_us;
+    if (esp_timer_get_time() >= state->open_not_before_us)
+        ble_open_initialize(state);
     return true;
+}
+
+static esp32_mquickjs_future_poll_t ble_open_poll(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state != NULL && state->started &&
+        !state->open_initialization_started &&
+        esp_timer_get_time() >= state->open_not_before_us)
+        ble_open_initialize(state);
+    return ble_future_poll(state);
 }
 
 static JSValue ble_open_finish(
@@ -2883,7 +2926,9 @@ static JSValue ble_open_finish(
     ble_adapter_ref_t *ref;
     JSValue object;
     if (state == NULL || state->host_code != 0 || !s_ble.synchronized) {
-        return ble_throw_error(ctx, "BLE_NOT_OPEN",
+        return ble_throw_error(ctx,
+                               state != NULL && state->error_code != NULL
+                                   ? state->error_code : "BLE_NOT_OPEN",
                                state != NULL ? state->host_code : BLE_HS_EINVAL,
                                -1, -1, -1);
     }
@@ -2905,7 +2950,7 @@ static void ble_open_destroy(esp32_mquickjs_future_driver_state_t *state)
         state->adapter_generation == s_ble.generation) {
         if (s_ble.host_started) {
             (void)nimble_port_stop();
-            (void)nimble_port_deinit();
+            if (nimble_port_deinit() == ESP_OK) ble_note_native_deinit();
         }
         ble_free_pools(&s_ble);
         s_ble.lifecycle = BLE_LIFECYCLE_CLOSED;
@@ -2916,7 +2961,7 @@ static void ble_open_destroy(esp32_mquickjs_future_driver_state_t *state)
 static const esp32_mquickjs_future_driver_t s_ble_open_driver = {
     .capture = ble_open_capture,
     .start = ble_open_start,
-    .poll = ble_future_poll,
+    .poll = ble_open_poll,
     .finish = ble_open_finish,
     .cancel = ble_future_cancel,
     .destroy = ble_open_destroy,
@@ -5463,6 +5508,7 @@ static void ble_close_worker(void *opaque)
     esp32_mquickjs_future_driver_state_t *state = opaque;
     int rc = nimble_port_stop();
     esp_err_t deinit_rc = nimble_port_deinit();
+    if (deinit_rc == ESP_OK) ble_note_native_deinit();
     if (rc == 0 && deinit_rc != ESP_OK) rc = deinit_rc;
     state->host_code = rc;
     s_ble.host_started = false;
@@ -6956,7 +7002,7 @@ void esp32_mquickjs_deinit_ble_runtime(JSContext *ctx)
         if (s_ble.advertiser.active) (void)ble_gap_adv_stop();
         if (s_ble.host_started) {
             (void)nimble_port_stop();
-            (void)nimble_port_deinit();
+            if (nimble_port_deinit() == ESP_OK) ble_note_native_deinit();
         }
         ble_free_pools(&s_ble);
         s_ble.lifecycle = BLE_LIFECYCLE_CLOSED;
