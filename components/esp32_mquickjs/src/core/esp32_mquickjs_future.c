@@ -46,7 +46,6 @@ typedef struct {
     bool observed;
     bool rejection_reported;
     bool result_retained;
-    bool native_bytes_accounted;
     future_state_t state;
     JSValue result;
 } future_handle_t;
@@ -345,7 +344,6 @@ static void future_publish_terminal(JSContext *ctx, future_slot_t *slot)
         handle->result_retained = true;
     }
     slot->handle = NULL;
-    esp32_mquickjs_native_gc_reclaimable(slot->runtime);
 }
 
 static void future_store_result(JSContext *ctx, future_slot_t *slot, JSValue value)
@@ -422,8 +420,7 @@ static future_slot_t *future_find_free_slot(future_runtime_t *state,
     return NULL;
 }
 
-static future_slot_t *future_allocate_slot(JSContext *ctx,
-                                           esp32_mquickjs_runtime_t *runtime,
+static future_slot_t *future_allocate_slot(esp32_mquickjs_runtime_t *runtime,
                                            future_kind_t kind)
 {
     future_runtime_t *state = future_runtime(runtime);
@@ -435,10 +432,6 @@ static future_slot_t *future_allocate_slot(JSContext *ctx,
     }
     internal = state->internal_allocation_depth > 0;
     slot = future_find_free_slot(state, internal);
-    if (slot == NULL && ctx != NULL) {
-        JS_GC(ctx);
-        slot = future_find_free_slot(state, internal);
-    }
     if (slot == NULL) {
         return NULL;
     }
@@ -469,10 +462,6 @@ static JSValue future_make_handle(JSContext *ctx, future_slot_t *slot)
     }
     handle = heap_caps_calloc(1, sizeof(*handle), MALLOC_CAP_8BIT);
     if (handle == NULL) {
-        JS_GC(ctx);
-        handle = heap_caps_calloc(1, sizeof(*handle), MALLOC_CAP_8BIT);
-    }
-    if (handle == NULL) {
         future_clear_slot(ctx, slot);
         result = JS_ThrowOutOfMemory(ctx);
         JS_PopGCRef(ctx, &object_ref);
@@ -483,8 +472,6 @@ static JSValue future_make_handle(JSContext *ctx, future_slot_t *slot)
     handle->generation = slot->generation;
     handle->state = slot->state;
     handle->result = JS_UNDEFINED;
-    handle->native_bytes_accounted = true;
-    esp32_mquickjs_native_gc_alloc(slot->runtime, sizeof(*handle));
     slot->handle = handle;
     JS_SetOpaque(ctx, *object, handle);
     return JS_PopGCRef(ctx, &object_ref);
@@ -495,12 +482,7 @@ static void future_abandon_handle(future_slot_t *slot)
     if (slot == NULL || slot->handle == NULL) {
         return;
     }
-    /*
-     * The JS object still owns the handle until its finalizer runs. Keep the
-     * allocation accounted and request a safe-point collection; clearing the
-     * slot is sufficient to make the stale token unresolvable.
-     */
-    esp32_mquickjs_native_gc_reclaimable(slot->runtime);
+    /* The JS object owns the handle until MQuickJS runs its finalizer. */
     slot->handle = NULL;
 }
 
@@ -1940,10 +1922,6 @@ void js_future_finalizer(JSContext *ctx, void *opaque)
     future_report_unobserved(ctx, handle);
     handle->result = JS_UNDEFINED;
     handle->result_retained = false;
-    if (handle->native_bytes_accounted) {
-        esp32_mquickjs_native_gc_free(handle->runtime, sizeof(*handle));
-        handle->native_bytes_accounted = false;
-    }
     heap_caps_free(handle);
 }
 
@@ -1984,7 +1962,7 @@ JSValue js_future_call(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
                                     "Future.call(fn, thisValue?, args?) expects a function");
         goto done;
     }
-    slot = future_allocate_slot(ctx, runtime, FUTURE_KIND_CALL);
+    slot = future_allocate_slot(runtime, FUTURE_KIND_CALL);
     if (slot == NULL) {
         *result = JS_ThrowInternalError(ctx, "Future capacity is exhausted");
         goto done;
@@ -2030,7 +2008,7 @@ static JSValue future_make_combinator(JSContext *ctx,
     JSValue result;
 
     *rooted_inputs = inputs;
-    slot = future_allocate_slot(ctx, runtime, kind);
+    slot = future_allocate_slot(runtime, kind);
     if (slot == NULL) {
         result = JS_ThrowInternalError(ctx, "Future capacity is exhausted");
         goto done;
@@ -2086,7 +2064,7 @@ JSValue js_future_sleep(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
     if (argc != 1 || JS_ToInt32(ctx, &delay_ms, argv[0]) != 0 || delay_ms < 0) {
         return JS_ThrowTypeError(ctx, "Future.sleep(ms) expects a non-negative integer");
     }
-    slot = future_allocate_slot(ctx, runtime, FUTURE_KIND_SLEEP);
+    slot = future_allocate_slot(runtime, FUTURE_KIND_SLEEP);
     if (slot == NULL) {
         return JS_ThrowInternalError(ctx, "Future capacity is exhausted");
     }
@@ -2117,7 +2095,7 @@ JSValue js_future_timeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *
         JS_ToInt32(ctx, &timeout_ms, argv[1]) != 0 || timeout_ms < 0) {
         return JS_ThrowTypeError(ctx, "Future.timeout(future, timeoutMs) expects a Future and non-negative integer");
     }
-    slot = future_allocate_slot(ctx, runtime, FUTURE_KIND_TIMEOUT);
+    slot = future_allocate_slot(runtime, FUTURE_KIND_TIMEOUT);
     if (slot == NULL) {
         return JS_ThrowInternalError(ctx, "Future capacity is exhausted");
     }
@@ -2162,7 +2140,7 @@ static JSValue future_make_continuation(JSContext *ctx,
     if (argc != 1 || !JS_IsFunction(ctx, argv[0])) {
         return JS_ThrowTypeError(ctx, "%s expects one function", api_name);
     }
-    slot = future_allocate_slot(ctx, runtime, kind);
+    slot = future_allocate_slot(runtime, kind);
     if (slot == NULL) {
         return JS_ThrowInternalError(ctx, "Future capacity is exhausted");
     }

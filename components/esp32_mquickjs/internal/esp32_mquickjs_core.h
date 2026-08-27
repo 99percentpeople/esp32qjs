@@ -12,12 +12,6 @@ bool esp32_mquickjs_set_property_ref(JSContext *ctx,
                                      JSValue value);
 
 esp32_mquickjs_runtime_t *esp32_mquickjs_get_active_runtime(void);
-void esp32_mquickjs_native_gc_alloc(esp32_mquickjs_runtime_t *runtime,
-                                    size_t size);
-void esp32_mquickjs_native_gc_free(esp32_mquickjs_runtime_t *runtime,
-                                   size_t size);
-void esp32_mquickjs_native_gc_reclaimable(
-    esp32_mquickjs_runtime_t *runtime);
 
 JSValue esp32_mquickjs_load_from_active_fs(JSContext *ctx,
                                            esp32_mquickjs_runtime_t *runtime,

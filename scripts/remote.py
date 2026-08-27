@@ -207,8 +207,7 @@ JS_TEST_MODULES = (
         "future",
         (
             JsTestCase("modules/timers/capacity.js", reset_before=True, reset_after=True),
-            JsTestCase("modules/timers/gc-pressure-setup.js", reset_before=True),
-            JsTestCase("modules/timers/gc-pressure-verify.js", reset_after=True),
+            JsTestCase("modules/timers/automatic-gc.js", reset_before=True, reset_after=True),
         ),
     ),
 )

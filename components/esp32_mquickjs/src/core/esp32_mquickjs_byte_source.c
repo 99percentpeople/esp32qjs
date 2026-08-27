@@ -7,8 +7,6 @@
 
 #define ESP32_MQUICKJS_BYTE_VIEW_OWNER_KEY "__esp32qjsByteViewOwner"
 #define ESP32_MQUICKJS_BYTE_SPAN_SOURCE_OWNER_KEY "__esp32qjsByteSpanSourceOwner"
-#define ESP32_MQUICKJS_BYTE_VIEW_GC_PRESSURE_THRESHOLD 1024U
-
 typedef struct {
     const uint8_t *data;
     size_t length;
@@ -57,29 +55,6 @@ static void leased_byte_span_source_close(JSContext *ctx, void *opaque)
         JS_DeleteGCRef(ctx, &source->owner_ref);
     }
     heap_caps_free(source);
-}
-
-static size_t s_byte_view_gc_pressure;
-
-static void note_byte_view_gc_pressure(size_t bytes)
-{
-    if (bytes == 0) {
-        return;
-    }
-    if (s_byte_view_gc_pressure > SIZE_MAX - bytes) {
-        s_byte_view_gc_pressure = ESP32_MQUICKJS_BYTE_VIEW_GC_PRESSURE_THRESHOLD;
-        return;
-    }
-    s_byte_view_gc_pressure += bytes;
-}
-
-bool esp32_mquickjs_byte_source_take_gc_request(void)
-{
-    if (s_byte_view_gc_pressure < ESP32_MQUICKJS_BYTE_VIEW_GC_PRESSURE_THRESHOLD) {
-        return false;
-    }
-    s_byte_view_gc_pressure = 0;
-    return true;
 }
 
 static bool js_value_to_u32(JSContext *ctx, JSValue value, uint32_t *out_value)
@@ -189,7 +164,6 @@ static JSValue byte_view_make(JSContext *ctx,
         return JS_EXCEPTION;
     }
 
-    note_byte_view_gc_pressure(sizeof(*view) + (owned_data != NULL ? length : 0U));
     JS_PopGCRef(ctx, &owner_ref);
     return JS_PopGCRef(ctx, &object_ref);
 }

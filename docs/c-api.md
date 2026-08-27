@@ -12,10 +12,10 @@ This document covers the APIs exported directly by the firmware runtime.
   host diagnostics cache so protocol byte streams are not polluted.
 - `gc()`
   Run the JavaScript garbage collector explicitly for diagnostics. Normal
-  applications do not need to call it: the runtime accounts for JavaScript-owned
-  native allocations and collects them at scheduler safe points when an
-  execution turn completes, native allocation debt grows, or internal memory is
-  under pressure.
+  applications do not need to call it: MQuickJS automatically collects before
+  a JavaScript heap allocation would exhaust its configured heap. The framework
+  does not schedule additional collections from Future completion, native
+  allocation pressure, or scheduler polling.
 - `fetch(input, options?)`
   Run an HTTP request through a hidden native Future and return a `Response`.
 - `load(path)`

@@ -72,36 +72,26 @@ class GcArchitectureTests(SourceContractTestCase):
         self.assertIn("esp32_mquickjs_set_property_ref(ctx, result,", gateway)
         self.assertNotIn("esp32_mquickjs_set_property(ctx, result,", gateway)
 
-    def test_deferred_gc_roots_result_before_execution_safe_point(self):
+    def test_framework_does_not_schedule_garbage_collection(self):
         core = (MQUICKJS / "src" / "core" / "esp32_mquickjs.c").read_text(
             encoding="utf-8"
         )
-        finish_start = core.index("static JSValue esp32_mquickjs_finish_execution(")
-        finish_end = core.index("\nstatic void esp32_mquickjs_clear_idle_jobs(", finish_start)
-        finish = core[finish_start:finish_end]
-
-        self.assertIn("*rooted_result = result;", finish)
-        self.assertLess(
-            finish.index("*rooted_result = result;"),
-            finish.index("esp32_mquickjs_execution_leave(runtime);"),
-        )
-        self.assertLess(
-            finish.index("esp32_mquickjs_execution_leave(runtime);"),
-            finish.index("run_pending_gc(ctx, runtime);"),
-        )
-        self.assertIn("return JS_PopGCRef(ctx, &result_ref);", finish)
-
-    def test_terminal_futures_use_native_pressure_instead_of_a_fixed_batch(self):
         future = (
             MQUICKJS / "src" / "core" / "esp32_mquickjs_future.c"
         ).read_text(encoding="utf-8")
-        publish_start = future.index("static void future_publish_terminal(")
-        publish_end = future.index("\nstatic void future_store_result(", publish_start)
-        publish = future[publish_start:publish_end]
+        byte_source = (
+            MQUICKJS / "src" / "core" / "esp32_mquickjs_byte_source.c"
+        ).read_text(encoding="utf-8")
+        gc_start = core.index("JSValue js_gc(")
+        gc_end = core.index("\nJSValue js_load(", gc_start)
+        framework_automatic_paths = core[:gc_start] + core[gc_end:]
 
-        self.assertIn("esp32_mquickjs_native_gc_reclaimable(slot->runtime);", publish)
-        self.assertNotIn("FUTURE_GC_BATCH", future)
-        self.assertNotIn("terminal_handles_since_gc", future)
+        self.assertNotIn("JS_GC(", framework_automatic_paths)
+        self.assertNotIn("JS_GC(", future)
+        self.assertNotIn("native_gc_", core)
+        self.assertNotIn("native_gc_", future)
+        self.assertNotIn("gc_pressure", byte_source)
+        self.assertNotIn("run_pending_gc", core)
 
     def test_explicit_gc_remains_a_diagnostic_single_collection(self):
         core = (MQUICKJS / "src" / "core" / "esp32_mquickjs.c").read_text(
@@ -112,9 +102,22 @@ class GcArchitectureTests(SourceContractTestCase):
         gc_function = core[gc_start:gc_end]
 
         self.assertEqual(gc_function.count("JS_GC(ctx);"), 1)
-        self.assertNotIn("request_gc", gc_function)
-        self.assertIn("state->native_gc_pending = false;", gc_function)
-        self.assertIn("state->native_gc_debt_bytes = 0;", gc_function)
+        self.assertNotIn("native_gc", gc_function)
+        self.assertNotIn("byte_source_take_gc_request", gc_function)
+
+    def test_mquickjs_collects_automatically_on_allocation_pressure(self):
+        engine = (
+            MQUICKJS / "vendor" / "mquickjs" / "mquickjs.c"
+        ).read_text(encoding="utf-8")
+        check_start = engine.index("static int check_free_mem(")
+        check_end = engine.index("\n/* check that 'len' values", check_start)
+        check = engine[check_start:check_end]
+        malloc_start = engine.index("static void *js_malloc(")
+        malloc_end = engine.index("\nstatic void *js_mallocz(", malloc_start)
+        malloc = engine[malloc_start:malloc_end]
+
+        self.assertIn("JS_GC(ctx);", check)
+        self.assertIn("check_free_mem(ctx, ctx->stack_bottom, size)", malloc)
 
     def test_terminal_future_result_is_a_traced_child_not_a_context_root(self):
         future = (
@@ -130,7 +133,7 @@ class GcArchitectureTests(SourceContractTestCase):
         self.assertNotIn("JS_DeleteGCRef(ctx, &handle->result)", future)
         self.assertIn("JS_CLASS_TRACE_DEF(\"Future\"", stdlib)
 
-    def test_abandoned_future_handle_remains_accounted_until_finalization(self):
+    def test_abandoned_future_handle_is_owned_only_by_its_js_object(self):
         future = (
             MQUICKJS / "src" / "core" / "esp32_mquickjs_future.c"
         ).read_text(encoding="utf-8")
@@ -138,9 +141,9 @@ class GcArchitectureTests(SourceContractTestCase):
         abandon_end = future.index("\nstatic future_handle_t *future_handle_from_value(", abandon_start)
         abandon = future[abandon_start:abandon_end]
 
-        self.assertIn("esp32_mquickjs_native_gc_reclaimable(slot->runtime);", abandon)
-        self.assertNotIn("esp32_mquickjs_native_gc_free", abandon)
-        self.assertNotIn("->runtime = NULL", abandon)
+        self.assertIn("The JS object owns the handle until MQuickJS", abandon)
+        self.assertIn("slot->handle = NULL;", abandon)
+        self.assertNotIn("native_gc", abandon)
 
     def test_user_gc_trace_participates_in_mark_and_compaction(self):
         engine = (
@@ -167,7 +170,17 @@ class GcArchitectureTests(SourceContractTestCase):
         self.assertNotIn("JSValue", rectangle)
         self.assertNotIn("child", rectangle)
 
-    def test_scheduler_consumes_gc_before_advancing_futures(self):
+    def test_future_gc_regression_uses_engine_allocation_pressure(self):
+        test_source = (
+            ROOT / "tests" / "js" / "flash_data" / "modules" / "timers" /
+            "automatic-gc.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("gc()", test_source)
+        self.assertIn("pressure = prefix + i;", test_source)
+        self.assertIn("automatic MQuickJS GC", test_source)
+
+    def test_scheduler_only_advances_runtime_work(self):
         core = (MQUICKJS / "src" / "core" / "esp32_mquickjs.c").read_text(
             encoding="utf-8"
         )
@@ -175,11 +188,10 @@ class GcArchitectureTests(SourceContractTestCase):
         poll_end = core.index("\nJSValue js_print(", poll_start)
         poll = core[poll_start:poll_end]
 
-        self.assertLess(
-            poll.index("run_pending_gc(ctx, runtime);"),
-            poll.index("esp32_mquickjs_future_poll(ctx, runtime)"),
-        )
-        self.assertEqual(poll.count("run_pending_gc(ctx, runtime);"), 1)
+        self.assertIn("esp32_mquickjs_future_poll(ctx, runtime)", poll)
+        self.assertIn("esp32_mquickjs_poll_registered(ctx, runtime)", poll)
+        self.assertNotIn("JS_GC(", poll)
+        self.assertNotIn("run_pending_gc", poll)
 
     def test_compacting_gc_finalizes_every_coalesced_user_object(self):
         engine = (

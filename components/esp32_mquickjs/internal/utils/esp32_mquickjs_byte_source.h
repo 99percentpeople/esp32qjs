@@ -106,8 +106,6 @@ void esp32_mquickjs_byte_view_release_read(JSContext *ctx, JSValue value);
 
 void esp32_mquickjs_release_byte_source(uint8_t *owned);
 
-bool esp32_mquickjs_byte_source_take_gc_request(void);
-
 JSValue js_byte_view_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 void js_byte_view_finalizer(JSContext *ctx, void *opaque);
 JSValue js_byte_view_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
