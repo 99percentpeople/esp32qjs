@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "contextId": "firmware-test-esp32s3",
+  "firmwareCommit": "test-fixture",
+  "board": { "id": "firmware-test", "label": "Firmware test fixture", "digest": "test-fixture" },
+  "hardware": { "mcu": "esp32s3", "flashBytes": 8388608, "psramMode": "none", "psramBytes": 0 },
+  "nativeFeatures": ["fs"],
+  "libraries": [],
+  "digests": {}
+}

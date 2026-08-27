@@ -1,0 +1,7 @@
+# Firmware test Build Context; 8 MiB flash.
+# Name,   Type, SubType, Offset,  Size,      Flags
+nvs,      data, nvs,     0x9000,  0x6000,
+phy_init, data, phy,     0xf000,  0x1000,
+factory,  app,  factory, 0x10000, 0x300000,
+storage,  data, littlefs,0x310000, 0x80000,
+workspace,data, littlefs,0x390000,0x470000,

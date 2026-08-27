@@ -20,8 +20,17 @@ config ESP32QJS_JS_HEAP_PREFER_PSRAM
     help
         Try PSRAM first and fall back to internal memory.
 
+config ESP32QJS_LITTLEFS_READ_ONLY
+    bool "Mount the primary LittleFS partition read-only"
+    depends on ESP32_MQUICKJS_FEATURE_FS
+    default n
+    help
+        Protect immutable framework and JavaScript Library files at runtime.
+        Writable application data belongs on a separate mounted filesystem.
+
 config ESP32QJS_LITTLEFS_FORMAT_ON_MOUNT_FAIL
     bool "Format LittleFS when mount fails"
+    depends on !ESP32QJS_LITTLEFS_READ_ONLY
     default n
     help
         Development convenience that may erase application data. Production

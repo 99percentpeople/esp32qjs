@@ -1,10 +1,10 @@
 # ESP32QJS
 
-ESP32QJS is a reusable ESP-IDF framework for running trusted JavaScript
-applications on ESP32 microcontrollers with
+ESP32QJS is a reusable ESP-IDF framework for running trusted JavaScript on
+ESP32 microcontrollers with
 [mquickjs](https://github.com/99percentpeople/mquickjs). It provides a bounded,
-feature-gated native API while keeping board wiring, product protocols, and
-application policy outside the framework.
+feature-gated native API while keeping development-board wiring, JavaScript
+libraries, product protocols, and application policy outside the framework.
 
 | | Current development baseline |
 | --- | --- |
@@ -14,56 +14,69 @@ application policy outside the framework.
 | Targets | ESP32-S3 and ESP32-C3 |
 | JavaScript engine | vendored mquickjs submodule |
 
-## What the framework provides
+## Framework capabilities
 
-- A single trusted JavaScript runtime with bounded evaluation deadlines,
-  cooperative native waits, `Future`, timers, and `EventQueue`.
-- Explicit runtime create/start/stop/destroy lifecycle, JavaScript-only restart,
-  startup guarding, and application-owned safe-mode policy.
-- Optional native modules selected at build time instead of one monolithic
-  firmware image.
-- Generated hardware profiles for measured Flash and PSRAM capacity, partition
-  geometry, and immutable application or driver constants.
-- Native byte ownership through `ByteView`, `ByteSpanSource`, and `Stream` so
-  large media and transport payloads do not need to become JavaScript arrays.
-- Host tests, exact-engine JavaScript syntax checks, and device-backed module
-  tests driven by one repository-local command.
+- One trusted JavaScript runtime with deadlines, cooperative native waits,
+  `Future`, timers, and `EventQueue`.
+- Explicit create/start/stop/destroy lifecycle and JavaScript-only restart.
+- Native modules selected at build time instead of a monolithic image.
+- Immutable build-time constants, measured Flash/PSRAM configuration, and an
+  externally resolved partition table.
+- Native byte ownership through `ByteView`, `ByteSpanSource`, and `Stream`.
+- Exact-engine syntax checks, host tests, and device-backed module tests.
 
-The optional modules cover:
-
-| Area | Capabilities |
-| --- | --- |
-| Storage | LittleFS, secondary LittleFS, bounded NVS strings |
-| Peripherals | GPIO, LEDC, ADC, DAC, I2C, SPI, UART, RMT |
-| Media | standard I2S RX/TX/duplex, PDM RX, ESP32-S3 still camera |
-| Graphics | native mono1/gray8/RGB565/RGB888 bitmaps and display transports |
-| Networking | transport-neutral ESP-NETIF status, Wi-Fi station, TCP/UDP sockets, HTTP client/server, WebSocket client |
-| Security | optional public-CA TLS with hostname and certificate-date validation |
-| Integration | USB Serial/JTAG frames and application-configured binary RPC codec |
-
-Exact availability is target- and profile-dependent. Application code can read
-the compiled selection through `sys.info.features`.
+Feature-gated modules cover LittleFS and NVS; GPIO, LEDC, ADC, DAC, I2C, SPI,
+UART and RMT; I2S and camera; native bitmap/display primitives; ESP-NETIF,
+Wi-Fi, sockets, HTTP, WebSocket and TLS; USB Serial/JTAG and generic binary RPC.
+Read the compiled selection through `sys.info.features`.
 
 ## Framework boundary
 
-This repository is the generic firmware layer. It deliberately does **not**
-contain:
+This repository deliberately does not contain:
 
-- development-board pin maps or vendor-specific board wrappers;
-- an Agent business protocol, authentication policy, or workspace schema;
-- model/provider orchestration or credentials;
-- an online IDE, device control plane, or browser UI.
+- development-board pin maps or vendor-specific Board wrappers;
+- product JavaScript libraries or startup policy;
+- Agent opcodes, authentication, workspace schema, or connection policy;
+- model/provider orchestration, an online IDE, or a browser control plane.
 
-Those concerns belong to the host product or application profile. A board pack
-may supply generated constants and JavaScript display setup at build time, but
-the native modules remain reusable across boards and products.
+An external resolver owns Boards and JavaScript Libraries, then produces one
+immutable Build Context. The framework consumes that context and does not parse
+the source manifests. JavaScript is trusted application code; ESP32QJS is not
+an untrusted-code sandbox.
 
-JavaScript runs as trusted application code. ESP32QJS is not an untrusted-code
-sandbox.
+## Build Context v1
 
-## Prerequisites
+Every build requires a complete directory:
 
-- Python 3.11 or newer
+```text
+<context>/
+  manifest.json
+  sdkconfig.defaults
+  partitions.csv
+  profile-constants.inc
+  precompile.json
+  flash_data/
+```
+
+`manifest.json` identifies the resolved context and target hardware. All other
+files are immutable resolved inputs. Missing or inconsistent entries fail the
+build; there is no application-profile, hardware-template, or board-pack
+fallback. The repository includes
+`tests/build-contexts/esp32s3/` only as a framework test fixture.
+
+Configuration is applied in this order:
+
+1. intrinsic MCU defaults from `configs/mcus/<target>/`;
+2. the selected Build Context's sdkconfig defaults;
+3. an optional explicit developer sdkconfig layer.
+
+MCU defaults never guess development-board pins. Product hardware probes and
+the external resolver must provide Flash, PSRAM, partitions, constants, native
+features, JavaScript files, and precompile entries.
+
+## Prerequisites and first build
+
+- Python 3.11+
 - [uv](https://docs.astral.sh/uv/)
 - ESP-IDF 6.1
 - CMake and a host C compiler
@@ -76,69 +89,30 @@ uv sync
 cp .env.example .env
 ```
 
-Set `IDF_PATH` in `.env`. The default profile uses ESP32-S3, the `minimal`
-application, an 8 MiB Flash layout, and no assumed PSRAM. Set `TARGET` only when
-flashing, monitoring, or running device-backed tests; it accepts a local serial
-path such as `/dev/ttyACM0` or `COM3`, or an RFC2217 URL.
-
-Inspect the resolved configuration before the first build:
+Set `IDF_PATH` in `.env`, then inspect and build the repository fixture:
 
 ```bash
 uv run python scripts/remote.py mcus
-uv run python scripts/remote.py apps
 uv run python scripts/remote.py show-config
+uv run python scripts/remote.py check-js
 uv run python scripts/remote.py --assume y build
 ```
 
-Use `scripts/remote.py` for normal development. Direct `idf.py` commands remain
-available for low-level ESP-IDF work, but they bypass the framework's profile
-resolution and validation.
-
-## Configuration model
-
-Build configuration is applied in this order:
-
-1. MCU capability defaults from `configs/mcus/<target>/`.
-2. Application behavior and feature defaults from `apps/<application>/` or an
-   external application profile.
-3. A generated hardware overlay containing measured Flash/PSRAM values and
-   validated constants.
-4. An optional host-generated module selection for product builds.
-
-Partition tables are generated from the selected Flash capacity and application
-layout. MCU profiles never guess development-board pins. Unknown PSRAM must use
-the safe `none` profile; pass `--psram-mode` and `--psram-size` only with values
-measured from the target hardware.
-
-Useful overrides include:
+To build a context produced elsewhere:
 
 ```bash
-# Safe no-PSRAM ESP32-C3 build.
 uv run python scripts/remote.py \
-  --mcu esp32c3 \
-  --flash-size-mb 4 \
-  --psram-mode none \
-  --assume y build
-
-# Measured 8 MiB octal-PSRAM ESP32-S3 build.
-uv run python scripts/remote.py \
-  --mcu esp32s3 \
-  --flash-size-mb 8 \
-  --psram-mode octal \
-  --psram-size 8388608 \
+  --build-context /absolute/path/to/build-context \
   --assume y build
 ```
 
-Generated output stays under `build/<mcu>/`. Additional hardware and test
-profiles use subdirectories under the selected MCU. A relative `--build-dir`
-also stays under `build/`; use an absolute build directory only for an
-intentional temporary build.
+Generated output stays under `build/<mcu>/`. Direct `idf.py` remains available
+for low-level work but bypasses Build Context validation.
 
 ## Feature selection
 
-Native modules are feature-gated. Applications and host products enable only
-what they need; MCU and hardware overlays may force unsupported modules off or
-select a capability required by that profile. Application defaults can include:
+The Build Context enables only the native modules needed by its resolved Board
+and Libraries. Typical entries include:
 
 ```text
 CONFIG_ESP32_MQUICKJS_FEATURE_FS=y
@@ -149,42 +123,30 @@ CONFIG_ESP32_MQUICKJS_FEATURE_HTTP=y
 CONFIG_ESP32_MQUICKJS_FEATURE_TLS=y
 ```
 
-`net` is the transport-neutral ESP-NETIF capability used by Wi-Fi, Ethernet,
-PPP, HTTP, sockets, WebSocket, TLS, and network time synchronization. It
-observes interfaces; link drivers and applications still own connection and
-credential policy. TLS is an independent capability above `net`. Disabling TLS keeps plaintext HTTP and
-TCP/UDP available while removing the CA bundle and secure transport paths.
-WebSocket currently requires TLS because the ESP-IDF WebSocket component packages
-WS and WSS in one transport library. USB Serial/JTAG frames and the interactive
-REPL are mutually exclusive because both consume the same serial input stream.
+`net` owns shared ESP-NETIF initialization and is independent of Wi-Fi.
+Ethernet, PPP, or a custom netif can support HTTP, sockets, WebSocket, TLS, and
+network time without compiling the Wi-Fi module. TLS is separately optional.
+Disabling it retains plaintext HTTP/TCP/UDP while removing the public CA bundle
+and secure transports. WebSocket currently depends on TLS because ESP-IDF
+packages WS and WSS in one component.
 
-Run `show-config` to inspect the final merged selection rather than inferring
-features from one defaults file.
+USB Serial/JTAG frames and the interactive REPL are mutually exclusive because
+both consume the same serial stream.
 
 ## Memory and secure networking
 
-Hardware profiles determine where scarce memory is used:
-
-- PSRAM profiles prefer external RAM for the JavaScript heap, managed large
-  buffers, HTTP worker stacks, media payloads, and mbedTLS allocations.
-- No-PSRAM profiles keep selected API contracts but use bounded internal
-  allocations and omit capabilities that cannot fit that hardware profile.
-- Internal/DMA memory remains reserved for Wi-Fi and peripheral drivers. Inspect
-  `sys.status.memory.internal`, `.dma`, and `.psram`, especially
-  `largestFreeBlockBytes` and `minimumFreeBytes`; total `freeHeap()` alone is not
-  a fragmentation metric on PSRAM systems.
+PSRAM contexts prefer external memory for the JavaScript heap, managed large
+buffers, worker stacks, media payloads, and mbedTLS. Internal/DMA memory remains
+reserved for Wi-Fi and peripheral drivers. Diagnose pressure with
+`sys.status.memory.internal`, `.dma`, and `.psram`, especially
+`largestFreeBlockBytes` and `minimumFreeBytes`; aggregate free heap is not a
+fragmentation metric.
 
 TLS retains standard 16 KiB RX and 4 KiB TX records. Public CA, hostname, and
-certificate dates are always verified; there is no insecure or
-skip-verification mode. The full ESP-IDF bundle enables verification of valid
-cross-signed public-CA chains. Peer and intermediate certificate dates remain
-verified; the bundle's synthetic trusted key has no certificate dates to check.
-After a network interface obtains an address, the
-application supplies its own SNTP servers and synchronizes the wall clock before
-public TLS:
+certificate dates are always verified; there is no insecure mode. After a
+network interface receives an address, synchronize time before public TLS:
 
 ```js
-wifi.connect("network", "password", 15000);
 sys.time.sync({
     servers: ["pool.ntp.org", "time.cloudflare.com"],
     timeoutMs: 15000
@@ -193,82 +155,64 @@ var response = http.fetch("https://example.com", { timeoutMs: 15000 });
 print(response.status);
 ```
 
-`Date.now()` and `new Date()` use the synchronized wall clock.
-`performance.now()`, `sys.millis()`, and `sys.micros()` remain monotonic uptime
-clocks. SNTP provides ordinary date validation and does not authenticate network
-time against an active attacker.
+`Date.now()` uses synchronized wall time. `performance.now()`, `sys.millis()`,
+and `sys.micros()` remain monotonic. SNTP supports ordinary certificate-date
+validation but does not authenticate time against an active network attacker.
 
-## Create an application
+## JavaScript and documentation
 
-A bundled JavaScript application profile contains:
+The external Build Context may include ordinary JavaScript libraries under
+`flash_data/`. `framework.load(path)` resolves immutable system library files;
+`load(path)` uses the active application filesystem. Sources must use the
+vendored MQuickJS ES5-like dialect, not modern Node syntax.
 
-```text
-apps/my_app/
-  app.env
-  sdkconfig.defaults
-  flash_data/
-    index.js
-```
+The complete native reference is under `docs/`. Compact framework facts for AI
+consumers are ordinary Markdown files under `docs/ai/`, indexed by
+`docs/ai/docs.json`. External Libraries and Boards can add their own ordinary
+documentation. A host may snapshot all of them into Artifact-bound `doc://`
+resources. Skills are a separate host concept for problem-solving workflows;
+they are not the framework API or a hardware fact database.
 
-Minimal `app.env`:
-
-```dotenv
-APP_ID=my_app
-APP_LABEL=My application
-FLASH_DATA_DIR=flash_data
-APP_SDKCONFIG_DEFAULTS=sdkconfig.defaults
-PARTITION_LAYOUT=storage
-```
-
-The application owns autorun/REPL policy and feature defaults. Hardware
-capacity and board constants remain generated inputs. Select a bundled profile
-with `--app my_app`, or pass an external directory or `app.env` without copying
-it into this repository:
+## Flash, monitor, and test
 
 ```bash
-uv run python scripts/remote.py --app ../my-device-app show-config
-uv run python scripts/remote.py --app ../my-device-app --assume y build
-```
-
-Shared JavaScript libraries are copied from `shared/flash_data/` before the
-application files, so applications can intentionally override shared paths.
-Board-specific display code belongs in an application or host-supplied board
-pack. The framework supplies native bitmap and bus primitives plus generic
-JavaScript display drivers.
-
-Flashed sources must use the vendored MQuickJS ES5-like dialect. Do not assume
-that Node.js syntax checking accepts the same language. Run `check-js`, and
-avoid `const`, `let`, classes, arrow functions, and template literals unless a
-separate authoring pipeline explicitly transpiles them first.
-
-## Build, flash, and monitor
-
-```bash
-# Build or flash the hardware-neutral minimal application.
-uv run python scripts/remote.py --assume y build
 uv run python scripts/remote.py flash
-
-# Build and flash the bundled display demo.
-uv run python scripts/remote.py --app demo --assume y build
-uv run python scripts/remote.py --app demo flash
-
-# Validate or update JavaScript without rebuilding the application image.
-uv run python scripts/remote.py check-js
-uv run python scripts/remote.py --app demo flash-fs
-
-# Open the serial monitor.
+uv run python scripts/remote.py flash-fs
 uv run python scripts/remote.py monitor
 ```
 
-Ordinary `flash` and `flash-fs` preserve an external application's optional
-workspace partition. `flash --erase-workspace` initializes that partition while
-flashing the firmware; `flash-workspace` explicitly erases and initializes only
-the workspace. Treat both operations as destructive.
+Ordinary `flash` and `flash-fs` preserve an optional workspace partition.
+`flash --erase-workspace` and `flash-workspace` explicitly initialize it and
+are destructive.
+
+Host checks do not require a board:
+
+```bash
+uv run python -m unittest discover -s tests/python
+uv run python scripts/remote.py check-js
+uv run python scripts/remote.py test --scope c
+```
+
+The default hardware test rebuilds and flashes dedicated test inputs before
+running enabled JS modules:
+
+```bash
+uv run python scripts/remote.py test
+uv run python scripts/remote.py test --scope js --module socket
+uv run python scripts/remote.py test --scope js --module wifi --module http --network
+uv run python scripts/remote.py test --scope js --module spi --module uart --loopback
+uv run python scripts/remote.py test --scope js --module camera-bitmap --media-hardware
+```
+
+Network tests require `TEST_WIFI_SSID`, `TEST_WIFI_PASSWORD`, and
+`TEST_HTTP_URL`. Loopback and media tests require the corresponding hardware.
+Use `--no-flash-firmware` and `--no-flash-fs` only when intentionally reusing a
+compatible test image.
 
 ## Native runtime integration
 
-Custom ESP-IDF applications can embed `components/esp32qjs_runtime` instead of
-using the default `main/` entry point:
+Custom ESP-IDF applications can embed `components/esp32qjs_runtime` rather than
+using `main/`:
 
 ```c
 #include "esp32qjs_runtime.h"
@@ -278,93 +222,37 @@ static esp32qjs_runtime_t *runtime;
 void app_main(void)
 {
     esp32qjs_runtime_config_t config;
-
     esp32qjs_runtime_default_config(&config);
     ESP_ERROR_CHECK(esp32qjs_runtime_create(&config, &runtime));
     ESP_ERROR_CHECK(esp32qjs_runtime_start(runtime));
 }
 ```
 
-The lifecycle API also provides cooperative stop and destroy operations plus an
-application callback for installing trusted native globals. See
-[Native runtime integration](docs/runtime-api.md) for ownership and shutdown
-requirements.
-
-## Testing
-
-Host-side checks do not require a connected board:
-
-```bash
-uv run python -m unittest discover -s tests/python
-uv run python scripts/remote.py check-js
-uv run python scripts/remote.py test --scope c
-```
-
-The default device test command rebuilds and flashes dedicated test firmware and
-LittleFS images before running enabled JavaScript modules:
-
-```bash
-uv run python scripts/remote.py test
-```
-
-Narrow or extend hardware tests explicitly:
-
-```bash
-uv run python scripts/remote.py test --scope js --module nvs
-uv run python scripts/remote.py test --scope js --module socket
-uv run python scripts/remote.py test --scope js --module wifi --module http --network
-uv run python scripts/remote.py test --scope js --module spi --module uart --loopback
-uv run python scripts/remote.py test --scope js --module camera-bitmap --media-hardware
-```
-
-Network tests require `TEST_WIFI_SSID`, `TEST_WIFI_PASSWORD`, and
-`TEST_HTTP_URL`. Loopback and media tests require the corresponding physical
-wiring or hardware profile. Use `--no-flash-firmware` and `--no-flash-fs` only
-when intentionally reusing an already compatible device test image.
+See [Native runtime integration](docs/runtime-api.md) for lifecycle ownership.
 
 ## Repository layout
 
 ```text
-apps/                       bundled application profiles and files
-configs/mcus/               intrinsic MCU targets and capability exclusions
-shared/flash_data/_sys/     reusable JavaScript libraries and display drivers
-components/esp32_mquickjs/  mquickjs adapter and feature-gated Native Host API
-components/esp32qjs_runtime reusable runtime lifecycle component
-components/esp32qjs_interactive optional serial REPL frontend
-main/                       default standalone ESP-IDF entry point
+configs/mcus/               intrinsic target defaults
+components/esp32_mquickjs/  MQuickJS adapter and native modules
+components/esp32qjs_runtime reusable runtime lifecycle
+components/esp32qjs_interactive optional serial shell
+main/                       default ESP-IDF entry point
+docs/                       framework documentation
+tests/build-contexts/       complete test-only Build Context fixtures
 tests/c/                    host-native C tests
 tests/js/                   device-backed JavaScript tests
-tests/python/               profile and repository tooling tests
-scripts/remote.py           supported build, flash, monitor, and test workflow
+tests/python/               repository tooling tests
+scripts/remote.py           build, flash, monitor, and test helper
 ```
 
-## Documentation
+Start with [API index](docs/api.md), [Native Host API](docs/c-api.md),
+[JavaScript Library boundary](docs/js-api.md), and
+[framework backlog](docs/backlog.md).
 
-- [API index](docs/api.md)
-- [Native Host API](docs/c-api.md)
-- [JavaScript libraries](docs/js-api.md)
-- [System management API](docs/sys-management-api.md)
-- [Native runtime integration](docs/runtime-api.md)
-- [API stability plan](docs/api-stability-plan.md)
-- [Framework backlog](docs/backlog.md)
-
-ESP32QJS is still in development. Project-owned APIs, protocols, manifests, and
-persistence formats remain on the sole `v1` contract; breaking changes replace
-that contract directly instead of adding compatibility layers. Framework
-release numbers follow Semantic Versioning independently of the Host API
-contract.
-
-## Production boundary
-
-The default profiles are development-oriented. Production deployments still
-need an explicit review of REPL exposure, signed artifacts, secure boot, Flash
-and NVS encryption, secret provisioning/rotation, OTA rollback, and recovery
-under interrupted writes. Enabling the optional `nvs` module does not enable NVS
-encryption.
-
-See the [framework backlog](docs/backlog.md) for unfinished production and
-verification work.
-
-## License
+ESP32QJS remains in development. Project-owned APIs and manifests use one v1
+contract; breaking changes replace that contract directly. Production use
+still requires an explicit review of signed artifacts, secure boot, Flash/NVS
+encryption, provisioning, OTA rollback, and recovery.
 
 Licensed under the [Apache License 2.0](LICENSE).

@@ -1,5 +1,0 @@
-# Application behavior; hardware and memory settings are supplied by the generated hardware profile.
-CONFIG_ESP32_MQUICKJS_FEATURE_FS=y
-CONFIG_ESP32QJS_ENABLE_REPL=y
-CONFIG_ESP32QJS_AUTORUN_INDEX_JS=y
-CONFIG_ESP32QJS_LITTLEFS_FORMAT_ON_MOUNT_FAIL=n

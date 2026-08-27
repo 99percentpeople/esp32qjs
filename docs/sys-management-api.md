@@ -200,6 +200,7 @@ declare namespace ESP32QJS {
     root: string;
     mount: boolean;
     required: boolean;
+    readOnly: boolean;
     formatOnMountFail: boolean;
     secondary: SysRuntimeSecondaryFilesystemInfo | null;
   }
@@ -338,6 +339,7 @@ declare namespace ESP32QJS {
   interface SysRuntimeFilesystemStatus {
     root: string;
     mounted: boolean;
+    readOnly: boolean;
     secondaryMounted: boolean;
   }
 
@@ -1040,6 +1042,7 @@ There are no compatibility aliases.
 | `jsHeapSize` | `sys.info.runtime.heap.sizeBytes` |
 | `jsHeapRegion` | `sys.info.runtime.heap.region` |
 | `littlefsMounted` | `sys.status.runtime.filesystem.mounted` |
+| primary filesystem read-only state | `sys.status.runtime.filesystem.readOnly` |
 | `replEnabled` | `sys.info.runtime.startup.repl` |
 | `autoRunIndexJs` | `sys.info.runtime.startup.autorun` |
 | `formatLittlefsOnMountFail` | `sys.info.runtime.filesystem.formatOnMountFail` |
@@ -1052,7 +1055,7 @@ The implementation change moved all known repository consumers together:
 - enrollment/device information projection;
 - workspace Flash-size snapshots;
 - device and Agent smoke-test stubs;
-- runtime, diagnostics, hardware, and networking server skills;
+- framework, Library, and Board documentation exposed by a host;
 - C API reference, declarations, syntax examples, and JS device tests.
 
 ## Implementation status

@@ -18,6 +18,29 @@ SPEC.loader.exec_module(TOOL)
 
 
 class StartupPrecompileTests(unittest.TestCase):
+    def test_accepts_a_generated_startup_without_inline_sources(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "index.js").write_text(
+                'load("_sys/display.js");\n', encoding="utf-8"
+            )
+            manifest_path = root / "precompile.json"
+            manifest_path.write_text(
+                json.dumps({
+                    "version": 1,
+                    "entry": "index.js",
+                    "output": "index.js",
+                    "inline": [],
+                    "removeAfterCompile": [],
+                }),
+                encoding="utf-8",
+            )
+
+            manifest = TOOL.load_manifest(manifest_path)
+
+            self.assertEqual(manifest.inline, frozenset())
+            self.assertIn('load("_sys/display.js")', TOOL.bundle_startup(root, manifest))
+
     def test_bundles_only_manifest_sources_and_keeps_workspace_load(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

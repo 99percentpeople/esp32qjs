@@ -7,3 +7,4 @@ dependencies:
     version: "~2.1.7"
     rules:
       - if: "target == esp32s3"
+      - if: "$CONFIG{ESP32_MQUICKJS_FEATURE_CAMERA} == True"

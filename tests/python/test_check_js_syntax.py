@@ -61,9 +61,7 @@ class JavaScriptSyntaxToolTests(unittest.TestCase):
         files = CHECKER.iter_js_files(CHECKER.DEFAULT_SOURCE_ROOTS)
         relative = {path.relative_to(ROOT).as_posix() for path in files}
 
-        self.assertIn("apps/minimal/flash_data/index.js", relative)
-        self.assertIn("apps/demo/flash_data/index.js", relative)
-        self.assertIn("shared/flash_data/_sys/display/core.js", relative)
+        self.assertIn("tests/build-contexts/esp32s3/flash_data/index.js", relative)
         self.assertIn("tests/js/flash_data/index.js", relative)
         self.assertFalse(any("vendor/" in path for path in relative))
 

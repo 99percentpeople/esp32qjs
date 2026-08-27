@@ -512,6 +512,7 @@ static bool runtime_host_status(void *opaque,
     status->repl_enabled = runtime->config.enable_repl;
     status->mount_littlefs = runtime->config.mount_littlefs;
     status->require_littlefs = runtime->config.require_littlefs;
+    status->littlefs_read_only = runtime->config.littlefs_read_only;
     status->format_littlefs_on_mount_fail =
         runtime->config.format_littlefs_on_mount_fail;
     status->littlefs_mounted = runtime->littlefs_mounted;
@@ -633,6 +634,9 @@ void esp32qjs_runtime_default_config(esp32qjs_runtime_config_t *config)
         CONFIG_ESP32QJS_SECONDARY_LITTLEFS_PARTITION_LABEL;
     config->secondary_littlefs_base_path =
         CONFIG_ESP32QJS_SECONDARY_LITTLEFS_BASE_PATH;
+#endif
+#ifdef CONFIG_ESP32QJS_LITTLEFS_READ_ONLY
+    config->littlefs_read_only = true;
 #endif
 #ifdef CONFIG_ESP32QJS_LITTLEFS_FORMAT_ON_MOUNT_FAIL
     config->format_littlefs_on_mount_fail = true;
@@ -1168,6 +1172,8 @@ esp_err_t esp32qjs_runtime_create(const esp32qjs_runtime_config_t *config,
     if (config == NULL || out_runtime == NULL || config->js_heap_size == 0 ||
         config->task_stack_size == 0 || config->task_priority == 0 ||
         config->restart_timeout_ms == 0 ||
+        (config->littlefs_read_only &&
+         config->format_littlefs_on_mount_fail) ||
         (config->startup_guard &&
          (config->startup_failure_limit == 0 || config->startup_healthy_ms == 0)) ||
         (config->restart_failure_action != ESP32_MQUICKJS_RESTART_FAILURE_REBOOT &&
@@ -1238,7 +1244,9 @@ esp_err_t esp32qjs_runtime_create(const esp32qjs_runtime_config_t *config,
 
     if (config->mount_littlefs) {
         runtime->littlefs_mounted =
-            esp32_mquickjs_mount_littlefs(config->format_littlefs_on_mount_fail);
+            esp32_mquickjs_mount_littlefs(
+                config->format_littlefs_on_mount_fail,
+                config->littlefs_read_only);
         if (!runtime->littlefs_mounted && config->require_littlefs) {
             runtime_release_unstarted(runtime);
             return ESP_FAIL;
@@ -1249,6 +1257,7 @@ esp_err_t esp32qjs_runtime_create(const esp32qjs_runtime_config_t *config,
             esp32_mquickjs_mount_littlefs_partition(
                 runtime->secondary_littlefs_partition_label,
                 runtime->secondary_littlefs_base_path,
+                false,
                 false);
         if (!runtime->secondary_littlefs_mounted &&
             config->require_secondary_littlefs) {

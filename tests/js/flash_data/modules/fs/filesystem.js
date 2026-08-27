@@ -42,6 +42,7 @@ test("fs/filesystem", function () {
   test.equal(systemFs.ROOT, "/littlefs", "existing volume remains immutable");
   info = fs.info();
   test.equal(info.root, fs.ROOT, "fs info root");
+  test.equal(info.readOnly, false, "test filesystem remains writable");
   test.ok(info.totalBytes > 0, "fs info total bytes");
   test.ok(info.usedBytes >= 0, "fs info used bytes");
   test.equal(info.freeBytes, info.totalBytes - info.usedBytes, "fs info free bytes");

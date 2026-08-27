@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "docs": [
+    { "id": "runtime", "title": "ESP32QJS runtime API", "path": "runtime.md" },
+    { "id": "hardware", "title": "ESP32QJS hardware API", "path": "hardware.md" },
+    { "id": "networking", "title": "ESP32QJS networking API", "path": "networking.md" },
+    { "id": "media", "title": "ESP32QJS media API", "path": "media.md" }
+  ]
+}

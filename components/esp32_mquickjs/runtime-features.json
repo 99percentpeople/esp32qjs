@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "features": [
+    { "id": "fs", "label": "Filesystem", "category": "storage", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_FS", "estimatedBytes": 47104, "targets": ["esp32c3", "esp32s3"], "requires": [] },
+    { "id": "nvs", "label": "NVS", "category": "storage", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_NVS", "estimatedBytes": 18432, "targets": ["esp32c3", "esp32s3"], "requires": [] },
+    { "id": "gpio", "label": "GPIO", "category": "peripheral", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_GPIO", "estimatedBytes": 8192, "targets": ["esp32c3", "esp32s3"], "requires": [] },
+    { "id": "ledc", "label": "LEDC", "category": "peripheral", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_LEDC", "estimatedBytes": 9216, "targets": ["esp32c3", "esp32s3"], "requires": [] },
+    { "id": "adc", "label": "ADC", "category": "peripheral", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_ADC", "estimatedBytes": 10240, "targets": ["esp32c3", "esp32s3"], "requires": [] },
+    { "id": "dac", "label": "DAC", "category": "peripheral", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_DAC", "estimatedBytes": 10240, "targets": [], "requires": [] },
+    { "id": "i2c", "label": "I2C", "category": "peripheral", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_I2C", "estimatedBytes": 14336, "targets": ["esp32c3", "esp32s3"], "requires": [] },
+    { "id": "spi", "label": "SPI", "category": "peripheral", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_SPI", "estimatedBytes": 20480, "targets": ["esp32c3", "esp32s3"], "requires": [] },
+    { "id": "uart", "label": "UART", "category": "peripheral", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_UART", "estimatedBytes": 14336, "targets": ["esp32c3", "esp32s3"], "requires": [] },
+    { "id": "rmt", "label": "RMT", "category": "peripheral", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_RMT", "estimatedBytes": 22528, "targets": ["esp32c3", "esp32s3"], "requires": [] },
+    { "id": "i2s", "label": "I2S / PDM", "category": "media", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_I2S", "estimatedBytes": 28672, "targets": ["esp32c3", "esp32s3"], "requires": [] },
+    { "id": "camera", "label": "Camera", "category": "media", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA", "estimatedBytes": 75776, "targets": ["esp32s3"], "requires": [] },
+    { "id": "net", "label": "Network interfaces", "category": "network", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_NET", "estimatedBytes": 18432, "targets": ["esp32c3", "esp32s3"], "requires": [] },
+    { "id": "wifi", "label": "Wi-Fi", "category": "network", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI", "estimatedBytes": 194560, "targets": ["esp32c3", "esp32s3"], "requires": ["net"] },
+    { "id": "tls", "label": "TLS", "category": "network", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_TLS", "estimatedBytes": 196608, "targets": ["esp32c3", "esp32s3"], "requires": ["net"] },
+    { "id": "socket", "label": "Socket", "category": "network", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET", "estimatedBytes": 35840, "targets": ["esp32c3", "esp32s3"], "requires": ["net"] },
+    { "id": "rpc", "label": "Binary RPC", "category": "network", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_RPC", "estimatedBytes": 49152, "targets": ["esp32c3", "esp32s3"], "requires": [] },
+    { "id": "http_client", "label": "HTTP Client", "category": "network", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_HTTP", "estimatedBytes": 56320, "targets": ["esp32c3", "esp32s3"], "requires": ["net"] },
+    { "id": "http_server", "label": "HTTP Server", "category": "network", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER", "estimatedBytes": 43008, "targets": ["esp32c3", "esp32s3"], "requires": ["net"] },
+    { "id": "usb_serial", "label": "USB Serial", "category": "network", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL", "estimatedBytes": 24576, "targets": ["esp32c3", "esp32s3"], "requires": [] },
+    { "id": "websocket_client", "label": "WebSocket", "category": "network", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET", "estimatedBytes": 49152, "targets": ["esp32c3", "esp32s3"], "requires": ["net", "tls"] },
+    { "id": "bitmap", "label": "Bitmap", "category": "graphics", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP", "estimatedBytes": 56320, "targets": ["esp32c3", "esp32s3"], "requires": [] },
+    { "id": "runtime_logs", "label": "Runtime logs", "category": "diagnostics", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS", "estimatedBytes": 16384, "targets": ["esp32c3", "esp32s3"], "requires": [] }
+  ]
+}

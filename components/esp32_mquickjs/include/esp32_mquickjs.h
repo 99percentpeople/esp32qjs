@@ -93,6 +93,7 @@ typedef struct {
 
     bool mount_littlefs;
     bool require_littlefs;
+    bool littlefs_read_only;
     bool format_littlefs_on_mount_fail;
     bool littlefs_mounted;
     char fs_root[ESP32_MQUICKJS_FS_ROOT_MAX];
@@ -232,11 +233,13 @@ bool esp32_mquickjs_get_resource_status(
     esp32_mquickjs_runtime_t *runtime,
     esp32_mquickjs_resource_status_t *status);
 
-bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed);
+bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed,
+                                   bool read_only);
 void esp32_mquickjs_unmount_littlefs(void);
 bool esp32_mquickjs_mount_littlefs_partition(const char *partition_label,
                                              const char *base_path,
-                                             bool format_if_mount_failed);
+                                             bool format_if_mount_failed,
+                                             bool read_only);
 void esp32_mquickjs_unmount_littlefs_partition(const char *partition_label);
 
 void esp32_mquickjs_set_eval_timeout(esp32_mquickjs_runtime_t *runtime,

@@ -117,6 +117,12 @@ excluded from the ordinary JavaScript evaluation budget, while an explicit
 is drained before an interrupted call returns so DMA buffers remain valid; a
 synchronous HTTP request similarly waits for its bounded worker to finish.
 
+The primary LittleFS mount may be configured read-only for immutable framework
+and product Library files. Its effective policy is exposed as
+`fs.info().readOnly`, `sys.info.runtime.filesystem.readOnly`, and
+`sys.status.runtime.filesystem.readOnly`. Writable application state belongs on
+an explicitly mounted secondary volume such as `/workspace`.
+
 When startup guarding is enabled, the runtime writes only its private `qjs_rt`
 NVS namespace. It arms before the configured startup script, requires 30
 seconds of healthy outer-scheduler progress, and counts watchdog/panic resets or

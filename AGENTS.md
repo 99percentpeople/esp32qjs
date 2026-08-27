@@ -1,53 +1,73 @@
 # Repository Guidelines
 
 ## Project Structure
-This is an ESP-IDF framework with intrinsic MCU defaults under [`configs/mcus/`](configs/mcus), application behavior/partition/resource profiles under [`apps/`](apps), and shared LittleFS libraries under [`shared/flash_data/`](shared/flash_data). Flash, PSRAM, partitions, and optional wiring defaults are generated per build from measured hardware; MCU profiles must not guess development-board pins. The reusable lifecycle component lives in [`components/esp32qjs_runtime/`](components/esp32qjs_runtime), while [`main/`](main) is only the default entry point. The QuickJS adapter and built-in modules live in [`components/esp32_mquickjs/`](components/esp32_mquickjs) with core glue in [`src/core/`](components/esp32_mquickjs/src/core) and feature modules in [`src/modules/`](components/esp32_mquickjs/src/modules), and the serial interaction shell lives in [`components/esp32qjs_interactive/`](components/esp32qjs_interactive). Host C tests are in [`tests/c/`](tests/c) and device-backed JS test assets are in [`tests/js/`](tests/js). Upstream `mquickjs` stays in [`components/esp32_mquickjs/vendor/mquickjs`](components/esp32_mquickjs/vendor/mquickjs), while generated outputs stay inside this standalone repository under [`build/`](build/), with MCU builds rooted at `build/<mcu>/`.
 
-## Build, Flash, and Debug Commands
-Use the repo scripts for normal development; do not default to direct `idf.py` workflows.
+This is the independent, reusable ESP-IDF framework. Intrinsic MCU defaults live
+under `configs/mcus/`; resolved product inputs arrive only through an immutable
+Build Context. The framework must not interpret Board, JavaScript Library,
+Agent, workspace, or provider manifests.
 
-- `uv sync` installs the repo-local Python tooling.
-- `cp .env.example .env` seeds the local tool config; set `MCU`, `APP`, and `IDF_PATH` as needed.
-- `python scripts/remote.py mcus` lists available MCU profiles.
-- `python scripts/remote.py apps` lists available application profiles.
-- `python scripts/remote.py show-config` prints the merged MCU/app/hardware/sdkconfig/partition/resource/tool configuration.
-- `python scripts/remote.py check-js` parses first-party JS and runnable API examples with the exact vendored MQuickJS engine.
-- `python scripts/remote.py --assume y build` builds for the active MCU and hardware profile.
-- `python scripts/remote.py flash` builds and flashes the active hardware profile.
-- `python scripts/remote.py flash-fs` refreshes only the LittleFS `storage` partition for JS-only changes.
-- `python scripts/remote.py flash --erase-workspace` initializes an optional workspace partition; ordinary flashes preserve it.
-- `python scripts/remote.py flash-workspace` explicitly erases only the optional workspace partition.
-- `python scripts/remote.py monitor` opens the serial monitor.
-- `python scripts/remote.py test` runs the default automated test baseline and flashes the latest code with dedicated JS test sdkconfig defaults before device-backed JS tests.
-- `python -m unittest discover -s tests/python` runs host tests for repository tooling and profile resolution.
-- `python scripts/remote.py test --scope c` runs only host C tests.
-- `python scripts/remote.py test --scope js --module fs --module stream --no-flash-firmware --no-flash-fs` reruns selected JS modules against an already flashed test image.
-- `python scripts/remote.py test --scope js --module wifi --module http --network` enables network-required cases when `TEST_WIFI_SSID`, `TEST_WIFI_PASSWORD`, and `TEST_HTTP_URL` are configured.
-- `python scripts/remote.py test --scope js --module spi --loopback` enables physical SPI loopback cases using the hardware profile defaults.
-- `TEST_JS_CONFIG='{"spiLoopback":{"sclk":1,"mosi":2,"miso":2}}' python scripts/remote.py test --scope js --module spi --loopback` overrides the default SPI loopback pins.
-- `python scripts/remote.py --mcu esp32c3 --flash-size-mb 4 build` switches MCU/capacity without editing `.env`.
-- `python scripts/remote.py --app demo build` builds the display demo while the default `minimal` app remains hardware-neutral.
-- `python scripts/remote.py --app ../agent/device build` builds a sibling external application profile without copying it into `apps/`.
+The reusable lifecycle component is `components/esp32qjs_runtime/`, the default
+entry point is `main/`, and feature-gated MQuickJS adapters live in
+`components/esp32_mquickjs/`. The optional serial shell is
+`components/esp32qjs_interactive/`. Host C tests are under `tests/c/`, device JS
+tests under `tests/js/`, Python tooling tests under `tests/python/`, and complete
+test Build Context fixtures under `tests/build-contexts/`. Generated output
+stays under `build/`.
 
-Keep `idf.py menuconfig` for configuration work and `cmake --build build/<mcu> --target update_mquickjs_headers` as a manual fallback for generated headers, but they are not the primary day-to-day workflow.
+Ordinary AI-readable framework facts live in `docs/ai/` and are listed by
+`docs/ai/docs.json`. They are documentation, not Skills. Problem-solving Skills
+belong to a host product and are outside this repository.
 
-Local serial and RFC2217 targets are configured through `scripts/remote.py` and
-the repository `.env` file.
+## Build, Flash, and Debug
 
-## Coding Style
-Use 4-space indentation and standard ESP-IDF C style. Prefer `snake_case` for functions and locals, `UPPER_SNAKE_CASE` for macros, and keep ESP32-specific code in the adapter layer instead of editing the submodule directly. Match existing logging and error-handling patterns with `ESP_LOG*`, `ESP_ERROR_CHECK`, and thin adapter helpers around third-party code.
+Use the repository helper for normal development:
 
-## Development Versioning
-Keep project-owned firmware APIs, wire protocols, manifests, and persisted configuration schemas at version `1`/`v1` while the project remains in development. Breaking changes replace the sole v1 contract in place. Do not add v2/v3 identifiers, legacy aliases, compatibility parsers, migration branches, or tests for superseded project formats unless the user explicitly changes this policy. Runtime/entity revisions, dependency versions, and third-party protocol versions are outside this rule.
+- `uv sync`
+- `cp .env.example .env`, then set `IDF_PATH` and optionally `TARGET`.
+- `python scripts/remote.py mcus`
+- `python scripts/remote.py show-config`
+- `python scripts/remote.py check-js`
+- `python scripts/remote.py --assume y build`
+- `python scripts/remote.py flash`
+- `python scripts/remote.py flash-fs`
+- `python scripts/remote.py monitor`
+- `python -m unittest discover -s tests/python`
+- `python scripts/remote.py test --scope c`
+- `python scripts/remote.py test`
 
-## Testing
-The default validation target is `python scripts/remote.py test`. It runs host C tests plus the JS modules enabled by the active hardware profile's runtime feature set, runs the MQuickJS syntax preflight before JS scope, and flashes the latest code with the dedicated JS test sdkconfig defaults before device-backed JS tests so C-side changes are not left stale on the device. Use `--scope c`, `--scope js`, `--module ...`, `--network`, and `--loopback` to narrow or extend coverage when needed. Hardware-specific JS tests can read optional values from `TEST_JS_CONFIG`; SPI loopback cases require `--loopback`, use `spi.DEFAULT_*` by default, and `testConfig.spiLoopback` only overrides selected fields. Use `--no-flash-firmware` and `--no-flash-fs` only when you intentionally want to reuse what is already on the board.
+The default is the repository's ESP32-S3 test Build Context. To consume a Hub
+output, pass `--build-context /absolute/path/to/context`. A context must already
+contain its exact v1 manifest, sdkconfig defaults, partition table, constants,
+precompile manifest, and `flash_data`; do not add fallback readers for deleted
+application profiles or hardware templates.
 
-MQuickJS is a constrained ES5-like engine. Do not use `node --check` as the syntax authority and do not introduce `const`, `let`, classes, arrow functions, template literals, or other modern syntax directly into flashed sources. If a modern authoring source is ever added, its checked artifact must be explicitly transpiled before the MQuickJS preflight.
+`flash --erase-workspace` and `flash-workspace` are destructive. Ordinary
+flashes preserve the workspace. Use direct `idf.py` only for low-level ESP-IDF
+configuration work.
 
-For firmware changes, prefer `python scripts/remote.py --assume y build` and `python scripts/remote.py test` over manual `idf.py` checks. The offline JS baseline already covers the built-in runtime modules such as `core`, `sys`, `gpio`, `ledc`, `adc`, `dac`, `i2c`, `spi`, `timers`, `fs`, `stream`, `load`, `bitmap`, `display`, `wifi`, `socket`, `http`, `http_server`, and `websocket`; modules disabled by `sys.info.features` are auto-skipped, opt-in cases such as network, media hardware, and physical loopback are skipped unless their flag is passed, and explicitly requested disabled modules fail fast.
+## Coding and Versioning
 
-Only add extra manual verification when the change is inherently interactive or outside the automated harness, for example terminal UX, REPL multiline editing, or app-level LittleFS helpers such as `display` and `ui`. The canonical API reference lives in [docs/api.md](docs/api.md), [docs/c-api.md](docs/c-api.md), and [docs/js-api.md](docs/js-api.md). When adding features, prefer extending `tests/c` or `tests/js` rather than mixing test logic into `app_main()`.
+Use 4-space indentation and ESP-IDF C conventions. Prefer `snake_case` for
+functions and locals, `UPPER_SNAKE_CASE` for macros, and thin adapter helpers
+around third-party code. Keep ESP32-specific changes outside the vendored
+MQuickJS submodule unless the issue is demonstrably upstream.
 
-## Commits and Pull Requests
-Use short imperative commit messages, for example `Add remote RFC2217 flash helper` or `Split LED init from app_main`. Keep pull requests narrowly scoped, describe the hardware used for validation, include the exact flash or monitor commands you ran, and attach boot logs for behavior changes.
+Project-owned APIs, manifests, and persisted schemas remain on the sole v1
+contract during development. Breaking changes replace v1 directly; do not add
+v2 identifiers, legacy aliases, compatibility parsers, or migration branches.
+
+Flashed JavaScript uses the vendored ES5-like dialect. Do not use Node syntax
+checking as authority or introduce `const`, `let`, classes, arrows, or template
+literals without an explicit transpilation pipeline.
+
+## Testing and Commits
+
+The default validation target is `python scripts/remote.py test`. Use
+`--scope`, `--module`, `--network`, `--loopback`, and `--media-hardware` only to
+narrow or explicitly enable physical cases. Network cases require the
+`TEST_WIFI_*` variables; loopback and media tests require matching hardware.
+
+Prefer extending `tests/c`, `tests/js`, or `tests/python` over putting test logic
+in `app_main()`. In pull requests, state the exact build/flash commands, board,
+and hardware evidence. Keep commits narrow and imperative.

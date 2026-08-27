@@ -101,11 +101,8 @@ class ProfileConstantsTests(unittest.TestCase):
             "CONFIG_ESP32_MQUICKJS_FEATURE_DAC=n",
         })
 
-        for app in ("minimal", "demo"):
-            defaults = (ROOT / "apps" / app / "sdkconfig.defaults").read_text(
-                encoding="utf-8"
-            )
-            self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_FS=y", defaults)
+        self.assertFalse((ROOT / "apps").exists())
+        self.assertFalse((ROOT / "shared" / "flash_data").exists())
 
     def test_optional_modules_require_explicit_project_selection(self):
         kconfig = (
@@ -120,6 +117,17 @@ class ProfileConstantsTests(unittest.TestCase):
         self.assertGreaterEqual(len(feature_sections), 18)
         for symbol, section in feature_sections:
             self.assertRegex(section, r"(?m)^\s+default n\s*$", symbol)
+
+    def test_camera_managed_component_is_feature_gated(self):
+        manifest = (
+            ROOT / "components" / "esp32_mquickjs" / "idf_component.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("espressif/esp32-camera:", manifest)
+        self.assertIn(
+            '$CONFIG{ESP32_MQUICKJS_FEATURE_CAMERA} == True',
+            manifest,
+        )
 
 
 if __name__ == "__main__":

@@ -9,10 +9,12 @@ bool esp32_mquickjs_init_fs_runtime(JSContext *ctx,
                                     esp32_mquickjs_runtime_t *runtime);
 void esp32_mquickjs_deinit_fs_runtime(esp32_mquickjs_runtime_t *runtime);
 
-bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed);
+bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed,
+                                   bool read_only);
 bool esp32_mquickjs_mount_littlefs_partition(const char *partition_label,
                                              const char *base_path,
-                                             bool format_if_mount_failed);
+                                             bool format_if_mount_failed,
+                                             bool read_only);
 void esp32_mquickjs_unmount_littlefs_partition(const char *partition_label);
 esp32_mquickjs_resource_key_t esp32_mquickjs_fs_resource_key_for_path(
     const char *path);

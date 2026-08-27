@@ -33,7 +33,7 @@ API-shape and freeze work is tracked separately in
 
 ## Verification Infrastructure
 
-- Add CI build matrices for supported ESP-IDF targets and application profiles.
+- Add CI build matrices for supported ESP-IDF targets and representative Build Contexts.
 - Add sanitizers and host-side fuzzing where the native adapters can run without
   hardware.
 - Add fault-injection coverage for allocation failure, queue saturation,

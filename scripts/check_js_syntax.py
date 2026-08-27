@@ -19,14 +19,13 @@ COMPONENT_INCLUDE_DIR = ROOT_DIR / "components" / "esp32_mquickjs" / "include"
 CHECKER_SOURCE = ROOT_DIR / "scripts" / "mquickjs_syntax_check.c"
 DEFAULT_BUILD_DIR = ROOT_DIR / "build" / "js-syntax"
 DEFAULT_SOURCE_ROOTS = (
-    ROOT_DIR / "apps",
-    ROOT_DIR / "shared" / "flash_data",
     ROOT_DIR / "tests" / "js" / "flash_data",
+    ROOT_DIR / "tests" / "build-contexts",
 )
 DEFAULT_DOCUMENTS = (
     ROOT_DIR / "README.md",
     ROOT_DIR / "docs" / "c-api.md",
-    ROOT_DIR / "docs" / "js-api.md",
+    *sorted((ROOT_DIR / "docs" / "ai").glob("*.md")),
 )
 
 

@@ -713,6 +713,8 @@ JSValue js_sys_runtime_info_filesystem(JSContext *ctx,
                                          JS_NewBool(status.mount_littlefs)) ||
         !esp32_mquickjs_set_property_ref(ctx, object, "required",
                                          JS_NewBool(status.require_littlefs)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "readOnly",
+                                         JS_NewBool(status.littlefs_read_only)) ||
         !esp32_mquickjs_set_property_ref(
             ctx,
             object,
@@ -1272,6 +1274,8 @@ JSValue js_sys_runtime_status_filesystem(JSContext *ctx,
                                          JS_NewString(ctx, status.fs_root)) ||
         !esp32_mquickjs_set_property_ref(ctx, object, "mounted",
                                          JS_NewBool(status.littlefs_mounted)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "readOnly",
+                                         JS_NewBool(status.littlefs_read_only)) ||
         !esp32_mquickjs_set_property_ref(
             ctx,
             object,

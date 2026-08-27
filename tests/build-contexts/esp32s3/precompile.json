@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "entry": "index.js",
+  "output": "index.js",
+  "inline": ["_fixture/bootstrap.js"],
+  "removeAfterCompile": ["_fixture"]
+}

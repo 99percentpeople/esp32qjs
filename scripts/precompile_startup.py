@@ -66,8 +66,8 @@ def load_manifest(path: Path) -> StartupManifest:
         raise ValueError("unsupported startup precompile manifest version")
     inline_raw = raw["inline"]
     remove_raw = raw["removeAfterCompile"]
-    if not isinstance(inline_raw, list) or not inline_raw:
-        raise ValueError("startup manifest inline must be a non-empty array")
+    if not isinstance(inline_raw, list):
+        raise ValueError("startup manifest inline must be an array")
     if not isinstance(remove_raw, list):
         raise ValueError("startup manifest removeAfterCompile must be an array")
     inline = [safe_relative_path(value, "inline entry") for value in inline_raw]

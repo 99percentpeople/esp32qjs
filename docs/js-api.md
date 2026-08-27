@@ -1,251 +1,52 @@
-# JS API Reference
+# JavaScript Library boundary
 
-This document covers APIs implemented in JavaScript on top of the built-in C host APIs. Their sources live under `shared/flash_data/_sys`, are merged into the selected application's LittleFS image, and are typically loaded from `apps/<app>/flash_data/index.js`.
+ESP32QJS supports ordinary JavaScript libraries layered on top of the native
+Host API, but this generic framework repository does not own product libraries
+or Board wrappers. A build receives their already-resolved files in the
+immutable Build Context's `flash_data/` tree.
 
 ## Loading
 
-Load the entry point for the panel in use, then load any application-owned UI:
+`framework.load(path)` loads an immutable system library from
+`/littlefs/_sys/<path>`. `load(path)` loads application code from the active
+filesystem volume. For example, a Build Context may provide a system library
+and application entry:
 
 ```js
-framework.load("display/st7789.js");
+framework.load("vendor/device-support.js");
 load("ui.js");
 ```
 
-`ui.js` in this example belongs to the selected app. The framework does not
-ship `_sys/ui`; layout, controls, and rendering policy are application code.
+The framework defines the loader and native `bitmap`, `display`, bus, storage,
+network, and media primitives. It does not define which JavaScript library
+paths exist, which Board profile is registered, or which generated startup
+entry loads them. Those facts belong to the selected Library and Board
+documentation.
 
-`_sys/display.js` loads only the display facade, surface, fonts, and registries.
-Use `_sys/display/ssd1306.js` or `_sys/display/st7789.js` to load one hardware
-stack, and `_sys/display/all.js` only when every built-in is needed. An
-application entry point may do this from `/littlefs/index.js`; the default
-`minimal` app intentionally loads nothing.
+## Build Context contract
 
-Development-board profiles are not framework content. They are built as board
-packs on the host (under `web/backend/boards/<board-model>/`) and overlaid onto
-the LittleFS image through `ESP32QJS_BOARD_FLASH_DATA_DIR` at build time; see
-[Board Profiles](#board-profiles).
+The external resolver must compose a collision-free `flash_data/` tree and a
+precompile manifest before invoking the framework build. It also supplies all
+required native features and constants. `firmware/` consumes those outputs and
+does not read Library or Board manifests.
 
-## `display` Helpers
+Flashed sources must use the vendored MQuickJS ES5-like dialect. Run:
 
-The display library is composed from three independent layers:
-
-```text
-Display facade -> Surface -> bitmap
-              -> PanelDriver -> DisplayTransport -> SPI/I2C/GPIO
+```bash
+python scripts/remote.py check-js
 ```
 
-- `display.VERSION`
-  Current JS display-layer version, `"0.5.0"`.
-- `display.Display`
-  Public lifecycle and drawing facade used by applications and `ui`.
-- `display.Surface`
-  Hardware-independent renderer that owns one native framebuffer.
-- `display.transports`
-  Registry for byte transports. Built-ins are `i2c` and `spi4wire`.
-- `display.drivers`
-  Registry for panel-controller drivers. Built-ins are `ssd1306` and `st7789`.
-- `display.profiles`
-  Registry for complete hardware presets. Board profiles are overlays supplied
-  by board packs or application flash data, not framework content.
-- `display.create(driver, options?)`
-  Create a `Display` without opening panel hardware. Drawing is allowed before
-  `open()`.
-- `display.open(driver, options?)`
-  Create and open a `Display`, then present its initial framebuffer.
+before building. Do not assume that a Node.js parser accepts the same syntax.
 
-The old flat `display.open({ driver: "...", ... })` API has been removed. Bus,
-device, panel, surface, and display settings are grouped by their owning layer.
-Unknown options fail before hardware initialization.
+## Documentation boundary
 
-### Explicit ST7789 Construction
+The generic native reference is [c-api.md](c-api.md). Compact AI-readable
+framework facts are ordinary Markdown documents under `docs/ai/`, indexed by
+`docs/ai/docs.json`. External Libraries and Boards can carry their own ordinary
+Markdown documentation, which a host may expose as immutable `doc://`
+resources bound to an Artifact.
 
-```js
-framework.load("display/st7789.js");
-
-var transport = display.transports.create("spi4wire", {
-  busOptions: {
-    host: spi.DEFAULT_HOST,
-    sclk: spi.DEFAULT_SCLK,
-    mosi: spi.DEFAULT_MOSI,
-    miso: -1,
-    maxTransferSize: 16384
-  },
-  deviceOptions: {
-    cs: spi.DEFAULT_CS,
-    mode: 0,
-    freqHz: 40000000,
-    queueSize: 2
-  },
-  pins: { dc: 4, reset: 5, backlight: 6 }
-});
-
-var driver = display.drivers.create("st7789", {
-  transport: transport,
-  width: 240,
-  height: 240,
-  rotation: 0
-});
-
-var screen = display.open(driver, {
-  surface: {
-    storage: "dma",
-    fallbackStorage: "auto",
-    chunkBytes: 16384
-  },
-  metrics: true
-});
-
-screen.clear();
-screen.drawText(8, 8, "HELLO");
-screen.present();
-```
-
-`SPI4Wire` transport options are separated into `busOptions`, `deviceOptions`,
-and `pins`. If no bus or device is supplied, the transport creates and owns
-both. A supplied bus is borrowed; the transport opens and owns only its display
-device. A supplied device is also borrowed. Closing the display never closes a
-borrowed handle.
-
-### Explicit SSD1306 Construction
-
-```js
-load("_sys/display/ssd1306.js");
-
-var transport = display.transports.create("i2c", {
-  busOptions: {
-    sda: 5,
-    scl: 6,
-    freqHz: 400000,
-    timeoutMs: 1000,
-    internalPullup: true
-  },
-  address: 0x3c
-});
-var driver = display.drivers.create("ssd1306", {
-  transport: transport,
-  width: 128,
-  height: 64
-});
-var oled = display.open(driver);
-
-oled.clear();
-oled.drawText(0, 0, "HELLO", { color: display.mono1(1) });
-oled.drawRect(0, 10, 64, 18, display.mono1(1));
-oled.present();
-```
-
-### Board Profiles
-
-A board profile registers a complete preset (transport wiring, panel driver,
-fixed offsets, board power sequencing) under `display.profiles`. The framework
-ships none; each comes from one of two overlay sources:
-
-- Host board packs under `web/backend/boards/<board-model>/` are injected into
-  the LittleFS image via `ESP32QJS_BOARD_FLASH_DATA_DIR` when the backend builds
-  firmware for a hardware template that sets `APP_BOARD_MODEL` and
-  `APP_DISPLAY_PROFILE`. The pack entry file lands at
-  `_sys/boards/<board-model>.js`:
-
-  ```js
-  framework.load("boards/m5stack-sticks3.js");
-
-  var screen = display.profiles.open("m5sticks3", {
-    display: { metrics: true }
-  });
-  ```
-
-  `framework.load` keeps working after the agent installs a workspace
-  `FsVolume` as global `fs` because it always resolves against
-  `/littlefs/_sys`.
-
-- Application overlays, such as the `wlk1501spi8p` profile carried by the
-  bundled `demo` app under `apps/demo/flash_data/_sys/display/`:
-
-  ```js
-  load("_sys/display/wlk1501spi8p.js");
-
-  var screen = display.profiles.open("wlk1501spi8p", {
-    transport: {
-      deviceOptions: { freqHz: 80000000 }
-    },
-    surface: {
-      chunkBytes: 32768
-    },
-    display: {
-      metrics: true
-    }
-  });
-  ```
-
-A profile creates the normal `SPI4Wire` transport, ST7789 driver, Surface, and
-Display objects. `screen.driver.name` remains `"st7789"`, while
-`screen.profileName` is the profile name. Opening the M5StickS3 profile first
-enables the LCD rail through the M5PM1 on the internal I2C bus; merely loading
-or creating a profile does not access hardware.
-
-### Display Drawing and Presentation
-
-Drawing methods operate only on the local `Surface`; they do not touch panel
-hardware. Optional colors use the surface foreground, except `clear()` and
-`fill()`, which use its background.
-
-- `clear`, `fill`, `setPixel`, `getPixel`, `fillRect`
-- `drawLine`, `drawRect`, `drawCircle`, `fillCircle`
-- `drawEllipse`, `fillEllipse`, `drawRoundRect`, `fillRoundRect`
-- `drawPolyline`, `drawPolygon`, `fillPolygon`
-- `drawTriangle`, `fillTriangle`
-- `drawQuadraticBezier`, `drawCubicBezier`
-- `drawMask`, `blit`, `drawChar`, `drawText`, `measureText`
-  `blit(source, options?)` forwards to the native `Bitmap` transform worker. A
-  raw `CameraFrame`, Bitmap, or raw descriptor is accepted without a JavaScript
-  pixel loop; callers can crop, rotate, flip, resize, normalize gray output,
-  and request `dither: "bayer4x4"` for `mono1` output.
-- `beginBatch()` / `endBatch(batch)`
-  Record/replay native drawing commands when `screen.supports("batch")`.
-
-Presentation methods are:
-
-- `present(regions?, options?)`
-  Present current dirty bounds, one rectangle, or a rectangle list. Successful
-  presentation clears native dirty state; failed presentation preserves it for
-  retry. `{ merge: false }` keeps multiple regions separate.
-- `flush()`
-  Force a full-screen presentation.
-- `flushRect(...)` / `flushRects(...)`
-  Explicit region convenience methods.
-
-Panel controls use a consistent capability-checked API:
-
-- `supports(name)`
-- `setPower(enabled)`
-- `setInverted(enabled)`
-- `setContrast(value)`
-- `setBacklight(enabled)`
-
-Capability names are `partialPresent`, `multiRegion`, `power`, `inversion`,
-`contrast`, `backlight`, `batch`, and `directSource`.
-
-`stats()` returns common presentation counters including `presents`, `regions`,
-`pixels`, `bytes`, `chunks`, `directTransfers`, `totalUs`, `prepareUs`,
-`panelUs`, and `transferUs`. Timing collection is enabled with
-`{ metrics: true }`. `resetStats()` resets facade, driver, and transport
-statistics.
-
-`close()` is idempotent and terminal. It turns off a managed backlight, closes
-the driver/transport, releases command/frame sources, and closes the native
-framebuffer. Drawing or reopening after close throws.
-
-### Fonts
-
-The display core loads `_sys/display/fonts/mono5x7.eqf` as
-`display.defaultFont`. Load additional EQF1 fonts with
-`display.loadFont(path, name?)`, `display.loadFontSet(path)`, or
-`display.loadMappedFont(path, size, name?)`.
-
-```js
-var cjk16 = display.loadMappedFont("_sys/fonts/droid-cjk.json", "16");
-screen.drawText(8, 40, "中文显示", {
-  color: display.rgb565(255, 255, 255),
-  font: cjk16
-});
-```
+Skills are not documentation packages. A Skill should describe a
+problem-solving workflow, such as diagnosing memory pressure or safely changing
+a workspace. API facts, Library behavior, Board pins, and examples belong in
+ordinary documentation instead.

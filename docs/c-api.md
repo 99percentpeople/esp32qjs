@@ -33,8 +33,8 @@ This document covers the APIs exported directly by the firmware runtime.
 Startup behavior:
 
 - If `/littlefs/index.js` exists, it is loaded automatically before the first `js>` prompt appears.
-- `index.js` is the single startup entry point. Keep it empty when you want the board to boot into the REPL, or use it to `load(...)` scripts, drivers, and app code.
-- This is the recommended place for board startup logic such as loading a panel entry point (`framework.load("display/st7789.js")`), `framework.load("ui.js")`, and `wifi.connect(...)`.
+- `index.js` is the single startup entry point. An external Build Context resolver may generate it from selected JavaScript Library entries; the framework does not interpret Library manifests.
+- A Library entry may initialize a native-feature wrapper, register Board support, or decide whether and when to load writable application code.
 - Optional examples can live under `demo/` and be started manually, for example `load("demo/display_perf.js")`.
 
 Examples:
@@ -54,8 +54,8 @@ Example `index.js`:
 
 ```js
 print("[startup] boot script running");
-framework.load("display/st7789.js");
-framework.load("ui.js");
+framework.load("vendor/device-support.js");
+load("application/startup.js");
 wifi.connect("your-ssid", "your-password", 10000);
 sys.time.sync({ servers: ["pool.ntp.org"], timeoutMs: 10000 });
 ```
@@ -180,7 +180,7 @@ All `fs` operations are restricted to the immutable root captured by their
   volume to retain or install globally.
 - `fs.info()`
   Return live LittleFS capacity for this volume as
-  `{ root, totalBytes, usedBytes, freeBytes }`.
+  `{ root, readOnly, totalBytes, usedBytes, freeBytes }`.
 - `fs.watch(options?)`
   Return an `EventQueue` for filesystem changes under this volume. Events are
   `{ sequence, timestampUs, type, path }`, with `toPath` on `rename`; `type` is
@@ -1141,7 +1141,7 @@ Use `scripts/font_to_eqf.py` to generate EQF1 files from BDF or a small JSON
 bitmap description:
 
 ```sh
-python3 scripts/font_to_eqf.py input.bdf shared/flash_data/_sys/display/fonts/my.eqf \
+python3 scripts/font_to_eqf.py input.bdf /path/to/library/flash_data/_sys/display/fonts/my.eqf \
   --first 0x20 --last 0x7f --missing question
 ```
 
@@ -1155,7 +1155,7 @@ For small Chinese UI strings, use an `eqf1-map` manifest. The same JSON file is
 used by the generator and by `display.loadMappedFont(...)` at runtime:
 
 ```sh
-python3 scripts/font_to_eqf.py --format manifest shared/flash_data/_sys/fonts/droid-cjk.json
+python3 scripts/font_to_eqf.py --format manifest /path/to/library/flash_data/_sys/fonts/droid-cjk.json
 ```
 
 The manifest maps source characters to safe printable ASCII EQF1 slots before

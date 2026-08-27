@@ -42,6 +42,7 @@ static const char *TAG = "esp32qjs";
 
 typedef struct {
     bool active;
+    bool read_only;
     char partition_label[ESP32_MQUICKJS_PARTITION_LABEL_MAX];
     char base_path[ESP32_MQUICKJS_FS_ROOT_MAX];
 } esp32_mquickjs_littlefs_mount_t;
@@ -266,7 +267,8 @@ static esp32_mquickjs_littlefs_mount_t *find_littlefs_mount_exact(
 }
 
 static bool remember_littlefs_mount(const char *partition_label,
-                                    const char *base_path)
+                                    const char *base_path,
+                                    bool read_only)
 {
     esp32_mquickjs_littlefs_mount_t *available = NULL;
     size_t i;
@@ -292,6 +294,7 @@ static bool remember_littlefs_mount(const char *partition_label,
              sizeof(available->base_path),
              "%s",
              base_path);
+    available->read_only = read_only;
     available->active = true;
     return true;
 }
@@ -490,7 +493,8 @@ fail:
     return JS_EXCEPTION;
 }
 
-bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed)
+bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed,
+                                   bool read_only)
 {
     if (s_littlefs_mounted) {
         return true;
@@ -498,18 +502,21 @@ bool esp32_mquickjs_mount_littlefs(bool format_if_mount_failed)
     s_littlefs_mounted = esp32_mquickjs_mount_littlefs_partition(
         ESP32_MQUICKJS_LITTLEFS_PARTITION_LABEL,
         ESP32_MQUICKJS_LITTLEFS_BASE_PATH,
-        format_if_mount_failed);
+        format_if_mount_failed,
+        read_only);
     return s_littlefs_mounted;
 }
 
 bool esp32_mquickjs_mount_littlefs_partition(const char *partition_label,
                                              const char *base_path,
-                                             bool format_if_mount_failed)
+                                             bool format_if_mount_failed,
+                                             bool read_only)
 {
     esp_vfs_littlefs_conf_t conf = {
         .base_path = base_path,
         .partition_label = partition_label,
         .format_if_mount_failed = format_if_mount_failed,
+        .read_only = read_only,
         .dont_mount = false,
     };
     esp_err_t ret;
@@ -520,7 +527,8 @@ bool esp32_mquickjs_mount_littlefs_partition(const char *partition_label,
         base_path == NULL || base_path[0] != '/' ||
         strlen(partition_label) >= 17U ||
         strlen(base_path) >= ESP32_MQUICKJS_FS_ROOT_MAX ||
-        strstr(base_path, "..") != NULL) {
+        strstr(base_path, "..") != NULL ||
+        (read_only && format_if_mount_failed)) {
         ESP_LOGE(TAG, "Invalid LittleFS partition mount parameters");
         return false;
     }
@@ -543,17 +551,18 @@ bool esp32_mquickjs_mount_littlefs_partition(const char *partition_label,
     ret = esp_littlefs_info(partition_label, &total, &used);
     if (ret == ESP_OK) {
         ESP_LOGI(TAG,
-                 "LittleFS '%s' mounted at %s: total=%u used=%u",
+                 "LittleFS '%s' mounted at %s: total=%u used=%u readOnly=%s",
                  partition_label,
                  base_path,
                  (unsigned)total,
-                 (unsigned)used);
+                 (unsigned)used,
+                 read_only ? "true" : "false");
     } else {
         ESP_LOGW(TAG, "LittleFS '%s' mounted but size query failed (%s)",
                  partition_label,
                  esp_err_to_name(ret));
     }
-    if (!remember_littlefs_mount(partition_label, base_path)) {
+    if (!remember_littlefs_mount(partition_label, base_path, read_only)) {
         ESP_LOGW(TAG,
                  "LittleFS '%s' mounted but filesystem info registry is full",
                  partition_label);
@@ -792,6 +801,10 @@ JSValue js_fs_info(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
                                          result,
                                          "root",
                                          JS_NewString(ctx, root)) ||
+        !esp32_mquickjs_set_property_ref(ctx,
+                                         result,
+                                         "readOnly",
+                                         JS_NewBool(mount->read_only)) ||
         !esp32_mquickjs_set_property_ref(ctx,
                                          result,
                                          "totalBytes",

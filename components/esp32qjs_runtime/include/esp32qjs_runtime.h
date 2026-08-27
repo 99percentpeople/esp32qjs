@@ -24,6 +24,7 @@ typedef struct {
     bool prefer_psram;
     bool mount_littlefs;
     bool require_littlefs;
+    bool littlefs_read_only;
     bool mount_secondary_littlefs;
     bool require_secondary_littlefs;
     bool format_littlefs_on_mount_fail;

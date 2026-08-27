@@ -1,0 +1,1 @@
+/* Firmware test Build Context has no board constants. */

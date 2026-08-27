@@ -463,6 +463,8 @@ namespace ESP32QJS {
 
   interface FsInfo {
     root: string;
+    /** True when the underlying mounted filesystem rejects mutations. */
+    readOnly: boolean;
     totalBytes: number;
     usedBytes: number;
     freeBytes: number;
@@ -1190,6 +1192,7 @@ namespace ESP32QJS {
     root: string;
     mount: boolean;
     required: boolean;
+    readOnly: boolean;
     formatOnMountFail: boolean;
     secondary: SysRuntimeSecondaryFilesystemInfo | null;
   }
@@ -1328,6 +1331,7 @@ namespace ESP32QJS {
   interface SysRuntimeFilesystemStatus {
     root: string;
     mounted: boolean;
+    readOnly: boolean;
     secondaryMounted: boolean;
   }
 

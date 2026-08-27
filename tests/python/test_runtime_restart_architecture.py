@@ -96,35 +96,54 @@ class RuntimeRestartArchitectureTests(SourceContractTestCase):
         self.assertIn("default 2", kconfig)
 
     def test_agent_safe_mode_keeps_system_services_and_skips_workspace(self):
-        agent_index = (
-            ROOT.parent / "agent" / "device" / "flash_data" / "index.js"
+        agent_startup = (
+            ROOT.parent
+            / "js-libraries"
+            / "agent-runtime"
+            / "flash_data"
+            / "agent"
+            / "startup.js"
         ).read_text(encoding="utf-8")
 
-        service_attach = agent_index.index(
+        service_attach = agent_startup.index(
             "esp32AgentProtocol.attach(agentSerialTransport);"
         )
-        startup_status = agent_index.index(
+        startup_status = agent_startup.index(
             "var startupState = runtimeState.startup;"
         )
-        workspace_load = agent_index.index('load("index.js");')
-        workspace_root = agent_index.index(
+        workspace_load = agent_startup.index('load("index.js");')
+        workspace_root = agent_startup.index(
             'workspaceFs = systemFs.volume("/workspace");'
         )
         self.assertLess(startup_status, workspace_root)
         self.assertLess(workspace_root, service_attach)
         self.assertLess(service_attach, workspace_load)
-        self.assertIn("filesystem.secondaryMounted === true", agent_index)
-        self.assertIn("var runtimeState = sys.status.runtime;", agent_index)
-        self.assertNotIn("sys.status()", agent_index)
+        self.assertIn("filesystem.secondaryMounted === true", agent_startup)
+        self.assertIn("var runtimeState = sys.status.runtime;", agent_startup)
+        self.assertNotIn("sys.status()", agent_startup)
         self.assertIn(
-            "if (workspaceMounted && !startupState.safeModeActive", agent_index
+            "if (workspaceMounted && !startupState.safeModeActive", agent_startup
         )
         self.assertEqual(
-            agent_index.count('workspaceFs = systemFs.volume("/workspace");'), 1
+            agent_startup.count('workspaceFs = systemFs.volume("/workspace");'), 1
         )
-        self.assertIn("globalThis.fs = workspaceFs;", agent_index)
-        self.assertIn("systemFs: systemFs", agent_index)
-        self.assertNotIn("sys.safeMode", agent_index)
+        self.assertIn("globalThis.fs = workspaceFs;", agent_startup)
+        self.assertIn("systemFs: systemFs", agent_startup)
+        self.assertNotIn("sys.safeMode", agent_startup)
+
+    def test_primary_library_filesystem_supports_read_only_mounts(self):
+        source = (
+            MQUICKJS / "src" / "modules" / "fs" / "esp32_mquickjs_fs.c"
+        ).read_text(encoding="utf-8")
+        runtime = (RUNTIME / "src" / "esp32qjs_runtime.c").read_text(
+            encoding="utf-8"
+        )
+        kconfig = (RUNTIME / "Kconfig.projbuild").read_text(encoding="utf-8")
+
+        self.assertIn(".read_only = read_only", source)
+        self.assertIn("config ESP32QJS_LITTLEFS_READ_ONLY", kconfig)
+        self.assertIn("config->littlefs_read_only = true;", runtime)
+        self.assertIn("config->littlefs_read_only", runtime)
 
     def test_startup_guard_uses_private_nvs_and_ignores_intentional_control(self):
         source = (

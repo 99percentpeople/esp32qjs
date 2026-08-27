@@ -24,9 +24,11 @@ class TlsArchitectureTests(SourceContractTestCase):
 
         self.assertIn("config ESP32_MQUICKJS_FEATURE_TLS", kconfig)
         self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_TLS", cmake)
-        remote = (ROOT / "scripts/remote.py").read_text(encoding="utf-8")
-        self.assertIn("CONFIG_ESP_TLS_CUSTOM_STACK", remote)
-        self.assertIn("CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT", remote)
+        catalog = (
+            MQUICKJS / "runtime-features.json"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"id": "tls"', catalog)
+        self.assertIn('"kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_TLS"', catalog)
         self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_TLS", socket)
         self.assertIn("TLS sockets require the TLS firmware capability", socket)
         self.assertIn("HTTPS requires the TLS firmware capability", http)
@@ -80,19 +82,8 @@ class TlsArchitectureTests(SourceContractTestCase):
         self.assertIn("esp32_mquickjs_tls_error_capture", socket)
         self.assertIn("esp_http_client_get_and_clear_last_tls_error", http)
 
-    def test_tls_uses_full_bundle_with_cross_signed_chain_verification(self):
-        remote = (ROOT / "scripts/remote.py").read_text(encoding="utf-8")
+    def test_tls_bundle_verification_is_supported_by_the_native_layer(self):
         kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
-
-        self.assertIn('CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y', remote)
-        self.assertIn(
-            "CONFIG_MBEDTLS_X509_TRUSTED_CERT_CALLBACK={'y' if tls_enabled else 'n'}",
-            remote,
-        )
-        self.assertIn(
-            "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY={'y' if tls_enabled else 'n'}",
-            remote,
-        )
         self.assertNotIn("select MBEDTLS_X509_TRUSTED_CERT_CALLBACK", kconfig)
 
     def test_tls_terminal_paths_release_native_contexts(self):

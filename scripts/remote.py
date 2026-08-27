@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Unified helper for local and remote ESP32QJS application development.
-
-The script combines a mcu profile from `configs/mcus/*/.env` with a
-bundled or directly referenced application profile. That keeps hardware
-configuration independent from application behavior, partitions, and
-LittleFS resources.
-"""
+"""Firmware development helper consuming one resolved Build Context."""
 
 from __future__ import annotations
 
@@ -30,16 +24,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from profile_constants import render_c_include, validate_constants
-
-
 ROOT_DIR = Path(__file__).resolve().parent.parent
 BUILD_ROOT = ROOT_DIR / "build"
 ENV_PATH = ROOT_DIR / ".env"
 CONFIG_DIR = ROOT_DIR / "configs"
 MCU_DIR = CONFIG_DIR / "mcus"
-APP_DIR = ROOT_DIR / "apps"
-SHARED_FLASH_DATA_DIR = ROOT_DIR / "shared" / "flash_data"
+DEFAULT_BUILD_CONTEXT_DIR = ROOT_DIR / "tests" / "build-contexts" / "esp32s3"
 
 ESPTOOL_CONFIG_TEXT = """[esptool]
 custom_reset_sequence = R0|D0|W0.1|D1|R0|W0.1|R1|D0|R1|W0.1|D0|R0
@@ -70,7 +60,6 @@ JS_REPL_BANNER_MARKER = "Run help() for usage."
 MONITOR_READY_MARKER = "--- Quit:"
 ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])")
 CTEST_SUMMARY_RE = re.compile(r"(?m)^(\d+)% tests passed, (\d+) tests failed out of (\d+)$")
-APP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 TEST_SCOPE_ORDER = ("c", "js")
 SUPPORTED_MCU_TARGETS = frozenset(("esp32c3", "esp32s3"))
 SUPPORTED_FLASH_SIZE_MB = frozenset((4, 8, 16, 32))
@@ -329,7 +318,7 @@ class MCUProfile:
 
 
 @dataclass(frozen=True)
-class AppProfile:
+class BuildContextProfile:
     reference: str
     name: str
     file: Path
@@ -339,6 +328,10 @@ class AppProfile:
     sdkconfig_defaults: Path | None
     partition_layout: str
     storage_size: int | None
+    mcu: str
+    flash_size_mb: int
+    psram_mode: str
+    psram_size_bytes: int
 
 
 @dataclass(frozen=True)
@@ -346,25 +339,22 @@ class ProjectConfig:
     mcu: str
     mcu_file: Path
     mcu_label: str
-    app: str
-    app_file: Path
-    app_profile_dir: Path
-    app_label: str
-    shared_flash_data_dir: Path
-    app_flash_data_dir: Path
+    build_context_id: str
+    build_context_manifest: Path
+    build_context_dir: Path
+    build_context_label: str
+    build_context_flash_data_dir: Path
     flash_data_override: Path | None
     build_dir: Path
     generated_sdkconfig: Path
     mcu_sdkconfig_defaults: Path | None
-    app_sdkconfig_defaults: Path | None
+    build_context_sdkconfig_defaults: Path | None
     sdkconfig_defaults: tuple[Path, ...]
     partition_table: Path
-    hardware_sdkconfig_defaults: Path
     profile_constants_file: Path
     flash_size_mb: int
     psram_mode: str
     psram_size_bytes: int
-    hardware_constants: Path | None
     idf_target: str
     idf_path: str
     target: str
@@ -544,141 +534,61 @@ def resolve_mcu_file(reference: str) -> Path:
     return mcu_file.resolve()
 
 
-def app_reference_from_env(repo_env: dict[str, str], override: str | None) -> str:
-    """Choose the application profile from CLI or repository-local settings."""
-    if override:
-        return override
-    if os.environ.get("APP_FILE"):
-        return os.environ["APP_FILE"]
-    if repo_env.get("APP_FILE"):
-        return repo_env["APP_FILE"]
-    if os.environ.get("APP"):
-        return os.environ["APP"]
-    if repo_env.get("APP"):
-        return repo_env["APP"]
-    return "minimal"
+def build_context_reference(repo_env: dict[str, str], override: str | None) -> str:
+    """Choose the immutable Build Context from CLI or repository settings."""
+    return override or os.environ.get("ESP32QJS_BUILD_CONTEXT_DIR") or repo_env.get(
+        "ESP32QJS_BUILD_CONTEXT_DIR", str(DEFAULT_BUILD_CONTEXT_DIR)
+    )
 
 
-def resolve_app_file(reference: str) -> Path:
-    """Resolve an application profile to an on-disk `app.env` file."""
-    ref_path = Path(reference).expanduser()
-    if ref_path.is_absolute() or "/" in reference or "\\" in reference or reference.endswith(".env"):
-        candidate = ref_path if ref_path.is_absolute() else ROOT_DIR / ref_path
-    else:
-        candidate = APP_DIR / reference
-
-    app_file = candidate / "app.env" if candidate.is_dir() else candidate
-    if not app_file.exists():
-        raise SystemExit(
-            f"Application profile {reference!r} not found. Add {app_file} or run "
-            "`python scripts/remote.py apps` to list available applications."
-        )
-    return app_file.resolve()
-
-
-def resolve_app_profile_path(
-    raw_path: str,
-    app_dir: Path,
-    mcu_name: str,
-    idf_target: str,
-) -> Path:
-    """Resolve an app path after expanding the selected mcu placeholders."""
+def load_build_context(reference: str | None) -> BuildContextProfile:
+    """Load one fixed-layout Build Context and derive its MCU identity."""
+    selected = build_context_reference(load_dotenv(ENV_PATH), reference)
+    path = Path(selected).expanduser()
+    directory = (path if path.is_absolute() else ROOT_DIR / path).resolve()
+    required = (
+        "manifest.json",
+        "sdkconfig.defaults",
+        "partitions.csv",
+        "profile-constants.inc",
+        "precompile.json",
+    )
+    if not directory.is_dir() or any(not (directory / name).is_file() for name in required):
+        raise SystemExit(f"Build Context is incomplete: {directory}")
+    flash_data = directory / "flash_data"
+    if not flash_data.is_dir() or not (flash_data / "index.js").is_file():
+        raise SystemExit(f"Build Context flash_data must contain index.js: {directory}")
     try:
-        expanded = raw_path.format(mcu=mcu_name, idf_target=idf_target)
-    except KeyError as exc:
-        raise SystemExit(
-            f"Unsupported application path placeholder {exc.args[0]!r} in {raw_path!r}; "
-            "only {mcu} and {idf_target} are available."
-        ) from exc
-
-    path = Path(expanded).expanduser()
-    if path.is_absolute():
-        return path.resolve()
-    if expanded.startswith(("apps/", "configs/", "shared/")):
-        return (ROOT_DIR / path).resolve()
-    return (app_dir / path).resolve()
-
-
-def parse_size(value: str, label: str) -> int:
-    """Parse a positive decimal or 0x-prefixed byte count."""
-    try:
-        result = int(value, 0)
-    except ValueError as exc:
-        raise SystemExit(f"Invalid {label}: {value!r}") from exc
-    if result <= 0:
-        raise SystemExit(f"{label} must be positive")
-    return result
-
-
-def load_app_profile(
-    app_override: str | None,
-    mcu_name: str,
-    idf_target: str,
-) -> AppProfile:
-    """Load an application profile for one mcu and validate all app inputs."""
-    repo_env = load_dotenv(ENV_PATH)
-    reference = app_reference_from_env(repo_env, app_override)
-    app_file = resolve_app_file(reference)
-    app_dir = app_file.parent
-    app_env = load_dotenv(app_file)
-    app_name = app_env.get("APP_ID", app_dir.name).strip()
-    if not APP_ID_RE.fullmatch(app_name):
-        raise SystemExit(
-            f"{app_file} APP_ID must match {APP_ID_RE.pattern!r}; got {app_name!r}."
-        )
-
-    flash_data_raw = app_env.get("FLASH_DATA_DIR", "flash_data")
-    flash_data_dir = resolve_app_profile_path(
-        flash_data_raw, app_dir, mcu_name, idf_target
+        manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        hardware = manifest["hardware"]
+        mcu = hardware["mcu"]
+        flash_bytes = int(hardware["flashBytes"])
+        psram_mode = hardware["psramMode"]
+        psram_bytes = int(hardware["psramBytes"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"Build Context manifest has invalid hardware identity: {directory}") from exc
+    if mcu not in SUPPORTED_MCU_TARGETS or flash_bytes not in {
+        size * 1024 * 1024 for size in SUPPORTED_FLASH_SIZE_MB
+    } or psram_mode not in SUPPORTED_PSRAM_MODES or psram_bytes < 0:
+        raise SystemExit(f"Build Context manifest selects unsupported hardware: {directory}")
+    board = manifest.get("board", {})
+    name = str(board.get("id", directory.name))
+    label = str(board.get("label", name))
+    return BuildContextProfile(
+        reference=selected,
+        name=name,
+        file=directory / "manifest.json",
+        directory=directory,
+        label=label,
+        flash_data_dir=flash_data,
+        sdkconfig_defaults=directory / "sdkconfig.defaults",
+        partition_layout="context",
+        storage_size=None,
+        mcu=mcu,
+        flash_size_mb=flash_bytes // (1024 * 1024),
+        psram_mode=psram_mode,
+        psram_size_bytes=psram_bytes,
     )
-    if not flash_data_dir.is_dir():
-        raise SystemExit(f"Application flash data directory does not exist: {flash_data_dir}")
-    if not (flash_data_dir / "index.js").is_file():
-        raise SystemExit(f"Application flash data must contain index.js: {flash_data_dir}")
-
-    app_defaults_raw = os.environ.get(
-        "APP_SDKCONFIG_DEFAULTS",
-        repo_env.get("APP_SDKCONFIG_DEFAULTS", app_env.get("APP_SDKCONFIG_DEFAULTS", "")),
-    ).strip()
-    if not app_defaults_raw and (app_dir / "sdkconfig.defaults").is_file():
-        app_defaults_raw = "sdkconfig.defaults"
-    app_defaults = (
-        resolve_app_profile_path(app_defaults_raw, app_dir, mcu_name, idf_target)
-        if app_defaults_raw
-        else None
-    )
-    if app_defaults is not None and not app_defaults.is_file():
-        raise SystemExit(f"Application sdkconfig defaults file does not exist: {app_defaults}")
-
-    partition_layout = app_env.get("PARTITION_LAYOUT", "storage").strip()
-    if partition_layout not in {"storage", "workspace"}:
-        raise SystemExit(
-            f"{app_file} PARTITION_LAYOUT must be storage or workspace; "
-            f"got {partition_layout!r}."
-        )
-    storage_size_raw = app_env.get("STORAGE_SIZE", "").strip()
-    storage_size = parse_size(storage_size_raw, "STORAGE_SIZE") if storage_size_raw else None
-    if partition_layout == "workspace" and storage_size is None:
-        raise SystemExit(f"{app_file} must define STORAGE_SIZE for a workspace layout.")
-
-    return AppProfile(
-        reference=reference,
-        name=app_name,
-        file=app_file,
-        directory=app_dir,
-        label=app_env.get("APP_LABEL", app_name),
-        flash_data_dir=flash_data_dir,
-        sdkconfig_defaults=app_defaults,
-        partition_layout=partition_layout,
-        storage_size=storage_size,
-    )
-
-
-def available_app_profiles() -> list[Path]:
-    """Return application profiles shipped in the repository."""
-    if not APP_DIR.exists():
-        return []
-    return sorted(path for path in APP_DIR.glob("*/app.env") if path.is_file())
 
 
 def legacy_target(repo_env: dict[str, str], mcu_env: dict[str, str]) -> tuple[str, int]:
@@ -1426,11 +1336,11 @@ def flash_monitor(
 
 
 def config_default_inputs(config: ProjectConfig) -> list[Path]:
-    """Return tracked inputs that define the selected mcu/app configuration."""
+    """Return tracked inputs that define the MCU and Build Context configuration."""
     return [
         *config.sdkconfig_defaults,
         config.mcu_file,
-        config.app_file,
+        config.build_context_manifest,
         config.partition_table,
     ]
 
@@ -1454,7 +1364,7 @@ def refresh_generated_sdkconfig(config: ProjectConfig) -> None:
     if should_refresh:
         print(
             f"Refreshing {format_path(config.generated_sdkconfig)} because "
-            "mcu/application configuration inputs changed."
+            "MCU/Build Context inputs changed."
         )
         config.generated_sdkconfig.unlink(missing_ok=True)
         old_sdkconfig = config.generated_sdkconfig.with_name(
@@ -1490,64 +1400,33 @@ def list_mcus(selected_mcu: str) -> None:
         print(f"{marker} {mcu_file.parent.name}: {label} [{detail}]")
 
 
-def list_apps(selected_app: str) -> None:
-    """Print bundled application profiles and the selected external profile."""
-    profiles = available_app_profiles()
-    selected = resolve_app_file(selected_app)
-    selected_is_bundled = False
-
-    for app_file in profiles:
-        app_env = load_dotenv(app_file)
-        is_selected = app_file.resolve() == selected
-        selected_is_bundled = selected_is_bundled or is_selected
-        marker = "*" if is_selected else " "
-        app_name = app_env.get("APP_ID", app_file.parent.name)
-        label = app_env.get("APP_LABEL", app_name)
-        flash_data = app_env.get("FLASH_DATA_DIR", "flash_data")
-        app_defaults = app_env.get("APP_SDKCONFIG_DEFAULTS", "sdkconfig.defaults")
-        partition_layout = app_env.get("PARTITION_LAYOUT", "storage")
-        print(
-            f"{marker} {app_name}: {label} "
-            f"[{flash_data}, {app_defaults}, partition-layout={partition_layout}]"
-        )
-
-    if not selected_is_bundled:
-        app_env = load_dotenv(selected)
-        app_name = app_env.get("APP_ID", selected.parent.name)
-        label = app_env.get("APP_LABEL", app_name)
-        print(
-            f"* {app_name}: {label} "
-            f"[external: {selected.parent}]"
-        )
-
-
 def show_config(config: ProjectConfig) -> None:
-    """Print the effective merged mcu, application, and tool configuration."""
+    """Print the effective MCU, Build Context, and tool configuration."""
     normalized_target = normalize_target(config.target)
     print(f"mcu={config.mcu}")
     print(f"mcu_file={config.mcu_file}")
     print(f"mcu_label={config.mcu_label}")
-    print(f"app={config.app}")
-    print(f"app_file={config.app_file}")
-    print(f"app_profile_dir={config.app_profile_dir}")
-    print(f"app_label={config.app_label}")
-    print(f"shared_flash_data_dir={format_path(config.shared_flash_data_dir)}")
-    print(f"app_flash_data_dir={format_path(config.app_flash_data_dir)}")
-    print(f"flash_data_override={format_path(config.flash_data_override)}")
+    print(f"build_context_id={config.build_context_id}")
+    print(f"build_context_manifest={config.build_context_manifest}")
+    print(f"build_context_dir={config.build_context_dir}")
+    print(f"build_context_label={config.build_context_label}")
+    print(f"build_context_flash_data={format_path(config.build_context_flash_data_dir)}")
     print(f"idf_target={config.idf_target}")
     print(f"build_dir={format_path(config.build_dir)}")
     print(f"generated_sdkconfig={format_path(config.generated_sdkconfig)}")
     print(
         f"mcu_sdkconfig_defaults={format_path(config.mcu_sdkconfig_defaults)}"
     )
-    print(f"app_sdkconfig_defaults={format_path(config.app_sdkconfig_defaults)}")
+    print(
+        "build_context_sdkconfig_defaults="
+        f"{format_path(config.build_context_sdkconfig_defaults)}"
+    )
     print(
         "sdkconfig_defaults="
         + ";".join(format_path(path) for path in config.sdkconfig_defaults)
     )
     print(f"partition_table={format_path(config.partition_table)}")
     print(f"profile_constants_file={format_path(config.profile_constants_file)}")
-    print(f"hardware_constants={format_path(config.hardware_constants)}")
     print(f"idf_path={config.idf_path}")
     print(f"target={config.target}")
     print(f"normalized_target={normalized_target}")
@@ -1558,7 +1437,7 @@ def show_config(config: ProjectConfig) -> None:
     print(f"server_python_exe={config.server_python_exe}")
     print(f"esptool_bin={config.esptool_bin}")
     print(f"assume_prompt={config.assume_prompt}")
-    print(f"test_wifi_ssid={config.test_wifi_ssid}")
+    print(f"test_wifi_ssid_set={'yes' if config.test_wifi_ssid else 'no'}")
     print(f"test_wifi_password_set={'yes' if config.test_wifi_password else 'no'}")
     print(f"test_http_url={config.test_http_url}")
     print(f"test_js_config_set={'yes' if config.test_js_config else 'no'}")
@@ -1947,30 +1826,71 @@ def js_test_build_config(
     modules: tuple[JsTestModule, ...] = (),
     explicit_module_selection: bool = False,
 ) -> ProjectConfig:
-    """Return a build config that enables test instrumentation and test LittleFS."""
-    build_dir = BUILD_ROOT / config.mcu / f"{config.app}-js-test"
+    """Resolve a dedicated test Build Context with test instrumentation and LittleFS."""
+    build_dir = BUILD_ROOT / config.mcu / f"{config.build_context_id}-js-test"
     flash_data_dir = (
         stage_selected_js_test_flash_data(build_dir, modules)
         if explicit_module_selection
         else JS_TEST_FLASH_DATA_DIR
     )
     target_defaults = JS_TEST_DIR / f"sdkconfig.{config.idf_target}.defaults"
-    test_defaults = (JS_TEST_SDKCONFIG_DEFAULTS,)
+    test_defaults = [JS_TEST_SDKCONFIG_DEFAULTS]
     if target_defaults.is_file():
-        test_defaults += (target_defaults,)
+        test_defaults.append(target_defaults)
+    context_dir = build_dir / "esp32qjs-test-context"
+    if context_dir.exists():
+        shutil.rmtree(context_dir)
+    context_dir.mkdir(parents=True)
+    shutil.copytree(flash_data_dir, context_dir / "flash_data")
+    for name in ("partitions.csv", "profile-constants.inc"):
+        shutil.copy2(config.build_context_dir / name, context_dir / name)
+    manifest = json.loads(
+        (config.build_context_manifest).read_text(encoding="utf-8")
+    )
+    manifest["contextId"] = (
+        f"{manifest.get('contextId', config.build_context_id)}-js-test"
+    )
+    (context_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    (context_dir / "sdkconfig.defaults").write_text(
+        "\n".join(
+            path.read_text(encoding="utf-8").rstrip()
+            for path in (config.build_context_sdkconfig_defaults, *test_defaults)
+            if path is not None
+        ) + "\n",
+        encoding="utf-8",
+    )
+    (context_dir / "precompile.json").write_text(
+        json.dumps({
+            "version": 1,
+            "entry": "index.js",
+            "output": "index.js",
+            "inline": ["_test/harness.js"],
+            "removeAfterCompile": ["_test"],
+        }, indent=2) + "\n",
+        encoding="utf-8",
+    )
     cmake_entries = [
         entry for entry in config.cmake_cache_entries
-        if not entry.startswith("-DESP32QJS_FLASH_DATA_DIR=") and
-        not entry.startswith("-DESP32QJS_FLASH_DATA_INCLUDE_SHARED=")
+        if not entry.startswith("-DESP32QJS_BUILD_CONTEXT_DIR=")
     ]
-    cmake_entries.append(f"-DESP32QJS_FLASH_DATA_DIR={flash_data_dir}")
-    cmake_entries.append("-DESP32QJS_FLASH_DATA_INCLUDE_SHARED=ON")
+    cmake_entries.append(f"-DESP32QJS_BUILD_CONTEXT_DIR={context_dir}")
 
     return replace(
         config,
         build_dir=build_dir,
         generated_sdkconfig=build_dir / config.generated_sdkconfig.name,
-        sdkconfig_defaults=config.sdkconfig_defaults + test_defaults,
+        build_context_manifest=context_dir / "manifest.json",
+        build_context_dir=context_dir,
+        build_context_flash_data_dir=context_dir / "flash_data",
+        build_context_sdkconfig_defaults=context_dir / "sdkconfig.defaults",
+        sdkconfig_defaults=tuple(
+            path for path in (config.mcu_sdkconfig_defaults, context_dir / "sdkconfig.defaults")
+            if path is not None
+        ),
+        partition_table=context_dir / "partitions.csv",
+        profile_constants_file=context_dir / "profile-constants.inc",
         flash_data_override=flash_data_dir,
         cmake_cache_entries=tuple(cmake_entries),
     )
@@ -2421,11 +2341,11 @@ def run_js_tests(config: ProjectConfig,
         close_monitor_session(session)
 
 
-def run_js_syntax_check(app_flash_data_dir: Path | None = None) -> None:
-    """Parse framework, selected-app, test, and documented JavaScript."""
+def run_js_syntax_check(build_context_flash_data_dir: Path | None = None) -> None:
+    """Parse framework tests, Build Context JavaScript, and documented examples."""
     command = [sys.executable, str(JS_SYNTAX_CHECK_SCRIPT)]
-    if app_flash_data_dir is not None:
-        command.extend(("--extra-path", str(app_flash_data_dir)))
+    if build_context_flash_data_dir is not None:
+        command.extend(("--extra-path", str(build_context_flash_data_dir)))
     returncode, _ = run_streaming(command, cwd=ROOT_DIR)
     if returncode != 0:
         raise SystemExit("MQuickJS JavaScript syntax validation failed.")
@@ -2451,7 +2371,7 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
             raise SystemExit("`--no-flash-fs` requires JS scope.")
 
     if "js" in scopes:
-        run_js_syntax_check(config.app_flash_data_dir)
+        run_js_syntax_check(config.build_context_flash_data_dir)
 
     stage_errors: list[str] = []
 
@@ -2485,158 +2405,12 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
         raise SystemExit("One or more test stages failed.")
 
 
-def write_if_changed(path: Path, text: str) -> None:
-    """Write a generated profile input only when its content changed."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and path.read_text(encoding="utf-8") == text:
-        return
-    path.write_text(text, encoding="utf-8")
-
-
-def sdkconfig_bool(path: Path | None, symbol: str, default: bool = False) -> bool:
-    """Read one final boolean assignment from an sdkconfig defaults file."""
-    if path is None:
-        return default
-    enabled = default
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if line == f"{symbol}=y":
-            enabled = True
-        elif line == f"{symbol}=n" or line == f"# {symbol} is not set":
-            enabled = False
-    return enabled
-
-
-def hardware_constant_values(path: Path | None, idf_target: str) -> dict[str, object]:
-    """Load and validate immutable hardware-profile constants for local builds."""
-    if path is None:
-        return {}
-    if path.stat().st_size > 16_384:
-        raise SystemExit("Hardware constants exceed 16 KiB.")
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"Invalid wiring config {path}: {exc}") from exc
-    try:
-        constants, _warnings = validate_constants(value, idf_target)
-    except ValueError as exc:
-        raise SystemExit(f"Invalid hardware constants {path}: {exc}") from exc
-    return constants
-
-
-def generated_hardware_defaults(
-    idf_target: str,
-    flash_size_mb: int,
-    psram_mode: str,
-    psram_size_bytes: int,
-    tls_enabled: bool,
-    http_client_enabled: bool,
-) -> str:
-    """Create the allowlisted sdkconfig overlay for detected hardware capabilities."""
-    lines = [
-        "# Generated by scripts/remote.py; do not edit.",
-        "CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE=y",
-        f"CONFIG_ESPTOOLPY_FLASHSIZE_{flash_size_mb}MB=y",
-        f'CONFIG_ESPTOOLPY_FLASHSIZE="{flash_size_mb}MB"',
-        f'CONFIG_ESP32_MQUICKJS_PSRAM_MODE="{psram_mode}"',
-        "CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y",
-        "CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384",
-        "CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096",
-        "CONFIG_MBEDTLS_DYNAMIC_BUFFER=n",
-        "CONFIG_LWIP_SNTP_MAX_SERVERS=4",
-        f"CONFIG_ESP_TLS_USING_MBEDTLS={'y' if tls_enabled else 'n'}",
-        f"CONFIG_ESP_TLS_CUSTOM_STACK={'n' if tls_enabled else 'y'}",
-        f"CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT={'y' if tls_enabled else 'n'}",
-        f"CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS={'y' if tls_enabled and http_client_enabled else 'n'}",
-        f"CONFIG_MBEDTLS_CERTIFICATE_BUNDLE={'y' if tls_enabled else 'n'}",
-        f"CONFIG_MBEDTLS_HAVE_TIME_DATE={'y' if tls_enabled else 'n'}",
-        f"CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE={'y' if tls_enabled else 'n'}",
-        f"CONFIG_MBEDTLS_X509_TRUSTED_CERT_CALLBACK={'y' if tls_enabled else 'n'}",
-        f"CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY={'y' if tls_enabled else 'n'}",
-    ]
-    if tls_enabled:
-        lines.append("CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y")
-    if psram_mode == "none":
-        heap_size = 200_704 if idf_target == "esp32c3" else 262_144
-        lines.extend((
-            "CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=y",
-            "CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=n",
-        ))
-        if idf_target == "esp32s3":
-            lines.append("CONFIG_SPIRAM=n")
-        lines.extend((
-            f"CONFIG_ESP32QJS_JS_HEAP_SIZE={heap_size}",
-            "CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP=n",
-        ))
-    else:
-        if idf_target != "esp32s3":
-            raise SystemExit(f"{idf_target} does not support a {psram_mode} PSRAM profile.")
-        heap_size = min(psram_size_bytes // 2, 4 * 1024 * 1024)
-        if heap_size < 256 * 1024:
-            raise SystemExit("A PSRAM build requires at least 512 KiB of detected PSRAM.")
-        mode_config = "OCT" if psram_mode == "octal" else "QUAD"
-        lines.extend((
-            "CONFIG_SPIRAM=y",
-            f"CONFIG_SPIRAM_MODE_{mode_config}=y",
-            "CONFIG_SPIRAM_TYPE_AUTO=y",
-            "CONFIG_SPIRAM_SPEED_80M=y",
-            "CONFIG_SPIRAM_SPEED=80",
-            "CONFIG_SPIRAM_BOOT_HW_INIT=y",
-            "CONFIG_SPIRAM_BOOT_INIT=y",
-            "CONFIG_SPIRAM_PRE_CONFIGURE_MEMORY_PROTECTION=y",
-            "CONFIG_SPIRAM_USE_MALLOC=y",
-            "CONFIG_SPIRAM_MEMTEST=y",
-            "CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384",
-            "CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536",
-            "CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y",
-            "CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=n",
-            "CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y",
-            f"CONFIG_ESP32QJS_JS_HEAP_SIZE={heap_size}",
-            "CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP=y",
-        ))
-
-    return "\n".join(lines) + "\n"
-
-
-def generated_partition_table(
-    flash_size_mb: int,
-    layout: str,
-    storage_size: int | None,
-) -> str:
-    """Generate a partition table that consumes the detected flash safely."""
-    flash_bytes = flash_size_mb * 1024 * 1024
-    data_start = 0x210000
-    available = flash_bytes - data_start
-    if available <= 0:
-        raise SystemExit("Detected flash is too small for the 2 MiB application slot.")
-    if layout == "workspace":
-        assert storage_size is not None
-        workspace_size = available - storage_size
-        if workspace_size < 0x10000:
-            raise SystemExit("Detected flash leaves less than 64 KiB for the workspace partition.")
-        data_rows = [
-            f"storage,  data, littlefs,,        0x{storage_size:X},",
-            f"workspace,data, littlefs,,        0x{workspace_size:X},",
-        ]
-    else:
-        data_rows = [f"storage,  data, littlefs,,        0x{available:X},"]
-    return "\n".join((
-        "# Generated from detected flash size; do not edit.",
-        "# Name,   Type, SubType, Offset,  Size,      Flags",
-        "nvs,      data, nvs,     0x9000,  0x6000,",
-        "phy_init, data, phy,     0xf000,  0x1000,",
-        "factory,  app,  factory, 0x10000, 0x200000,",
-        *data_rows,
-        "",
-    ))
-
-
 def build_project_config(
     args: argparse.Namespace,
     profile: MCUProfile,
-    app_profile: AppProfile,
+    build_context: BuildContextProfile,
 ) -> ProjectConfig:
-    """Convert parsed CLI args and selected profiles to the effective project config."""
+    """Convert one MCU profile and immutable Build Context to project config."""
     def cli_path(raw_path: str) -> Path | None:
         if not raw_path:
             return None
@@ -2644,116 +2418,50 @@ def build_project_config(
         return (path if path.is_absolute() else ROOT_DIR / path).resolve()
 
     mcu_defaults = cli_path(getattr(args, "sdkconfig_defaults", ""))
-    app_defaults = cli_path(getattr(args, "app_sdkconfig_defaults", ""))
-    partition_table = cli_path(getattr(args, "partition_table", ""))
-    hardware_constants = cli_path(getattr(args, "hardware_constants", ""))
-    flash_size_mb = int(getattr(args, "flash_size_mb", profile.default_flash_size_mb))
-    psram_mode = str(getattr(args, "psram_mode", "none"))
-    psram_size_bytes = int(getattr(args, "psram_size", 0))
-    if flash_size_mb not in SUPPORTED_FLASH_SIZE_MB:
-        raise SystemExit("--flash-size-mb must be one of 4, 8, 16, 32.")
-    if psram_mode not in SUPPORTED_PSRAM_MODES:
-        raise SystemExit("--psram-mode must be none, quad, or octal.")
-    if psram_mode == "none" and psram_size_bytes != 0:
-        raise SystemExit("--psram-size must be zero when --psram-mode is none.")
-    if psram_mode != "none" and psram_size_bytes <= 0:
-        raise SystemExit("--psram-size is required for a PSRAM build.")
-
-    for label, path in (
-        ("MCU sdkconfig defaults", mcu_defaults),
-        ("Application sdkconfig defaults", app_defaults),
-        ("Partition table", partition_table),
-        ("Hardware constants", hardware_constants),
-    ):
-        if path is not None and not path.is_file():
-            raise SystemExit(f"{label} file does not exist: {path}")
+    if mcu_defaults is not None and not mcu_defaults.is_file():
+        raise SystemExit(f"MCU sdkconfig defaults file does not exist: {mcu_defaults}")
+    if build_context.mcu != profile.idf_target:
+        raise SystemExit(
+            f"Build Context targets {build_context.mcu}, not {profile.idf_target}"
+        )
 
     build_dir = resolve_build_path(args.build_dir)
-    generated_profile_dir = build_dir / "esp32qjs-profile"
-    hardware_defaults = generated_profile_dir / "hardware.defaults"
-    profile_constants_file = generated_profile_dir / "profile-constants.inc"
-    if partition_table is None:
-        partition_table = generated_profile_dir / "partitions.csv"
-    constants = hardware_constant_values(hardware_constants, profile.idf_target)
-    tls_enabled = sdkconfig_bool(
-        app_defaults, "CONFIG_ESP32_MQUICKJS_FEATURE_TLS"
-    )
-    http_client_enabled = sdkconfig_bool(
-        app_defaults, "CONFIG_ESP32_MQUICKJS_FEATURE_HTTP"
-    )
-    write_if_changed(profile_constants_file, render_c_include(constants))
-    write_if_changed(
-        hardware_defaults,
-        generated_hardware_defaults(
-            profile.idf_target,
-            flash_size_mb,
-            psram_mode,
-            psram_size_bytes,
-            tls_enabled,
-            http_client_enabled,
-        ),
-    )
-    if partition_table.parent == generated_profile_dir:
-        write_if_changed(
-            partition_table,
-            generated_partition_table(
-                flash_size_mb,
-                app_profile.partition_layout,
-                app_profile.storage_size,
-            ),
-        )
     sdkconfig_defaults = tuple(
         dict.fromkeys(
-            path for path in (mcu_defaults, app_defaults, hardware_defaults) if path is not None
+            path for path in (mcu_defaults, build_context.sdkconfig_defaults) if path is not None
         )
     )
-
-    flash_data_override = cli_path(getattr(args, "flash_data_dir", ""))
-    if flash_data_override is not None and not flash_data_override.is_dir():
-        raise SystemExit(f"Flash data override does not exist: {flash_data_override}")
-
-    shared_flash_data_dir = SHARED_FLASH_DATA_DIR.resolve()
     cmake_entries = (
         f"-DESP32QJS_MCU={profile.name}",
-        f"-DESP32QJS_APP={app_profile.name}",
-        f"-DESP32QJS_APP_PROFILE_DIR={app_profile.directory}",
-        f"-DESP32QJS_SHARED_FLASH_DATA_DIR={shared_flash_data_dir}",
-        f"-DESP32QJS_APP_FLASH_DATA_DIR={app_profile.flash_data_dir}",
-        f"-DESP32QJS_FLASH_DATA_DIR={flash_data_override or ''}",
         f"-DESP32QJS_MCU_SDKCONFIG_DEFAULTS={mcu_defaults or ''}",
-        f"-DESP32QJS_APP_SDKCONFIG_DEFAULTS={app_defaults or ''}",
-        f"-DESP32QJS_PARTITION_TABLE={partition_table}",
-        f"-DESP32QJS_PROFILE_CONSTANTS_FILE={profile_constants_file}",
+        f"-DESP32QJS_BUILD_CONTEXT_DIR={build_context.directory}",
     )
 
     config_slug = re.sub(
-        r"[^A-Za-z0-9_.-]+", "_", f"{profile.name}.{app_profile.name}"
+        r"[^A-Za-z0-9_.-]+", "_", f"{profile.name}.{build_context.name}"
     )
     mcu_file = Path(args.mcu_file)
     return ProjectConfig(
         mcu=profile.name,
         mcu_file=mcu_file,
         mcu_label=profile.label,
-        app=app_profile.name,
-        app_file=app_profile.file,
-        app_profile_dir=app_profile.directory,
-        app_label=app_profile.label,
-        shared_flash_data_dir=shared_flash_data_dir,
-        app_flash_data_dir=app_profile.flash_data_dir,
-        flash_data_override=flash_data_override,
+        build_context_id=build_context.name,
+        build_context_manifest=build_context.file,
+        build_context_dir=build_context.directory,
+        build_context_label=build_context.label,
+        build_context_flash_data_dir=build_context.flash_data_dir,
+        flash_data_override=None,
         build_dir=build_dir,
         generated_sdkconfig=build_dir / f"sdkconfig.{config_slug}",
         mcu_sdkconfig_defaults=mcu_defaults,
-        app_sdkconfig_defaults=app_defaults,
+        build_context_sdkconfig_defaults=build_context.sdkconfig_defaults,
         sdkconfig_defaults=sdkconfig_defaults,
-        partition_table=partition_table,
-        hardware_sdkconfig_defaults=hardware_defaults,
-        profile_constants_file=profile_constants_file,
-        flash_size_mb=flash_size_mb,
-        psram_mode=psram_mode,
-        psram_size_bytes=psram_size_bytes,
-        hardware_constants=hardware_constants,
-        idf_target=args.idf_target,
+        partition_table=build_context.directory / "partitions.csv",
+        profile_constants_file=build_context.directory / "profile-constants.inc",
+        flash_size_mb=build_context.flash_size_mb,
+        psram_mode=build_context.psram_mode,
+        psram_size_bytes=build_context.psram_size_bytes,
+        idf_target=profile.idf_target,
         idf_path=args.idf_path,
         target=normalize_target(getattr(args, "target", profile.target)),
         monitor_baud=getattr(args, "baud", profile.monitor_baud),
@@ -2770,76 +2478,31 @@ def build_project_config(
 
 
 def add_common_mcu_args(parser: argparse.ArgumentParser, profile: MCUProfile) -> None:
-    """Attach the shared mcu/build-selection options at the top-level parser."""
-    parser.add_argument(
-        "--mcu",
-        default=profile.reference,
-        help="MCU profile name from configs/mcus/*/.env, or a direct path to a mcu directory/profile file.",
-    )
+    """Attach MCU tool options derived from the selected Build Context."""
     parser.add_argument(
         "--build-dir",
         default=format_path(profile.build_dir),
         help="Build subdirectory under build/; absolute paths remain available for temporary test builds.",
     )
-    parser.add_argument("--idf-target", default=profile.idf_target)
     parser.add_argument(
         "--sdkconfig-defaults",
         default=format_path(profile.sdkconfig_defaults),
-        help="MCU/base sdkconfig defaults file applied before application defaults.",
+        help="Optional MCU/base sdkconfig defaults applied before the Build Context.",
     )
     parser.add_argument("--idf-path", default=profile.idf_path)
-    parser.add_argument(
-        "--flash-size-mb",
-        type=int,
-        choices=sorted(SUPPORTED_FLASH_SIZE_MB),
-        default=profile.default_flash_size_mb,
-        help="Detected SPI flash capacity in MiB.",
-    )
-    parser.add_argument(
-        "--psram-mode",
-        choices=sorted(SUPPORTED_PSRAM_MODES),
-        default="none",
-        help="Detected PSRAM bus mode. Unknown hardware must use the safe none profile.",
-    )
-    parser.add_argument(
-        "--psram-size",
-        type=int,
-        default=0,
-        help="Detected PSRAM capacity in bytes; required for quad/octal profiles.",
-    )
-    parser.add_argument(
-        "--hardware-constants",
-        "--wiring-config",
-        dest="hardware_constants",
-        default="",
-        help="Optional validated JSON file containing immutable hardware-profile constants; --wiring-config is a legacy alias.",
-    )
     parser.set_defaults(mcu_file=str(profile.file))
 
 
-def add_common_app_args(parser: argparse.ArgumentParser, profile: AppProfile) -> None:
-    """Attach application and LittleFS resource selection options."""
+def add_common_build_context_args(
+    parser: argparse.ArgumentParser,
+    profile: BuildContextProfile,
+) -> None:
+    """Expose only the fixed Build Context root as firmware build input."""
     parser.add_argument(
-        "--app",
+        "--build-context",
         default=profile.reference,
-        help="Application name from apps/*/app.env, or a direct app directory/profile path.",
+        help="Resolved immutable Build Context directory produced by the Hub.",
     )
-    parser.add_argument(
-        "--app-sdkconfig-defaults",
-        default=format_path(profile.sdkconfig_defaults),
-        help="Application sdkconfig defaults applied after the selected mcu defaults.",
-    )
-    parser.add_argument(
-        "--partition-table",
-        default="",
-        help="Optional explicit partition CSV; default is generated from flash capacity.",
-    )
-    parser.add_argument(
-        "--flash-data-dir",
-        default="",
-        help="Use one complete LittleFS source directory instead of merging shared and app data.",
-    )
-    parser.set_defaults(app_file=str(profile.file))
 
 
 def add_common_connection_args(parser: argparse.ArgumentParser, profile: MCUProfile) -> None:
@@ -2857,23 +2520,18 @@ def add_common_connection_args(parser: argparse.ArgumentParser, profile: MCUProf
 
 def parse_args(
     argv: list[str] | None = None,
-) -> tuple[argparse.Namespace, MCUProfile, AppProfile]:
-    """Parse CLI arguments after resolving mcu and application profiles."""
+) -> tuple[argparse.Namespace, MCUProfile, BuildContextProfile]:
+    """Parse CLI arguments after resolving the immutable Build Context."""
     raw_argv = sys.argv[1:] if argv is None else argv
     bootstrap = argparse.ArgumentParser(add_help=False)
-    bootstrap.add_argument("--mcu")
-    bootstrap.add_argument("--app")
+    bootstrap.add_argument("--build-context")
     pre_args, _ = bootstrap.parse_known_args(raw_argv)
-    profile = load_profile(pre_args.mcu)
-    app_profile = load_app_profile(
-        pre_args.app,
-        mcu_name=profile.name,
-        idf_target=profile.idf_target,
-    )
+    build_context = load_build_context(pre_args.build_context)
+    profile = load_profile(build_context.mcu)
 
-    parser = argparse.ArgumentParser(description="Unified helper for ESP32QJS application development.")
+    parser = argparse.ArgumentParser(description="ESP32QJS firmware helper for a resolved Build Context.")
     add_common_mcu_args(parser, profile)
-    add_common_app_args(parser, app_profile)
+    add_common_build_context_args(parser, build_context)
     add_common_connection_args(parser, profile)
     parser.add_argument(
         "--assume",
@@ -2887,10 +2545,7 @@ def parse_args(
     mcus_parser = sub.add_parser("mcus", help="List bundled mcu profiles.")
     mcus_parser.set_defaults(_noop=True)
 
-    apps_parser = sub.add_parser("apps", help="List bundled application profiles.")
-    apps_parser.set_defaults(_noop=True)
-
-    show_parser = sub.add_parser("show-config", help="Print the merged mcu/app/tool configuration.")
+    show_parser = sub.add_parser("show-config", help="Print the MCU/Build Context/tool configuration.")
     show_parser.set_defaults(_noop=True)
 
     server = sub.add_parser("server", help="Write config and start esp_rfc2217_server.")
@@ -2963,7 +2618,7 @@ def parse_args(
     test.add_argument(
         "--media-hardware",
         action="store_true",
-        help="Enable JS cases that require the selected camera or microphone hardware template and attached media hardware.",
+        help="Enable JS cases that require media support in the Build Context and attached camera or microphone hardware.",
     )
     test.add_argument(
         "--no-flash-firmware",
@@ -2976,19 +2631,15 @@ def parse_args(
         help="Reuse the existing JS test LittleFS image instead of rebuilding and reflashing it.",
     )
 
-    return parser.parse_args(raw_argv), profile, app_profile
+    return parser.parse_args(raw_argv), profile, build_context
 
 
 def main() -> int:
-    args, profile, app_profile = parse_args()
-    config = build_project_config(args, profile, app_profile)
+    args, profile, build_context = parse_args()
+    config = build_project_config(args, profile, build_context)
 
     if args.command == "mcus":
-        list_mcus(args.mcu)
-        return 0
-
-    if args.command == "apps":
-        list_apps(args.app)
+        list_mcus(profile.reference)
         return 0
 
     if args.command == "show-config":
@@ -3007,7 +2658,7 @@ def main() -> int:
         return 0
 
     if args.command == "check-js":
-        run_js_syntax_check(config.app_flash_data_dir)
+        run_js_syntax_check(config.build_context_flash_data_dir)
         return 0
 
     if args.command == "chip-id":
