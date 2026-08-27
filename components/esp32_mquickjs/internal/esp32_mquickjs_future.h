@@ -46,6 +46,11 @@ typedef struct {
         esp32_mquickjs_future_driver_state_t *state);
     void (*destroy)(esp32_mquickjs_future_driver_state_t *state);
     uint32_t (*timeout_ms)(const esp32_mquickjs_future_driver_state_t *state);
+    /* Optionally replace the generic Future deadline error with a
+       driver-specific structured exception. The callback must throw. */
+    JSValue (*on_timeout)(JSContext *ctx,
+                          esp32_mquickjs_future_driver_state_t *state,
+                          uint32_t timeout_ms);
     esp32_mquickjs_resource_key_t (*resource_key)(
         const esp32_mquickjs_future_driver_state_t *state);
 } esp32_mquickjs_future_driver_t;

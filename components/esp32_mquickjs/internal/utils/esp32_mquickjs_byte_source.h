@@ -18,6 +18,7 @@ typedef struct {
     uint8_t *owned;
     JSGCRef value_ref;
     bool rooted;
+    bool read_leased;
 } esp32_mquickjs_byte_source_chunk_t;
 
 typedef struct {

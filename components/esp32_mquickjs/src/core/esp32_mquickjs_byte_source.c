@@ -333,6 +333,20 @@ bool esp32_mquickjs_get_byte_source_chunk(JSContext *ctx,
         esp32_mquickjs_release_byte_source_chunk(ctx, out);
         return false;
     }
+    if (JS_GetClassID(ctx, *value) == JS_CLASS_BYTE_VIEW) {
+        const uint8_t *leased_data = NULL;
+        size_t leased_length = 0;
+
+        if (!esp32_mquickjs_byte_view_acquire_read(
+                ctx, *value, api_name, &leased_data, &leased_length)) {
+            *out_error = JS_EXCEPTION;
+            esp32_mquickjs_release_byte_source_chunk(ctx, out);
+            return false;
+        }
+        out->source.data = leased_data;
+        out->source.length = leased_length;
+        out->read_leased = true;
+    }
     return true;
 }
 
@@ -341,6 +355,10 @@ void esp32_mquickjs_release_byte_source_chunk(JSContext *ctx,
 {
     if (chunk == NULL) {
         return;
+    }
+    if (chunk->read_leased && chunk->rooted) {
+        esp32_mquickjs_byte_view_release_read(ctx, chunk->value_ref.val);
+        chunk->read_leased = false;
     }
     esp32_mquickjs_release_byte_source(chunk->owned);
     chunk->owned = NULL;

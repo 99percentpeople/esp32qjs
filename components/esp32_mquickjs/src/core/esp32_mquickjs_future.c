@@ -1374,6 +1374,8 @@ static bool future_expire_deadlines(JSContext *ctx,
         future_slot_t *slot = &state->slots[i];
         char message[96];
         uint32_t timeout_ms;
+        JSValue timeout_error = JS_UNDEFINED;
+        bool custom_timeout_error = false;
 
         if (!slot->allocated || future_is_terminal(slot->state) ||
             slot->kind == FUTURE_KIND_SLEEP || slot->kind == FUTURE_KIND_TIMEOUT ||
@@ -1382,6 +1384,16 @@ static bool future_expire_deadlines(JSContext *ctx,
         }
         timeout_ms = esp32_mquickjs_future_elapsed_timeout_ms(
             slot->submitted_us, slot->deadline_us);
+        if (slot->driver_active && slot->driver != NULL &&
+            slot->driver->on_timeout != NULL) {
+            JSValue result = slot->driver->on_timeout(
+                ctx, slot->driver_state, timeout_ms);
+
+            if (JS_IsException(result) && JS_HasException(ctx)) {
+                timeout_error = JS_GetException(ctx);
+                custom_timeout_error = true;
+            }
+        }
         if (slot->driver_active && slot->state == FUTURE_STATE_QUEUED) {
             future_destroy_driver(slot);
         } else if (slot->driver_active && slot->driver != NULL &&
@@ -1393,8 +1405,13 @@ static bool future_expire_deadlines(JSContext *ctx,
                 slot->cancel_requested = true;
             }
         }
-        snprintf(message, sizeof(message), "Future operation timed out after %" PRIu32 " ms", timeout_ms);
-        future_reject_message(ctx, slot, message);
+        if (custom_timeout_error) {
+            future_settle(
+                ctx, slot, FUTURE_STATE_REJECTED, timeout_error);
+        } else {
+            snprintf(message, sizeof(message), "Future operation timed out after %" PRIu32 " ms", timeout_ms);
+            future_reject_message(ctx, slot, message);
+        }
         handled = true;
     }
     return handled;
