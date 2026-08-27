@@ -807,6 +807,28 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("assert(queue.drop_calls == 2)", c_test)
         self.assertIn("assert(queue.live_payloads == 0)", c_test)
 
+    def test_event_queue_explicit_dispose_detaches_js_and_defers_pending_receive(self):
+        event_queue = (
+            MQUICKJS / "src/core/esp32_mquickjs_event_queue.c"
+        ).read_text(encoding="utf-8")
+        header = (
+            MQUICKJS / "internal/esp32_mquickjs_event_queue.h"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("bool esp32_mquickjs_event_queue_dispose(", header)
+        dispose_start = event_queue.index(
+            "bool esp32_mquickjs_event_queue_dispose("
+        )
+        dispose_end = event_queue.index(
+            "\nsize_t esp32_mquickjs_event_queue_discard_all(", dispose_start
+        )
+        dispose = event_queue[dispose_start:dispose_end]
+        self.assertIn("JS_SetOpaque(ctx, value, NULL)", dispose)
+        self.assertIn("queue->dispose_requested = true", dispose)
+        self.assertIn("event_queue_unregister(queue)", dispose)
+        self.assertIn("event_queue_destroy_if_disposed(queue)", event_queue)
+        self.assertIn("queue->receiver_registered", event_queue)
+
     def test_event_queue_exposes_queue_local_stats(self):
         event_queue = (
             MQUICKJS / "src/core/esp32_mquickjs_event_queue.c"

@@ -83,6 +83,54 @@ class BLEArchitectureTests(unittest.TestCase):
         self.assertIn("esp32_mquickjs_future_register_driver", source)
         self.assertIn("esp32_mquickjs_event_queue_register_receive_alias", source)
 
+    def test_closed_handles_dispose_native_event_queues_without_waiting_for_gc(self):
+        source = self.source()
+        function_names = (
+            "ble_close_subscription",
+            "ble_free_server",
+            "ble_release_scanner",
+            "ble_release_advertiser",
+            "ble_free_pools",
+        )
+        for index, function_name in enumerate(function_names):
+            start = source.index(f"static void {function_name}", 500)
+            while source.find("\n{", start, start + 200) < 0:
+                start = source.index(f"static void {function_name}", start + 1)
+            next_starts = [
+                source.find("\nstatic ", start + 1),
+            ]
+            end = min(item for item in next_starts if item >= 0)
+            self.assertIn(
+                "ble_release_event_queue",
+                source[start:end],
+                function_name,
+            )
+        release_start = source.index("static void ble_release_event_queue")
+        release_end = source.index("\nstatic ", release_start + 1)
+        self.assertIn(
+            "esp32_mquickjs_event_queue_dispose",
+            source[release_start:release_end],
+        )
+
+    def test_explicit_close_retires_gc_owned_native_handle_refs(self):
+        source = self.source()
+        for finish_name in (
+            "ble_scanner_close_finish",
+            "ble_advertiser_close_finish",
+            "ble_connection_close_finish",
+            "ble_subscription_close_finish",
+            "ble_adapter_close_finish",
+        ):
+            start = source.index(f"static JSValue {finish_name}")
+            end = source.index("\nstatic ", start + 1)
+            self.assertIn("ble_retire_handle", source[start:end], finish_name)
+        self.assertIn("s_ble_closed_adapter_ref", source)
+        adapter_finalizer = source[
+            source.index("void js_ble_adapter_finalizer") :
+            source.index("JSValue js_ble_adapter_status")
+        ]
+        self.assertIn("opaque != &s_ble_closed_adapter_ref", adapter_finalizer)
+
     def test_reopen_waits_for_nimble_deinit_quiescence_without_blocking_start(self):
         source = self.source()
         open_start = source[

@@ -449,6 +449,11 @@ static _Atomic uint32_t s_ble_next_advertiser_generation = 1;
 static _Atomic uint32_t s_ble_next_connection_generation = 1;
 static _Atomic uint32_t s_ble_next_subscription_generation = 1;
 static int64_t s_ble_reopen_not_before_us;
+static ble_adapter_ref_t s_ble_closed_adapter_ref;
+static ble_scanner_ref_t s_ble_closed_scanner_ref;
+static ble_advertiser_ref_t s_ble_closed_advertiser_ref;
+static ble_connection_ref_t s_ble_closed_connection_ref;
+static ble_subscription_ref_t s_ble_closed_subscription_ref;
 static const uint8_t s_ble_gap_lane_key;
 static const uint8_t s_ble_adapter_lane_key;
 static const uint8_t s_ble_server_lane_key;
@@ -994,17 +999,43 @@ static ble_connection_slot_t *ble_reserve_connection(bool central,
     return NULL;
 }
 
+static void ble_release_event_queue(
+    JSContext *ctx, esp32_mquickjs_event_queue_t **queue,
+    JSGCRef *queue_ref, bool *queue_rooted)
+{
+    if (queue == NULL || queue_ref == NULL || queue_rooted == NULL) return;
+    if (*queue_rooted) {
+        (void)esp32_mquickjs_event_queue_dispose(ctx, queue_ref->val);
+        JS_DeleteGCRef(ctx, queue_ref);
+        *queue_rooted = false;
+    } else if (*queue != NULL) {
+        (void)esp32_mquickjs_event_queue_close(*queue);
+        (void)esp32_mquickjs_event_queue_discard_all(*queue);
+    }
+    *queue = NULL;
+}
+
+static void ble_retire_handle(JSContext *ctx, JSValue value,
+                              int class_id, void *closed_ref)
+{
+    void *ref;
+
+    if (ctx == NULL || closed_ref == NULL ||
+        JS_GetClassID(ctx, value) != class_id ||
+        (ref = JS_GetOpaque(ctx, value)) == NULL || ref == closed_ref) {
+        return;
+    }
+    JS_SetOpaque(ctx, value, closed_ref);
+    heap_caps_free(ref);
+}
+
 static void ble_close_subscription(ble_subscription_t *subscription)
 {
     if (subscription == NULL || !subscription->allocated) return;
     subscription->open = false;
-    if (subscription->queue != NULL) {
-        (void)esp32_mquickjs_event_queue_close(subscription->queue);
-        (void)esp32_mquickjs_event_queue_discard_all(subscription->queue);
-    }
-    if (subscription->queue_rooted) {
-        JS_DeleteGCRef(s_ble.ctx, &subscription->queue_ref);
-    }
+    ble_release_event_queue(s_ble.ctx, &subscription->queue,
+                            &subscription->queue_ref,
+                            &subscription->queue_rooted);
     heap_caps_free(subscription->payloads);
     heap_caps_free(subscription->lengths);
     memset(subscription, 0, sizeof(*subscription));
@@ -2058,13 +2089,9 @@ static void ble_free_server(ble_gatt_server_t *server)
 {
     uint16_t index;
     if (server == NULL) return;
-    if (server->event_queue != NULL) {
-        (void)esp32_mquickjs_event_queue_close(server->event_queue);
-        (void)esp32_mquickjs_event_queue_discard_all(server->event_queue);
-    }
-    if (server->event_queue_rooted) {
-        JS_DeleteGCRef(s_ble.ctx, &server->event_queue_ref);
-    }
+    ble_release_event_queue(s_ble.ctx, &server->event_queue,
+                            &server->event_queue_ref,
+                            &server->event_queue_rooted);
     heap_caps_free(server->event_payloads);
     for (index = 0; index < server->characteristic_count; ++index) {
         heap_caps_free(server->characteristics[index].id);
@@ -2087,12 +2114,8 @@ static void ble_release_scanner(ble_adapter_t *adapter)
     ble_scanner_t *scanner;
     if (adapter == NULL) return;
     scanner = &adapter->scanner;
-    if (scanner->queue != NULL) {
-        (void)esp32_mquickjs_event_queue_close(scanner->queue);
-        (void)esp32_mquickjs_event_queue_discard_all(scanner->queue);
-    }
-    if (scanner->queue_rooted)
-        JS_DeleteGCRef(adapter->ctx, &scanner->queue_ref);
+    ble_release_event_queue(adapter->ctx, &scanner->queue,
+                            &scanner->queue_ref, &scanner->queue_rooted);
     heap_caps_free(scanner->payloads);
     memset(scanner, 0, sizeof(*scanner));
 }
@@ -2102,12 +2125,9 @@ static void ble_release_advertiser(ble_adapter_t *adapter)
     ble_advertiser_t *advertiser;
     if (adapter == NULL) return;
     advertiser = &adapter->advertiser;
-    if (advertiser->queue != NULL) {
-        (void)esp32_mquickjs_event_queue_close(advertiser->queue);
-        (void)esp32_mquickjs_event_queue_discard_all(advertiser->queue);
-    }
-    if (advertiser->queue_rooted)
-        JS_DeleteGCRef(adapter->ctx, &advertiser->queue_ref);
+    ble_release_event_queue(adapter->ctx, &advertiser->queue,
+                            &advertiser->queue_ref,
+                            &advertiser->queue_rooted);
     memset(advertiser, 0, sizeof(*advertiser));
 }
 
@@ -2120,8 +2140,8 @@ static void ble_free_pools(ble_adapter_t *adapter)
     for (index = 0; index < adapter->max_connections; ++index) {
         ble_connection_slot_t *slot = &adapter->connections[index];
         ble_release_connection(slot);
-        if (slot->queue_rooted)
-            JS_DeleteGCRef(adapter->ctx, &slot->queue_ref);
+        ble_release_event_queue(adapter->ctx, &slot->queue,
+                                &slot->queue_ref, &slot->queue_rooted);
         memset(slot, 0, sizeof(*slot));
     }
     ble_free_server(&adapter->server);
@@ -3118,7 +3138,8 @@ static bool ble_scan_capture(
     JS_PopGCRef(ctx, &property_ref);
     return true;
 fail_scanner:
-    if (scanner->queue_rooted) JS_DeleteGCRef(ctx, &scanner->queue_ref);
+    ble_release_event_queue(ctx, &scanner->queue, &scanner->queue_ref,
+                            &scanner->queue_rooted);
     heap_caps_free(scanner->payloads);
     memset(scanner, 0, sizeof(*scanner));
 fail:
@@ -3191,10 +3212,9 @@ static void ble_scan_destroy(esp32_mquickjs_future_driver_state_t *state)
     if (state != NULL && !state->transferred &&
         state->connection_generation == s_ble.scanner.generation) {
         if (s_ble.scanner.active) (void)ble_gap_disc_cancel();
-        if (s_ble.scanner.queue != NULL)
-            (void)esp32_mquickjs_event_queue_close(s_ble.scanner.queue);
-        if (s_ble.scanner.queue_rooted)
-            JS_DeleteGCRef(state->ctx, &s_ble.scanner.queue_ref);
+        ble_release_event_queue(state->ctx, &s_ble.scanner.queue,
+                                &s_ble.scanner.queue_ref,
+                                &s_ble.scanner.queue_rooted);
         heap_caps_free(s_ble.scanner.payloads);
         memset(&s_ble.scanner, 0, sizeof(s_ble.scanner));
     }
@@ -3259,6 +3279,8 @@ static JSValue ble_scanner_close_finish(
     if (state == NULL || state->host_code != 0)
         return ble_bool_finish(ctx, state);
     ble_release_scanner(&s_ble);
+    ble_retire_handle(ctx, state->owner_ref.val, JS_CLASS_BLE_SCANNER,
+                      &s_ble_closed_scanner_ref);
     return JS_TRUE;
 }
 
@@ -3481,7 +3503,9 @@ static bool ble_advertise_capture(
     JS_PopGCRef(ctx, &property_ref);
     return true;
 fail_advertiser:
-    if (advertiser->queue_rooted) JS_DeleteGCRef(ctx, &advertiser->queue_ref);
+    ble_release_event_queue(ctx, &advertiser->queue,
+                            &advertiser->queue_ref,
+                            &advertiser->queue_rooted);
     memset(advertiser, 0, sizeof(*advertiser));
 fail:
     heap_caps_free(state);
@@ -3551,10 +3575,9 @@ static void ble_advertise_destroy(esp32_mquickjs_future_driver_state_t *state)
     if (state != NULL && !state->transferred &&
         state->connection_generation == s_ble.advertiser.generation) {
         if (s_ble.advertiser.active) (void)ble_gap_adv_stop();
-        if (s_ble.advertiser.queue != NULL)
-            (void)esp32_mquickjs_event_queue_close(s_ble.advertiser.queue);
-        if (s_ble.advertiser.queue_rooted)
-            JS_DeleteGCRef(state->ctx, &s_ble.advertiser.queue_ref);
+        ble_release_event_queue(state->ctx, &s_ble.advertiser.queue,
+                                &s_ble.advertiser.queue_ref,
+                                &s_ble.advertiser.queue_rooted);
         memset(&s_ble.advertiser, 0, sizeof(s_ble.advertiser));
     }
     ble_future_state_release(state);
@@ -3618,6 +3641,8 @@ static JSValue ble_advertiser_close_finish(
     if (state == NULL || state->host_code != 0)
         return ble_bool_finish(ctx, state);
     ble_release_advertiser(&s_ble);
+    ble_retire_handle(ctx, state->owner_ref.val, JS_CLASS_BLE_ADVERTISER,
+                      &s_ble_closed_advertiser_ref);
     return JS_TRUE;
 }
 
@@ -3942,6 +3967,8 @@ static JSValue ble_connection_close_finish(
         ble_active_state_bind(&slot->active_gatt_state, NULL);
         ble_recycle_connection(slot);
     }
+    ble_retire_handle(ctx, state->owner_ref.val, JS_CLASS_BLE_CONNECTION,
+                      &s_ble_closed_connection_ref);
     return JS_TRUE;
 }
 
@@ -5187,8 +5214,9 @@ static bool ble_subscribe_capture(
     JS_PopGCRef(ctx, &property_ref);
     return true;
 fail_subscription:
-    if (subscription->queue_rooted)
-        JS_DeleteGCRef(ctx, &subscription->queue_ref);
+    ble_release_event_queue(ctx, &subscription->queue,
+                            &subscription->queue_ref,
+                            &subscription->queue_rooted);
     heap_caps_free(subscription->payloads);
     heap_caps_free(subscription->lengths);
     memset(subscription, 0, sizeof(*subscription));
@@ -5363,6 +5391,9 @@ static JSValue ble_subscription_close_finish(
         if (subscription->generation == state->subscription_generation)
             ble_close_subscription(subscription);
     }
+    ble_retire_handle(ctx, state->owner_ref.val,
+                      JS_CLASS_BLE_NOTIFICATION_STREAM,
+                      &s_ble_closed_subscription_ref);
     return JS_TRUE;
 }
 
@@ -5576,6 +5607,8 @@ static JSValue ble_adapter_close_finish(
     ble_free_pools(&s_ble);
     s_ble.lifecycle = BLE_LIFECYCLE_CLOSED;
     s_ble.runtime = NULL;
+    ble_retire_handle(ctx, state->owner_ref.val, JS_CLASS_BLE_ADAPTER,
+                      &s_ble_closed_adapter_ref);
     if (host_code != 0)
         return ble_throw_error(ctx, "BLE_CLOSING", host_code, -1, -1, -1);
     return JS_TRUE;
@@ -6003,7 +6036,7 @@ JSValue js_ble_adapter_constructor(JSContext *ctx, JSValue *this_val,
 void js_ble_adapter_finalizer(JSContext *ctx, void *opaque)
 {
     (void)ctx;
-    heap_caps_free(opaque);
+    if (opaque != &s_ble_closed_adapter_ref) heap_caps_free(opaque);
 }
 
 JSValue js_ble_adapter_status(JSContext *ctx, JSValue *this_val,
@@ -6128,7 +6161,7 @@ JSValue js_ble_scanner_constructor(JSContext *ctx, JSValue *this_val,
 void js_ble_scanner_finalizer(JSContext *ctx, void *opaque)
 {
     (void)ctx;
-    heap_caps_free(opaque);
+    if (opaque != &s_ble_closed_scanner_ref) heap_caps_free(opaque);
 }
 
 JSValue js_ble_scanner_receive(JSContext *ctx, JSValue *this_val,
@@ -6196,7 +6229,7 @@ JSValue js_ble_advertiser_constructor(JSContext *ctx, JSValue *this_val,
 void js_ble_advertiser_finalizer(JSContext *ctx, void *opaque)
 {
     (void)ctx;
-    heap_caps_free(opaque);
+    if (opaque != &s_ble_closed_advertiser_ref) heap_caps_free(opaque);
 }
 
 JSValue js_ble_advertiser_receive(JSContext *ctx, JSValue *this_val,
@@ -6263,7 +6296,7 @@ JSValue js_ble_connection_constructor(JSContext *ctx, JSValue *this_val,
 void js_ble_connection_finalizer(JSContext *ctx, void *opaque)
 {
     (void)ctx;
-    heap_caps_free(opaque);
+    if (opaque != &s_ble_closed_connection_ref) heap_caps_free(opaque);
 }
 
 JSValue js_ble_connection_receive(JSContext *ctx, JSValue *this_val,
@@ -6553,7 +6586,7 @@ JSValue js_ble_notification_constructor(JSContext *ctx, JSValue *this_val,
 void js_ble_notification_finalizer(JSContext *ctx, void *opaque)
 {
     (void)ctx;
-    heap_caps_free(opaque);
+    if (opaque != &s_ble_closed_subscription_ref) heap_caps_free(opaque);
 }
 
 JSValue js_ble_notification_receive(JSContext *ctx, JSValue *this_val,

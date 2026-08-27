@@ -50,6 +50,7 @@ bool esp32_mquickjs_event_queue_send_from_isr(esp32_mquickjs_event_queue_t *queu
                                               const void *event,
                                               int *task_woken);
 bool esp32_mquickjs_event_queue_close(esp32_mquickjs_event_queue_t *queue);
+bool esp32_mquickjs_event_queue_dispose(JSContext *ctx, JSValue value);
 size_t esp32_mquickjs_event_queue_discard_all(
     esp32_mquickjs_event_queue_t *queue);
 bool esp32_mquickjs_event_queue_is_closed(const esp32_mquickjs_event_queue_t *queue);

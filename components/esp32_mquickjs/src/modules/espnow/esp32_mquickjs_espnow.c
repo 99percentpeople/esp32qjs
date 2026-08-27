@@ -192,6 +192,8 @@ static espnow_session_t s_espnow_session = {
 static _Atomic uint32_t s_espnow_next_generation = 1;
 static _Atomic uint32_t s_espnow_next_peer_generation = 1;
 static int64_t s_espnow_reopen_not_before_us;
+static espnow_session_ref_t s_espnow_closed_session_ref;
+static espnow_peer_ref_t s_espnow_closed_peer_ref;
 static const uint8_t s_espnow_tx_lane_key;
 static const uint8_t s_espnow_control_lane_key;
 
@@ -203,6 +205,20 @@ static void espnow_note_native_deinit(void)
 {
     s_espnow_reopen_not_before_us =
         esp_timer_get_time() + (int64_t)ESPNOW_REOPEN_QUIESCE_MS * 1000;
+}
+
+static void espnow_retire_handle(JSContext *ctx, JSValue value,
+                                 int class_id, void *closed_ref)
+{
+    void *ref;
+
+    if (ctx == NULL || closed_ref == NULL ||
+        JS_GetClassID(ctx, value) != class_id ||
+        (ref = JS_GetOpaque(ctx, value)) == NULL || ref == closed_ref) {
+        return;
+    }
+    JS_SetOpaque(ctx, value, closed_ref);
+    heap_caps_free(ref);
 }
 
 static JSValue espnow_future_call_and_wait(JSContext *ctx,
@@ -1038,6 +1054,10 @@ static void espnow_open_release(
         espnow_close_native(&s_espnow_session);
     }
     if (state->event_queue_rooted) {
+        if (!state->transferred) {
+            (void)esp32_mquickjs_event_queue_dispose(
+                state->ctx, state->event_queue_ref.val);
+        }
         JS_DeleteGCRef(state->ctx, &state->event_queue_ref);
         state->event_queue_rooted = false;
     }
@@ -1751,6 +1771,20 @@ static bool espnow_session_close_capture(
     state->result_bool = ref->generation == s_espnow_session.generation &&
                          s_espnow_session.lifecycle == ESPNOW_LIFECYCLE_ACTIVE;
     atomic_init(&state->completed, false);
+    *JS_AddGCRef(ctx, &state->event_queue_ref) =
+        JS_GetPropertyStr(ctx, this_ref->val, "_eventQueue");
+    state->event_queue_rooted = true;
+    if (JS_IsException(state->event_queue_ref.val) ||
+        JS_GetClassID(ctx, state->event_queue_ref.val) !=
+            JS_CLASS_EVENT_QUEUE) {
+        JS_DeleteGCRef(ctx, &state->event_queue_ref);
+        heap_caps_free(state);
+        if (!JS_HasException(ctx)) {
+            JS_ThrowInternalError(ctx,
+                                  "ESP-NOW session event queue is unavailable");
+        }
+        return false;
+    }
     espnow_retain_owner(ctx, this_ref->val, state);
     *out_state = state;
     return true;
@@ -1984,8 +2018,27 @@ static void espnow_control_destroy(
             espnow_clear_peer(peer);
         }
     }
+    if (state->event_queue_rooted) {
+        if (state->operation == ESPNOW_OPERATION_CLOSE_SESSION) {
+            (void)esp32_mquickjs_event_queue_dispose(
+                state->ctx, state->event_queue_ref.val);
+        }
+        JS_DeleteGCRef(state->ctx, &state->event_queue_ref);
+        state->event_queue_rooted = false;
+    }
     if (state->owner_rooted) {
+        if (state->operation == ESPNOW_OPERATION_CLOSE_SESSION) {
+            espnow_retire_handle(state->ctx, state->owner_ref.val,
+                                 JS_CLASS_ESPNOW_SESSION,
+                                 &s_espnow_closed_session_ref);
+        } else if (state->operation == ESPNOW_OPERATION_CLOSE_PEER &&
+                   state->result_bool) {
+            espnow_retire_handle(state->ctx, state->owner_ref.val,
+                                 JS_CLASS_ESPNOW_PEER,
+                                 &s_espnow_closed_peer_ref);
+        }
         JS_DeleteGCRef(state->ctx, &state->owner_ref);
+        state->owner_rooted = false;
     }
     esp32_mquickjs_wireless_secure_zero(state->lmk, sizeof(state->lmk));
     heap_caps_free(state);
@@ -2637,10 +2690,11 @@ void js_espnow_session_finalizer(JSContext *ctx, void *opaque)
     espnow_session_ref_t *ref = opaque;
 
     (void)ctx;
-    if (ref != NULL && ref->generation == s_espnow_session.generation) {
+    if (ref != NULL && ref != &s_espnow_closed_session_ref &&
+        ref->generation == s_espnow_session.generation) {
         espnow_close_native(&s_espnow_session);
     }
-    heap_caps_free(ref);
+    if (ref != &s_espnow_closed_session_ref) heap_caps_free(ref);
 }
 
 JSValue js_espnow_session_receive(JSContext *ctx, JSValue *this_val,
@@ -2814,7 +2868,7 @@ JSValue js_espnow_peer_constructor(JSContext *ctx, JSValue *this_val,
 void js_espnow_peer_finalizer(JSContext *ctx, void *opaque)
 {
     (void)ctx;
-    heap_caps_free(opaque);
+    if (opaque != &s_espnow_closed_peer_ref) heap_caps_free(opaque);
 }
 
 JSValue js_espnow_peer_status(JSContext *ctx, JSValue *this_val,

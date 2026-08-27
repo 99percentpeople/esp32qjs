@@ -51,6 +51,43 @@ class EspNowArchitectureTests(unittest.TestCase):
         )
         self.assertIn("esp32_mquickjs_wifi_radio_release", source)
 
+    def test_session_close_disposes_native_event_queue_without_waiting_for_gc(self):
+        source = (
+            MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
+        ).read_text(encoding="utf-8")
+        close_capture = source[
+            source.index("static bool espnow_session_close_capture") :
+            source.index("static bool espnow_control_start")
+        ]
+        destroy = source[
+            source.index("static void espnow_control_destroy") :
+            source.index("static esp32_mquickjs_resource_key_t espnow_control_resource_key")
+        ]
+
+        self.assertIn("state->event_queue_ref", close_capture)
+        self.assertIn("state->event_queue_rooted = true", close_capture)
+        self.assertIn("esp32_mquickjs_event_queue_dispose", destroy)
+        self.assertIn("JS_DeleteGCRef", destroy)
+
+    def test_explicit_close_retires_gc_owned_native_handle_refs(self):
+        source = (
+            MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
+        ).read_text(encoding="utf-8")
+        destroy = source[
+            source.index("static void espnow_control_destroy") :
+            source.index("static esp32_mquickjs_resource_key_t espnow_control_resource_key")
+        ]
+        session_finalizer = source[
+            source.index("void js_espnow_session_finalizer") :
+            source.index("JSValue js_espnow_session_receive")
+        ]
+
+        self.assertIn("s_espnow_closed_session_ref", source)
+        self.assertIn("s_espnow_closed_peer_ref", source)
+        self.assertIn("espnow_retire_handle", destroy)
+        self.assertIn("JS_SetOpaque", source)
+        self.assertIn("ref != &s_espnow_closed_session_ref", session_finalizer)
+
     def test_open_and_receive_are_native_future_drivers(self):
         header = (
             MQUICKJS / "internal/esp32_mquickjs_espnow.h"
