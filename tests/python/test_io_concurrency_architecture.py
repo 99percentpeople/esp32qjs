@@ -919,6 +919,20 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("spi_get_bus_slot_by_ids", spi_key)
         self.assertEqual(spi.count("SPI_FUTURE_DRIVER(s_spi_"), 5)
 
+        completion_start = spi.index(
+            "static void IRAM_ATTR spi_future_transaction_done("
+        )
+        completion_end = spi.index("\nstatic bool spi_register_future_drivers(", completion_start)
+        completion = spi[completion_start:completion_end]
+        self.assertIn("device_config.post_cb = spi_future_transaction_done;", spi)
+        self.assertIn("transaction->user = state;", spi)
+        self.assertIn("state->transaction.user = state;", spi)
+        self.assertIn("esp32_mquickjs_future_wake_from_isr", completion)
+        self.assertIn("portYIELD_FROM_ISR();", completion)
+        self.assertNotIn("spi_future_timer", spi)
+        self.assertNotIn("poll_timer", spi)
+        self.assertNotIn("esp_timer_start_periodic", spi)
+
         self.assertIn('JS_CFUNC_DEF("watch", 1, js_uart_port_watch)', stdlib)
         self.assertIn("esp32_mquickjs_event_queue_new", uart)
         self.assertIn("UART_WATCH_EVENT_READABLE", uart)

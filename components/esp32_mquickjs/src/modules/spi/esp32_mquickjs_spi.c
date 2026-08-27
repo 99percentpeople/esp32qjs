@@ -14,10 +14,12 @@
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
+#include "esp_attr.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_memory_utils.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
 #include "soc/soc_caps.h"
 
 #define ESP32_MQUICKJS_SPI_DEFAULT_HOST_NUMBER \
@@ -77,6 +79,7 @@ static uint32_t s_spi_next_generation = 1;
 
 static bool spi_register_future_drivers(JSContext *ctx,
                                         esp32_mquickjs_runtime_t *runtime);
+static void spi_future_transaction_done(spi_transaction_t *transaction);
 
 static bool js_value_to_u32(JSContext *ctx, JSValue value, uint32_t *out_value)
 {
@@ -1129,6 +1132,7 @@ JSValue js_spi_bus_open_device(JSContext *ctx, JSValue *this_val, int argc, JSVa
     device_config.clock_speed_hz = (int)freq_hz;
     device_config.spics_io_num = cs_pin;
     device_config.queue_size = (int)queue_size;
+    device_config.post_cb = spi_future_transaction_done;
     device_config.flags = 0;
     if (cs_high) {
         device_config.flags |= SPI_DEVICE_POSITIVE_CS;
@@ -1247,7 +1251,6 @@ struct esp32_mquickjs_future_driver_state {
     esp32_mquickjs_spi_device_ref_t device_ref;
     esp32_mquickjs_runtime_t *runtime;
     esp32_mquickjs_future_token_t token;
-    esp_timer_handle_t poll_timer;
     spi_transaction_t transaction;
     spi_transaction_t bulk_transactions[2];
     spi_span_owner_root_t bulk_owners[2];
@@ -1286,6 +1289,24 @@ struct esp32_mquickjs_future_driver_state {
     bool cancelled;
 };
 
+static void IRAM_ATTR spi_future_transaction_done(
+    spi_transaction_t *transaction)
+{
+    esp32_mquickjs_future_driver_state_t *state =
+        transaction != NULL ? transaction->user : NULL;
+    int task_woken = 0;
+
+    if (state == NULL || state->runtime == NULL ||
+        atomic_load_explicit(&state->completed, memory_order_acquire)) {
+        return;
+    }
+    (void)esp32_mquickjs_future_wake_from_isr(
+        state->runtime, state->token, &task_woken);
+    if (task_woken != 0) {
+        portYIELD_FROM_ISR();
+    }
+}
+
 static void spi_future_release(esp32_mquickjs_future_driver_state_t *state)
 {
     esp32_mquickjs_spi_device_slot_t *device;
@@ -1294,10 +1315,6 @@ static void spi_future_release(esp32_mquickjs_future_driver_state_t *state)
 
     if (state == NULL) {
         return;
-    }
-    if (state->poll_timer != NULL) {
-        (void)esp_timer_stop(state->poll_timer);
-        (void)esp_timer_delete(state->poll_timer);
     }
     for (index = 0; index < 2; ++index) {
         spi_release_span_owner(state->ctx, &state->bulk_owners[index]);
@@ -1446,6 +1463,7 @@ static bool spi_future_allocate_buffers(
     state->transaction.rxlength = receive ? length * 8U : 0;
     state->transaction.tx_buffer = state->tx_data;
     state->transaction.rx_buffer = state->rx_data;
+    state->transaction.user = state;
     spi_mark_external_dma(&state->transaction);
     return true;
 }
@@ -1714,16 +1732,6 @@ static void spi_future_retain_source_exception(
     state->source_error_retained = true;
 }
 
-static void spi_future_timer(void *opaque)
-{
-    esp32_mquickjs_future_driver_state_t *state = opaque;
-
-    if (state != NULL &&
-        !atomic_load_explicit(&state->completed, memory_order_acquire)) {
-        (void)esp32_mquickjs_future_wake(state->runtime, state->token);
-    }
-}
-
 static bool spi_future_is_bulk(
     const esp32_mquickjs_future_driver_state_t *state)
 {
@@ -1854,6 +1862,7 @@ static void spi_future_bulk_step(
 
         memset(transaction, 0, sizeof(*transaction));
         transaction->length = length * 8U;
+        transaction->user = state;
         if ((state->kind == SPI_FUTURE_WRITE_SOURCE && source_direct) ||
             (state->kind == SPI_FUTURE_WRITE_CHUNKS &&
              spi_buffer_can_dma(data))) {
@@ -1965,13 +1974,6 @@ static bool spi_future_start(JSContext *ctx,
 {
     esp32_mquickjs_spi_device_slot_t *device = state != NULL
         ? spi_get_device_slot(&state->device_ref) : NULL;
-    esp_timer_create_args_t args = {
-        .callback = spi_future_timer,
-        .arg = state,
-        .dispatch_method = ESP_TIMER_TASK,
-        .name = "mqjs_spi",
-        .skip_unhandled_events = true,
-    };
 
     if (state == NULL || device == NULL) {
         JS_ThrowReferenceError(ctx, "SPI device closed before transaction start");
@@ -1987,12 +1989,6 @@ static bool spi_future_start(JSContext *ctx,
     state->started = true;
     state->total_start_us = esp_timer_get_time();
     spi_future_step(state);
-    if (!atomic_load_explicit(&state->completed, memory_order_acquire) &&
-        (esp_timer_create(&args, &state->poll_timer) != ESP_OK ||
-         esp_timer_start_periodic(state->poll_timer, 1000U) != ESP_OK)) {
-        JS_ThrowInternalError(ctx, "failed to start SPI completion poller");
-        return false;
-    }
     (void)esp32_mquickjs_future_wake(runtime, token);
     return true;
 }
