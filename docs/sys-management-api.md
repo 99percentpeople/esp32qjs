@@ -269,8 +269,10 @@ declare namespace ESP32QJS {
     dmaLargestReserveBytes: number;
     managedInternalBytes: number;
     managedPsramBytes: number;
-    /** Internal stable managed bytes whose memory class is non-movable. */
+    /** Stable internal managed blocks plus registered driver DMA payloads. */
     pinnedBytes: number;
+    driverPinnedBytes: number;
+    pendingDmaReservationBytes: number;
     movableIdleBytes: number;
     migrationCount: number;
     migrationBytes: number;
@@ -656,8 +658,11 @@ runtime safe point while no borrow is active. Generation teardown releases any
 stable blocks left after JavaScript finalizers, so a runtime restart cannot
 retain ownerless buffers from the previous generation. The managed-byte and
 `movableIdleBytes` counters cover stable managed blocks; allocation-failure
-counts cover all classified payload and block requests. None of these counters
-claim ownership of opaque ESP-IDF or third-party allocations.
+counts cover classified payload, block, and DMA reservation requests. Driver
+integrations may register an exact, public payload size after ESP-IDF
+initialization. I2S does this for its persistent PCM DMA buffers; opaque
+ESP-IDF metadata and unregistered third-party allocations remain outside the
+counters.
 
 The internal `DMA_EXTERNAL` class means "prefer external DMA". If the target SoC
 supports DMA access to initialized PSRAM, allocation and reallocation try PSRAM
@@ -672,19 +677,20 @@ manager never alternates repeatedly between heaps, and records one
 allocation failure only after both permitted attempts fail. Code that always
 requires internal DMA uses `DMA_INTERNAL` explicitly.
 
-`pinnedBytes` is based on the block's actual placement and mobility. It counts
-every internal stable managed block whose class is non-movable, including
-`DMA_EXTERNAL` blocks that fell back to internal RAM. Movable-class blocks are
-excluded even while temporarily borrowed; `movableIdleBytes` separately
-reports movable blocks that are currently idle. As with the other manager
-counters, raw payload helpers and opaque driver allocations are outside this
-value.
+`pinnedBytes` counts every internal stable managed block whose class is
+non-movable, including `DMA_EXTERNAL` blocks that fell back to internal RAM,
+plus registered driver DMA payloads. `driverPinnedBytes` isolates the latter;
+`pendingDmaReservationBytes` reports allocations admitted by policy but not
+yet committed by the driver. Movable-class blocks are excluded even while
+temporarily borrowed; `movableIdleBytes` separately reports movable blocks
+that are currently idle. Raw payload helpers and opaque driver metadata remain
+outside these values.
 
 On targets without PSRAM the same classification and reserve checks remain in
 force, but migration is disabled. Pressure maintenance runs only after active
 JavaScript execution has unwound; recursive scheduler polls used by cooperative
-USB, UART, and Future waits do not relocate blocks. Driver-task and DMA
-preflight allocation helpers never relocate blocks. A failed classified
+USB, UART, and Future waits do not relocate blocks. Driver-task allocation
+helpers and DMA reservation calls never relocate blocks. A failed classified
 allocation returns the operation's normal out-of-memory error instead of trying
 progressively smaller driver layouts.
 

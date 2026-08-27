@@ -814,7 +814,9 @@ is not exposed.
   the configured PCM frame, including when a frame crosses span boundaries.
 - `channel.status()`
   Return direction, port, running/read/write state, PCM layout, DMA
-  configuration, receive queue overruns, and `sendQueueOverflows`.
+  configuration, receive queue overruns, and `sendQueueOverflows`. Its `dma`
+  object includes `storage: "internal"`, the actual aligned `bufferBytes` per
+  descriptor, and `totalBufferBytes` across RX/TX directions.
 - `channel.close()`
   Detach the JavaScript handle idempotently, request cancellation of active
   reads and writes, prevent queued operations from reaching DMA, and release
@@ -831,7 +833,9 @@ do not close and reopen it for every recording or playback attempt. On PSRAM
 boards, transient PCM operation buffers are allocated from PSRAM so the
 internal DMA-capable heap remains available to the persistent DMA ring. A PSRAM
 allocation failure returns `I2S_NO_MEMORY` and does not fall back to internal
-memory or try alternate DMA layouts.
+memory or try alternate DMA layouts. The persistent ring remains allocated by
+ESP-IDF, but its admission, exact PCM payload accounting, and release are
+registered with the framework memory manager.
 
 Close every returned audio `ByteView` in a `finally` block after its consumer
 finishes. Producers of `ByteSpanSource` data must likewise close the source in

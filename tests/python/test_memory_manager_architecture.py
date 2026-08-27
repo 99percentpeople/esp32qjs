@@ -33,9 +33,10 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
             "void esp32_mquickjs_memory_maintain(void)", 1
         )[0])
         dma_preflight = source.split(
-            "bool esp32_mquickjs_memory_prepare_internal_dma", 1
+            "bool esp32_mquickjs_memory_reserve_internal_dma", 1
         )[1].split("void esp32_mquickjs_memory_get_status", 1)[0]
         self.assertNotIn("esp32_mquickjs_memory_maintain();", dma_preflight)
+        self.assertNotIn("memory_migrate_one", dma_preflight)
         self.assertNotIn("M5", source)
         self.assertNotIn("StickS3", source)
 
@@ -57,7 +58,10 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
         i2s = (MQUICKJS / "src/modules/i2s/esp32_mquickjs_i2s.c").read_text(
             encoding="utf-8"
         )
-        self.assertIn("esp32_mquickjs_memory_prepare_internal_dma", i2s)
+        self.assertIn("esp32_mquickjs_memory_reserve_internal_dma", i2s)
+        self.assertIn("esp32_mquickjs_memory_commit_driver_pinned", i2s)
+        self.assertIn("esp32_mquickjs_memory_release_driver_pinned", i2s)
+        self.assertIn("i2s_channel_get_info", i2s)
         self.assertEqual(i2s.count("i2s_new_channel("), 1)
 
         spi = (MQUICKJS / "src/modules/spi/esp32_mquickjs_spi.c").read_text(
@@ -191,6 +195,8 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
 
         self.assertIn('JS_CGETSET_DEF("manager", js_sys_memory_manager', stdlib)
         self.assertIn('"dmaLargestReserveBytes"', sys_source)
+        self.assertIn('"driverPinnedBytes"', sys_source)
+        self.assertIn('"pendingDmaReservationBytes"', sys_source)
         self.assertIn('"migrationCount"', sys_source)
         self.assertIn("esp32_mquickjs_memory_block_alloc", commands)
         self.assertIn("esp32_mquickjs_memory_block_borrow", commands)

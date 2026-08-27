@@ -38,7 +38,8 @@ typedef struct {
     size_t dma_largest_reserve_bytes;
     size_t managed_internal_bytes;
     size_t managed_psram_bytes;
-    size_t pinned_bytes;
+    size_t managed_pinned_bytes;
+    esp32_mquickjs_memory_dma_accounting_t dma_accounting;
     uint64_t use_sequence;
     uint32_t migration_count;
     size_t migration_bytes;
@@ -137,14 +138,26 @@ static bool memory_internal_dma_can_fit(size_t request_bytes)
     multi_heap_info_t internal;
     multi_heap_info_t dma;
     size_t reserve;
+    size_t pending_bytes;
+    size_t pending_largest_bytes;
+    size_t required_bytes;
+    size_t required_largest;
 
     memory_heap_info(&internal, &dma);
     taskENTER_CRITICAL(&s_memory.lock);
     reserve = s_memory.internal_reserve_bytes;
+    pending_bytes = s_memory.dma_accounting.pending_bytes;
+    pending_largest_bytes = s_memory.dma_accounting.pending_largest_bytes;
     taskEXIT_CRITICAL(&s_memory.lock);
-    return dma.largest_free_block >= request_bytes &&
-           internal.total_free_bytes >= request_bytes &&
-           internal.total_free_bytes - request_bytes >= reserve / 2U;
+    if (request_bytes > SIZE_MAX - pending_bytes ||
+        request_bytes > SIZE_MAX - pending_largest_bytes) {
+        return false;
+    }
+    required_bytes = request_bytes + pending_bytes;
+    required_largest = request_bytes + pending_largest_bytes;
+    return dma.largest_free_block >= required_largest &&
+           internal.total_free_bytes >= required_bytes &&
+           internal.total_free_bytes - required_bytes >= reserve / 2U;
 }
 
 void esp32_mquickjs_memory_init(void)
@@ -393,7 +406,7 @@ static void memory_add_block(esp32_mquickjs_memory_block_t *block)
     } else {
         s_memory.managed_internal_bytes += block->size;
         if (memory_class_counts_as_pinned(block->memory_class)) {
-            s_memory.pinned_bytes += block->size;
+            s_memory.managed_pinned_bytes += block->size;
         }
     }
     taskEXIT_CRITICAL(&s_memory.lock);
@@ -476,7 +489,7 @@ bool esp32_mquickjs_memory_block_resize(esp32_mquickjs_memory_block_t *block,
     } else {
         s_memory.managed_internal_bytes -= old_size;
         if (memory_class_counts_as_pinned(block->memory_class)) {
-            s_memory.pinned_bytes -= old_size;
+            s_memory.managed_pinned_bytes -= old_size;
         }
     }
     block->data = next;
@@ -487,7 +500,7 @@ bool esp32_mquickjs_memory_block_resize(esp32_mquickjs_memory_block_t *block,
     } else {
         s_memory.managed_internal_bytes += block->size;
         if (memory_class_counts_as_pinned(block->memory_class)) {
-            s_memory.pinned_bytes += block->size;
+            s_memory.managed_pinned_bytes += block->size;
         }
     }
     block->last_used = ++s_memory.use_sequence;
@@ -574,7 +587,7 @@ bool esp32_mquickjs_memory_block_free(esp32_mquickjs_memory_block_t *block)
     } else {
         s_memory.managed_internal_bytes -= block->size;
         if (memory_class_counts_as_pinned(block->memory_class)) {
-            s_memory.pinned_bytes -= block->size;
+            s_memory.managed_pinned_bytes -= block->size;
         }
     }
     taskEXIT_CRITICAL(&s_memory.lock);
@@ -726,7 +739,7 @@ void esp32_mquickjs_memory_release_generation(void)
     s_memory.blocks = NULL;
     s_memory.managed_internal_bytes = 0;
     s_memory.managed_psram_bytes = 0;
-    s_memory.pinned_bytes = 0;
+    s_memory.managed_pinned_bytes = 0;
     taskEXIT_CRITICAL(&s_memory.lock);
 
     /*
@@ -744,25 +757,71 @@ void esp32_mquickjs_memory_release_generation(void)
     }
 }
 
-bool esp32_mquickjs_memory_prepare_internal_dma(size_t total_bytes,
-                                                size_t largest_block_bytes)
+bool esp32_mquickjs_memory_reserve_internal_dma(
+    esp32_mquickjs_memory_dma_reservation_t *reservation,
+    size_t total_bytes,
+    size_t largest_block_bytes)
 {
     multi_heap_info_t internal;
     multi_heap_info_t dma;
     size_t reserve;
+    size_t required_bytes;
+    size_t required_largest;
+    bool accepted = false;
 
     esp32_mquickjs_memory_init();
+    if (reservation == NULL || total_bytes == 0 || largest_block_bytes == 0 ||
+        largest_block_bytes > total_bytes) {
+        return false;
+    }
     memory_heap_info(&internal, &dma);
     taskENTER_CRITICAL(&s_memory.lock);
     reserve = s_memory.internal_reserve_bytes;
+    if (total_bytes <= SIZE_MAX - s_memory.dma_accounting.pending_bytes &&
+        largest_block_bytes <=
+            SIZE_MAX - s_memory.dma_accounting.pending_largest_bytes) {
+        required_bytes = total_bytes + s_memory.dma_accounting.pending_bytes;
+        required_largest = largest_block_bytes +
+                           s_memory.dma_accounting.pending_largest_bytes;
+        if (dma.largest_free_block >= required_largest &&
+            internal.total_free_bytes >= required_bytes &&
+            internal.total_free_bytes - required_bytes >= reserve / 2U) {
+            accepted = esp32_mquickjs_memory_dma_accounting_reserve(
+                &s_memory.dma_accounting, reservation, total_bytes,
+                largest_block_bytes);
+        }
+    }
     taskEXIT_CRITICAL(&s_memory.lock);
-    if (dma.largest_free_block < largest_block_bytes ||
-        internal.total_free_bytes < total_bytes ||
-        internal.total_free_bytes - total_bytes < reserve / 2U) {
+    if (!accepted) {
         memory_note_failure();
         return false;
     }
     return true;
+}
+
+bool esp32_mquickjs_memory_commit_driver_pinned(
+    esp32_mquickjs_memory_dma_reservation_t *reservation,
+    size_t driver_pinned_bytes)
+{
+    bool committed;
+
+    taskENTER_CRITICAL(&s_memory.lock);
+    committed = esp32_mquickjs_memory_dma_accounting_commit(
+        &s_memory.dma_accounting, reservation, driver_pinned_bytes);
+    taskEXIT_CRITICAL(&s_memory.lock);
+    return committed;
+}
+
+bool esp32_mquickjs_memory_release_driver_pinned(
+    esp32_mquickjs_memory_dma_reservation_t *reservation)
+{
+    bool released;
+
+    taskENTER_CRITICAL(&s_memory.lock);
+    released = esp32_mquickjs_memory_dma_accounting_release(
+        &s_memory.dma_accounting, reservation);
+    taskEXIT_CRITICAL(&s_memory.lock);
+    return released;
 }
 
 void esp32_mquickjs_memory_get_status(esp32_mquickjs_memory_status_t *out)
@@ -780,7 +839,11 @@ void esp32_mquickjs_memory_get_status(esp32_mquickjs_memory_status_t *out)
     out->dma_largest_reserve_bytes = s_memory.dma_largest_reserve_bytes;
     out->managed_internal_bytes = s_memory.managed_internal_bytes;
     out->managed_psram_bytes = s_memory.managed_psram_bytes;
-    out->pinned_bytes = s_memory.pinned_bytes;
+    out->pinned_bytes = s_memory.managed_pinned_bytes +
+                        s_memory.dma_accounting.driver_pinned_bytes;
+    out->driver_pinned_bytes = s_memory.dma_accounting.driver_pinned_bytes;
+    out->pending_dma_reservation_bytes =
+        s_memory.dma_accounting.pending_bytes;
     out->migration_count = s_memory.migration_count;
     out->migration_bytes = s_memory.migration_bytes;
     out->eviction_count = s_memory.eviction_count;

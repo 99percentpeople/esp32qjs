@@ -83,3 +83,10 @@ add_executable(test_future_timeout
 )
 target_include_directories(test_future_timeout PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_future_timeout COMMAND test_future_timeout)
+
+add_executable(test_memory_dma_accounting
+    test_memory_dma_accounting.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_memory_dma_accounting.c
+)
+target_include_directories(test_memory_dma_accounting PRIVATE ../../components/esp32_mquickjs/internal)
+add_test(NAME test_memory_dma_accounting COMMAND test_memory_dma_accounting)

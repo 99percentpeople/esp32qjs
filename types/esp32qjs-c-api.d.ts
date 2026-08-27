@@ -1261,8 +1261,12 @@ namespace ESP32QJS {
     dmaLargestReserveBytes: number;
     managedInternalBytes: number;
     managedPsramBytes: number;
-    /** Internal stable managed bytes whose memory class is non-movable. */
+    /** Stable internal managed blocks plus registered driver DMA payloads. */
     pinnedBytes: number;
+    /** Driver-owned DMA payload bytes registered with the memory manager. */
+    driverPinnedBytes: number;
+    /** Internal DMA bytes admitted but not yet committed by a driver. */
+    pendingDmaReservationBytes: number;
     movableIdleBytes: number;
     migrationCount: number;
     migrationBytes: number;
@@ -1998,6 +2002,11 @@ namespace ESP32QJS {
     dma: {
       descriptorCount: number;
       framesPerDescriptor: number;
+      storage: "internal";
+      /** Actual bytes in each driver DMA buffer after ESP-IDF alignment. */
+      bufferBytes: number;
+      /** Actual driver DMA buffer bytes across every channel direction. */
+      totalBufferBytes: number;
     };
   }
 

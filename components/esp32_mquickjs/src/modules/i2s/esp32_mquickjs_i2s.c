@@ -73,6 +73,8 @@ typedef struct {
     uint8_t channels;
     uint32_t dma_descriptor_count;
     uint32_t dma_frames_per_descriptor;
+    size_t dma_buffer_bytes;
+    size_t dma_total_buffer_bytes;
     uint32_t timeout_ms;
     _Atomic uint32_t overruns;
     _Atomic uint32_t send_queue_overflows;
@@ -85,6 +87,7 @@ typedef struct {
     esp32_mquickjs_runtime_t *tx_runtime;
     esp32_mquickjs_future_token_t rx_token;
     esp32_mquickjs_future_token_t tx_token;
+    esp32_mquickjs_memory_dma_reservation_t dma_reservation;
     esp32_mquickjs_peripheral_lease_t lease;
 } esp32_mquickjs_i2s_slot_t;
 
@@ -369,6 +372,8 @@ static void i2s_cleanup_slot(esp32_mquickjs_i2s_slot_t *slot)
     if (slot->tx_handle != NULL) {
         (void)i2s_del_channel(slot->tx_handle);
     }
+    (void)esp32_mquickjs_memory_release_driver_pinned(
+        &slot->dma_reservation);
     esp32_mquickjs_peripheral_lease_release(&slot->lease);
     i2s_reset_slot(slot, port);
 }
@@ -582,6 +587,14 @@ static JSValue i2s_status_object(JSContext *ctx,
         !esp32_mquickjs_set_property_ref(
             ctx, dma, "framesPerDescriptor",
             JS_NewUint32(ctx, slot->dma_frames_per_descriptor)) ||
+        !esp32_mquickjs_set_property_ref(ctx, dma, "storage",
+                                         JS_NewString(ctx, "internal")) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, dma, "bufferBytes",
+            JS_NewUint32(ctx, (uint32_t)slot->dma_buffer_bytes)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, dma, "totalBufferBytes",
+            JS_NewUint32(ctx, (uint32_t)slot->dma_total_buffer_bytes)) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "pcm", *pcm) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "dma", *dma)) {
         JS_PopGCRef(ctx, &dma_ref);
@@ -1564,6 +1577,49 @@ static bool i2s_read_u32_property(JSContext *ctx, JSValue object,
            (JS_IsUndefined(property) || i2s_to_u32(ctx, property, value));
 }
 
+static bool i2s_commit_dma_accounting(esp32_mquickjs_i2s_slot_t *slot)
+{
+    i2s_chan_info_t info;
+    size_t buffer_bytes = 0;
+    size_t total_buffer_bytes = 0;
+
+    if (slot == NULL) {
+        return false;
+    }
+    if (slot->rx_handle != NULL) {
+        if (i2s_channel_get_info(slot->rx_handle, &info) != ESP_OK ||
+            info.total_dma_buf_size == 0 ||
+            info.total_dma_buf_size % slot->dma_descriptor_count != 0 ||
+            total_buffer_bytes > SIZE_MAX - info.total_dma_buf_size) {
+            return false;
+        }
+        buffer_bytes =
+            info.total_dma_buf_size / slot->dma_descriptor_count;
+        total_buffer_bytes += info.total_dma_buf_size;
+    }
+    if (slot->tx_handle != NULL) {
+        if (i2s_channel_get_info(slot->tx_handle, &info) != ESP_OK ||
+            info.total_dma_buf_size == 0 ||
+            info.total_dma_buf_size % slot->dma_descriptor_count != 0 ||
+            (buffer_bytes != 0 &&
+             buffer_bytes !=
+                 info.total_dma_buf_size / slot->dma_descriptor_count) ||
+            total_buffer_bytes > SIZE_MAX - info.total_dma_buf_size) {
+            return false;
+        }
+        buffer_bytes =
+            info.total_dma_buf_size / slot->dma_descriptor_count;
+        total_buffer_bytes += info.total_dma_buf_size;
+    }
+    if (!esp32_mquickjs_memory_commit_driver_pinned(
+            &slot->dma_reservation, total_buffer_bytes)) {
+        return false;
+    }
+    slot->dma_buffer_bytes = buffer_bytes;
+    slot->dma_total_buffer_bytes = total_buffer_bytes;
+    return true;
+}
+
 JSValue js_i2s_open(JSContext *ctx, JSValue *this_val, int argc,
                     JSValue *argv)
 {
@@ -1575,6 +1631,9 @@ JSValue js_i2s_open(JSContext *ctx, JSValue *this_val, int argc,
     uint32_t slot_bits = 16;
     uint32_t dma_descriptors = I2S_DEFAULT_DMA_DESCRIPTORS;
     uint32_t dma_frames = I2S_DEFAULT_DMA_FRAMES;
+    size_t dma_buffer_bytes;
+    size_t dma_largest_block_bytes;
+    size_t dma_request;
     uint32_t timeout_ms = I2S_DEFAULT_TIMEOUT_MS;
     i2s_slot_mode_t slot_mode = I2S_SLOT_MODE_MONO;
     i2s_std_slot_mask_t slot_mask = I2S_STD_SLOT_LEFT;
@@ -1869,21 +1928,25 @@ parsed:
     if (mode == ESP32_MQUICKJS_I2S_MODE_PDM) {
         requested_port = I2S_NUM_0;
     }
-    {
-        size_t directions = direction == ESP32_MQUICKJS_I2S_DIRECTION_DUPLEX
-                                ? 2U
-                                : 1U;
-        size_t bytes_per_frame = ((size_t)slot_bits / 8U) *
-                                 (slot_mode == I2S_SLOT_MODE_MONO ? 1U : 2U);
-        size_t dma_buffer_bytes = (size_t)dma_frames * bytes_per_frame;
-        size_t dma_request = directions * (size_t)dma_descriptors *
-                             (dma_buffer_bytes + 32U);
-
-        if (!esp32_mquickjs_memory_prepare_internal_dma(
-                dma_request, dma_buffer_bytes)) {
-            return i2s_throw_no_memory(ctx, "i2s.open()");
-        }
+    dma_buffer_bytes = (size_t)dma_frames *
+#if CONFIG_IDF_TARGET_ESP32
+                       (((size_t)data_bits + 15U) / 16U) * 2U *
+#else
+                       (((size_t)data_bits + 7U) / 8U) *
+#endif
+                       (slot_mode == I2S_SLOT_MODE_MONO ? 1U : 2U);
+    dma_largest_block_bytes = dma_buffer_bytes + 32U;
+    if (dma_largest_block_bytes < 32U) {
+        dma_largest_block_bytes = 32U;
     }
+    if (dma_largest_block_bytes <
+        (size_t)dma_descriptors * sizeof(void *)) {
+        dma_largest_block_bytes =
+            (size_t)dma_descriptors * sizeof(void *);
+    }
+    dma_request =
+        (direction == ESP32_MQUICKJS_I2S_DIRECTION_DUPLEX ? 2U : 1U) *
+        (size_t)dma_descriptors * (dma_buffer_bytes + 32U);
     if (requested_port == I2S_NUM_AUTO) {
         for (i = 0; i < I2S_LL_GET(INST_NUM); ++i) {
             if (!s_i2s_slots[i].allocated &&
@@ -1915,7 +1978,14 @@ parsed:
     slot->channels = slot_mode == I2S_SLOT_MODE_MONO ? 1 : 2;
     slot->dma_descriptor_count = dma_descriptors;
     slot->dma_frames_per_descriptor = dma_frames;
+    slot->dma_buffer_bytes = dma_buffer_bytes;
     slot->timeout_ms = timeout_ms;
+    if (!esp32_mquickjs_memory_reserve_internal_dma(
+            &slot->dma_reservation, dma_request,
+            dma_largest_block_bytes)) {
+        i2s_cleanup_slot(slot);
+        return i2s_throw_no_memory(ctx, "i2s.open()");
+    }
     channel_config.id = slot->port;
     channel_config.dma_desc_num = dma_descriptors;
     channel_config.dma_frame_num = dma_frames;
@@ -1987,6 +2057,9 @@ parsed:
 #else
         err = ESP_ERR_NOT_SUPPORTED;
 #endif
+    }
+    if (err == ESP_OK && !i2s_commit_dma_accounting(slot)) {
+        err = ESP_ERR_INVALID_STATE;
     }
     if (err == ESP_OK && slot->rx_handle != NULL) {
         err = i2s_channel_register_event_callback(slot->rx_handle,

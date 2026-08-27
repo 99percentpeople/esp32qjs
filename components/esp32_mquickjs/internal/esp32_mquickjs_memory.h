@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "esp32_mquickjs_memory_dma_accounting.h"
+
 typedef enum {
     ESP32_MQUICKJS_MEMORY_DEFAULT,
     ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL,
@@ -37,8 +39,10 @@ typedef struct {
     size_t dma_largest_reserve_bytes;
     size_t managed_internal_bytes;
     size_t managed_psram_bytes;
-    /* Internal stable managed bytes whose memory class is non-movable. */
+    /* Stable internal managed blocks plus registered driver DMA payloads. */
     size_t pinned_bytes;
+    size_t driver_pinned_bytes;
+    size_t pending_dma_reservation_bytes;
     size_t movable_idle_bytes;
     uint32_t migration_count;
     size_t migration_bytes;
@@ -59,12 +63,21 @@ void esp32_mquickjs_memory_maintain(void);
 void esp32_mquickjs_memory_release_generation(void);
 
 /*
- * Reserve-check an internal-only DMA allocation set before entering a driver.
- * `total_bytes` covers aggregate heap pressure while `largest_block_bytes`
- * models the largest individual allocation the driver is expected to make.
+ * Reserve an internal-only DMA allocation set before entering a driver. The
+ * driver commits the exact payload reported by ESP-IDF after initialization,
+ * then releases the same reservation after deleting its native handles.
+ * Reservations do not migrate managed blocks because callers may be inside a
+ * native JavaScript method rather than a runtime safe point.
  */
-bool esp32_mquickjs_memory_prepare_internal_dma(size_t total_bytes,
-                                                size_t largest_block_bytes);
+bool esp32_mquickjs_memory_reserve_internal_dma(
+    esp32_mquickjs_memory_dma_reservation_t *reservation,
+    size_t total_bytes,
+    size_t largest_block_bytes);
+bool esp32_mquickjs_memory_commit_driver_pinned(
+    esp32_mquickjs_memory_dma_reservation_t *reservation,
+    size_t driver_pinned_bytes);
+bool esp32_mquickjs_memory_release_driver_pinned(
+    esp32_mquickjs_memory_dma_reservation_t *reservation);
 
 void esp32_mquickjs_memory_get_status(esp32_mquickjs_memory_status_t *out);
 const char *esp32_mquickjs_memory_pressure_name(

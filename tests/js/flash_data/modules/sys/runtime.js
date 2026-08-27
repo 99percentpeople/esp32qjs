@@ -209,6 +209,8 @@ test("sys/runtime", function () {
     "memory manager should publish non-zero internal and DMA reserves");
   test.ok(memoryManager.managedInternalBytes >= 0 &&
       memoryManager.managedPsramBytes >= 0 &&
+      memoryManager.driverPinnedBytes >= 0 &&
+      memoryManager.pendingDmaReservationBytes >= 0 &&
       memoryManager.movableIdleBytes >= 0,
     "memory manager byte counters should be non-negative");
   test.ok(memoryManager.migrationCount >= 0 &&

@@ -28,7 +28,8 @@ profile.
   crosses a span boundary.
 - `channel.status()` reports direction, port, running/read/write state, PCM
   layout, DMA configuration, receive queue overruns, and
-  `sendQueueOverflows`.
+  `sendQueueOverflows`. Read `dma.storage`, `dma.bufferBytes`, and
+  `dma.totalBufferBytes` for the actual persistent driver ring layout.
 - `channel.close()` is idempotent and non-waiting. It cancels pending I/O and
   releases native handles after Future leases finish. Runtime teardown uses the
   same path.
@@ -48,7 +49,11 @@ Create the channel once after Wi-Fi initialization, then reuse `start()` and
 configurations as a low-memory fallback. On PSRAM boards, transient PCM buffers
 use PSRAM while I2S DMA rings remain in DMA-capable internal memory; a staging
 allocation failure reports `I2S_NO_MEMORY` without consuming that internal
-reserve. Compare `sys.status.memory.internal`, `.dma`, and `.psram`
+reserve. Ring admission and lifetime accounting are owned by the framework
+memory manager even though ESP-IDF performs the physical allocations. Compare
+`sys.status.memory.manager.driverPinnedBytes`,
+`.pendingDmaReservationBytes`, plus `sys.status.memory.internal`, `.dma`, and
+`.psram`
 `largestFreeBlockBytes` / `minimumFreeBytes` when diagnosing fragmentation.
 
 PDM always yields signed 16-bit little-endian mono PCM:
