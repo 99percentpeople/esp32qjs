@@ -1261,10 +1261,14 @@ namespace ESP32QJS {
     dmaLargestReserveBytes: number;
     managedInternalBytes: number;
     managedPsramBytes: number;
-    /** Stable internal managed blocks plus registered driver DMA payloads. */
+    /** Managed pinned bytes plus driver DMA payloads and staging pools. */
     pinnedBytes: number;
     /** Driver-owned DMA payload bytes registered with the memory manager. */
     driverPinnedBytes: number;
+    /** Internal DMA bytes committed to reusable driver staging pools. */
+    stagingPinnedBytes: number;
+    /** Number of committed reusable DMA staging pools. */
+    dmaStagingPools: number;
     /** Internal DMA bytes admitted but not yet committed by a driver. */
     pendingDmaReservationBytes: number;
     movableIdleBytes: number;
@@ -1605,6 +1609,7 @@ namespace ESP32QJS {
     mosi: number;
     miso: number;
     maxTransferSize: number;
+    dmaStagingBytes: number;
     deviceCount: number;
   }
 
@@ -1616,10 +1621,16 @@ namespace ESP32QJS {
     host: number;
     cs: number;
     mode: 0 | 1 | 2 | 3;
-    freqHz: number;
+    requestedFreqHz: number;
+    actualFreqHz: number;
     queueSize: number;
     csHigh: boolean;
     lsbFirst: boolean;
+    directExternalDma: boolean;
+    timeoutMs: number;
+    dmaStagingBytes: number;
+    faulted: boolean;
+    lastErrorCode: SPIErrorCode | null;
   }
 
   /**
@@ -1631,6 +1642,8 @@ namespace ESP32QJS {
     mosi?: number;
     miso?: number;
     maxTransferSize?: number;
+    /** Size of each of the two reusable internal DMA staging slots. */
+    dmaStagingBytes?: number;
   }
 
   /**
@@ -1643,26 +1656,63 @@ namespace ESP32QJS {
     queueSize?: number;
     csHigh?: boolean;
     lsbFirst?: boolean;
+    directExternalDma?: boolean;
+    timeoutMs?: number;
+  }
+
+  interface SPIOperationOptions {
+    timeoutMs?: number;
+  }
+
+  interface SPIReadOptions extends SPIOperationOptions {
+    fillByte?: number;
   }
 
   interface SPIWriteOptions {
     /** Number of queued transactions to keep in flight. */
     queueDepth?: number;
+    timeoutMs?: number;
+  }
+
+  type SPIDmaPath =
+    | "direct-internal"
+    | "direct-external"
+    | "staged-internal"
+    | "mixed";
+
+  type SPIErrorCode =
+    | "DMA_STAGING_NO_MEMORY"
+    | "DMA_TX_UNDERFLOW"
+    | "DMA_RX_OVERFLOW"
+    | "DMA_TRANSFER_TIMEOUT"
+    | "DMA_DEVICE_FAULTED";
+
+  interface SPIError extends Error {
+    code: SPIErrorCode;
+    operation: "openBus" | "write" | "transfer" | "read" | "writeChunks" | "writeSource" | "unknown";
+    espCode: number;
+    espName: string;
+    completedBytes: number;
+    path: SPIDmaPath;
+    requestedFreqHz: number;
+    actualFreqHz: number;
   }
 
   /**
    * Timing and transfer counters returned by SPI bulk-write helpers.
    */
   interface SPIWriteStats {
-    chunks: number;
     bytes: number;
-    prepUs: number;
+    sourceSpans: number;
+    transactions: number;
+    path: SPIDmaPath;
+    stagedBytes: number;
+    copyUs: number;
     queueUs: number;
     waitUs: number;
     transferUs: number;
     totalUs: number;
     queueDepth: number;
-    direct: boolean;
   }
 
   /**
@@ -1689,8 +1739,8 @@ namespace ESP32QJS {
   interface SPIDevice {
     close(): boolean;
     status(): SPIDeviceStatus;
-    transfer(data: ByteSource): ByteView;
-    write(data: ByteSource): number;
+    transfer(data: ByteSource, options?: SPIOperationOptions): ByteView;
+    write(data: ByteSource, options?: SPIOperationOptions): number;
     /**
      * Write an array-like list of byte sources, reusing queued SPI
      * transactions for larger display flushes.
@@ -1707,7 +1757,7 @@ namespace ESP32QJS {
       source: ByteSpanSource,
       options?: SPIWriteOptions,
     ): SPIWriteStats;
-    read(length: number, fillByte?: number): ByteView;
+    read(length: number, options?: SPIReadOptions): ByteView;
   }
 
   /**

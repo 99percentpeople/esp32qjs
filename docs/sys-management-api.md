@@ -269,9 +269,11 @@ declare namespace ESP32QJS {
     dmaLargestReserveBytes: number;
     managedInternalBytes: number;
     managedPsramBytes: number;
-    /** Stable internal managed blocks plus registered driver DMA payloads. */
+    /** Managed pinned blocks plus driver DMA payloads and staging pools. */
     pinnedBytes: number;
     driverPinnedBytes: number;
+    stagingPinnedBytes: number;
+    dmaStagingPools: number;
     pendingDmaReservationBytes: number;
     movableIdleBytes: number;
     migrationCount: number;
@@ -679,9 +681,11 @@ requires internal DMA uses `DMA_INTERNAL` explicitly.
 
 `pinnedBytes` counts every internal stable managed block whose class is
 non-movable, including `DMA_EXTERNAL` blocks that fell back to internal RAM,
-plus registered driver DMA payloads. `driverPinnedBytes` isolates the latter;
-`pendingDmaReservationBytes` reports allocations admitted by policy but not
-yet committed by the driver. Movable-class blocks are excluded even while
+plus registered driver DMA payloads and committed staging pools.
+`driverPinnedBytes` isolates persistent driver payloads;
+`stagingPinnedBytes` and `dmaStagingPools` isolate reusable internal DMA
+staging workspaces. `pendingDmaReservationBytes` reports allocations admitted
+by policy but not yet committed by the driver. Movable-class blocks are excluded even while
 temporarily borrowed; `movableIdleBytes` separately reports movable blocks
 that are currently idle. Raw payload helpers and opaque driver metadata remain
 outside these values.

@@ -198,10 +198,10 @@ user-provided pins; never guess them.
 
 ## SPI
 
-- `spi.openBus({host?, sclk?, mosi?, miso?, maxTransferSize?})`
-- bus `openDevice({cs?, mode?, freqHz?, queueSize?, csHigh?, lsbFirst?})`
-- device `transfer(data)`, `read(length, fillByte?)`, `write(data)`,
-  `writeChunks(chunks, options?)`, `writeSource(source, options?)`, `status()`,
+- `spi.openBus({host?, sclk?, mosi?, miso?, maxTransferSize?, dmaStagingBytes?})`
+- bus `openDevice({cs?, mode?, freqHz?, queueSize?, csHigh?, lsbFirst?, directExternalDma?, timeoutMs?})`
+- device `transfer(data, {timeoutMs?}?)`, `read(length, {fillByte?, timeoutMs?}?)`, `write(data, {timeoutMs?}?)`,
+  `writeChunks(chunks, {queueDepth?, timeoutMs?}?)`, `writeSource(source, {queueDepth?, timeoutMs?}?)`, `status()`,
   `close()`
 - bus `status()`, `close()`
 

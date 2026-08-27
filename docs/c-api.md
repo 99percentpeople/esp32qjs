@@ -541,34 +541,34 @@ bus.close();
 - `spi.DEFAULT_MAX_TRANSFER_SIZE`
   Default bus max transfer size in bytes.
 - `spi.openBus(options?)`
-  Open one SPI master bus and return an `SPIBus` instance. Without options it uses `DEFAULT_HOST`, `DEFAULT_SCLK`, `DEFAULT_MOSI`, and `DEFAULT_MISO`. `options` can override `{ host, sclk, mosi, miso, maxTransferSize }`. One JS `SPIBus` maps to one ESP-IDF SPI host; opening the same host twice throws.
+  Open one SPI master bus and return an `SPIBus` instance. Without options it uses `DEFAULT_HOST`, `DEFAULT_SCLK`, `DEFAULT_MOSI`, and `DEFAULT_MISO`. `options` can override `{ host, sclk, mosi, miso, maxTransferSize, dmaStagingBytes }`. `dmaStagingBytes` defaults to `min(8192, maxTransferSize)` and must be a positive integer no larger than `maxTransferSize`. The bus reserves two reusable internal-DMA TX/RX staging slots of this size; operations never resize them. One JS `SPIBus` maps to one ESP-IDF SPI host; opening the same host twice throws.
 
 `SPIBus` methods:
 
 - `bus.status()`
-  Return `{ opened, host, sclk, mosi, miso, maxTransferSize, deviceCount }`.
+  Return `{ opened, host, sclk, mosi, miso, maxTransferSize, dmaStagingBytes, deviceCount }`.
 - `bus.close()`
   Close the bus. Any `SPIDevice` objects opened from that bus become stale. If callers forget to close them, GC finalization still releases the native handles eventually, but explicit `close()` remains the intended lifecycle boundary.
 - `bus.openDevice(options?)`
-  Open an `SPIDevice` on the bus. `options` can include `{ cs, mode, freqHz, queueSize, csHigh, lsbFirst }`. `cs` defaults to `spi.DEFAULT_CS`, which can be `-1` when chip-select is managed manually in JS or external hardware.
+  Open an `SPIDevice` on the bus. `options` can include `{ cs, mode, freqHz, queueSize, csHigh, lsbFirst, directExternalDma, timeoutMs }`. `directExternalDma` defaults to `false`; external memory is staged unless it is explicitly enabled. `timeoutMs` defaults to `1000` and must be in `1..60000`. `cs` defaults to `spi.DEFAULT_CS`, which can be `-1` when chip-select is managed manually in JS or external hardware.
 
 `SPIDevice` methods:
 
 - `device.status()`
-  Return `{ opened, host, cs, mode, freqHz, queueSize, csHigh, lsbFirst }`.
+  Return `{ opened, host, cs, mode, requestedFreqHz, actualFreqHz, queueSize, csHigh, lsbFirst, directExternalDma, timeoutMs, dmaStagingBytes, faulted, lastErrorCode }`.
 - `device.close()`
   Remove the device from its parent SPI bus and make the JS object stale.
-- `device.transfer(data)`
-  Perform one full-duplex transaction from an array-like sequence
+- `device.transfer(data, options?)`
+  Perform a full-duplex operation from an array-like sequence
   of bytes or native byte view and return the received bytes as an owned
-  `ByteView`.
-- `device.write(data)`
-  Perform one write-only transaction from an array-like sequence of bytes or native byte view and return the number of transmitted bytes.
+  `ByteView`. `options.timeoutMs` overrides the device default for this operation.
+- `device.write(data, options?)`
+  Perform a write-only operation from an array-like sequence of bytes or native byte view and return the number of transmitted bytes. `options.timeoutMs` overrides the device default.
 - `device.writeChunks(chunks, options?)`
-  Queue an array-like list of byte-source chunks for write-only SPI transfers. `options.queueDepth` defaults to `2` and is capped by the device queue size. DMA-capable chunks are queued directly; other chunks are copied into DMA-capable staging buffers. The method returns `{ chunks, bytes, prepUs, queueUs, waitUs, transferUs, totalUs, queueDepth, direct }`.
+  Queue an array-like list of byte-source spans for write-only SPI transfers. `options.queueDepth` defaults to `2` and is capped by the device queue size and the two fixed staging slots; `options.timeoutMs` overrides the device default. Internal DMA sources are direct, external DMA sources are direct only when `directExternalDma` is enabled, and all other sources use the bus staging workspace. The method returns `{ bytes, sourceSpans, transactions, path, stagedBytes, copyUs, queueUs, waitUs, transferUs, totalUs, queueDepth }`; `path` is `direct-internal`, `direct-external`, `staged-internal`, or `mixed`.
 - `device.writeSource(source, options?)`
   Queue spans from a retained native `ByteSpanSource`, such as `Bitmap.createSpanSource(...)`, without materializing a JavaScript chunk array. SPI treats the source as a generic transport capability; it does not inspect Bitmap internals. `options.queueDepth` and the returned stats object match `writeChunks(...)`.
-- `device.read(length, fillByte = 0)`
+- `device.read(length, { fillByte = 0, timeoutMs? }?)`
   Clock `length` bytes and return an owned `ByteView` from MISO. `fillByte`
   controls the dummy value shifted out on MOSI while reading.
 
@@ -576,8 +576,25 @@ All five transaction methods are registered native Future drivers. Direct calls
 wait cooperatively; `Future.call()` returns after capture and before hardware
 I/O. Operations share one bounded FIFO lane per SPI host, so devices on one
 controller stay ordered while separate hosts may progress independently. A
-bulk write incrementally consumes its captured chunks or `ByteSpanSource` and
-can keep up to the selected queue depth of ESP-IDF DMA transactions in flight.
+bulk write incrementally consumes its captured chunks or retained
+`ByteSpanSource`; `ByteView` read leases, source owners, and staging slots
+remain retained until ESP-IDF returns each queued transaction. Splitting one source span keeps the
+bus acquired and uses `SPI_TRANS_CS_KEEP_ACTIVE`, so CS stays continuous across
+that span.
+ESP-IDF requires `portMAX_DELAY` for bus acquisition; SPI invokes it only after
+the per-bus Future lane proves there is no earlier transaction in flight, so it
+completes immediately. Queue and completion collection remain zero-wait calls,
+with ISR wakeups returning control to the runtime poller.
+
+Each operation has an overall deadline plus a no-progress deadline of
+`max(100 ms, 4 * theoretical wire time + 50 ms)`, capped by the remaining
+overall deadline. SPI does not retry with a different frequency, chunk size,
+or memory path. Structured failures use `DMA_STAGING_NO_MEMORY`,
+`DMA_TX_UNDERFLOW`, `DMA_RX_OVERFLOW`, `DMA_TRANSFER_TIMEOUT`, or
+`DMA_DEVICE_FAULTED` and include the operation, ESP error, completed byte
+count, DMA path, and requested/actual frequencies without payload data. A
+timed-out queued transaction is retained until ESP-IDF returns it; if stopping
+cannot be confirmed, the device becomes faulted and rejects new operations.
 
 Example:
 
@@ -1621,6 +1638,9 @@ if (ref) {
   Reports the framework-wide allocation pressure state, startup-derived
   internal/DMA reserves, managed internal/PSRAM byte counts, idle movable
   bytes, migration/eviction counters, and classified allocation failures.
+  `pinnedBytes` includes managed pinned blocks, registered driver DMA payloads,
+  and reusable staging; `stagingPinnedBytes` and `dmaStagingPools` isolate the
+  staging contribution.
   Driver-owned DMA descriptors and other opaque ESP-IDF allocations are not
   included in the managed byte counters.
 - `sys.randomHex(byteLength)`
