@@ -70,6 +70,22 @@ class WifiRadioArchitectureTests(unittest.TestCase):
         self.assertIn("config ESP32_MQUICKJS_WIFI_RADIO", kconfig)
         self.assertIn("select ESP32_MQUICKJS_WIFI_RADIO", kconfig)
 
+    def test_channel_snapshot_initializes_optional_secondary_channel(self):
+        radio = (
+            MQUICKJS
+            / "src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+        ).read_text(encoding="utf-8")
+        get_channel = radio[
+            radio.index("esp32_mquickjs_wifi_radio_get_channel(") :
+            radio.index("esp32_mquickjs_wifi_radio_set_channel(")
+        ]
+
+        self.assertIn("uint8_t actual_primary = 0;", get_channel)
+        self.assertIn(
+            "wifi_second_chan_t actual_secondary = WIFI_SECOND_CHAN_NONE;",
+            get_channel,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

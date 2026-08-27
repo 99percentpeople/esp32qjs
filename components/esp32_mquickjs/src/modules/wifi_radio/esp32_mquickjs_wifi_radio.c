@@ -168,8 +168,8 @@ esp_err_t esp32_mquickjs_wifi_radio_get_channel(
     wifi_second_chan_t *secondary,
     uint32_t *channel_generation)
 {
-    uint8_t actual_primary;
-    wifi_second_chan_t actual_secondary;
+    uint8_t actual_primary = 0;
+    wifi_second_chan_t actual_secondary = WIFI_SECOND_CHAN_NONE;
     esp_err_t err;
 
     if (primary == NULL || secondary == NULL ||
