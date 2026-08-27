@@ -581,9 +581,1291 @@
         "file": "docs/c-api.md",
         "ownerToken": "HttpServer"
       }
+    },
+    {
+      "name": "EspNowSession",
+      "globalName": "EspNowSession",
+      "arity": 0,
+      "implementation": "js_espnow_session_constructor",
+      "classId": "JS_CLASS_ESPNOW_SESSION",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "definition": "js_espnow_session_class"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowSession"
+      }
+    },
+    {
+      "name": "EspNowPeer",
+      "globalName": "EspNowPeer",
+      "arity": 0,
+      "implementation": "js_espnow_peer_constructor",
+      "classId": "JS_CLASS_ESPNOW_PEER",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "definition": "js_espnow_peer_class"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowPeer"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowPeer"
+      }
+    },
+    {
+      "name": "BLEAdapter",
+      "globalName": "BLEAdapter",
+      "arity": 0,
+      "implementation": "js_ble_adapter_constructor",
+      "classId": "JS_CLASS_BLE_ADAPTER",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "definition": "js_ble_adapter_class"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEAdapter"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEAdapter"
+      }
+    },
+    {
+      "name": "BLEScanner",
+      "globalName": "BLEScanner",
+      "arity": 0,
+      "implementation": "js_ble_scanner_constructor",
+      "classId": "JS_CLASS_BLE_SCANNER",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "definition": "js_ble_scanner_class"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEScanner"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEScanner"
+      }
+    },
+    {
+      "name": "BLEAdvertiser",
+      "globalName": "BLEAdvertiser",
+      "arity": 0,
+      "implementation": "js_ble_advertiser_constructor",
+      "classId": "JS_CLASS_BLE_ADVERTISER",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "definition": "js_ble_advertiser_class"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEAdvertiser"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEAdvertiser"
+      }
+    },
+    {
+      "name": "BLEConnection",
+      "globalName": "BLEConnection",
+      "arity": 0,
+      "implementation": "js_ble_connection_constructor",
+      "classId": "JS_CLASS_BLE_CONNECTION",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "definition": "js_ble_connection_class"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEConnection"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEConnection"
+      }
+    },
+    {
+      "name": "BLEService",
+      "globalName": "BLEService",
+      "arity": 0,
+      "implementation": "js_ble_service_constructor",
+      "classId": "JS_CLASS_BLE_SERVICE",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "definition": "js_ble_service_class"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEService"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEService"
+      }
+    },
+    {
+      "name": "BLECharacteristic",
+      "globalName": "BLECharacteristic",
+      "arity": 0,
+      "implementation": "js_ble_characteristic_constructor",
+      "classId": "JS_CLASS_BLE_CHARACTERISTIC",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "definition": "js_ble_characteristic_class"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLECharacteristic"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLECharacteristic"
+      }
+    },
+    {
+      "name": "BLEDescriptor",
+      "globalName": "BLEDescriptor",
+      "arity": 0,
+      "implementation": "js_ble_descriptor_constructor",
+      "classId": "JS_CLASS_BLE_DESCRIPTOR",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "definition": "js_ble_descriptor_class"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEDescriptor"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEDescriptor"
+      }
+    },
+    {
+      "name": "BLENotificationStream",
+      "globalName": "BLENotificationStream",
+      "arity": 0,
+      "implementation": "js_ble_notification_constructor",
+      "classId": "JS_CLASS_BLE_NOTIFICATION_STREAM",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "definition": "js_ble_notification_class"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLENotificationStream"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLENotificationStream"
+      }
+    },
+    {
+      "name": "BLEGattServer",
+      "globalName": "BLEGattServer",
+      "arity": 0,
+      "implementation": "js_ble_gatt_server_constructor",
+      "classId": "JS_CLASS_BLE_GATT_SERVER",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "definition": "js_ble_gatt_server_class"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEGattServer"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEGattServer"
+      }
+    },
+    {
+      "name": "BLELocalCharacteristic",
+      "globalName": "BLELocalCharacteristic",
+      "arity": 0,
+      "implementation": "js_ble_local_characteristic_constructor",
+      "classId": "JS_CLASS_BLE_LOCAL_CHARACTERISTIC",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "definition": "js_ble_local_characteristic_class"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLELocalCharacteristic"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLELocalCharacteristic"
+      }
     }
   ],
   "functions": [
+    {
+      "qualifiedName": "BLEAdapter.prototype.advertise",
+      "surface": "BLEAdapter.prototype",
+      "name": "advertise",
+      "arity": 1,
+      "implementation": "js_ble_adapter_advertise",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_adapter_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEAdapter"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEAdapter"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEAdapter.prototype.bonds",
+      "surface": "BLEAdapter.prototype",
+      "name": "bonds",
+      "arity": 0,
+      "implementation": "js_ble_adapter_bonds",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_adapter_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEAdapter"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEAdapter"
+      }
+    },
+    {
+      "qualifiedName": "BLEAdapter.prototype.clearBonds",
+      "surface": "BLEAdapter.prototype",
+      "name": "clearBonds",
+      "arity": 0,
+      "implementation": "js_ble_adapter_clear_bonds",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_adapter_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEAdapter"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEAdapter"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEAdapter.prototype.close",
+      "surface": "BLEAdapter.prototype",
+      "name": "close",
+      "arity": 0,
+      "implementation": "js_ble_adapter_close",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_adapter_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEAdapter"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEAdapter"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEAdapter.prototype.connect",
+      "surface": "BLEAdapter.prototype",
+      "name": "connect",
+      "arity": 2,
+      "implementation": "js_ble_adapter_connect",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_adapter_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEAdapter"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEAdapter"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEAdapter.prototype.removeBond",
+      "surface": "BLEAdapter.prototype",
+      "name": "removeBond",
+      "arity": 1,
+      "implementation": "js_ble_adapter_remove_bond",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_adapter_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEAdapter"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEAdapter"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEAdapter.prototype.scan",
+      "surface": "BLEAdapter.prototype",
+      "name": "scan",
+      "arity": 1,
+      "implementation": "js_ble_adapter_scan",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_adapter_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEAdapter"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEAdapter"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEAdapter.prototype.server",
+      "surface": "BLEAdapter.prototype",
+      "name": "server",
+      "arity": 0,
+      "implementation": "js_ble_adapter_server",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_adapter_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEAdapter"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEAdapter"
+      }
+    },
+    {
+      "qualifiedName": "BLEAdapter.prototype.status",
+      "surface": "BLEAdapter.prototype",
+      "name": "status",
+      "arity": 0,
+      "implementation": "js_ble_adapter_status",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_adapter_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEAdapter"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEAdapter"
+      }
+    },
+    {
+      "qualifiedName": "BLEAdvertiser.prototype.close",
+      "surface": "BLEAdvertiser.prototype",
+      "name": "close",
+      "arity": 0,
+      "implementation": "js_ble_advertiser_close",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_advertiser_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEAdvertiser"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEAdvertiser"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEAdvertiser.prototype.receive",
+      "surface": "BLEAdvertiser.prototype",
+      "name": "receive",
+      "arity": 1,
+      "implementation": "js_ble_advertiser_receive",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_advertiser_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEAdvertiser"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEAdvertiser"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEAdvertiser.prototype.stats",
+      "surface": "BLEAdvertiser.prototype",
+      "name": "stats",
+      "arity": 0,
+      "implementation": "js_ble_advertiser_stats",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_advertiser_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEAdvertiser"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEAdvertiser"
+      }
+    },
+    {
+      "qualifiedName": "BLEAdvertiser.prototype.status",
+      "surface": "BLEAdvertiser.prototype",
+      "name": "status",
+      "arity": 0,
+      "implementation": "js_ble_advertiser_status",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_advertiser_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEAdvertiser"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEAdvertiser"
+      }
+    },
+    {
+      "qualifiedName": "BLECharacteristic.prototype.descriptors",
+      "surface": "BLECharacteristic.prototype",
+      "name": "descriptors",
+      "arity": 0,
+      "implementation": "js_ble_characteristic_descriptors",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_characteristic_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLECharacteristic"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLECharacteristic"
+      }
+    },
+    {
+      "qualifiedName": "BLECharacteristic.prototype.read",
+      "surface": "BLECharacteristic.prototype",
+      "name": "read",
+      "arity": 1,
+      "implementation": "js_ble_characteristic_read",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_characteristic_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLECharacteristic"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLECharacteristic"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLECharacteristic.prototype.subscribe",
+      "surface": "BLECharacteristic.prototype",
+      "name": "subscribe",
+      "arity": 1,
+      "implementation": "js_ble_characteristic_subscribe",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_characteristic_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLECharacteristic"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLECharacteristic"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLECharacteristic.prototype.write",
+      "surface": "BLECharacteristic.prototype",
+      "name": "write",
+      "arity": 2,
+      "implementation": "js_ble_characteristic_write",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_characteristic_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLECharacteristic"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLECharacteristic"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEConnection.prototype.close",
+      "surface": "BLEConnection.prototype",
+      "name": "close",
+      "arity": 0,
+      "implementation": "js_ble_connection_close",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_connection_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEConnection"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEConnection"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEConnection.prototype.discover",
+      "surface": "BLEConnection.prototype",
+      "name": "discover",
+      "arity": 1,
+      "implementation": "js_ble_connection_discover",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_connection_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEConnection"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEConnection"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEConnection.prototype.exchangeMtu",
+      "surface": "BLEConnection.prototype",
+      "name": "exchangeMtu",
+      "arity": 2,
+      "implementation": "js_ble_connection_exchange_mtu",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_connection_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEConnection"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEConnection"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEConnection.prototype.pair",
+      "surface": "BLEConnection.prototype",
+      "name": "pair",
+      "arity": 1,
+      "implementation": "js_ble_connection_pair",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_connection_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEConnection"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEConnection"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEConnection.prototype.readRssi",
+      "surface": "BLEConnection.prototype",
+      "name": "readRssi",
+      "arity": 1,
+      "implementation": "js_ble_connection_read_rssi",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_connection_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEConnection"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEConnection"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEConnection.prototype.receive",
+      "surface": "BLEConnection.prototype",
+      "name": "receive",
+      "arity": 1,
+      "implementation": "js_ble_connection_receive",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_connection_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEConnection"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEConnection"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEConnection.prototype.respondPairing",
+      "surface": "BLEConnection.prototype",
+      "name": "respondPairing",
+      "arity": 2,
+      "implementation": "js_ble_connection_respond_pairing",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_connection_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEConnection"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEConnection"
+      }
+    },
+    {
+      "qualifiedName": "BLEConnection.prototype.stats",
+      "surface": "BLEConnection.prototype",
+      "name": "stats",
+      "arity": 0,
+      "implementation": "js_ble_connection_stats",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_connection_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEConnection"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEConnection"
+      }
+    },
+    {
+      "qualifiedName": "BLEConnection.prototype.status",
+      "surface": "BLEConnection.prototype",
+      "name": "status",
+      "arity": 0,
+      "implementation": "js_ble_connection_status",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_connection_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEConnection"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEConnection"
+      }
+    },
+    {
+      "qualifiedName": "BLEDescriptor.prototype.read",
+      "surface": "BLEDescriptor.prototype",
+      "name": "read",
+      "arity": 1,
+      "implementation": "js_ble_descriptor_read",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_descriptor_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEDescriptor"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEDescriptor"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEDescriptor.prototype.write",
+      "surface": "BLEDescriptor.prototype",
+      "name": "write",
+      "arity": 2,
+      "implementation": "js_ble_descriptor_write",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_descriptor_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEDescriptor"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEDescriptor"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEGattServer.prototype.characteristic",
+      "surface": "BLEGattServer.prototype",
+      "name": "characteristic",
+      "arity": 1,
+      "implementation": "js_ble_gatt_server_characteristic",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_gatt_server_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEGattServer"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEGattServer"
+      }
+    },
+    {
+      "qualifiedName": "BLEGattServer.prototype.status",
+      "surface": "BLEGattServer.prototype",
+      "name": "status",
+      "arity": 0,
+      "implementation": "js_ble_gatt_server_status",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_gatt_server_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEGattServer"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEGattServer"
+      }
+    },
+    {
+      "qualifiedName": "BLEGattServer.prototype.watch",
+      "surface": "BLEGattServer.prototype",
+      "name": "watch",
+      "arity": 1,
+      "implementation": "js_ble_gatt_server_watch",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_gatt_server_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEGattServer"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEGattServer"
+      }
+    },
+    {
+      "qualifiedName": "BLELocalCharacteristic.prototype.notify",
+      "surface": "BLELocalCharacteristic.prototype",
+      "name": "notify",
+      "arity": 2,
+      "implementation": "js_ble_local_characteristic_notify",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_local_characteristic_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLELocalCharacteristic"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLELocalCharacteristic"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLELocalCharacteristic.prototype.setValue",
+      "surface": "BLELocalCharacteristic.prototype",
+      "name": "setValue",
+      "arity": 1,
+      "implementation": "js_ble_local_characteristic_set_value",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_local_characteristic_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLELocalCharacteristic"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLELocalCharacteristic"
+      }
+    },
+    {
+      "qualifiedName": "BLELocalCharacteristic.prototype.value",
+      "surface": "BLELocalCharacteristic.prototype",
+      "name": "value",
+      "arity": 0,
+      "implementation": "js_ble_local_characteristic_value",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_local_characteristic_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLELocalCharacteristic"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLELocalCharacteristic"
+      }
+    },
+    {
+      "qualifiedName": "BLENotificationStream.prototype.close",
+      "surface": "BLENotificationStream.prototype",
+      "name": "close",
+      "arity": 0,
+      "implementation": "js_ble_notification_close",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_notification_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLENotificationStream"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLENotificationStream"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLENotificationStream.prototype.receive",
+      "surface": "BLENotificationStream.prototype",
+      "name": "receive",
+      "arity": 1,
+      "implementation": "js_ble_notification_receive",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_notification_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLENotificationStream"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLENotificationStream"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLENotificationStream.prototype.stats",
+      "surface": "BLENotificationStream.prototype",
+      "name": "stats",
+      "arity": 0,
+      "implementation": "js_ble_notification_stats",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_notification_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLENotificationStream"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLENotificationStream"
+      }
+    },
+    {
+      "qualifiedName": "BLENotificationStream.prototype.status",
+      "surface": "BLENotificationStream.prototype",
+      "name": "status",
+      "arity": 0,
+      "implementation": "js_ble_notification_status",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_notification_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLENotificationStream"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLENotificationStream"
+      }
+    },
+    {
+      "qualifiedName": "BLEScanner.prototype.close",
+      "surface": "BLEScanner.prototype",
+      "name": "close",
+      "arity": 0,
+      "implementation": "js_ble_scanner_close",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_scanner_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEScanner"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEScanner"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEScanner.prototype.receive",
+      "surface": "BLEScanner.prototype",
+      "name": "receive",
+      "arity": 1,
+      "implementation": "js_ble_scanner_receive",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_scanner_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEScanner"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEScanner"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEScanner.prototype.stats",
+      "surface": "BLEScanner.prototype",
+      "name": "stats",
+      "arity": 0,
+      "implementation": "js_ble_scanner_stats",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_scanner_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEScanner"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEScanner"
+      }
+    },
+    {
+      "qualifiedName": "BLEScanner.prototype.status",
+      "surface": "BLEScanner.prototype",
+      "name": "status",
+      "arity": 0,
+      "implementation": "js_ble_scanner_status",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_scanner_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEScanner"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEScanner"
+      }
+    },
+    {
+      "qualifiedName": "BLEService.prototype.characteristics",
+      "surface": "BLEService.prototype",
+      "name": "characteristics",
+      "arity": 0,
+      "implementation": "js_ble_service_characteristics",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_service_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEService"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEService"
+      }
+    },
     {
       "qualifiedName": "Bitmap.prototype.blit",
       "surface": "Bitmap.prototype",
@@ -1848,6 +3130,324 @@
       "documentation": {
         "file": "docs/c-api.md",
         "ownerToken": "DisplayCommandBuffer"
+      }
+    },
+    {
+      "qualifiedName": "EspNowPeer.prototype.close",
+      "surface": "EspNowPeer.prototype",
+      "name": "close",
+      "arity": 0,
+      "implementation": "js_espnow_peer_close",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_peer_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowPeer"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowPeer"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c",
+        "function": "espnow_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "EspNowPeer.prototype.send",
+      "surface": "EspNowPeer.prototype",
+      "name": "send",
+      "arity": 2,
+      "implementation": "js_espnow_peer_send",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_peer_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowPeer"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowPeer"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c",
+        "function": "espnow_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "EspNowPeer.prototype.status",
+      "surface": "EspNowPeer.prototype",
+      "name": "status",
+      "arity": 0,
+      "implementation": "js_espnow_peer_status",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_peer_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowPeer"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowPeer"
+      }
+    },
+    {
+      "qualifiedName": "EspNowPeer.prototype.update",
+      "surface": "EspNowPeer.prototype",
+      "name": "update",
+      "arity": 1,
+      "implementation": "js_espnow_peer_update",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_peer_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowPeer"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowPeer"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c",
+        "function": "espnow_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "EspNowSession.prototype.addPeer",
+      "surface": "EspNowSession.prototype",
+      "name": "addPeer",
+      "arity": 1,
+      "implementation": "js_espnow_session_add_peer",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowSession"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c",
+        "function": "espnow_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "EspNowSession.prototype.broadcast",
+      "surface": "EspNowSession.prototype",
+      "name": "broadcast",
+      "arity": 2,
+      "implementation": "js_espnow_session_broadcast",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowSession"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c",
+        "function": "espnow_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "EspNowSession.prototype.close",
+      "surface": "EspNowSession.prototype",
+      "name": "close",
+      "arity": 0,
+      "implementation": "js_espnow_session_close",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowSession"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c",
+        "function": "espnow_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "EspNowSession.prototype.peer",
+      "surface": "EspNowSession.prototype",
+      "name": "peer",
+      "arity": 1,
+      "implementation": "js_espnow_session_peer",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowSession"
+      }
+    },
+    {
+      "qualifiedName": "EspNowSession.prototype.peers",
+      "surface": "EspNowSession.prototype",
+      "name": "peers",
+      "arity": 0,
+      "implementation": "js_espnow_session_peers",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowSession"
+      }
+    },
+    {
+      "qualifiedName": "EspNowSession.prototype.receive",
+      "surface": "EspNowSession.prototype",
+      "name": "receive",
+      "arity": 1,
+      "implementation": "js_espnow_session_receive",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowSession"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c",
+        "function": "espnow_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "EspNowSession.prototype.setPowerSave",
+      "surface": "EspNowSession.prototype",
+      "name": "setPowerSave",
+      "arity": 1,
+      "implementation": "js_espnow_session_set_power_save",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowSession"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c",
+        "function": "espnow_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "EspNowSession.prototype.stats",
+      "surface": "EspNowSession.prototype",
+      "name": "stats",
+      "arity": 0,
+      "implementation": "js_espnow_session_stats",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowSession"
+      }
+    },
+    {
+      "qualifiedName": "EspNowSession.prototype.status",
+      "surface": "EspNowSession.prototype",
+      "name": "status",
+      "arity": 0,
+      "implementation": "js_espnow_session_status",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowSession"
       }
     },
     {
@@ -5023,6 +6623,54 @@
       }
     },
     {
+      "qualifiedName": "ble.capabilities",
+      "surface": "ble",
+      "name": "capabilities",
+      "arity": 0,
+      "implementation": "js_ble_capabilities",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEModule"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "ble"
+      }
+    },
+    {
+      "qualifiedName": "ble.open",
+      "surface": "ble",
+      "name": "open",
+      "arity": 1,
+      "implementation": "js_ble_open",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEModule"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "ble"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+        "function": "ble_register_future_drivers"
+      }
+    },
+    {
       "qualifiedName": "camera.capabilities",
       "surface": "camera",
       "name": "capabilities",
@@ -5262,6 +6910,54 @@
       "documentation": {
         "file": "docs/c-api.md",
         "ownerToken": "Global Helpers"
+      }
+    },
+    {
+      "qualifiedName": "espNow.capabilities",
+      "surface": "espNow",
+      "name": "capabilities",
+      "arity": 0,
+      "implementation": "js_espnow_capabilities",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowModule"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "espNow"
+      }
+    },
+    {
+      "qualifiedName": "espNow.open",
+      "surface": "espNow",
+      "name": "open",
+      "arity": 1,
+      "implementation": "js_espnow_open",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowModule"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "espNow"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c",
+        "function": "espnow_register_future_drivers"
       }
     },
     {

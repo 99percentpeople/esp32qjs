@@ -1780,6 +1780,116 @@ After synchronization, `Date.now()` and `new Date()` use the same wall clock;
 `sys.millis()`, `sys.micros()`, and `performance.now()` remain monotonic uptime
 clocks and are not affected by SNTP adjustments.
 
+## `espNow` Module
+
+`espNow` exposes generic station-interface ESP-NOW transport when
+`sys.info.features.espNow` is enabled. It intentionally does not implement
+application acknowledgements, retries, deduplication, fragmentation, routing,
+Mesh behavior, provisioning, or a product message schema.
+
+- `espNow.capabilities()` returns the configured peer, encrypted-peer, and
+  payload limits.
+- `espNow.open(options?)` opens the only session in the runtime through a native
+  Future. Options are `interface: "station"`, `channel: "current" | 1..14`,
+  `maxPayloadBytes`, `receiveCapacity`, `sendTimeoutMs`, an optional 16-byte
+  `pmk`, and optional `{ wakeWindowMs, wakeIntervalMs }` power-save settings.
+- `session.receive(timeoutMs?)` and `session.stats()` expose its bounded
+  DROP_NEWEST receive EventQueue. Each event contains normalized source and
+  destination addresses, RSSI, channel, sequence, timestamp, broadcast flag,
+  and an owned `ByteView`; close that view after use.
+- `session.addPeer(options)`, `peer.update(options)`, and `peer.close()` are
+  native Future operations. Encrypted peers require both an explicit session
+  PMK and a 16-byte LMK. Keys never appear in status, snapshots, or errors.
+- `session.peer(address)` returns a generation-checked handle or `null`, while
+  `session.peers()` returns key-free status snapshots.
+- `peer.send(data, options?)` and `session.broadcast(data, options?)` share one
+  FIFO transmit lane. `macDelivered` is the MAC result and is not an
+  application acknowledgement.
+- `session.setPowerSave(options)` updates the station wake window and interval.
+- `session.close()` closes receive delivery, unregisters callbacks, deinitializes
+  ESP-NOW, releases the shared radio lease, clears keys, and invalidates peers.
+
+`EspNowSession` is the generation-checked session handle returned by `open()`;
+`EspNowPeer` is the generation-checked peer handle returned by `addPeer()` or
+`peer()`. Their callable surface is `receive()`, `stats()`, `status()`,
+`addPeer()`, `peer()`, `peers()`, `broadcast()`, `setPowerSave()`, `close()`,
+`send()`, and `update()` as described above.
+
+Use `channel: "current"` when Wi-Fi is connected. The framework rejects channel
+conflicts and does not disconnect Wi-Fi, change an AP channel, or perform
+hidden off-channel sends. A send callback timeout rebuilds ESP-NOW and restores
+the PMK and peers before releasing the transmit lane; failed recovery leaves
+the session unavailable until close and reopen.
+
+## `ble` Module
+
+`ble` exposes the generic ESP-NimBLE central, peripheral, observer,
+broadcaster, GATT, and security surface when `sys.info.features.ble` is
+enabled. It does not parse advertising structures, define a product GATT
+profile, or implement provisioning policy.
+
+- `ble.capabilities()` reports the compiled roles, connection/MTU limits,
+  bonding, privacy, and advertising capabilities.
+- `ble.open(options?)` opens the runtime singleton. It strictly validates roles,
+  device name, own-address policy, preferred MTU, connection limit, security,
+  and an optional static native-cached GATT Server definition.
+- `BLEAdapter.scan()` returns a `BLEScanner`. Reports carry raw legacy payloads
+  in owned `ByteView` objects through a bounded DROP_NEWEST EventQueue.
+- `BLEAdapter.advertise()` returns a `BLEAdvertiser`. It accepts only raw
+  advertising and scan-response bytes; an incoming peripheral connection is
+  returned as a generation-checked `BLEConnection`.
+- `BLEAdapter.connect()` creates a central `BLEConnection`. `status()` reports
+  link/security state and the per-connection GATT lane; `receive()` carries
+  disconnect, MTU, security, and pairing-request control events.
+- `BLEConnection.discover()` creates generation-checked `BLEService`,
+  `BLECharacteristic`, and `BLEDescriptor` snapshots. Attribute reads, writes,
+  subscriptions, MTU exchange, pairing, and close are native Future operations
+  serialized per connection.
+- `BLEConnection.pair()`, `respondPairing()`, `exchangeMtu()`, and `readRssi()`
+  expose explicit security, MTU, and signal operations. `BLEService.characteristics()`,
+  `BLECharacteristic.descriptors()`, and `BLECharacteristic.subscribe()` expose
+  the discovered GATT hierarchy and bounded value stream.
+- `BLENotificationStream` owns a bounded notification/indication EventQueue.
+  Each payload is an owned `ByteView`; close it after use. Closing the stream
+  first disables its CCCD.
+- `BLEGattServer` exposes the static definition captured by `ble.open()`.
+  `watch()` returns bounded remote-write/subscription events;
+  `characteristic(id)` returns a generation-checked local handle, while
+  `BLELocalCharacteristic.value()`, `setValue()`, and `notify()` operate on the
+  native cache without calling JavaScript from NimBLE callbacks.
+- `BLEAdapter.bonds()`, `removeBond()`, and `clearBonds()` operate on the NimBLE
+  store. Pairing requests must be answered before `expiresAtUs`.
+- `BLEAdapter.close()` stops GAP sources and connections, then stops and
+  deinitializes NimBLE on a worker before releasing native pools. It invalidates
+  every BLE handle from that adapter generation.
+
+All one-shot BLE operations support the usual cooperative direct-call form and
+the explicit `Future.call(...)` form. GAP start/stop operations share one lane,
+GATT procedures use one lane per connection, and server indications use a
+confirmation lane. Timeouts do not silently reduce MTU, discard security, or
+fall back to another address policy.
+
+```js
+var adapter = ble.open({ roles: ["central"], deviceName: "ESP32QJS" });
+try {
+  var scanner = adapter.scan({ active: true, durationMs: 5000, capacity: 16 });
+  try {
+    var report = scanner.receive(1000);
+    if (report !== null) {
+      try {
+        print(report.peer.address, report.rssi, report.data.length);
+      } finally {
+        report.data.close();
+      }
+    }
+  } finally {
+    scanner.close();
+  }
+} finally {
+  adapter.close();
+}
+```
+
 ## `socket` Module
 
 `socket` is exposed when `sys.info.features.socket` is enabled. It provides

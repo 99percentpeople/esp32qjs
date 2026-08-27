@@ -1112,6 +1112,8 @@ namespace ESP32QJS {
     readonly websocket: boolean;
     readonly bitmap: boolean;
     readonly wifi: boolean;
+    readonly espNow: boolean;
+    readonly ble: boolean;
     readonly tls: boolean;
     readonly http: boolean;
     readonly httpServer: boolean;
@@ -2520,6 +2522,558 @@ namespace ESP32QJS {
     scan(): WiFiScanResult[];
   }
 
+  type EspNowAddress = string;
+  type EspNowChannel = "current" | number;
+
+  interface EspNowCapabilities {
+    readonly maxPeers: number;
+    readonly maxEncryptedPeers: number;
+    readonly maxV1PayloadBytes: 250;
+    readonly maxPayloadBytes: number;
+    readonly v2Payloads: boolean;
+    readonly stationInterface: true;
+    readonly softApInterface: false;
+    readonly powerSave: boolean;
+    readonly peerRateConfig: boolean;
+  }
+
+  interface EspNowPowerSaveOptions {
+    wakeWindowMs: number;
+    wakeIntervalMs: number;
+  }
+
+  interface EspNowOpenOptions {
+    interface?: "station";
+    channel?: EspNowChannel;
+    maxPayloadBytes?: number;
+    receiveCapacity?: number;
+    sendTimeoutMs?: number;
+    pmk?: ByteSource;
+    powerSave?: EspNowPowerSaveOptions;
+  }
+
+  interface EspNowStatus {
+    open: boolean;
+    interface: "station";
+    channel: number;
+    channelGeneration: number;
+    channelSynchronized: boolean;
+    maxPayloadBytes: number;
+    v1Compatible: boolean;
+    peerCount: number;
+    encryptedPeerCount: number;
+    pendingSends: number;
+    txRecovering: boolean;
+    receivedPackets: number;
+    receivedBytes: number;
+    droppedPackets: number;
+    malformedPackets: number;
+    sentPackets: number;
+    sentBytes: number;
+    sendSuccesses: number;
+    sendFailures: number;
+    sendTimeouts: number;
+    powerSave: {
+      enabled: boolean;
+      wakeWindowMs: number;
+      wakeIntervalMs: number;
+    };
+  }
+
+  interface EspNowPeerOptions {
+    address: EspNowAddress;
+    channel?: EspNowChannel;
+    encrypted?: boolean;
+    lmk?: ByteSource;
+  }
+
+  interface EspNowPeerStatus {
+    open: boolean;
+    address: EspNowAddress;
+    channel: number | "current";
+    encrypted: boolean;
+  }
+
+  interface EspNowReceiveEvent {
+    type: "message";
+    sequence: number;
+    timestampUs: number;
+    sourceAddress: EspNowAddress;
+    destinationAddress: EspNowAddress;
+    broadcast: boolean;
+    rssi: number;
+    channel: number;
+    data: ByteView;
+  }
+
+  interface EspNowSendOptions {
+    timeoutMs?: number;
+  }
+
+  interface EspNowSendResult {
+    address: EspNowAddress;
+    bytes: number;
+    macDelivered: boolean;
+    completedAtUs: number;
+  }
+
+  type EspNowErrorCode =
+    | "ESPNOW_NOT_SUPPORTED"
+    | "ESPNOW_NOT_OPEN"
+    | "ESPNOW_ALREADY_OPEN"
+    | "ESPNOW_STALE_SESSION"
+    | "ESPNOW_STALE_PEER"
+    | "ESPNOW_INVALID_ADDRESS"
+    | "ESPNOW_PEER_NOT_FOUND"
+    | "ESPNOW_PEER_TABLE_FULL"
+    | "ESPNOW_ENCRYPTED_PEER_LIMIT"
+    | "ESPNOW_INVALID_KEY"
+    | "ESPNOW_ENCRYPTED_BROADCAST"
+    | "ESPNOW_PAYLOAD_TOO_LARGE"
+    | "ESPNOW_CHANNEL_MISMATCH"
+    | "ESPNOW_CHANNEL_CONFLICT"
+    | "ESPNOW_SEND_FAILED"
+    | "ESPNOW_SEND_TIMEOUT"
+    | "ESPNOW_RECOVERY_FAILED"
+    | "ESPNOW_QUEUE_FULL"
+    | "ESPNOW_CLOSING";
+
+  interface EspNowError extends Error {
+    code: EspNowErrorCode;
+    espCode: number;
+    address: string | null;
+    channel: number | null;
+  }
+
+  class EspNowPeer {
+    private constructor();
+    status(): EspNowPeerStatus;
+    send(data: ByteSource, options?: EspNowSendOptions): EspNowSendResult;
+    update(options: Omit<EspNowPeerOptions, "address">): EspNowPeerStatus;
+    close(): boolean;
+  }
+
+  class EspNowSession implements EventQueue<EspNowReceiveEvent> {
+    private constructor();
+    receive(timeoutMs?: number): EspNowReceiveEvent | null;
+    stats(): EventQueueStats;
+    status(): EspNowStatus;
+    addPeer(options: EspNowPeerOptions): EspNowPeer;
+    peer(address: EspNowAddress): EspNowPeer | null;
+    peers(): EspNowPeerStatus[];
+    broadcast(data: ByteSource,
+              options?: EspNowSendOptions): EspNowSendResult;
+    setPowerSave(options: EspNowPowerSaveOptions): boolean;
+    close(): boolean;
+  }
+
+  interface EspNowModule {
+    readonly BROADCAST_ADDRESS: "ff:ff:ff:ff:ff:ff";
+    readonly MAX_PAYLOAD_V1: 250;
+    readonly MAX_PAYLOAD_V2: number;
+    capabilities(): EspNowCapabilities;
+    open(options?: EspNowOpenOptions): EspNowSession;
+  }
+
+  type BLERole = "central" | "peripheral";
+  type BLEAddressType =
+    | "public"
+    | "random-static"
+    | "random-private-resolvable"
+    | "random-private-nonresolvable";
+
+  interface BLEAddress {
+    address: string;
+    type: BLEAddressType;
+  }
+
+  interface BLECapabilities {
+    readonly classic: false;
+    readonly central: boolean;
+    readonly peripheral: boolean;
+    readonly observer: boolean;
+    readonly broadcaster: boolean;
+    readonly legacyAdvertising: true;
+    readonly extendedAdvertising: false;
+    readonly maxConnections: number;
+    readonly maxMtu: number;
+    readonly bonding: boolean;
+    readonly privacy: boolean;
+    readonly concurrentScanAdvertising: boolean;
+  }
+
+  type BLEIoCapability =
+    | "none"
+    | "display-only"
+    | "keyboard-only"
+    | "display-keyboard"
+    | "display-yes-no";
+
+  interface BLESecurityOptions {
+    bonding?: boolean;
+    secureConnections?: boolean;
+    mitm?: boolean;
+    ioCapability?: BLEIoCapability;
+    pairingTimeoutMs?: number;
+  }
+
+  type BLEGattProperty =
+    | "broadcast"
+    | "read"
+    | "write"
+    | "write-without-response"
+    | "notify"
+    | "indicate"
+    | "authenticated-signed-write";
+
+  type BLEGattPermission =
+    | "encrypted-read"
+    | "encrypted-write"
+    | "authenticated-read"
+    | "authenticated-write";
+
+  interface BLELocalCharacteristicDefinition {
+    id: string;
+    uuid: string;
+    properties: BLEGattProperty[];
+    permissions?: BLEGattPermission[];
+    maxLength: number;
+    initialValue?: ByteSource;
+    storeWrites?: boolean;
+  }
+
+  interface BLELocalServiceDefinition {
+    id: string;
+    uuid: string;
+    primary?: boolean;
+    characteristics: BLELocalCharacteristicDefinition[];
+  }
+
+  interface BLEGattServerDefinition {
+    services: BLELocalServiceDefinition[];
+  }
+
+  interface BLEOpenOptions {
+    roles?: BLERole[];
+    deviceName?: string;
+    ownAddressType?: "public" | "random-static" | "rpa";
+    preferredMtu?: number;
+    maxConnections?: number;
+    security?: BLESecurityOptions;
+    server?: BLEGattServerDefinition;
+  }
+
+  interface BLEAdapterStatus {
+    open: boolean;
+    synchronized: boolean;
+    address: string;
+    addressType: BLEAddressType;
+    deviceName: string;
+    roles: BLERole[];
+    connections: number;
+    maxConnections: number;
+    scanning: boolean;
+    advertising: boolean;
+    bondedDevices: number;
+    resetCount: number;
+    droppedScanReports: number;
+    droppedConnectionEvents: number;
+    droppedServerEvents: number;
+  }
+
+  interface BLEBondInfo {
+    peer: BLEAddress;
+    authenticated: boolean;
+    secureConnections: boolean;
+  }
+
+  type BLEAdvertisementEventType =
+    | "advertisement"
+    | "scan-response"
+    | "directed-advertisement";
+
+  interface BLEScanOptions {
+    active?: boolean;
+    intervalMs?: number;
+    windowMs?: number;
+    durationMs?: number;
+    filterDuplicates?: boolean;
+    limited?: boolean;
+    capacity?: number;
+  }
+
+  interface BLEScanEvent {
+    type: "report";
+    sequence: number;
+    timestampUs: number;
+    peer: BLEAddress;
+    eventType: BLEAdvertisementEventType;
+    rssi: number;
+    connectable: boolean;
+    scannable: boolean;
+    directed: boolean;
+    data: ByteView;
+  }
+
+  interface BLEScannerStatus {
+    open: boolean;
+    active: boolean;
+    startedAtUs: number;
+    reports: number;
+    dropped: number;
+    malformed: number;
+    stopReason: "running" | "completed" | "closed" | "error";
+  }
+
+  class BLEScanner implements EventQueue<BLEScanEvent> {
+    private constructor();
+    receive(timeoutMs?: number): BLEScanEvent | null;
+    stats(): EventQueueStats;
+    status(): BLEScannerStatus;
+    close(): boolean;
+  }
+
+  interface BLEAdvertisingOptions {
+    connectable?: boolean;
+    scannable?: boolean;
+    intervalMinMs?: number;
+    intervalMaxMs?: number;
+    durationMs?: number;
+    data: ByteSource;
+    scanResponse?: ByteSource;
+    capacity?: number;
+  }
+
+  interface BLEAdvertiserEvent {
+    type: "connection";
+    sequence: number;
+    timestampUs: number;
+    connection: BLEConnection;
+  }
+
+  interface BLEAdvertiserStatus {
+    open: boolean;
+    active: boolean;
+    connectable: boolean;
+    scannable: boolean;
+    incomingConnections: number;
+    dropped: number;
+    stopReason: "running" | "connected" | "completed" | "closed" | "error";
+  }
+
+  class BLEAdvertiser implements EventQueue<BLEAdvertiserEvent> {
+    private constructor();
+    receive(timeoutMs?: number): BLEAdvertiserEvent | null;
+    stats(): EventQueueStats;
+    status(): BLEAdvertiserStatus;
+    close(): boolean;
+  }
+
+  interface BLEConnectOptions {
+    timeoutMs?: number;
+    preferredMtu?: number;
+    autoPair?: boolean;
+  }
+
+  interface BLEConnectionSecurityStatus {
+    encrypted: boolean;
+    authenticated: boolean;
+    bonded: boolean;
+    secureConnections: boolean;
+  }
+
+  interface BLEConnectionStatus {
+    open: boolean;
+    connectionId: number;
+    peer: BLEAddress;
+    role: BLERole;
+    mtu: number;
+    rssi: number | null;
+    security: BLEConnectionSecurityStatus;
+    gattQueued: number;
+    gattActive: boolean;
+  }
+
+  type BLEPairingAction =
+    | "display-passkey"
+    | "input-passkey"
+    | "numeric-comparison";
+
+  type BLEConnectionEvent =
+    | { type: "disconnected"; sequence: number; timestampUs: number;
+        reasonCode: number; reasonName: string }
+    | { type: "mtu"; sequence: number; timestampUs: number; mtu: number }
+    | { type: "security"; sequence: number; timestampUs: number;
+        status: BLEConnectionSecurityStatus }
+    | { type: "pairing-request"; sequence: number; timestampUs: number;
+        requestId: number; action: BLEPairingAction; passkey?: number;
+        expiresAtUs: number };
+
+  interface BLEDiscoverOptions {
+    includeDescriptors?: boolean;
+    maxServices?: number;
+    maxCharacteristics?: number;
+    maxDescriptors?: number;
+    timeoutMs?: number;
+  }
+
+  interface BLEGattReadOptions { timeoutMs?: number; maxBytes?: number }
+  interface BLEGattWriteOptions { response?: boolean; timeoutMs?: number }
+  interface BLESubscribeOptions {
+    mode?: "notify" | "indicate" | "auto";
+    capacity?: number;
+    timeoutMs?: number;
+  }
+
+  class BLEConnection implements EventQueue<BLEConnectionEvent> {
+    private constructor();
+    receive(timeoutMs?: number): BLEConnectionEvent | null;
+    stats(): EventQueueStats;
+    status(): BLEConnectionStatus;
+    pair(options?: { timeoutMs?: number }): BLEConnectionSecurityStatus;
+    respondPairing(requestId: number, response: boolean | number): boolean;
+    exchangeMtu(mtu?: number, timeoutMs?: number): number;
+    readRssi(timeoutMs?: number): number;
+    discover(options?: BLEDiscoverOptions): BLEService[];
+    close(): boolean;
+  }
+
+  class BLEService {
+    private constructor();
+    readonly uuid: string;
+    readonly startHandle: number;
+    readonly endHandle: number;
+    characteristics(): BLECharacteristic[];
+  }
+
+  class BLECharacteristic {
+    private constructor();
+    readonly uuid: string;
+    readonly declarationHandle: number;
+    readonly valueHandle: number;
+    readonly properties: BLEGattProperty[];
+    descriptors(): BLEDescriptor[];
+    read(options?: BLEGattReadOptions): ByteView;
+    write(data: ByteSource, options?: BLEGattWriteOptions): number;
+    subscribe(options?: BLESubscribeOptions): BLENotificationStream;
+  }
+
+  class BLEDescriptor {
+    private constructor();
+    readonly uuid: string;
+    readonly handle: number;
+    read(options?: BLEGattReadOptions): ByteView;
+    write(data: ByteSource, options?: BLEGattWriteOptions): number;
+  }
+
+  interface BLEValueEvent {
+    type: "value";
+    sequence: number;
+    timestampUs: number;
+    indication: boolean;
+    data: ByteView;
+  }
+
+  interface BLENotificationStatus {
+    open: boolean;
+    mode: "notify" | "indicate";
+    received: number;
+    dropped: number;
+  }
+
+  class BLENotificationStream implements EventQueue<BLEValueEvent> {
+    private constructor();
+    receive(timeoutMs?: number): BLEValueEvent | null;
+    stats(): EventQueueStats;
+    status(): BLENotificationStatus;
+    close(): boolean;
+  }
+
+  interface BLEServerNotifyOptions {
+    connection?: BLEConnection;
+    indication?: boolean;
+    timeoutMs?: number;
+  }
+
+  interface BLEServerNotifyResult {
+    attemptedConnections: number;
+    submittedConnections: number;
+    bytes: number;
+    indication: boolean;
+  }
+
+  type BLEServerEvent =
+    | { type: "write"; sequence: number; timestampUs: number;
+        connection: BLEConnection; characteristicId: string;
+        offset: number; data: ByteView }
+    | { type: "subscription"; sequence: number; timestampUs: number;
+        connection: BLEConnection; characteristicId: string;
+        notify: boolean; indicate: boolean };
+
+  interface BLEGattServerStatus {
+    open: boolean;
+    services: number;
+    characteristics: number;
+    activeConnections: number;
+    writes: number;
+    notifications: number;
+    indications: number;
+    droppedEvents: number;
+  }
+
+  class BLELocalCharacteristic {
+    private constructor();
+    readonly id: string;
+    readonly uuid: string;
+    readonly maxLength: number;
+    readonly properties: BLEGattProperty[];
+    value(): ByteView;
+    setValue(data: ByteSource): number;
+    notify(data?: ByteSource,
+           options?: BLEServerNotifyOptions): BLEServerNotifyResult;
+  }
+
+  class BLEGattServer {
+    private constructor();
+    status(): BLEGattServerStatus;
+    watch(options?: { capacity?: number }): EventQueue<BLEServerEvent>;
+    characteristic(id: string): BLELocalCharacteristic;
+  }
+
+  type BLEErrorCode =
+    | "BLE_NOT_SUPPORTED" | "BLE_NOT_OPEN" | "BLE_ALREADY_OPEN"
+    | "BLE_STALE_ADAPTER" | "BLE_STALE_CONNECTION" | "BLE_STALE_ATTRIBUTE"
+    | "BLE_STALE_SUBSCRIPTION" | "BLE_GAP_CONFLICT" | "BLE_TIMEOUT"
+    | "BLE_QUEUE_FULL" | "BLE_CONNECTION_FAILED" | "BLE_DISCONNECTED"
+    | "BLE_GATT_ERROR" | "BLE_SECURITY_ERROR" | "BLE_PAIRING_EXPIRED"
+    | "BLE_PAYLOAD_TOO_LARGE" | "BLE_SERVER_LIMIT" | "BLE_CLOSING";
+
+  interface BLEError extends Error {
+    code: BLEErrorCode;
+    hostCode: number;
+    attCode: number | null;
+    connectionId: number | null;
+    attributeHandle: number | null;
+  }
+
+  class BLEAdapter {
+    private constructor();
+    status(): BLEAdapterStatus;
+    scan(options?: BLEScanOptions): BLEScanner;
+    connect(peer: BLEAddress, options?: BLEConnectOptions): BLEConnection;
+    advertise(options: BLEAdvertisingOptions): BLEAdvertiser;
+    server(): BLEGattServer | null;
+    bonds(): BLEBondInfo[];
+    removeBond(peer: BLEAddress): boolean;
+    clearBonds(): number;
+    close(): boolean;
+  }
+
+  interface BLEModule {
+    capabilities(): BLECapabilities;
+    open(options?: BLEOpenOptions): BLEAdapter;
+  }
+
   /**
    * HTTP server creation options.
    */
@@ -2701,6 +3255,18 @@ namespace ESP32QJS {
   const I2CDevice: { readonly prototype: ESP32QJS.I2CDevice };
   const SPIBus: { readonly prototype: ESP32QJS.SPIBus };
   const SPIDevice: { readonly prototype: ESP32QJS.SPIDevice };
+  const EspNowSession: { readonly prototype: ESP32QJS.EspNowSession };
+  const EspNowPeer: { readonly prototype: ESP32QJS.EspNowPeer };
+  const BLEAdapter: { readonly prototype: ESP32QJS.BLEAdapter };
+  const BLEScanner: { readonly prototype: ESP32QJS.BLEScanner };
+  const BLEAdvertiser: { readonly prototype: ESP32QJS.BLEAdvertiser };
+  const BLEConnection: { readonly prototype: ESP32QJS.BLEConnection };
+  const BLEService: { readonly prototype: ESP32QJS.BLEService };
+  const BLECharacteristic: { readonly prototype: ESP32QJS.BLECharacteristic };
+  const BLEDescriptor: { readonly prototype: ESP32QJS.BLEDescriptor };
+  const BLENotificationStream: { readonly prototype: ESP32QJS.BLENotificationStream };
+  const BLEGattServer: { readonly prototype: ESP32QJS.BLEGattServer };
+  const BLELocalCharacteristic: { readonly prototype: ESP32QJS.BLELocalCharacteristic };
   const UARTPort: { readonly prototype: ESP32QJS.UARTPort };
   const TCPSocket: { readonly prototype: ESP32QJS.TCPSocket };
   const TCPListener: { readonly prototype: ESP32QJS.TCPListener };
@@ -2812,6 +3378,10 @@ namespace ESP32QJS {
   var bitmap: ESP32QJS.BitmapModule;
   /** Wi-Fi station helpers. */
   var wifi: ESP32QJS.WiFiModule;
+  /** Station-interface ESP-NOW sessions, peers, receive queues, and sends. */
+  var espNow: ESP32QJS.EspNowModule;
+  /** Generic ESP-NimBLE central, peripheral, GATT, and security API. */
+  var ble: ESP32QJS.BLEModule;
   /** HTTP client/server namespace. Exposed when either `sys.info.features.http` or `.httpServer` is enabled. */
   var http: ESP32QJS.HttpModule;
   /** Generic deterministic CBOR and COBS application-protocol codec. */

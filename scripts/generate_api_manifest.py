@@ -36,6 +36,8 @@ FEATURES = {
     "socket": "CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET",
     "websocket": "CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET",
     "wifi": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI",
+    "espNow": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+    "ble": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
     "net": "CONFIG_ESP32_MQUICKJS_FEATURE_NET",
     "http": "CONFIG_ESP32_MQUICKJS_FEATURE_HTTP",
     "httpServer": "CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER",
@@ -129,6 +131,46 @@ SURFACES = {
         "websocketClient", "WebSocketClientModule", "websocket", "websocketClient"
     ),
     "js_wifi": ("wifi", "WiFiModule", "wifi", "wifi"),
+    "js_espnow_session_proto": (
+        "EspNowSession.prototype", "EspNowSession", "espNow", "EspNowSession"
+    ),
+    "js_espnow_peer_proto": (
+        "EspNowPeer.prototype", "EspNowPeer", "espNow", "EspNowPeer"
+    ),
+    "js_espnow": ("espNow", "EspNowModule", "espNow", "espNow"),
+    "js_ble_adapter_proto": (
+        "BLEAdapter.prototype", "BLEAdapter", "ble", "BLEAdapter"
+    ),
+    "js_ble_scanner_proto": (
+        "BLEScanner.prototype", "BLEScanner", "ble", "BLEScanner"
+    ),
+    "js_ble_advertiser_proto": (
+        "BLEAdvertiser.prototype", "BLEAdvertiser", "ble", "BLEAdvertiser"
+    ),
+    "js_ble_connection_proto": (
+        "BLEConnection.prototype", "BLEConnection", "ble", "BLEConnection"
+    ),
+    "js_ble_service_proto": (
+        "BLEService.prototype", "BLEService", "ble", "BLEService"
+    ),
+    "js_ble_characteristic_proto": (
+        "BLECharacteristic.prototype", "BLECharacteristic", "ble", "BLECharacteristic"
+    ),
+    "js_ble_descriptor_proto": (
+        "BLEDescriptor.prototype", "BLEDescriptor", "ble", "BLEDescriptor"
+    ),
+    "js_ble_notification_proto": (
+        "BLENotificationStream.prototype", "BLENotificationStream", "ble",
+        "BLENotificationStream"
+    ),
+    "js_ble_gatt_server_proto": (
+        "BLEGattServer.prototype", "BLEGattServer", "ble", "BLEGattServer"
+    ),
+    "js_ble_local_characteristic_proto": (
+        "BLELocalCharacteristic.prototype", "BLELocalCharacteristic", "ble",
+        "BLELocalCharacteristic"
+    ),
+    "js_ble": ("ble", "BLEModule", "ble", "ble"),
     "js_net": ("net", "NetModule", "net", "net"),
     "js_http": ("http", "HttpModule", "http", "http"),
     "js_http_server_proto": (
@@ -176,6 +218,36 @@ CLASSES = {
     "TCPListener": ("TCPListener", "TCPListener", "socket", "TCPListener"),
     "UDPSocket": ("UDPSocket", "UDPSocket", "socket", "UDPSocket"),
     "HttpServer": ("HttpServer", "HttpServer", "httpServer", "HttpServer"),
+    "EspNowSession": (
+        "EspNowSession", "EspNowSession", "espNow", "EspNowSession"
+    ),
+    "EspNowPeer": ("EspNowPeer", "EspNowPeer", "espNow", "EspNowPeer"),
+    "BLEAdapter": ("BLEAdapter", "BLEAdapter", "ble", "BLEAdapter"),
+    "BLEScanner": ("BLEScanner", "BLEScanner", "ble", "BLEScanner"),
+    "BLEAdvertiser": (
+        "BLEAdvertiser", "BLEAdvertiser", "ble", "BLEAdvertiser"
+    ),
+    "BLEConnection": (
+        "BLEConnection", "BLEConnection", "ble", "BLEConnection"
+    ),
+    "BLEService": ("BLEService", "BLEService", "ble", "BLEService"),
+    "BLECharacteristic": (
+        "BLECharacteristic", "BLECharacteristic", "ble", "BLECharacteristic"
+    ),
+    "BLEDescriptor": (
+        "BLEDescriptor", "BLEDescriptor", "ble", "BLEDescriptor"
+    ),
+    "BLENotificationStream": (
+        "BLENotificationStream", "BLENotificationStream", "ble",
+        "BLENotificationStream"
+    ),
+    "BLEGattServer": (
+        "BLEGattServer", "BLEGattServer", "ble", "BLEGattServer"
+    ),
+    "BLELocalCharacteristic": (
+        "BLELocalCharacteristic", "BLELocalCharacteristic", "ble",
+        "BLELocalCharacteristic"
+    ),
 }
 
 METHOD_FEATURES = {
@@ -306,6 +378,69 @@ register_future(
     "wifi", ("connect", "disconnect", "scan"),
     "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi_future.c",
     "esp32_mquickjs_init_wifi_future_runtime",
+)
+register_future(
+    "espNow", ("open",),
+    "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c",
+    "espnow_register_future_drivers",
+)
+register_future(
+    "EspNowSession.prototype",
+    ("receive", "addPeer", "broadcast", "setPowerSave", "close"),
+    "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c",
+    "espnow_register_future_drivers",
+)
+register_future(
+    "EspNowPeer.prototype", ("send", "update", "close"),
+    "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c",
+    "espnow_register_future_drivers",
+)
+register_future(
+    "ble", ("open",),
+    "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+    "ble_register_future_drivers",
+)
+register_future(
+    "BLEAdapter.prototype",
+    ("scan", "connect", "advertise", "removeBond", "clearBonds", "close"),
+    "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+    "ble_register_future_drivers",
+)
+register_future(
+    "BLEScanner.prototype", ("receive", "close"),
+    "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+    "ble_register_future_drivers",
+)
+register_future(
+    "BLEAdvertiser.prototype", ("receive", "close"),
+    "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+    "ble_register_future_drivers",
+)
+register_future(
+    "BLEConnection.prototype",
+    ("receive", "pair", "exchangeMtu", "readRssi", "discover", "close"),
+    "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+    "ble_register_future_drivers",
+)
+register_future(
+    "BLECharacteristic.prototype", ("read", "write", "subscribe"),
+    "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+    "ble_register_future_drivers",
+)
+register_future(
+    "BLEDescriptor.prototype", ("read", "write"),
+    "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+    "ble_register_future_drivers",
+)
+register_future(
+    "BLENotificationStream.prototype", ("receive", "close"),
+    "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+    "ble_register_future_drivers",
+)
+register_future(
+    "BLELocalCharacteristic.prototype", ("notify",),
+    "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
+    "ble_register_future_drivers",
 )
 register_future(
     "http", ("fetch",),
