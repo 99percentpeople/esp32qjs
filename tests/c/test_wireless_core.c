@@ -67,6 +67,7 @@ static void test_ble_helpers(void)
     uint8_t update[] = {3, 4, 5};
     esp32_mquickjs_wireless_critical_slot_t critical = {0};
     uint16_t index;
+    uint16_t descriptor_end;
     assert(esp32_mquickjs_wireless_uuid_valid("180f"));
     assert(esp32_mquickjs_wireless_uuid_valid("12345678"));
     assert(esp32_mquickjs_wireless_uuid_valid(
@@ -85,6 +86,14 @@ static void test_ble_helpers(void)
     assert(!esp32_mquickjs_wireless_critical_take(&critical, 8, &index));
     assert(esp32_mquickjs_wireless_critical_take(&critical, 7, &index));
     assert(index == 3);
+    assert(esp32_mquickjs_wireless_gatt_descriptor_end(
+        1, 0, 3, 12, 9, &descriptor_end));
+    assert(descriptor_end == 8);
+    assert(esp32_mquickjs_wireless_gatt_descriptor_end(
+        2, 0, 3, 7, 9, &descriptor_end));
+    assert(descriptor_end == 7);
+    assert(!esp32_mquickjs_wireless_gatt_descriptor_end(
+        0, 0, 0, 7, 0, &descriptor_end));
 }
 
 int main(void)

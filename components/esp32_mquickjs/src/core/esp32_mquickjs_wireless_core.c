@@ -185,6 +185,31 @@ bool esp32_mquickjs_wireless_local_value_write(
     return true;
 }
 
+bool esp32_mquickjs_wireless_gatt_descriptor_end(
+    uint16_t characteristic_index,
+    uint16_t service_first_characteristic,
+    uint16_t service_characteristic_count,
+    uint16_t service_end_handle,
+    uint16_t next_declaration_handle,
+    uint16_t *out_end_handle)
+{
+    uint32_t service_characteristic_end =
+        (uint32_t)service_first_characteristic + service_characteristic_count;
+
+    if (out_end_handle == NULL || service_characteristic_count == 0U ||
+        characteristic_index < service_first_characteristic ||
+        characteristic_index >= service_characteristic_end) {
+        return false;
+    }
+    if ((uint32_t)characteristic_index + 1U < service_characteristic_end) {
+        if (next_declaration_handle == 0U) return false;
+        *out_end_handle = next_declaration_handle - 1U;
+    } else {
+        *out_end_handle = service_end_handle;
+    }
+    return true;
+}
+
 bool esp32_mquickjs_wireless_generation_matches(
     uint32_t active_generation, uint32_t event_generation, bool closing)
 {

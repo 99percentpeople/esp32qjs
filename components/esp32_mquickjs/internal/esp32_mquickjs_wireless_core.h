@@ -62,6 +62,13 @@ bool esp32_mquickjs_wireless_uuid_valid(const char *text);
 bool esp32_mquickjs_wireless_local_value_write(
     uint8_t *value, uint16_t max_length, uint16_t *value_length,
     uint16_t offset, const uint8_t *data, uint16_t data_length);
+bool esp32_mquickjs_wireless_gatt_descriptor_end(
+    uint16_t characteristic_index,
+    uint16_t service_first_characteristic,
+    uint16_t service_characteristic_count,
+    uint16_t service_end_handle,
+    uint16_t next_declaration_handle,
+    uint16_t *out_end_handle);
 bool esp32_mquickjs_wireless_generation_matches(
     uint32_t active_generation, uint32_t event_generation, bool closing);
 

@@ -4239,26 +4239,32 @@ static int ble_discover_start_descriptors(
     ble_connection_slot_t *slot)
 {
     ble_remote_characteristic_t *characteristic;
+    ble_remote_service_t *service = NULL;
     uint16_t end_handle;
+    uint16_t next_declaration_handle = 0;
+    uint16_t service_index;
     if (state->attribute_index >= slot->characteristic_count) return BLE_HS_EDONE;
     characteristic = &slot->characteristics[state->attribute_index];
-    if (state->attribute_index + 1U < slot->characteristic_count) {
-        end_handle = slot->characteristics[state->attribute_index + 1U]
-                         .declaration_handle - 1U;
-    } else {
-        uint16_t service_index;
-        end_handle = UINT16_MAX;
-        for (service_index = 0; service_index < slot->service_count;
-             ++service_index) {
-            ble_remote_service_t *service = &slot->services[service_index];
-            if (state->attribute_index >= service->first_characteristic &&
-                state->attribute_index < service->first_characteristic +
-                                             service->characteristic_count) {
-                end_handle = service->end_handle;
-                break;
-            }
+    for (service_index = 0; service_index < slot->service_count;
+         ++service_index) {
+        ble_remote_service_t *candidate = &slot->services[service_index];
+        if (state->attribute_index >= candidate->first_characteristic &&
+            state->attribute_index < candidate->first_characteristic +
+                                         candidate->characteristic_count) {
+            service = candidate;
+            break;
         }
     }
+    if (service == NULL) return BLE_HS_EDONE;
+    if (state->attribute_index + 1U < slot->characteristic_count) {
+        next_declaration_handle =
+            slot->characteristics[state->attribute_index + 1U]
+                .declaration_handle;
+    }
+    if (!esp32_mquickjs_wireless_gatt_descriptor_end(
+            state->attribute_index, service->first_characteristic,
+            service->characteristic_count, service->end_handle,
+            next_declaration_handle, &end_handle)) return BLE_HS_EDONE;
     characteristic->first_descriptor = slot->descriptor_count;
     characteristic->descriptor_count = 0;
     if (characteristic->value_handle >= end_handle) return BLE_HS_EDONE;
