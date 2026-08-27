@@ -765,6 +765,7 @@ static bool runtime_create_generation(esp32qjs_runtime_t *runtime)
                                           &runtime->engine,
                                           runtime->config.eval_timeout_ms);
     if (runtime->ctx == NULL) {
+        ESP_LOGE(TAG, "MQuickJS context creation failed");
         return false;
     }
     esp32_mquickjs_set_system_hooks(&runtime->engine,
@@ -793,6 +794,7 @@ static bool runtime_create_generation(esp32qjs_runtime_t *runtime)
     }
 #endif
     if (!esp32_mquickjs_install_globals(runtime->ctx, &runtime->engine)) {
+        ESP_LOGE(TAG, "MQuickJS global initialization failed");
         if (esp32_mquickjs_destroy_generation(runtime->ctx, &runtime->engine)) {
             runtime->ctx = NULL;
         }

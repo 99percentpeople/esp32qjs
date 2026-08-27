@@ -8,13 +8,14 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
 #define ESP32_MQUICKJS_FUTURE_MAX_ARGS 16U
-#define ESP32_MQUICKJS_FUTURE_MAX_DRIVERS 64U
+#define ESP32_MQUICKJS_FUTURE_MAX_DRIVERS 128U
 #define ESP32_MQUICKJS_FUTURE_SLOT_COUNT \
     (CONFIG_ESP32_MQUICKJS_MAX_FUTURES + CONFIG_ESP32_MQUICKJS_INTERNAL_FUTURE_RESERVE)
 
@@ -111,6 +112,7 @@ typedef struct {
     bool wake_future;
 } future_worker_item_t;
 
+static const char *TAG = "esp32qjs_future";
 static QueueHandle_t s_future_worker_queue;
 static bool s_future_worker_pool_initialized;
 
@@ -1692,6 +1694,10 @@ bool esp32_mquickjs_future_register_driver(JSContext *ctx,
         }
     }
     if (state->driver_count >= ESP32_MQUICKJS_FUTURE_MAX_DRIVERS) {
+        ESP_LOGE(TAG,
+                 "Future driver registry exhausted: count=%u capacity=%u",
+                 (unsigned)state->driver_count,
+                 (unsigned)ESP32_MQUICKJS_FUTURE_MAX_DRIVERS);
         return false;
     }
     entry = &state->drivers[state->driver_count++];
