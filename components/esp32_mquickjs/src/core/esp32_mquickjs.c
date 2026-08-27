@@ -1663,6 +1663,7 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
 {
     esp32_mquickjs_timer_state_t *state = esp32_mquickjs_timer_state(runtime);
     esp32_mquickjs_timer_event_t event;
+    UBaseType_t timer_budget;
     bool core_async_handled = false;
     bool async_handled = false;
     uint32_t output_generation;
@@ -1701,12 +1702,22 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
         return result;
     }
 
-    while (xQueueReceive(state->queue, &event, 0) == pdTRUE) {
+    /*
+     * Only consume timer events that were ready when this scheduler turn
+     * started. A periodic callback can take longer than its own interval and
+     * enqueue itself again as soon as the callback returns. Draining until
+     * the queue becomes empty would then starve registered pollers and idle
+     * jobs indefinitely.
+     */
+    timer_budget = uxQueueMessagesWaiting(state->queue);
+    while (timer_budget > 0 &&
+           xQueueReceive(state->queue, &event, 0) == pdTRUE) {
         esp32_mquickjs_timer_slot_t *slot;
         JSGCRef callback_ref;
         JSValue *callback;
         JSValue ret;
 
+        timer_budget--;
         if (event.timer_id >= ESP32_MQUICKJS_MAX_TIMERS) {
             continue;
         }

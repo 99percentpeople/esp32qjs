@@ -400,6 +400,34 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn('JS_CFUNC_DEF("_deferIdle", 1, js_runtime_defer_idle)', stdlib)
         self.assertNotIn("_deferIdle", declarations)
 
+    def test_timer_poll_uses_a_queue_snapshot_before_running_idle_jobs(self):
+        core = (MQUICKJS / "src/core/esp32_mquickjs.c").read_text(
+            encoding="utf-8"
+        )
+        start = core.index(
+            "esp32_mquickjs_poll_result_t esp32_mquickjs_poll("
+        )
+        end = core.index("\nJSValue js_print(", start)
+        poll = core[start:end]
+
+        self.assertIn(
+            "timer_budget = uxQueueMessagesWaiting(state->queue);",
+            poll,
+        )
+        self.assertIn(
+            "while (timer_budget > 0 &&",
+            poll,
+        )
+        self.assertIn("timer_budget--;", poll)
+        self.assertLess(
+            poll.index("timer_budget = uxQueueMessagesWaiting(state->queue);"),
+            poll.rindex("esp32_mquickjs_poll_registered(ctx, runtime)"),
+        )
+        self.assertLess(
+            poll.rindex("esp32_mquickjs_poll_registered(ctx, runtime)"),
+            poll.rindex("esp32_mquickjs_poll_idle_job(ctx, runtime)"),
+        )
+
     def test_future_wait_checks_its_deadline_after_each_scheduler_pump(self):
         future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
             encoding="utf-8"

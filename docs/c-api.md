@@ -156,7 +156,10 @@ drain paths.
   Run `fn` repeatedly and return an opaque timer handle. Periods below
   `CONFIG_ESP32_MQUICKJS_MIN_INTERVAL_MS` are clamped to that configured
   minimum. An interval is canceled automatically if its callback throws or
-  exceeds the JavaScript callback deadline.
+  exceeds the JavaScript callback deadline. Each scheduler turn consumes only
+  the timer events that were ready when that turn began; events that become
+  ready during a callback run on a later turn so an overdue interval cannot
+  starve Futures, EventQueues, or runtime idle work.
 - `clearInterval(handle)`
   Cancel an interval using the same generation-checked handle semantics.
 
