@@ -428,6 +428,33 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             poll.rindex("esp32_mquickjs_poll_idle_job(ctx, runtime)"),
         )
 
+    def test_timer_queue_overflow_is_recovered_from_a_turn_snapshot(self):
+        core = (MQUICKJS / "src/core/esp32_mquickjs.c").read_text(
+            encoding="utf-8"
+        )
+        callback_start = core.index("static void esp32_mquickjs_timer_cb(")
+        callback_end = core.index("\nstatic JSValue js_value_to_delay_ms", callback_start)
+        callback = core[callback_start:callback_end]
+        poll_start = core.index("esp32_mquickjs_poll_result_t esp32_mquickjs_poll(")
+        poll_end = core.index("\nJSValue js_print(", poll_start)
+        poll = core[poll_start:poll_end]
+
+        self.assertIn("_Atomic bool delivery_lost;", core)
+        self.assertIn("slot->pending = true;", callback)
+        self.assertIn(
+            "atomic_store_explicit(&slot->delivery_lost, true, memory_order_release)",
+            callback,
+        )
+        self.assertIn("atomic_exchange_explicit(&slot->delivery_lost", poll)
+        self.assertIn("memory_order_acq_rel", poll)
+        self.assertIn("lost_timer_count", poll)
+        self.assertIn("esp32_mquickjs_dispatch_timer_event", poll)
+        self.assertLess(
+            poll.index("atomic_exchange_explicit(&slot->delivery_lost"),
+            poll.index("while (timer_budget > 0 &&"),
+            "overflow recovery must snapshot lost deliveries before callbacks run",
+        )
+
     def test_future_wait_checks_its_deadline_after_each_scheduler_pump(self):
         future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
             encoding="utf-8"
@@ -531,6 +558,30 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             poll.index("future_poll_active_drivers(ctx, runtime)"),
             poll.index("future_advance_combinators(ctx, runtime)"),
             "completed or cancelled native drivers must be reaped at each safe point",
+        )
+
+    def test_future_sleep_deadlines_make_progress_without_a_wake_token(self):
+        future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
+            encoding="utf-8"
+        )
+        poll_start = future.index("bool esp32_mquickjs_future_poll(")
+        poll_end = future.index(
+            "\nbool esp32_mquickjs_future_cooperate(", poll_start
+        )
+        poll = future[poll_start:poll_end]
+
+        self.assertIn("static bool future_advance_sleep_deadlines(", future)
+        self.assertIn("slot->kind != FUTURE_KIND_SLEEP", future)
+        self.assertIn("slot->deadline_us > now_us", future)
+        self.assertIn(
+            "future_settle(ctx, slot, FUTURE_STATE_FULFILLED, JS_UNDEFINED)",
+            future,
+        )
+        self.assertIn("future_advance_sleep_deadlines(ctx, runtime)", poll)
+        self.assertLess(
+            poll.index("future_advance_sleep_deadlines(ctx, runtime)"),
+            poll.index("xQueueReceive(state->ready"),
+            "expired sleeps must settle even when their ready token was dropped",
         )
 
     def test_http_and_websocket_workers_publish_results_with_c11_atomics(self):

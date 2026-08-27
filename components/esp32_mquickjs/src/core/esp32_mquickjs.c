@@ -38,6 +38,7 @@
 
 #include <inttypes.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/time.h>
@@ -121,6 +122,7 @@ struct esp32_mquickjs_timer_slot {
     bool allocated;
     bool repeating;
     bool pending;
+    _Atomic bool delivery_lost;
 };
 
 #define ESP32_MQUICKJS_MAX_ASYNC_POLLERS 8
@@ -952,6 +954,7 @@ static bool esp32_mquickjs_init_timer_state(esp32_mquickjs_runtime_t *runtime)
     for (i = 0; i < ESP32_MQUICKJS_MAX_TIMERS; ++i) {
         slots[i].runtime = runtime;
         slots[i].timer_id = (uint8_t)i;
+        atomic_init(&slots[i].delivery_lost, false);
     }
 
     runtime->timer_state = state;
@@ -975,10 +978,11 @@ static void esp32_mquickjs_timer_cb(void *arg)
 
     event.timer_id = slot->timer_id;
     event.generation = slot->generation;
-    if (xQueueSend(state->queue, &event, 0) == pdTRUE) {
-        slot->pending = true;
-        esp32_mquickjs_notify_activity(slot->runtime);
+    slot->pending = true;
+    if (xQueueSend(state->queue, &event, 0) != pdTRUE) {
+        atomic_store_explicit(&slot->delivery_lost, true, memory_order_release);
     }
+    esp32_mquickjs_notify_activity(slot->runtime);
 }
 
 static JSValue js_value_to_delay_ms(JSContext *ctx,
@@ -1050,6 +1054,7 @@ static void esp32_mquickjs_cancel_timer(JSContext *ctx, esp32_mquickjs_timer_slo
     slot->allocated = false;
     slot->repeating = false;
     slot->pending = false;
+    atomic_store_explicit(&slot->delivery_lost, false, memory_order_release);
 }
 
 static void esp32_mquickjs_deinit_timer_state(JSContext *ctx,
@@ -1138,6 +1143,7 @@ static JSValue esp32_mquickjs_create_timer(JSContext *ctx,
         slot->generation++;
     }
     slot->pending = false;
+    atomic_store_explicit(&slot->delivery_lost, false, memory_order_release);
     slot->repeating = repeating;
     slot->allocated = true;
     pfunc = JS_AddGCRef(ctx, &slot->callback);
@@ -1658,12 +1664,73 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
     return true;
 }
 
+static bool esp32_mquickjs_dispatch_timer_event(
+    JSContext *ctx,
+    esp32_mquickjs_runtime_t *runtime,
+    esp32_mquickjs_timer_event_t event)
+{
+    esp32_mquickjs_timer_state_t *state = esp32_mquickjs_timer_state(runtime);
+    esp32_mquickjs_timer_slot_t *slot;
+    JSGCRef callback_ref;
+    JSValue *callback;
+    JSValue ret;
+
+    if (ctx == NULL || state == NULL || state->slots == NULL ||
+        event.timer_id >= ESP32_MQUICKJS_MAX_TIMERS) {
+        return false;
+    }
+    slot = &state->slots[event.timer_id];
+    if (!slot->allocated || !slot->pending ||
+        slot->generation != event.generation) {
+        return false;
+    }
+
+    if (JS_StackCheck(ctx, 2)) {
+        console_output_begin(runtime, ESP32_MQUICKJS_LOG_SOURCE_RUNTIME);
+        console_output_write(runtime,
+                             "Timer callback skipped: JS stack overflow",
+                             strlen("Timer callback skipped: JS stack overflow"));
+        console_output_end(runtime);
+        esp32_mquickjs_cancel_timer(ctx, slot);
+        return true;
+    }
+
+    callback = JS_PushGCRef(ctx, &callback_ref);
+    *callback = slot->callback.val;
+    if (!slot->repeating) {
+        esp32_mquickjs_cancel_timer(ctx, slot);
+    }
+
+    ret = esp32_mquickjs_call(ctx, runtime, *callback, JS_NULL, 0, NULL);
+    if (slot->allocated && slot->generation == event.generation &&
+        slot->repeating) {
+        /*
+         * Keep a repeating timer pending for the entire callback. Native
+         * Future waits can poll the scheduler recursively; clearing this flag
+         * before the call lets the same periodic timer enter itself again.
+         */
+        slot->pending = false;
+    }
+    if (JS_IsException(ret)) {
+        esp32_mquickjs_print_exception(ctx);
+        if (slot->allocated && slot->generation == event.generation &&
+            slot->repeating) {
+            esp32_mquickjs_cancel_timer(ctx, slot);
+        }
+    }
+    JS_PopGCRef(ctx, &callback_ref);
+    return true;
+}
+
 esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
                                                  esp32_mquickjs_runtime_t *runtime)
 {
     esp32_mquickjs_timer_state_t *state = esp32_mquickjs_timer_state(runtime);
     esp32_mquickjs_timer_event_t event;
+    esp32_mquickjs_timer_event_t lost_timers[ESP32_MQUICKJS_MAX_TIMERS];
     UBaseType_t timer_budget;
+    size_t lost_timer_count = 0;
+    size_t i;
     bool core_async_handled = false;
     bool async_handled = false;
     uint32_t output_generation;
@@ -1703,65 +1770,36 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
     }
 
     /*
-     * Only consume timer events that were ready when this scheduler turn
-     * started. A periodic callback can take longer than its own interval and
-     * enqueue itself again as soon as the callback returns. Draining until
-     * the queue becomes empty would then starve registered pollers and idle
-     * jobs indefinitely.
+     * Snapshot both queued events and queue-overflow recovery before invoking
+     * callbacks. Events raised by a callback remain pending for the next turn,
+     * so an overdue interval cannot starve pollers or idle work.
      */
+    for (i = 0; i < ESP32_MQUICKJS_MAX_TIMERS; ++i) {
+        esp32_mquickjs_timer_slot_t *slot = &state->slots[i];
+
+        if (!atomic_exchange_explicit(&slot->delivery_lost, false,
+                                      memory_order_acq_rel)) {
+            continue;
+        }
+        if (!slot->allocated || !slot->pending) {
+            continue;
+        }
+        lost_timers[lost_timer_count].timer_id = slot->timer_id;
+        lost_timers[lost_timer_count].generation = slot->generation;
+        lost_timer_count++;
+    }
     timer_budget = uxQueueMessagesWaiting(state->queue);
     while (timer_budget > 0 &&
            xQueueReceive(state->queue, &event, 0) == pdTRUE) {
-        esp32_mquickjs_timer_slot_t *slot;
-        JSGCRef callback_ref;
-        JSValue *callback;
-        JSValue ret;
-
         timer_budget--;
-        if (event.timer_id >= ESP32_MQUICKJS_MAX_TIMERS) {
-            continue;
-        }
-
-        slot = &state->slots[event.timer_id];
-        if (!slot->allocated || slot->generation != event.generation) {
-            continue;
-        }
-
-        core_async_handled = true;
-
-        if (JS_StackCheck(ctx, 2)) {
-            console_output_begin(runtime, ESP32_MQUICKJS_LOG_SOURCE_RUNTIME);
-            console_output_write(runtime,
-                                 "Timer callback skipped: JS stack overflow",
-                                 strlen("Timer callback skipped: JS stack overflow"));
-            console_output_end(runtime);
-            esp32_mquickjs_cancel_timer(ctx, slot);
-            continue;
-        }
-
-        callback = JS_PushGCRef(ctx, &callback_ref);
-        *callback = slot->callback.val;
-        if (!slot->repeating) {
-            esp32_mquickjs_cancel_timer(ctx, slot);
-        }
-
-        ret = esp32_mquickjs_call(ctx, runtime, *callback, JS_NULL, 0, NULL);
-        if (slot->allocated && slot->generation == event.generation && slot->repeating) {
-            /*
-             * Keep a repeating timer pending for the entire callback. Native
-             * Future waits can poll the scheduler recursively; clearing this
-             * flag before the call lets the same periodic timer enqueue and
-             * enter itself again until the C stack overflows.
-             */
-            slot->pending = false;
-        }
-        if (JS_IsException(ret)) {
-            esp32_mquickjs_print_exception(ctx);
-            if (slot->allocated && slot->generation == event.generation && slot->repeating) {
-                esp32_mquickjs_cancel_timer(ctx, slot);
-            }
-        }
-        JS_PopGCRef(ctx, &callback_ref);
+        core_async_handled =
+            esp32_mquickjs_dispatch_timer_event(ctx, runtime, event) ||
+            core_async_handled;
+    }
+    for (i = 0; i < lost_timer_count; ++i) {
+        core_async_handled = esp32_mquickjs_dispatch_timer_event(
+                                 ctx, runtime, lost_timers[i]) ||
+                             core_async_handled;
     }
 
     async_handled = esp32_mquickjs_poll_registered(ctx, runtime);

@@ -1351,6 +1351,35 @@ static bool future_advance_combinators(JSContext *ctx,
     return handled;
 }
 
+static bool future_advance_sleep_deadlines(JSContext *ctx,
+                                           esp32_mquickjs_runtime_t *runtime)
+{
+    future_runtime_t *state = future_runtime(runtime);
+    uint64_t now_us = (uint64_t)esp_timer_get_time();
+    bool handled = false;
+    int i;
+
+    if (state == NULL || state->slots == NULL) {
+        return false;
+    }
+    for (i = 0; i < ESP32_MQUICKJS_FUTURE_SLOT_COUNT; ++i) {
+        future_slot_t *slot = &state->slots[i];
+
+        if (!slot->allocated || slot->state != FUTURE_STATE_PENDING ||
+            slot->kind != FUTURE_KIND_SLEEP || slot->deadline_us == 0 ||
+            slot->deadline_us > now_us) {
+            continue;
+        }
+        /*
+         * The ready queue is only a latency hint. A full queue must not strand
+         * a timer-backed Future after its esp_timer callback has fired.
+         */
+        future_settle(ctx, slot, FUTURE_STATE_FULFILLED, JS_UNDEFINED);
+        handled = true;
+    }
+    return handled;
+}
+
 static bool future_expire_deadlines(JSContext *ctx,
                                     esp32_mquickjs_runtime_t *runtime)
 {
@@ -1751,6 +1780,7 @@ bool esp32_mquickjs_future_poll(JSContext *ctx,
         return false;
     }
     handled = future_expire_deadlines(ctx, runtime);
+    handled = future_advance_sleep_deadlines(ctx, runtime) || handled;
     while (count < CONFIG_ESP32_MQUICKJS_FUTURE_DISPATCH_BATCH &&
            xQueueReceive(state->submissions, &token, 0) == pdTRUE) {
         future_slot_t *slot = future_resolve_token(runtime, token);
