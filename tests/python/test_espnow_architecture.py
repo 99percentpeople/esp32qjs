@@ -66,6 +66,31 @@ class EspNowArchitectureTests(unittest.TestCase):
         self.assertIn("esp32_mquickjs_future_register_driver", source)
         self.assertIn("esp32_mquickjs_event_queue_register_receive_alias", source)
 
+    def test_open_failure_reports_structured_error_and_failed_native_step(self):
+        source = (
+            MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
+        ).read_text(encoding="utf-8")
+        open_start = source[
+            source.index("static bool espnow_open_start") :
+            source.index("static esp32_mquickjs_future_poll_t espnow_open_poll")
+        ]
+
+        for step in (
+            "wifi_radio_ensure_started",
+            "wifi_radio_set_channel",
+            "wifi_radio_get_channel",
+            "esp_now_init",
+            "esp_now_register_recv_cb",
+            "esp_now_register_send_cb",
+            "esp_now_set_pmk",
+            "esp_now_add_broadcast_peer",
+            "esp_now_set_wake_window",
+            "esp_now_set_wake_interval",
+        ):
+            self.assertIn(f'failed_step = "{step}"', open_start)
+        self.assertIn("ESP_LOGE", open_start)
+        self.assertIn('espnow_throw_error(ctx, "ESPNOW_NOT_OPEN"', open_start)
+
     def test_key_material_is_cleared_and_not_exposed(self):
         source = (
             MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"

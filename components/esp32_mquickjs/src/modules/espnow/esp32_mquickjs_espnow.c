@@ -17,6 +17,7 @@
 
 #include "esp_check.h"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "esp_now.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -27,6 +28,7 @@
 #define ESPNOW_ADDRESS_BYTES ESP_NOW_ETH_ALEN
 #define ESPNOW_BROADCAST_ADDRESS "ff:ff:ff:ff:ff:ff"
 #define ESPNOW_DEFAULT_CHANNEL 0U
+static const char *TAG = "esp32qjs_espnow";
 #if defined(CONFIG_ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD) && \
     CONFIG_ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD
 #define ESPNOW_V2_PAYLOAD_ENABLED 1
@@ -162,6 +164,7 @@ struct esp32_mquickjs_future_driver_state {
     uint16_t wake_interval_ms;
     int64_t completed_at_us;
     esp_err_t err;
+    const char *failed_step;
     bool mac_delivered;
     bool timed_out;
     bool recovery_failed;
@@ -1152,29 +1155,36 @@ static bool espnow_open_start(
     state->runtime = runtime;
     state->token = token;
     state->started = true;
+    state->failed_step = "wifi_radio_ensure_started";
     state->err = esp32_mquickjs_wifi_radio_ensure_started(
         &session->radio_lease);
     if (state->err == ESP_OK && state->channel_fixed) {
+        state->failed_step = "wifi_radio_set_channel";
         state->err = esp32_mquickjs_wifi_radio_set_channel(
             &session->radio_lease, state->channel, WIFI_SECOND_CHAN_NONE);
     }
     if (state->err == ESP_OK) {
+        state->failed_step = "wifi_radio_get_channel";
         state->err = esp32_mquickjs_wifi_radio_get_channel(
             &session->channel, &secondary, &session->channel_generation);
     }
     if (state->err == ESP_OK) {
+        state->failed_step = "esp_now_init";
         state->err = esp_now_init();
         session->now_initialized = state->err == ESP_OK;
     }
     if (state->err == ESP_OK) {
+        state->failed_step = "esp_now_register_recv_cb";
         state->err = esp_now_register_recv_cb(espnow_receive_callback);
         session->receive_callback_registered = state->err == ESP_OK;
     }
     if (state->err == ESP_OK) {
+        state->failed_step = "esp_now_register_send_cb";
         state->err = esp_now_register_send_cb(espnow_send_callback);
         session->send_callback_registered = state->err == ESP_OK;
     }
     if (state->err == ESP_OK && session->has_pmk) {
+        state->failed_step = "esp_now_set_pmk";
         state->err = esp_now_set_pmk(session->pmk);
     }
     if (state->err == ESP_OK) {
@@ -1183,22 +1193,29 @@ static bool espnow_open_start(
         broadcast_peer.channel = 0;
         broadcast_peer.ifidx = WIFI_IF_STA;
         broadcast_peer.encrypt = false;
+        state->failed_step = "esp_now_add_broadcast_peer";
         state->err = esp_now_add_peer(&broadcast_peer);
         session->broadcast_peer_added = state->err == ESP_OK;
     }
     if (state->err == ESP_OK && session->power_save_enabled) {
+        state->failed_step = "esp_now_set_wake_window";
         state->err = esp_now_set_wake_window(session->wake_window_ms);
         if (state->err == ESP_OK) {
+            state->failed_step = "esp_now_set_wake_interval";
             state->err = esp_wifi_connectionless_module_set_wake_interval(
                 session->wake_interval_ms);
         }
     }
     if (state->err != ESP_OK) {
         session->lifecycle = ESPNOW_LIFECYCLE_FAILED;
-        JS_ThrowInternalError(ctx, "ESPNOW_NOT_OPEN: espNow.open() failed: %s",
-                              esp_err_to_name(state->err));
+        ESP_LOGE(TAG, "open failed at %s: %s (0x%x)",
+                 state->failed_step != NULL ? state->failed_step : "unknown",
+                 esp_err_to_name(state->err), (unsigned int)state->err);
+        espnow_throw_error(ctx, "ESPNOW_NOT_OPEN", state->err, NULL,
+                           session->channel > 0 ? (int)session->channel : -1);
         return false;
     }
+    state->failed_step = NULL;
     session->lifecycle = ESPNOW_LIFECYCLE_ACTIVE;
     atomic_store_explicit(&state->completed, true, memory_order_release);
     (void)esp32_mquickjs_future_wake(runtime, token);
