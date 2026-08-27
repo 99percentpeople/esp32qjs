@@ -97,3 +97,10 @@ add_executable(test_dma_transfer
 )
 target_include_directories(test_dma_transfer PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_dma_transfer COMMAND test_dma_transfer)
+
+add_executable(test_wireless_core
+    test_wireless_core.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_wireless_core.c
+)
+target_include_directories(test_wireless_core PRIVATE ../../components/esp32_mquickjs/internal)
+add_test(NAME test_wireless_core COMMAND test_wireless_core)

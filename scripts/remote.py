@@ -173,6 +173,16 @@ JS_TEST_MODULES = (
         required_features=("wifi",),
     ),
     JsTestModule(
+        "espnow",
+        (JsTestCase("modules/espnow/offline.js"),),
+        required_features=("espnow",),
+    ),
+    JsTestModule(
+        "ble",
+        (JsTestCase("modules/ble/offline.js", timeout_seconds=45.0),),
+        required_features=("ble",),
+    ),
+    JsTestModule(
         "http",
         (
             JsTestCase("modules/http/offline.js"),

@@ -787,13 +787,22 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             "\nJSValue js_event_queue_receive(", finalizer_start
         )
         finalizer = event_queue[finalizer_start:finalizer_end]
+        discard_start = event_queue.index(
+            "size_t esp32_mquickjs_event_queue_discard_all("
+        )
+        discard_end = event_queue.index(
+            "\nbool esp32_mquickjs_event_queue_is_closed(", discard_start
+        )
+        discard = event_queue[discard_start:discard_end]
         c_test = (ROOT / "tests/c/test_event_queue_drain.c").read_text(
             encoding="utf-8"
         )
 
         self.assertIn("queue->drain_scratch = heap_caps_malloc", create)
-        self.assertIn("esp32_mquickjs_event_queue_drain(", finalizer)
+        self.assertIn("esp32_mquickjs_event_queue_discard_all(queue)", finalizer)
+        self.assertIn("esp32_mquickjs_event_queue_drain(", discard)
         self.assertNotIn("heap_caps_malloc", finalizer)
+        self.assertNotIn("heap_caps_malloc", discard)
         self.assertIn("queue.allocations_allowed = false", c_test)
         self.assertIn("assert(queue.drop_calls == 2)", c_test)
         self.assertIn("assert(queue.live_payloads == 0)", c_test)
