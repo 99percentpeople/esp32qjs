@@ -9,6 +9,7 @@
 #include "esp_psram.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
+#include "soc/soc_caps.h"
 
 #define MEMORY_MIN_INTERNAL_RESERVE_BYTES (16U * 1024U)
 #define MEMORY_MAX_INTERNAL_RESERVE_BYTES (64U * 1024U)
@@ -71,9 +72,16 @@ static bool memory_has_psram(void)
 
 static bool memory_has_external_dma(void)
 {
-    return memory_has_psram() &&
-           heap_caps_get_total_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA |
-                                    MALLOC_CAP_8BIT) > 0;
+#if SOC_PSRAM_DMA_CAPABLE
+    /*
+     * External DMA is a SoC capability, not a heap capability intersection.
+     * ESP-IDF intentionally registers PSRAM without MALLOC_CAP_DMA and adjusts
+     * SPIRAM|DMA requests in the capability allocator.
+     */
+    return memory_has_psram();
+#else
+    return false;
+#endif
 }
 
 static bool memory_is_external(const void *data)
@@ -189,6 +197,10 @@ static void *memory_alloc_once(size_t size,
         if (has_external_dma) {
             data = heap_caps_malloc(
                 size, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+            if (data != NULL && !esp_ptr_dma_ext_capable(data)) {
+                heap_caps_free(data);
+                data = NULL;
+            }
         }
         if (data == NULL && memory_internal_dma_can_fit(size)) {
             data = heap_caps_malloc(

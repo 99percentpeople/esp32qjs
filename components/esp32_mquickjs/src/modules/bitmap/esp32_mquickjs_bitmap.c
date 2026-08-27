@@ -12,9 +12,6 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
-#include "esp_psram.h"
-
-#define BITMAP_SMALL_INTERNAL_LIMIT 8192U
 #define BITMAP_STAGED_VIEW_KEY "__esp32qjsBitmapStagedView"
 #define BITMAP_STAGED_CHUNKS_KEY "__esp32qjsBitmapStagedChunks"
 
@@ -314,26 +311,18 @@ static bool compute_layout(uint32_t width,
     return true;
 }
 
-static uint32_t allocation_caps(uint8_t storage, size_t byte_length)
+static esp32_mquickjs_memory_class_t bitmap_memory_class(uint8_t storage)
 {
     if (storage == BITMAP_STORAGE_INTERNAL) {
-        return MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+        return ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL;
     }
     if (storage == BITMAP_STORAGE_PSRAM) {
-        return MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+        return ESP32_MQUICKJS_MEMORY_EXTERNAL;
     }
     if (storage == BITMAP_STORAGE_DMA) {
-        return MALLOC_CAP_DMA | MALLOC_CAP_8BIT;
+        return ESP32_MQUICKJS_MEMORY_DMA_INTERNAL;
     }
-
-#ifdef CONFIG_SPIRAM
-    if (byte_length > BITMAP_SMALL_INTERNAL_LIMIT && esp_psram_is_initialized()) {
-        return MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
-    }
-#else
-    (void)byte_length;
-#endif
-    return MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    return ESP32_MQUICKJS_MEMORY_DEFAULT;
 }
 
 static uint8_t *alloc_export_bytes(size_t length)
@@ -411,11 +400,8 @@ esp32_mquickjs_bitmap_t *bitmap_allocate(JSContext *ctx,
         JS_ThrowRangeError(ctx, "Bitmap allocation received invalid dimensions, layout, or stride");
         return NULL;
     }
-    data = storage == BITMAP_STORAGE_AUTO
-               ? esp32_mquickjs_memory_payload_alloc(
-                     byte_length, ESP32_MQUICKJS_MEMORY_DEFAULT)
-               : heap_caps_malloc(byte_length,
-                                  allocation_caps(storage, byte_length));
+    data = esp32_mquickjs_memory_payload_alloc(
+        byte_length, bitmap_memory_class(storage));
     if (data == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return NULL;
@@ -1909,11 +1895,8 @@ JSValue js_bitmap_create(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
         JS_PopGCRef(ctx, &property_ref);
     }
 
-    data = storage == BITMAP_STORAGE_AUTO
-               ? esp32_mquickjs_memory_payload_alloc(
-                     byte_length, ESP32_MQUICKJS_MEMORY_DEFAULT)
-               : heap_caps_malloc(byte_length,
-                                  allocation_caps(storage, byte_length));
+    data = esp32_mquickjs_memory_payload_alloc(
+        byte_length, bitmap_memory_class(storage));
     if (data == NULL) {
         return JS_ThrowOutOfMemory(ctx);
     }

@@ -112,6 +112,68 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
             docs,
         )
 
+    def test_external_dma_uses_soc_capability_instead_of_heap_intersection(self):
+        source = (MQUICKJS / "src/core/esp32_mquickjs_memory.c").read_text(
+            encoding="utf-8"
+        )
+        detection = source.split(
+            "static bool memory_has_external_dma(void)", 1
+        )[1].split(
+            "static bool memory_is_external", 1
+        )[0]
+        allocation_case = source.split(
+            "case ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL:", 1
+        )[1].split(
+            "case ESP32_MQUICKJS_MEMORY_EXTERNAL:", 1
+        )[0]
+
+        self.assertIn("SOC_PSRAM_DMA_CAPABLE", detection)
+        self.assertIn("memory_has_psram()", detection)
+        self.assertNotIn("heap_caps_get_total_size", detection)
+        self.assertIn("esp_ptr_dma_ext_capable(data)", allocation_case)
+
+    def test_spi_accepts_internal_or_external_dma_without_fixed_word_length(self):
+        source = (MQUICKJS / "src/modules/spi/esp32_mquickjs_spi.c").read_text(
+            encoding="utf-8"
+        )
+        predicate = source.split(
+            "static bool spi_buffer_can_dma", 1
+        )[1].split(
+            "static bool spi_byte_span_can_dma", 1
+        )[0]
+        span_predicate = source.split(
+            "static bool spi_byte_span_can_dma", 1
+        )[1].split(
+            "static void spi_mark_external_dma", 1
+        )[0]
+        queue_path = source.split(
+            "memset(transaction, 0, sizeof(*transaction));", 1
+        )[1].split(
+            "spi_mark_external_dma(transaction);", 1
+        )[0]
+
+        self.assertIn("esp_ptr_dma_capable(data)", predicate)
+        self.assertIn("esp_ptr_dma_ext_capable(data)", predicate)
+        self.assertNotIn("length", predicate)
+        self.assertIn("spi_buffer_can_dma(span->data)", span_predicate)
+        self.assertIn("spi_buffer_can_dma(data)", queue_path)
+        self.assertNotIn("length & 3U", queue_path)
+
+    def test_bitmap_storage_classes_all_use_the_shared_allocator(self):
+        source = (MQUICKJS / "src/modules/bitmap/esp32_mquickjs_bitmap.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("static esp32_mquickjs_memory_class_t bitmap_memory_class", source)
+        self.assertEqual(
+            source.count(
+                "esp32_mquickjs_memory_payload_alloc(\n"
+                "        byte_length, bitmap_memory_class(storage))"
+            ),
+            2,
+        )
+        self.assertNotIn("static uint32_t allocation_caps", source)
+
     def test_status_and_movable_display_buffers_are_exposed(self):
         stdlib = (MQUICKJS / "src/core/mqjs_stdlib_esp32.c").read_text(
             encoding="utf-8"

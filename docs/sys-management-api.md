@@ -659,12 +659,16 @@ retain ownerless buffers from the previous generation. The managed-byte and
 counts cover all classified payload and block requests. None of these counters
 claim ownership of opaque ESP-IDF or third-party allocations.
 
-The internal `DMA_EXTERNAL` class means "prefer external DMA". If the target
-exposes an external DMA-capable heap, allocation and reallocation try that heap
-first. If it is fragmented or exhausted, the manager makes one internal-DMA
-attempt only when the internal reserve check allows the full request. A target
-without external DMA goes directly to the same reserve-checked internal path.
-The manager never alternates repeatedly between heaps, and records one
+The internal `DMA_EXTERNAL` class means "prefer external DMA". If the target SoC
+supports DMA access to initialized PSRAM, allocation and reallocation try PSRAM
+first. This deliberately does not look for a `SPIRAM | DMA` heap intersection:
+ESP-IDF registers PSRAM without the `MALLOC_CAP_DMA` heap tag and applies the
+required DMA alignment when processing the allocation request. The manager also
+verifies the resulting pointer with the target's external-DMA predicate. If
+PSRAM is fragmented or exhausted, the manager makes one internal-DMA attempt
+only when the internal reserve check allows the full request. A target without
+external DMA goes directly to the same reserve-checked internal path. The
+manager never alternates repeatedly between heaps, and records one
 allocation failure only after both permitted attempts fail. Code that always
 requires internal DMA uses `DMA_INTERNAL` explicitly.
 

@@ -674,6 +674,21 @@ static uint32_t spi_clamp_queue_depth(const esp32_mquickjs_spi_device_slot_t *de
     return depth;
 }
 
+static bool spi_buffer_can_dma(const void *data)
+{
+    if (data == NULL) {
+        return false;
+    }
+    if (esp_ptr_dma_capable(data)) {
+        return true;
+    }
+#if SOC_PSRAM_DMA_CAPABLE
+    return esp_ptr_dma_ext_capable(data);
+#else
+    return false;
+#endif
+}
+
 static bool spi_byte_span_can_dma(const esp32_mquickjs_byte_span_t *span)
 {
     if (span == NULL || span->length == 0) {
@@ -681,9 +696,7 @@ static bool spi_byte_span_can_dma(const esp32_mquickjs_byte_span_t *span)
     }
     return span->dma_capable &&
            span->data != NULL &&
-           esp_ptr_dma_capable(span->data) &&
-           (((uintptr_t)span->data) & 3U) == 0U &&
-           (span->length & 3U) == 0U;
+           spi_buffer_can_dma(span->data);
 }
 
 static void spi_mark_external_dma(spi_transaction_t *transaction)
@@ -1843,8 +1856,7 @@ static void spi_future_bulk_step(
         transaction->length = length * 8U;
         if ((state->kind == SPI_FUTURE_WRITE_SOURCE && source_direct) ||
             (state->kind == SPI_FUTURE_WRITE_CHUNKS &&
-             data != NULL && esp_ptr_dma_capable(data) &&
-             (((uintptr_t)data) & 3U) == 0U && (length & 3U) == 0U)) {
+             spi_buffer_can_dma(data))) {
             transaction->tx_buffer = data;
         } else {
             started_us = esp_timer_get_time();

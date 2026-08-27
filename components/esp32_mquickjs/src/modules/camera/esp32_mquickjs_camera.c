@@ -650,7 +650,8 @@ static bool camera_source_next(JSContext *ctx, void *opaque,
     out->data = frame->buf + source->offset;
     out->length = length;
     out->owner = JS_UNDEFINED;
-    out->dma_capable = esp_ptr_dma_capable(out->data);
+    out->dma_capable = esp_ptr_dma_capable(out->data) ||
+                       esp_ptr_dma_ext_capable(out->data);
     source->offset += length;
     return true;
 }
