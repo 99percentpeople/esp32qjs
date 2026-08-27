@@ -378,6 +378,16 @@ JSValue js_sys_feature_get(JSContext *ctx,
 #else
         false,
 #endif
+#if defined(CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW) && CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW
+        true,
+#else
+        false,
+#endif
+#if defined(CONFIG_ESP32_MQUICKJS_FEATURE_BLE) && CONFIG_ESP32_MQUICKJS_FEATURE_BLE
+        true,
+#else
+        false,
+#endif
     };
 
     (void)this_val;

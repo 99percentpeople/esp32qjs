@@ -21,7 +21,6 @@
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
-#include "nvs_flash.h"
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAILED_BIT BIT1
@@ -313,21 +312,8 @@ static void wifi_event_handler(void *arg,
     }
 }
 
-static esp_err_t wifi_init_nvs(void)
-{
-    esp_err_t err = nvs_flash_init();
-
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_RETURN_ON_ERROR(nvs_flash_erase(), TAG, "nvs_flash_erase() failed");
-        err = nvs_flash_init();
-    }
-    return err;
-}
-
 static esp_err_t wifi_init_once(void)
 {
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-
     if (s_wifi_state.initialized) {
         return ESP_OK;
     }
@@ -344,8 +330,6 @@ static esp_err_t wifi_init_once(void)
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_RETURN_ON_ERROR(wifi_init_nvs(), TAG, "nvs_flash_init() failed");
-
     ESP_RETURN_ON_ERROR(esp32_mquickjs_net_ensure_initialized(), TAG,
                         "network runtime initialization failed");
 
@@ -355,9 +339,11 @@ static esp_err_t wifi_init_once(void)
         return ESP_FAIL;
     }
 
-    ESP_RETURN_ON_ERROR(esp_wifi_init(&cfg), TAG, "esp_wifi_init() failed");
-    ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "esp_wifi_set_storage() failed");
-    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "esp_wifi_set_mode() failed");
+    ESP_RETURN_ON_ERROR(
+        esp32_mquickjs_wifi_radio_acquire(
+            ESP32_MQUICKJS_WIFI_RADIO_CLIENT_WIFI_STA,
+            WIFI_MODE_STA, &s_wifi_state.radio_lease),
+        TAG, "acquire Wi-Fi radio failed");
 
     ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(WIFI_EVENT,
                                                             WIFI_EVENT_STA_START,
@@ -473,7 +459,8 @@ esp_err_t esp32_mquickjs_wifi_ensure_started(void)
     }
 
     xEventGroupClearBits(s_wifi_state.event_group, WIFI_STARTED_BIT);
-    err = esp_wifi_start();
+    err = esp32_mquickjs_wifi_radio_ensure_started(
+        &s_wifi_state.radio_lease);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_start() failed: %s", esp_err_to_name(err));
         return err;

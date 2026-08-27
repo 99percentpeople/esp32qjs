@@ -1,0 +1,79 @@
+#ifndef ESP32_MQUICKJS_WIRELESS_CORE_H
+#define ESP32_MQUICKJS_WIRELESS_CORE_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdatomic.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define ESP32_MQUICKJS_WIRELESS_ADDRESS_BYTES 6U
+#define ESP32_MQUICKJS_WIRELESS_POOL_MAX_CAPACITY 64U
+
+typedef struct {
+    _Atomic uint32_t free_bits[2];
+    uint8_t capacity;
+} esp32_mquickjs_wireless_pool_t;
+
+typedef enum {
+    ESP32_MQUICKJS_WIRELESS_TX_READY = 0,
+    ESP32_MQUICKJS_WIRELESS_TX_TIMED_OUT,
+    ESP32_MQUICKJS_WIRELESS_TX_RECOVERING,
+    ESP32_MQUICKJS_WIRELESS_TX_FAILED,
+} esp32_mquickjs_wireless_tx_state_t;
+
+typedef struct {
+    bool occupied;
+    uint32_t generation;
+    uint16_t index;
+} esp32_mquickjs_wireless_critical_slot_t;
+
+bool esp32_mquickjs_wireless_parse_address(
+    const char *text,
+    uint8_t output[ESP32_MQUICKJS_WIRELESS_ADDRESS_BYTES]);
+void esp32_mquickjs_wireless_format_address(
+    const uint8_t address[ESP32_MQUICKJS_WIRELESS_ADDRESS_BYTES],
+    char output[18]);
+
+bool esp32_mquickjs_wireless_key_length_valid(size_t length,
+                                               size_t required_length);
+void esp32_mquickjs_wireless_secure_zero(void *data, size_t length);
+
+bool esp32_mquickjs_wireless_pool_init(
+    esp32_mquickjs_wireless_pool_t *pool, uint32_t capacity);
+bool esp32_mquickjs_wireless_pool_acquire(
+    esp32_mquickjs_wireless_pool_t *pool, uint16_t *out_index);
+bool esp32_mquickjs_wireless_pool_release(
+    esp32_mquickjs_wireless_pool_t *pool, uint16_t index);
+uint32_t esp32_mquickjs_wireless_pool_available(
+    const esp32_mquickjs_wireless_pool_t *pool);
+
+bool esp32_mquickjs_wireless_tx_timeout(
+    esp32_mquickjs_wireless_tx_state_t *state);
+bool esp32_mquickjs_wireless_tx_begin_recovery(
+    esp32_mquickjs_wireless_tx_state_t *state);
+bool esp32_mquickjs_wireless_tx_finish_recovery(
+    esp32_mquickjs_wireless_tx_state_t *state, bool success);
+
+bool esp32_mquickjs_wireless_uuid_valid(const char *text);
+bool esp32_mquickjs_wireless_local_value_write(
+    uint8_t *value, uint16_t max_length, uint16_t *value_length,
+    uint16_t offset, const uint8_t *data, uint16_t data_length);
+bool esp32_mquickjs_wireless_generation_matches(
+    uint32_t active_generation, uint32_t event_generation, bool closing);
+
+bool esp32_mquickjs_wireless_critical_reserve(
+    esp32_mquickjs_wireless_critical_slot_t *slot,
+    uint32_t generation, uint16_t index);
+bool esp32_mquickjs_wireless_critical_take(
+    esp32_mquickjs_wireless_critical_slot_t *slot,
+    uint32_t generation, uint16_t *out_index);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

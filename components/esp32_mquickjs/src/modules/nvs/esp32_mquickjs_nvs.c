@@ -4,6 +4,7 @@
 
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_nvs_flash_boot.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -12,7 +13,6 @@
 
 #include "esp_heap_caps.h"
 #include "nvs.h"
-#include "nvs_flash.h"
 
 #define ESP32_MQUICKJS_NVS_MAX_NAME_BYTES 15U
 #define ESP32_MQUICKJS_NVS_MAX_VALUE_BYTES 2048U
@@ -91,7 +91,7 @@ bool esp32_mquickjs_init_nvs_runtime(JSContext *ctx,
     esp_err_t err;
 
     if (!s_nvs_initialized) {
-        err = nvs_flash_init();
+        err = esp32_mquickjs_nvs_flash_ensure_initialized();
         if (err != ESP_OK) {
             nvs_throw_error(ctx, "init", err);
             return false;

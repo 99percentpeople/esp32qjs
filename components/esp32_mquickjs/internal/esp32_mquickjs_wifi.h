@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_wifi_radio.h"
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
@@ -49,6 +50,7 @@ typedef struct {
     esp32_mquickjs_future_token_t scan_future_token;
     esp32_mquickjs_future_token_t connect_future_token;
     esp_timer_handle_t connect_timeout_timer;
+    esp32_mquickjs_wifi_radio_lease_t radio_lease;
     esp32_mquickjs_wifi_status_t status;
 } esp32_mquickjs_wifi_state_t;
 

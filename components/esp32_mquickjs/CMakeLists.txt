@@ -23,6 +23,8 @@ set(ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS
     CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA
     CONFIG_ESP32_MQUICKJS_FEATURE_NET
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
+    CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW
+    CONFIG_ESP32_MQUICKJS_FEATURE_BLE
     CONFIG_ESP32_MQUICKJS_FEATURE_TLS
     CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
     CONFIG_ESP32_MQUICKJS_FEATURE_RPC
@@ -246,10 +248,13 @@ set(ESP32_MQUICKJS_SRCS
     "src/core/esp32_mquickjs_memory_dma_accounting.c"
     "src/core/esp32_mquickjs_dma_transfer.c"
     "src/core/esp32_mquickjs_peripheral_lease.c"
+    "src/core/esp32_mquickjs_wireless_core.c"
     "src/core/esp32_mquickjs_profile.c"
     "src/core/esp32_mquickjs_sys.c"
     "src/core/esp32_mquickjs_stream.c"
     "src/core/esp32_mquickjs_request_response.c"
+    "src/modules/nvs/esp32_mquickjs_nvs_flash_boot.c"
+    "src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
     "src/modules/time/esp32_mquickjs_time.c"
     "src/core/js_stdlib.c"
     "${MQUICKJS_DIR}/cutils.c"
@@ -302,6 +307,7 @@ set(ESP32_MQUICKJS_PRIV_REQUIRES
     esp_netif
     esp-tls
     esp_wifi
+    bt
     esp_driver_usb_serial_jtag
     esp_websocket_client
     lwip
@@ -452,6 +458,21 @@ esp32_mquickjs_append_feature_component(
         esp_event
         esp_netif
         esp_wifi
+        nvs_flash
+)
+
+esp32_mquickjs_append_feature_component(
+    CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW
+    "src/modules/espnow/esp32_mquickjs_espnow.c"
+    PRIV_REQUIRES
+        esp_wifi
+)
+
+esp32_mquickjs_append_feature_component(
+    CONFIG_ESP32_MQUICKJS_FEATURE_BLE
+    "src/modules/ble/esp32_mquickjs_ble.c"
+    PRIV_REQUIRES
+        bt
         nvs_flash
 )
 

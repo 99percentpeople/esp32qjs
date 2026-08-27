@@ -144,9 +144,165 @@ config ESP32_MQUICKJS_FEATURE_WIFI
     bool "Enable wifi module"
     default n
     depends on ESP32_MQUICKJS_FEATURE_NET && SOC_WIFI_SUPPORTED
+    select ESP32_MQUICKJS_WIFI_RADIO
     help
         Enable Wi-Fi station bindings such as wifi.status(), wifi.scan(), and
         wifi.connect().
+
+config ESP32_MQUICKJS_WIFI_RADIO
+    bool
+    depends on SOC_WIFI_SUPPORTED
+    help
+        Internal boot-scoped Wi-Fi radio service shared by the public Wi-Fi
+        module and connectionless wireless transports such as ESP-NOW.
+
+config ESP32_MQUICKJS_FEATURE_ESPNOW
+    bool "Enable ESP-NOW module"
+    default n
+    depends on SOC_WIFI_SUPPORTED
+    select ESP32_MQUICKJS_WIFI_RADIO
+    select ESP_WIFI_STA_DISCONNECTED_PM_ENABLE
+    help
+        Enable bounded station-interface ESP-NOW sessions with a fixed receive
+        pool, EventQueue delivery, peer management, and Future-backed sends.
+
+config ESP32_MQUICKJS_ESPNOW_RX_QUEUE_LEN
+    int "Default ESP-NOW receive capacity"
+    range 1 32
+    default 8
+    depends on ESP32_MQUICKJS_FEATURE_ESPNOW
+
+config ESP32_MQUICKJS_ESPNOW_RX_MAX_QUEUE_LEN
+    int "Maximum ESP-NOW receive capacity"
+    range 1 64
+    default 16
+    depends on ESP32_MQUICKJS_FEATURE_ESPNOW
+
+config ESP32_MQUICKJS_ESPNOW_DEFAULT_MAX_PAYLOAD_BYTES
+    int "Default ESP-NOW payload limit"
+    range 1 1470
+    default 250
+    depends on ESP32_MQUICKJS_FEATURE_ESPNOW
+
+config ESP32_MQUICKJS_ESPNOW_MAX_PAYLOAD_BYTES
+    int "Maximum ESP-NOW payload limit"
+    range 1 1470
+    default 250
+    depends on ESP32_MQUICKJS_FEATURE_ESPNOW
+
+config ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD
+    bool "Allow ESP-NOW v2 payloads"
+    default n
+    depends on ESP32_MQUICKJS_FEATURE_ESPNOW
+
+config ESP32_MQUICKJS_ESPNOW_DEFAULT_SEND_TIMEOUT_MS
+    int "Default ESP-NOW send timeout (ms)"
+    range 1 60000
+    default 1000
+    depends on ESP32_MQUICKJS_FEATURE_ESPNOW
+
+config ESP32_MQUICKJS_ESPNOW_MAX_PEERS
+    int "Maximum application ESP-NOW peers"
+    range 1 19
+    default 19
+    depends on ESP32_MQUICKJS_FEATURE_ESPNOW
+    help
+        One additional ESP-IDF peer slot is reserved for broadcast.
+
+config ESP32_MQUICKJS_FEATURE_BLE
+    bool "Enable Bluetooth LE module"
+    default n
+    depends on SOC_BLE_SUPPORTED && BT_NIMBLE_ENABLED && BT_CONTROLLER_ENABLED
+    select BT_NIMBLE_ROLE_CENTRAL
+    select BT_NIMBLE_ROLE_PERIPHERAL
+    select BT_NIMBLE_ROLE_OBSERVER
+    select BT_NIMBLE_ROLE_BROADCASTER
+    select BT_NIMBLE_GATT_CLIENT
+    select BT_NIMBLE_GATT_SERVER
+    select BT_NIMBLE_SECURITY_ENABLE
+    select BT_NIMBLE_NVS_PERSIST
+    help
+        Enable bounded BLE central, peripheral, observer, broadcaster, GATT,
+        security, and native-cached GATT Server bindings over ESP-NimBLE.
+
+config ESP32_MQUICKJS_WIRELESS_COEX
+    bool
+    default y if ESP32_MQUICKJS_FEATURE_BLE && ESP32_MQUICKJS_WIFI_RADIO
+    select ESP_COEX_SW_COEXIST_ENABLE
+    help
+        Internal software-coexistence selection for builds combining BLE with
+        Wi-Fi or ESP-NOW. BLE-only builds do not select coexistence.
+
+config ESP32_MQUICKJS_BLE_MAX_CONNECTIONS
+    int "Maximum BLE connections exposed to JavaScript"
+    range 1 8
+    default 2
+    depends on ESP32_MQUICKJS_FEATURE_BLE
+
+config ESP32_MQUICKJS_BLE_SCAN_QUEUE_LEN
+    int "Default BLE scan report capacity"
+    range 1 64
+    default 16
+    depends on ESP32_MQUICKJS_FEATURE_BLE
+
+config ESP32_MQUICKJS_BLE_SCAN_QUEUE_MAX_LEN
+    int "Maximum BLE scan report capacity"
+    range 1 64
+    default 32
+    depends on ESP32_MQUICKJS_FEATURE_BLE
+
+config ESP32_MQUICKJS_BLE_CONNECTION_QUEUE_LEN
+    int "BLE connection control event capacity"
+    range 2 32
+    default 8
+    depends on ESP32_MQUICKJS_FEATURE_BLE
+
+config ESP32_MQUICKJS_BLE_NOTIFICATION_QUEUE_LEN
+    int "Default BLE notification capacity"
+    range 1 32
+    default 8
+    depends on ESP32_MQUICKJS_FEATURE_BLE
+
+config ESP32_MQUICKJS_BLE_SERVER_QUEUE_LEN
+    int "Default BLE GATT Server event capacity"
+    range 1 32
+    default 8
+    depends on ESP32_MQUICKJS_FEATURE_BLE
+
+config ESP32_MQUICKJS_BLE_MAX_SERVICES
+    int "Maximum application GATT services"
+    range 1 32
+    default 16
+    depends on ESP32_MQUICKJS_FEATURE_BLE
+
+config ESP32_MQUICKJS_BLE_MAX_CHARACTERISTICS
+    int "Maximum application GATT characteristics"
+    range 1 64
+    default 32
+    depends on ESP32_MQUICKJS_FEATURE_BLE
+
+config ESP32_MQUICKJS_BLE_MAX_DESCRIPTORS
+    int "Maximum discovered GATT descriptors"
+    range 1 128
+    default 32
+    depends on ESP32_MQUICKJS_FEATURE_BLE
+
+config ESP32_MQUICKJS_BLE_MAX_ATTRIBUTE_BYTES
+    int "Maximum bytes in one BLE attribute value"
+    range 20 512
+    default 512
+    depends on ESP32_MQUICKJS_FEATURE_BLE
+
+config ESP32_MQUICKJS_BLE_BONDING
+    bool "Enable persistent BLE bonding"
+    default y
+    depends on ESP32_MQUICKJS_FEATURE_BLE
+
+config ESP32_MQUICKJS_BLE_HOST_TASK_STACK_SIZE
+    int "NimBLE Host task stack size"
+    range 4096 16384
+    default 6144
+    depends on ESP32_MQUICKJS_FEATURE_BLE
 
 config ESP32_MQUICKJS_FEATURE_TLS
     bool "Enable public-CA TLS transport capability"

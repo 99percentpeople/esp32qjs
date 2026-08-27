@@ -258,6 +258,18 @@ bool esp32_mquickjs_event_queue_close(esp32_mquickjs_event_queue_t *queue)
     return true;
 }
 
+size_t esp32_mquickjs_event_queue_discard_all(
+    esp32_mquickjs_event_queue_t *queue)
+{
+    if (queue == NULL || queue->events == NULL ||
+        queue->drain_scratch == NULL) {
+        return 0;
+    }
+    return esp32_mquickjs_event_queue_drain(
+        queue->events, queue->drain_scratch, event_queue_drain_receive,
+        queue->drop, queue->opaque);
+}
+
 bool esp32_mquickjs_event_queue_is_closed(const esp32_mquickjs_event_queue_t *queue)
 {
     return queue == NULL || atomic_load_explicit(
@@ -623,9 +635,7 @@ void js_event_queue_finalizer(JSContext *ctx, void *opaque)
     }
     event_queue_unregister(queue);
     (void)esp32_mquickjs_event_queue_close(queue);
-    (void)esp32_mquickjs_event_queue_drain(
-        queue->events, queue->drain_scratch, event_queue_drain_receive,
-        queue->drop, queue->opaque);
+    (void)esp32_mquickjs_event_queue_discard_all(queue);
     vQueueDelete(queue->events);
     heap_caps_free(queue->drain_scratch);
     heap_caps_free(queue);

@@ -33,7 +33,19 @@
 #define JS_CLASS_UDP_SOCKET (JS_CLASS_USER + 28)
 #define JS_CLASS_RPC_CODEC (JS_CLASS_USER + 29)
 #define JS_CLASS_RPC_DECODER (JS_CLASS_USER + 30)
-#define JS_CLASS_COUNT (JS_CLASS_USER + 31)
+#define JS_CLASS_BLE_ADAPTER (JS_CLASS_USER + 31)
+#define JS_CLASS_BLE_SCANNER (JS_CLASS_USER + 32)
+#define JS_CLASS_BLE_ADVERTISER (JS_CLASS_USER + 33)
+#define JS_CLASS_BLE_CONNECTION (JS_CLASS_USER + 34)
+#define JS_CLASS_BLE_SERVICE (JS_CLASS_USER + 35)
+#define JS_CLASS_BLE_CHARACTERISTIC (JS_CLASS_USER + 36)
+#define JS_CLASS_BLE_DESCRIPTOR (JS_CLASS_USER + 37)
+#define JS_CLASS_BLE_NOTIFICATION_STREAM (JS_CLASS_USER + 38)
+#define JS_CLASS_BLE_GATT_SERVER (JS_CLASS_USER + 39)
+#define JS_CLASS_BLE_LOCAL_CHARACTERISTIC (JS_CLASS_USER + 40)
+#define JS_CLASS_ESPNOW_SESSION (JS_CLASS_USER + 41)
+#define JS_CLASS_ESPNOW_PEER (JS_CLASS_USER + 42)
+#define JS_CLASS_COUNT (JS_CLASS_USER + 43)
 
 #define js_global_object js_global_object_base
 #define js_c_function_decl js_c_function_decl_base
@@ -489,6 +501,8 @@ static const JSPropDef js_sys_info_features[] = {
     JS_CGETSET_MAGIC_DEF("rmt", js_sys_feature_get, NULL, 20),
     JS_CGETSET_MAGIC_DEF("tls", js_sys_feature_get, NULL, 21),
     JS_CGETSET_MAGIC_DEF("net", js_sys_feature_get, NULL, 22),
+    JS_CGETSET_MAGIC_DEF("espNow", js_sys_feature_get, NULL, 23),
+    JS_CGETSET_MAGIC_DEF("ble", js_sys_feature_get, NULL, 24),
     JS_PROP_END,
 };
 
@@ -811,6 +825,198 @@ static const JSPropDef js_rmt[] = {
 static const JSClassDef js_rmt_obj = JS_OBJECT_DEF("rmt", js_rmt);
 #endif
 
+#if CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW
+static const JSPropDef js_espnow_session_proto[] = {
+    JS_CFUNC_DEF("receive", 1, js_espnow_session_receive),
+    JS_CFUNC_DEF("stats", 0, js_espnow_session_stats),
+    JS_CFUNC_DEF("status", 0, js_espnow_session_status),
+    JS_CFUNC_DEF("addPeer", 1, js_espnow_session_add_peer),
+    JS_CFUNC_DEF("peer", 1, js_espnow_session_peer),
+    JS_CFUNC_DEF("peers", 0, js_espnow_session_peers),
+    JS_CFUNC_DEF("broadcast", 2, js_espnow_session_broadcast),
+    JS_CFUNC_DEF("setPowerSave", 1, js_espnow_session_set_power_save),
+    JS_CFUNC_DEF("close", 0, js_espnow_session_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_espnow_session_class =
+    JS_CLASS_DEF("EspNowSession", 0, js_espnow_session_constructor,
+                 JS_CLASS_ESPNOW_SESSION, NULL, js_espnow_session_proto, NULL,
+                 js_espnow_session_finalizer);
+
+static const JSPropDef js_espnow_peer_proto[] = {
+    JS_CFUNC_DEF("status", 0, js_espnow_peer_status),
+    JS_CFUNC_DEF("send", 2, js_espnow_peer_send),
+    JS_CFUNC_DEF("update", 1, js_espnow_peer_update),
+    JS_CFUNC_DEF("close", 0, js_espnow_peer_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_espnow_peer_class =
+    JS_CLASS_DEF("EspNowPeer", 0, js_espnow_peer_constructor,
+                 JS_CLASS_ESPNOW_PEER, NULL, js_espnow_peer_proto, NULL,
+                 js_espnow_peer_finalizer);
+
+static const JSPropDef js_espnow[] = {
+    JS_PROP_STRING_DEF("BROADCAST_ADDRESS", "ff:ff:ff:ff:ff:ff", 0),
+    JS_PROP_DOUBLE_DEF("MAX_PAYLOAD_V1", 250, 0),
+    JS_PROP_DOUBLE_DEF("MAX_PAYLOAD_V2", 1470, 0),
+    JS_CFUNC_DEF("capabilities", 0, js_espnow_capabilities),
+    JS_CFUNC_DEF("open", 1, js_espnow_open),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_espnow_obj =
+    JS_OBJECT_DEF("espNow", js_espnow);
+#endif
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BLE
+static const JSPropDef js_ble_adapter_proto[] = {
+    JS_CFUNC_DEF("status", 0, js_ble_adapter_status),
+    JS_CFUNC_DEF("scan", 1, js_ble_adapter_scan),
+    JS_CFUNC_DEF("connect", 2, js_ble_adapter_connect),
+    JS_CFUNC_DEF("advertise", 1, js_ble_adapter_advertise),
+    JS_CFUNC_DEF("server", 0, js_ble_adapter_server),
+    JS_CFUNC_DEF("bonds", 0, js_ble_adapter_bonds),
+    JS_CFUNC_DEF("removeBond", 1, js_ble_adapter_remove_bond),
+    JS_CFUNC_DEF("clearBonds", 0, js_ble_adapter_clear_bonds),
+    JS_CFUNC_DEF("close", 0, js_ble_adapter_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_ble_adapter_class =
+    JS_CLASS_DEF("BLEAdapter", 0, js_ble_adapter_constructor,
+                 JS_CLASS_BLE_ADAPTER, NULL, js_ble_adapter_proto, NULL,
+                 js_ble_adapter_finalizer);
+
+static const JSPropDef js_ble_scanner_proto[] = {
+    JS_CFUNC_DEF("receive", 1, js_ble_scanner_receive),
+    JS_CFUNC_DEF("stats", 0, js_ble_scanner_stats),
+    JS_CFUNC_DEF("status", 0, js_ble_scanner_status),
+    JS_CFUNC_DEF("close", 0, js_ble_scanner_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_ble_scanner_class =
+    JS_CLASS_DEF("BLEScanner", 0, js_ble_scanner_constructor,
+                 JS_CLASS_BLE_SCANNER, NULL, js_ble_scanner_proto, NULL,
+                 js_ble_scanner_finalizer);
+
+static const JSPropDef js_ble_advertiser_proto[] = {
+    JS_CFUNC_DEF("receive", 1, js_ble_advertiser_receive),
+    JS_CFUNC_DEF("stats", 0, js_ble_advertiser_stats),
+    JS_CFUNC_DEF("status", 0, js_ble_advertiser_status),
+    JS_CFUNC_DEF("close", 0, js_ble_advertiser_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_ble_advertiser_class =
+    JS_CLASS_DEF("BLEAdvertiser", 0, js_ble_advertiser_constructor,
+                 JS_CLASS_BLE_ADVERTISER, NULL, js_ble_advertiser_proto, NULL,
+                 js_ble_advertiser_finalizer);
+
+static const JSPropDef js_ble_connection_proto[] = {
+    JS_CFUNC_DEF("receive", 1, js_ble_connection_receive),
+    JS_CFUNC_DEF("stats", 0, js_ble_connection_stats),
+    JS_CFUNC_DEF("status", 0, js_ble_connection_status),
+    JS_CFUNC_DEF("pair", 1, js_ble_connection_pair),
+    JS_CFUNC_DEF("respondPairing", 2, js_ble_connection_respond_pairing),
+    JS_CFUNC_DEF("exchangeMtu", 2, js_ble_connection_exchange_mtu),
+    JS_CFUNC_DEF("readRssi", 1, js_ble_connection_read_rssi),
+    JS_CFUNC_DEF("discover", 1, js_ble_connection_discover),
+    JS_CFUNC_DEF("close", 0, js_ble_connection_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_ble_connection_class =
+    JS_CLASS_DEF("BLEConnection", 0, js_ble_connection_constructor,
+                 JS_CLASS_BLE_CONNECTION, NULL, js_ble_connection_proto, NULL,
+                 js_ble_connection_finalizer);
+
+static const JSPropDef js_ble_service_proto[] = {
+    JS_CFUNC_DEF("characteristics", 0, js_ble_service_characteristics),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_ble_service_class =
+    JS_CLASS_DEF("BLEService", 0, js_ble_service_constructor,
+                 JS_CLASS_BLE_SERVICE, NULL, js_ble_service_proto, NULL,
+                 js_ble_service_finalizer);
+
+static const JSPropDef js_ble_characteristic_proto[] = {
+    JS_CFUNC_DEF("descriptors", 0, js_ble_characteristic_descriptors),
+    JS_CFUNC_DEF("read", 1, js_ble_characteristic_read),
+    JS_CFUNC_DEF("write", 2, js_ble_characteristic_write),
+    JS_CFUNC_DEF("subscribe", 1, js_ble_characteristic_subscribe),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_ble_characteristic_class =
+    JS_CLASS_DEF("BLECharacteristic", 0, js_ble_characteristic_constructor,
+                 JS_CLASS_BLE_CHARACTERISTIC, NULL,
+                 js_ble_characteristic_proto, NULL,
+                 js_ble_characteristic_finalizer);
+
+static const JSPropDef js_ble_descriptor_proto[] = {
+    JS_CFUNC_DEF("read", 1, js_ble_descriptor_read),
+    JS_CFUNC_DEF("write", 2, js_ble_descriptor_write),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_ble_descriptor_class =
+    JS_CLASS_DEF("BLEDescriptor", 0, js_ble_descriptor_constructor,
+                 JS_CLASS_BLE_DESCRIPTOR, NULL, js_ble_descriptor_proto, NULL,
+                 js_ble_descriptor_finalizer);
+
+static const JSPropDef js_ble_notification_proto[] = {
+    JS_CFUNC_DEF("receive", 1, js_ble_notification_receive),
+    JS_CFUNC_DEF("stats", 0, js_ble_notification_stats),
+    JS_CFUNC_DEF("status", 0, js_ble_notification_status),
+    JS_CFUNC_DEF("close", 0, js_ble_notification_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_ble_notification_class =
+    JS_CLASS_DEF("BLENotificationStream", 0, js_ble_notification_constructor,
+                 JS_CLASS_BLE_NOTIFICATION_STREAM, NULL,
+                 js_ble_notification_proto, NULL,
+                 js_ble_notification_finalizer);
+
+static const JSPropDef js_ble_gatt_server_proto[] = {
+    JS_CFUNC_DEF("status", 0, js_ble_gatt_server_status),
+    JS_CFUNC_DEF("watch", 1, js_ble_gatt_server_watch),
+    JS_CFUNC_DEF("characteristic", 1, js_ble_gatt_server_characteristic),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_ble_gatt_server_class =
+    JS_CLASS_DEF("BLEGattServer", 0, js_ble_gatt_server_constructor,
+                 JS_CLASS_BLE_GATT_SERVER, NULL, js_ble_gatt_server_proto,
+                 NULL, js_ble_gatt_server_finalizer);
+
+static const JSPropDef js_ble_local_characteristic_proto[] = {
+    JS_CFUNC_DEF("value", 0, js_ble_local_characteristic_value),
+    JS_CFUNC_DEF("setValue", 1, js_ble_local_characteristic_set_value),
+    JS_CFUNC_DEF("notify", 2, js_ble_local_characteristic_notify),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_ble_local_characteristic_class =
+    JS_CLASS_DEF("BLELocalCharacteristic", 0,
+                 js_ble_local_characteristic_constructor,
+                 JS_CLASS_BLE_LOCAL_CHARACTERISTIC, NULL,
+                 js_ble_local_characteristic_proto, NULL,
+                 js_ble_local_characteristic_finalizer);
+
+static const JSPropDef js_ble[] = {
+    JS_CFUNC_DEF("capabilities", 0, js_ble_capabilities),
+    JS_CFUNC_DEF("open", 1, js_ble_open),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_ble_obj = JS_OBJECT_DEF("ble", js_ble);
+#endif
+
 #if CONFIG_ESP32_MQUICKJS_FEATURE_I2S
 static const JSPropDef js_i2s_channel_proto[] = {
     JS_CFUNC_DEF("start", 0, js_i2s_channel_start),
@@ -1119,6 +1325,24 @@ static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("rmt", &js_rmt_obj),
     JS_PROP_CLASS_DEF("RMTSymbolBuffer", &js_rmt_symbol_buffer_class),
     JS_PROP_CLASS_DEF("RMTChannel", &js_rmt_channel_class),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW
+    JS_PROP_CLASS_DEF("espNow", &js_espnow_obj),
+    JS_PROP_CLASS_DEF("EspNowSession", &js_espnow_session_class),
+    JS_PROP_CLASS_DEF("EspNowPeer", &js_espnow_peer_class),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BLE
+    JS_PROP_CLASS_DEF("ble", &js_ble_obj),
+    JS_PROP_CLASS_DEF("BLEAdapter", &js_ble_adapter_class),
+    JS_PROP_CLASS_DEF("BLEScanner", &js_ble_scanner_class),
+    JS_PROP_CLASS_DEF("BLEAdvertiser", &js_ble_advertiser_class),
+    JS_PROP_CLASS_DEF("BLEConnection", &js_ble_connection_class),
+    JS_PROP_CLASS_DEF("BLEService", &js_ble_service_class),
+    JS_PROP_CLASS_DEF("BLECharacteristic", &js_ble_characteristic_class),
+    JS_PROP_CLASS_DEF("BLEDescriptor", &js_ble_descriptor_class),
+    JS_PROP_CLASS_DEF("BLENotificationStream", &js_ble_notification_class),
+    JS_PROP_CLASS_DEF("BLEGattServer", &js_ble_gatt_server_class),
+    JS_PROP_CLASS_DEF("BLELocalCharacteristic", &js_ble_local_characteristic_class),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_I2S
     JS_PROP_CLASS_DEF("i2s", &js_i2s_obj),
