@@ -39,9 +39,11 @@ typedef struct {
     size_t dma_largest_reserve_bytes;
     size_t managed_internal_bytes;
     size_t managed_psram_bytes;
-    /* Stable internal managed blocks plus registered driver DMA payloads. */
+    /* Stable managed blocks plus registered driver DMA and staging payloads. */
     size_t pinned_bytes;
     size_t driver_pinned_bytes;
+    size_t staging_pinned_bytes;
+    uint32_t dma_staging_pools;
     size_t pending_dma_reservation_bytes;
     size_t movable_idle_bytes;
     uint32_t migration_count;
@@ -76,6 +78,10 @@ bool esp32_mquickjs_memory_reserve_internal_dma(
 bool esp32_mquickjs_memory_commit_driver_pinned(
     esp32_mquickjs_memory_dma_reservation_t *reservation,
     size_t driver_pinned_bytes);
+bool esp32_mquickjs_memory_commit_staging_pinned(
+    esp32_mquickjs_memory_dma_reservation_t *reservation,
+    size_t staging_pinned_bytes,
+    uint32_t dma_staging_pools);
 bool esp32_mquickjs_memory_release_driver_pinned(
     esp32_mquickjs_memory_dma_reservation_t *reservation);
 

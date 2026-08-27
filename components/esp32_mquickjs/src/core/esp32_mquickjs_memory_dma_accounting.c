@@ -55,6 +55,35 @@ bool esp32_mquickjs_memory_dma_accounting_commit(
     return true;
 }
 
+bool esp32_mquickjs_memory_dma_accounting_commit_staging(
+    esp32_mquickjs_memory_dma_accounting_t *totals,
+    esp32_mquickjs_memory_dma_reservation_t *reservation,
+    size_t staging_pinned_bytes,
+    uint32_t dma_staging_pools)
+{
+    if (totals == NULL || reservation == NULL ||
+        staging_pinned_bytes == 0 || dma_staging_pools == 0 ||
+        reservation->state != ESP32_MQUICKJS_MEMORY_DMA_RESERVED ||
+        staging_pinned_bytes > reservation->pending_bytes ||
+        totals->pending_bytes < reservation->pending_bytes ||
+        totals->pending_largest_bytes < reservation->pending_largest_bytes ||
+        !memory_size_add_fits(totals->staging_pinned_bytes,
+                              staging_pinned_bytes) ||
+        totals->dma_staging_pools > UINT32_MAX - dma_staging_pools) {
+        return false;
+    }
+    totals->pending_bytes -= reservation->pending_bytes;
+    totals->pending_largest_bytes -= reservation->pending_largest_bytes;
+    totals->staging_pinned_bytes += staging_pinned_bytes;
+    totals->dma_staging_pools += dma_staging_pools;
+    reservation->state = ESP32_MQUICKJS_MEMORY_DMA_COMMITTED;
+    reservation->pending_bytes = 0;
+    reservation->pending_largest_bytes = 0;
+    reservation->staging_pinned_bytes = staging_pinned_bytes;
+    reservation->dma_staging_pools = dma_staging_pools;
+    return true;
+}
+
 bool esp32_mquickjs_memory_dma_accounting_release(
     esp32_mquickjs_memory_dma_accounting_t *totals,
     esp32_mquickjs_memory_dma_reservation_t *reservation)
@@ -72,11 +101,15 @@ bool esp32_mquickjs_memory_dma_accounting_release(
         totals->pending_bytes -= reservation->pending_bytes;
         totals->pending_largest_bytes -= reservation->pending_largest_bytes;
     } else if (reservation->state == ESP32_MQUICKJS_MEMORY_DMA_COMMITTED) {
-        if (totals->driver_pinned_bytes <
-            reservation->driver_pinned_bytes) {
+        if (totals->driver_pinned_bytes < reservation->driver_pinned_bytes ||
+            totals->staging_pinned_bytes <
+                reservation->staging_pinned_bytes ||
+            totals->dma_staging_pools < reservation->dma_staging_pools) {
             return false;
         }
         totals->driver_pinned_bytes -= reservation->driver_pinned_bytes;
+        totals->staging_pinned_bytes -= reservation->staging_pinned_bytes;
+        totals->dma_staging_pools -= reservation->dma_staging_pools;
     } else {
         return false;
     }

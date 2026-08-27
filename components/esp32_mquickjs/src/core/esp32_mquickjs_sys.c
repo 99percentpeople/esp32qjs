@@ -1073,6 +1073,12 @@ JSValue js_sys_memory_manager(JSContext *ctx,
             ctx, object, "driverPinnedBytes",
             JS_NewUint32(ctx, (uint32_t)status.driver_pinned_bytes)) ||
         !esp32_mquickjs_set_property_ref(
+            ctx, object, "stagingPinnedBytes",
+            JS_NewUint32(ctx, (uint32_t)status.staging_pinned_bytes)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "dmaStagingPools",
+            JS_NewUint32(ctx, status.dma_staging_pools)) ||
+        !esp32_mquickjs_set_property_ref(
             ctx, object, "pendingDmaReservationBytes",
             JS_NewUint32(
                 ctx, (uint32_t)status.pending_dma_reservation_bytes)) ||

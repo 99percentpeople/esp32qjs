@@ -812,6 +812,21 @@ bool esp32_mquickjs_memory_commit_driver_pinned(
     return committed;
 }
 
+bool esp32_mquickjs_memory_commit_staging_pinned(
+    esp32_mquickjs_memory_dma_reservation_t *reservation,
+    size_t staging_pinned_bytes,
+    uint32_t dma_staging_pools)
+{
+    bool committed;
+
+    taskENTER_CRITICAL(&s_memory.lock);
+    committed = esp32_mquickjs_memory_dma_accounting_commit_staging(
+        &s_memory.dma_accounting, reservation, staging_pinned_bytes,
+        dma_staging_pools);
+    taskEXIT_CRITICAL(&s_memory.lock);
+    return committed;
+}
+
 bool esp32_mquickjs_memory_release_driver_pinned(
     esp32_mquickjs_memory_dma_reservation_t *reservation)
 {
@@ -840,8 +855,11 @@ void esp32_mquickjs_memory_get_status(esp32_mquickjs_memory_status_t *out)
     out->managed_internal_bytes = s_memory.managed_internal_bytes;
     out->managed_psram_bytes = s_memory.managed_psram_bytes;
     out->pinned_bytes = s_memory.managed_pinned_bytes +
-                        s_memory.dma_accounting.driver_pinned_bytes;
+                        s_memory.dma_accounting.driver_pinned_bytes +
+                        s_memory.dma_accounting.staging_pinned_bytes;
     out->driver_pinned_bytes = s_memory.dma_accounting.driver_pinned_bytes;
+    out->staging_pinned_bytes = s_memory.dma_accounting.staging_pinned_bytes;
+    out->dma_staging_pools = s_memory.dma_accounting.dma_staging_pools;
     out->pending_dma_reservation_bytes =
         s_memory.dma_accounting.pending_bytes;
     out->migration_count = s_memory.migration_count;
