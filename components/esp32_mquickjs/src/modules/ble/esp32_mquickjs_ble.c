@@ -448,8 +448,6 @@ static const uint8_t s_ble_gap_lane_key;
 static const uint8_t s_ble_adapter_lane_key;
 static const uint8_t s_ble_server_lane_key;
 static _Atomic(esp32_mquickjs_future_driver_state_t *) s_ble_open_state;
-static _Atomic(esp32_mquickjs_future_driver_state_t *) s_ble_scanner_stop_state;
-static _Atomic(esp32_mquickjs_future_driver_state_t *) s_ble_advertiser_stop_state;
 static _Atomic(esp32_mquickjs_future_driver_state_t *) s_ble_server_notify_state;
 
 static int ble_gap_event_callback(struct ble_gap_event *event, void *arg);
@@ -1503,48 +1501,18 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
         break;
     case BLE_GAP_EVENT_DISC_COMPLETE:
         s_ble.scanner.active = false;
-        {
-            esp32_mquickjs_future_driver_state_t *stop_state =
-                ble_active_state_acquire(&s_ble_scanner_stop_state);
-            if (stop_state != NULL &&
-                stop_state->operation == BLE_OP_SCANNER_CLOSE) {
-                s_ble.scanner.stop_reason = BLE_STOP_CLOSED;
-                stop_state->host_code = 0;
-                ble_active_state_bind(&s_ble_scanner_stop_state, NULL);
-                atomic_store_explicit(&stop_state->completed, true,
-                                      memory_order_release);
-                (void)esp32_mquickjs_future_wake_from_isr(
-                    stop_state->runtime, stop_state->token, &task_woken);
-            } else {
-                s_ble.scanner.stop_reason =
-                    event->disc_complete.reason == 0 ||
-                    event->disc_complete.reason == BLE_HS_ETIMEOUT
-                        ? BLE_STOP_COMPLETED : BLE_STOP_ERROR;
-            }
-            ble_future_state_drop(stop_state);
-        }
+        s_ble.scanner.stop_reason =
+            event->disc_complete.reason == 0 ||
+            event->disc_complete.reason == BLE_HS_ETIMEOUT
+                ? BLE_STOP_COMPLETED : BLE_STOP_ERROR;
         break;
     case BLE_GAP_EVENT_ADV_COMPLETE:
         s_ble.advertiser.active = false;
-        {
-            esp32_mquickjs_future_driver_state_t *stop_state =
-                ble_active_state_acquire(&s_ble_advertiser_stop_state);
-            if (stop_state != NULL &&
-                stop_state->operation == BLE_OP_ADVERTISER_CLOSE) {
-                s_ble.advertiser.stop_reason = BLE_STOP_CLOSED;
-                stop_state->host_code = 0;
-                ble_active_state_bind(&s_ble_advertiser_stop_state, NULL);
-                atomic_store_explicit(&stop_state->completed, true,
-                                      memory_order_release);
-                (void)esp32_mquickjs_future_wake_from_isr(
-                    stop_state->runtime, stop_state->token, &task_woken);
-            } else if (s_ble.advertiser.stop_reason == BLE_STOP_RUNNING) {
+        if (s_ble.advertiser.stop_reason == BLE_STOP_RUNNING) {
             s_ble.advertiser.stop_reason =
                 event->adv_complete.reason == 0 ? BLE_STOP_CONNECTED :
                 event->adv_complete.reason == BLE_HS_ETIMEOUT
                     ? BLE_STOP_COMPLETED : BLE_STOP_ERROR;
-            }
-            ble_future_state_drop(stop_state);
         }
         break;
     case BLE_GAP_EVENT_CONNECT:
@@ -1935,14 +1903,6 @@ static void ble_future_state_release(esp32_mquickjs_future_driver_state_t *state
     taskENTER_CRITICAL(&s_ble.lock);
     if (atomic_load_explicit(&s_ble_open_state, memory_order_relaxed) == state)
         atomic_store_explicit(&s_ble_open_state, NULL, memory_order_release);
-    if (atomic_load_explicit(&s_ble_scanner_stop_state,
-                             memory_order_relaxed) == state)
-        atomic_store_explicit(&s_ble_scanner_stop_state, NULL,
-                              memory_order_release);
-    if (atomic_load_explicit(&s_ble_advertiser_stop_state,
-                             memory_order_relaxed) == state)
-        atomic_store_explicit(&s_ble_advertiser_stop_state, NULL,
-                              memory_order_release);
     if (atomic_load_explicit(&s_ble_server_notify_state,
                              memory_order_relaxed) == state)
         atomic_store_explicit(&s_ble_server_notify_state, NULL,
@@ -3233,18 +3193,18 @@ static bool ble_scanner_close_start(
     state->token = token;
     state->started = true;
     if (s_ble.scanner.active) {
-        ble_active_state_bind(&s_ble_scanner_stop_state, state);
         rc = ble_gap_disc_cancel();
-        if (rc == BLE_HS_EALREADY) s_ble.scanner.active = false;
         if (rc == BLE_HS_EALREADY) rc = 0;
     }
     state->host_code = rc;
-    if (rc != 0 || !s_ble.scanner.active) {
-        ble_active_state_bind(&s_ble_scanner_stop_state, NULL);
-        if (rc != 0) s_ble.scanner.stop_reason = BLE_STOP_ERROR;
-        atomic_store_explicit(&state->completed, true, memory_order_release);
-        (void)esp32_mquickjs_future_wake(runtime, token);
+    if (rc == 0) {
+        s_ble.scanner.active = false;
+        s_ble.scanner.stop_reason = BLE_STOP_CLOSED;
+    } else {
+        s_ble.scanner.stop_reason = BLE_STOP_ERROR;
     }
+    atomic_store_explicit(&state->completed, true, memory_order_release);
+    (void)esp32_mquickjs_future_wake(runtime, token);
     return true;
 }
 
@@ -3592,18 +3552,18 @@ static bool ble_advertiser_close_start(
     state->token = token;
     state->started = true;
     if (s_ble.advertiser.active) {
-        ble_active_state_bind(&s_ble_advertiser_stop_state, state);
         rc = ble_gap_adv_stop();
-        if (rc == BLE_HS_EALREADY) s_ble.advertiser.active = false;
         if (rc == BLE_HS_EALREADY) rc = 0;
     }
     state->host_code = rc;
-    if (rc != 0 || !s_ble.advertiser.active) {
-        ble_active_state_bind(&s_ble_advertiser_stop_state, NULL);
-        if (rc != 0) s_ble.advertiser.stop_reason = BLE_STOP_ERROR;
-        atomic_store_explicit(&state->completed, true, memory_order_release);
-        (void)esp32_mquickjs_future_wake(runtime, token);
+    if (rc == 0) {
+        s_ble.advertiser.active = false;
+        s_ble.advertiser.stop_reason = BLE_STOP_CLOSED;
+    } else {
+        s_ble.advertiser.stop_reason = BLE_STOP_ERROR;
     }
+    atomic_store_explicit(&state->completed, true, memory_order_release);
+    (void)esp32_mquickjs_future_wake(runtime, token);
     return true;
 }
 
@@ -6984,8 +6944,6 @@ bool esp32_mquickjs_init_ble_runtime(JSContext *ctx,
     s_ble.ctx = ctx;
     s_ble.runtime = runtime;
     atomic_init(&s_ble_open_state, NULL);
-    atomic_init(&s_ble_scanner_stop_state, NULL);
-    atomic_init(&s_ble_advertiser_stop_state, NULL);
     atomic_init(&s_ble_server_notify_state, NULL);
     return ble_register_future_drivers(ctx, runtime);
 }

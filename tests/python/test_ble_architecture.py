@@ -83,7 +83,7 @@ class BLEArchitectureTests(unittest.TestCase):
         self.assertIn("esp32_mquickjs_future_register_driver", source)
         self.assertIn("esp32_mquickjs_event_queue_register_receive_alias", source)
 
-    def test_gap_operations_share_one_lane_and_stop_waits_for_callback(self):
+    def test_gap_operations_share_one_lane_and_natural_completion_uses_callbacks(self):
         source = self.source()
 
         for driver in (
@@ -104,10 +104,12 @@ class BLEArchitectureTests(unittest.TestCase):
         )
         callback_end = source.index("static void ble_host_task", callback_start)
         callback = source[callback_start:callback_end]
-        self.assertIn("s_ble_scanner_stop_state", callback)
-        self.assertIn("s_ble_advertiser_stop_state", callback)
         self.assertIn("BLE_GAP_EVENT_DISC_COMPLETE", callback)
         self.assertIn("BLE_GAP_EVENT_ADV_COMPLETE", callback)
+        self.assertIn("s_ble.scanner.active = false;", callback)
+        self.assertIn("s_ble.advertiser.active = false;", callback)
+        self.assertNotIn("BLE_OP_SCANNER_CLOSE", callback)
+        self.assertNotIn("BLE_OP_ADVERTISER_CLOSE", callback)
 
     def test_closed_gap_handles_release_their_singleton_slots(self):
         source = self.source()
@@ -129,7 +131,7 @@ class BLEArchitectureTests(unittest.TestCase):
         self.assertIn("ble_release_scanner(&s_ble)", scanner_finish)
         self.assertIn("ble_release_advertiser(&s_ble)", advertiser_finish)
 
-    def test_gap_close_completes_when_nimble_reports_already_stopped(self):
+    def test_gap_close_completes_when_nimble_confirms_stop(self):
         source = self.source()
 
         scanner_start = source.index("static bool ble_scanner_close_start")
@@ -144,14 +146,15 @@ class BLEArchitectureTests(unittest.TestCase):
                 "static JSValue ble_advertiser_close_finish", advertiser_start
             )
         ]
-        self.assertIn(
-            "if (rc == BLE_HS_EALREADY) s_ble.scanner.active = false;",
-            scanner_close,
-        )
-        self.assertIn(
-            "if (rc == BLE_HS_EALREADY) s_ble.advertiser.active = false;",
-            advertiser_close,
-        )
+        for close, resource in (
+            (scanner_close, "scanner"),
+            (advertiser_close, "advertiser"),
+        ):
+            self.assertIn("if (rc == BLE_HS_EALREADY) rc = 0;", close)
+            self.assertIn(f"s_ble.{resource}.active = false;", close)
+            self.assertIn(f"s_ble.{resource}.stop_reason = BLE_STOP_CLOSED;", close)
+            self.assertIn("atomic_store_explicit(&state->completed, true", close)
+            self.assertNotIn("ble_active_state_bind", close)
 
     def test_connect_options_are_applied(self):
         source = self.source()
