@@ -1146,6 +1146,8 @@ static bool espnow_open_start(
     espnow_session_t *session = &s_espnow_session;
     wifi_second_chan_t secondary;
     esp_now_peer_info_t broadcast_peer = {0};
+    uint8_t actual_channel = 0;
+    uint32_t actual_generation = 0;
 
     if (state == NULL || session->generation != state->generation ||
         session->lifecycle != ESPNOW_LIFECYCLE_OPENING) {
@@ -1204,6 +1206,19 @@ static bool espnow_open_start(
             state->failed_step = "esp_now_set_wake_interval";
             state->err = esp_wifi_connectionless_module_set_wake_interval(
                 session->wake_interval_ms);
+        }
+    }
+    if (state->err == ESP_OK) {
+        state->failed_step = "wifi_radio_confirm_channel";
+        state->err = esp32_mquickjs_wifi_radio_get_channel(
+            &actual_channel, &secondary, &actual_generation);
+        if (state->err == ESP_OK && state->channel_fixed &&
+            actual_channel != state->channel) {
+            state->err = ESP_ERR_ESPNOW_CHAN;
+        }
+        if (state->err == ESP_OK) {
+            session->channel = actual_channel;
+            session->channel_generation = actual_generation;
         }
     }
     if (state->err != ESP_OK) {

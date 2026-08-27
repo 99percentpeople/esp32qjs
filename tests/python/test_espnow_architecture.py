@@ -86,10 +86,27 @@ class EspNowArchitectureTests(unittest.TestCase):
             "esp_now_add_broadcast_peer",
             "esp_now_set_wake_window",
             "esp_now_set_wake_interval",
+            "wifi_radio_confirm_channel",
         ):
             self.assertIn(f'failed_step = "{step}"', open_start)
         self.assertIn("ESP_LOGE", open_start)
         self.assertIn('espnow_throw_error(ctx, "ESPNOW_NOT_OPEN"', open_start)
+
+    def test_open_confirms_channel_generation_after_espnow_initialization(self):
+        source = (
+            MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
+        ).read_text(encoding="utf-8")
+        open_start = source[
+            source.index("static bool espnow_open_start") :
+            source.index("static esp32_mquickjs_future_poll_t espnow_open_poll")
+        ]
+
+        confirm = open_start.rindex("esp32_mquickjs_wifi_radio_get_channel")
+        self.assertGreater(confirm, open_start.index("esp_now_init"))
+        self.assertGreater(confirm, open_start.index("esp_now_add_peer"))
+        self.assertIn("state->channel_fixed &&", open_start)
+        self.assertIn("actual_channel != state->channel", open_start)
+        self.assertIn("session->channel_generation = actual_generation", open_start)
 
     def test_key_material_is_cleared_and_not_exposed(self):
         source = (
