@@ -67,7 +67,9 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
         spi = (MQUICKJS / "src/modules/spi/esp32_mquickjs_spi.c").read_text(
             encoding="utf-8"
         )
-        self.assertIn("ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL", spi)
+        self.assertIn("esp32_mquickjs_memory_reserve_internal_dma", spi)
+        self.assertIn("esp32_mquickjs_memory_commit_staging_pinned", spi)
+        self.assertIn("MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA", spi)
         self.assertIn("SPI_TRANS_DMA_USE_PSRAM", spi)
 
     def test_external_dma_class_falls_back_once_to_reserved_internal_dma(self):
@@ -140,16 +142,17 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
         source = (MQUICKJS / "src/modules/spi/esp32_mquickjs_spi.c").read_text(
             encoding="utf-8"
         )
+        core = (MQUICKJS / "src/core/esp32_mquickjs_dma_transfer.c").read_text(
+            encoding="utf-8"
+        )
         predicate = source.split(
             "static bool spi_buffer_can_dma", 1
         )[1].split(
-            "static bool spi_byte_span_can_dma", 1
+            "static esp32_mquickjs_dma_path_t spi_classify_buffer", 1
         )[0]
-        span_predicate = source.split(
-            "static bool spi_byte_span_can_dma", 1
-        )[1].split(
-            "static void spi_mark_external_dma", 1
-        )[0]
+        classifier = source.split(
+            "static esp32_mquickjs_dma_path_t spi_classify_buffer", 1
+        )[1].split("static void spi_mark_external_dma", 1)[0]
         queue_path = source.split(
             "memset(transaction, 0, sizeof(*transaction));", 1
         )[1].split(
@@ -159,8 +162,11 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
         self.assertIn("esp_ptr_dma_capable(data)", predicate)
         self.assertIn("esp_ptr_dma_ext_capable(data)", predicate)
         self.assertNotIn("length", predicate)
-        self.assertIn("spi_buffer_can_dma(span->data)", span_predicate)
-        self.assertIn("spi_buffer_can_dma(data)", queue_path)
+        self.assertIn("spi_buffer_can_dma(data)", classifier)
+        self.assertIn("direct_external_dma", classifier)
+        self.assertIn("esp32_mquickjs_dma_classify_source", classifier)
+        self.assertIn("esp32_mquickjs_dma_cursor_next", source)
+        self.assertIn("cursor->offset", core)
         self.assertNotIn("length & 3U", queue_path)
 
     def test_bitmap_storage_classes_all_use_the_shared_allocator(self):
@@ -196,6 +202,8 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
         self.assertIn('JS_CGETSET_DEF("manager", js_sys_memory_manager', stdlib)
         self.assertIn('"dmaLargestReserveBytes"', sys_source)
         self.assertIn('"driverPinnedBytes"', sys_source)
+        self.assertIn('"stagingPinnedBytes"', sys_source)
+        self.assertIn('"dmaStagingPools"', sys_source)
         self.assertIn('"pendingDmaReservationBytes"', sys_source)
         self.assertIn('"migrationCount"', sys_source)
         self.assertIn("esp32_mquickjs_memory_block_alloc", commands)

@@ -72,7 +72,7 @@ test("spi/loopback", function () {
     rx = device.transfer(pattern);
     assertBytesEqual(rx, pattern, "loopback transfer should echo MOSI on MISO");
 
-    readBack = device.read(4, dummy);
+    readBack = device.read(4, { fillByte: dummy, timeoutMs: 1000 });
     assertBytesEqual(readBack, [dummy, dummy, dummy, dummy], "loopback read should echo fill byte");
 
     test.equal(device.write(pattern), pattern.length, "loopback write should report byte count");

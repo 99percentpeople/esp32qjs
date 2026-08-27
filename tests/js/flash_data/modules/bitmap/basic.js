@@ -412,20 +412,22 @@ test("bitmap/basic", function () {
       var stats = device.writeChunks(chunks, { queueDepth: 2 });
 
       test.equal(stats.bytes, 8, "spi.writeChunks should report transmitted bytes");
-      test.equal(stats.chunks, 2, "spi.writeChunks should transmit byte-source chunks");
-      test.equal(typeof stats.direct, "boolean", "spi.writeChunks should report whether direct DMA was used");
+      test.equal(stats.sourceSpans, 2, "spi.writeChunks should transmit byte-source spans");
+      test.ok(stats.transactions >= 2, "spi.writeChunks should report DMA transactions");
+      test.ok(typeof stats.path === "string", "spi.writeChunks should report its DMA path");
     }
     if (typeof device.writeSource === "function") {
       var sourceStats = device.writeSource(source, { queueDepth: 2 });
 
       test.equal(sourceStats.bytes, 8, "spi.writeSource should report transmitted bytes");
-      test.equal(sourceStats.chunks, 2, "spi.writeSource should transmit source spans");
-      test.equal(typeof sourceStats.direct, "boolean", "spi.writeSource should report whether direct DMA was used");
+      test.equal(sourceStats.sourceSpans, 2, "spi.writeSource should transmit source spans");
+      test.ok(sourceStats.transactions >= 2, "spi.writeSource should report DMA transactions");
+      test.ok(typeof sourceStats.path === "string", "spi.writeSource should report its DMA path");
 
       source.setRect(-1, -1, 2, 2);
       sourceStats = device.writeSource(source, { queueDepth: 2 });
       test.equal(sourceStats.bytes, 2, "spi.writeSource should use the clamped source rectangle");
-      test.equal(sourceStats.chunks, 1, "spi.writeSource should emit one clamped span");
+      test.equal(sourceStats.sourceSpans, 1, "spi.writeSource should emit one clamped span");
     }
     device.close();
     bus.close();

@@ -912,8 +912,13 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertEqual(i2c.count("I2C_FUTURE_DRIVER(s_i2c_"), 6)
 
         self.assertIn('"transfer", "write", "read", "writeChunks", "writeSource"', spi)
-        self.assertIn("spi_future_bulk_step", spi)
+        self.assertIn("esp32_mquickjs_dma_cursor_next", spi)
         self.assertIn("spi_device_queue_trans", spi)
+        self.assertIn("spi_device_get_trans_result", spi)
+        self.assertIn(
+            "spi_device_acquire_bus(device->handle, portMAX_DELAY)", spi
+        )
+        self.assertIn("SPI_TRANS_CS_KEEP_ACTIVE", spi)
         self.assertIn("spi_future_resource_key", spi)
         self.assertIn("esp32_mquickjs_open_byte_span_source", spi)
         self.assertIn("spi_get_bus_slot_by_ids", spi_key)
@@ -926,12 +931,11 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         completion = spi[completion_start:completion_end]
         self.assertIn("device_config.post_cb = spi_future_transaction_done;", spi)
         self.assertIn("transaction->user = state;", spi)
-        self.assertIn("state->transaction.user = state;", spi)
         self.assertIn("esp32_mquickjs_future_wake_from_isr", completion)
         self.assertIn("portYIELD_FROM_ISR();", completion)
-        self.assertNotIn("spi_future_timer", spi)
         self.assertNotIn("poll_timer", spi)
         self.assertNotIn("esp_timer_start_periodic", spi)
+        self.assertIn("esp_timer_start_once", spi)
 
         self.assertIn('JS_CFUNC_DEF("watch", 1, js_uart_port_watch)', stdlib)
         self.assertIn("esp32_mquickjs_event_queue_new", uart)
