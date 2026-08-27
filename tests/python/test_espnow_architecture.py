@@ -70,9 +70,13 @@ class EspNowArchitectureTests(unittest.TestCase):
         source = (
             MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
         ).read_text(encoding="utf-8")
-        open_start = source[
-            source.index("static bool espnow_open_start") :
-            source.index("static esp32_mquickjs_future_poll_t espnow_open_poll")
+        open_initialize = source[
+            source.index("static void espnow_open_initialize") :
+            source.index("static bool espnow_open_start")
+        ]
+        open_finish = source[
+            source.index("static JSValue espnow_open_finish") :
+            source.index("static esp32_mquickjs_cancel_result_t espnow_open_cancel")
         ]
 
         for step in (
@@ -88,11 +92,11 @@ class EspNowArchitectureTests(unittest.TestCase):
             "esp_now_set_wake_interval",
             "wifi_radio_confirm_channel",
         ):
-            self.assertIn(f'failed_step = "{step}"', open_start)
-        self.assertIn("ESP_LOGE", open_start)
-        self.assertIn('espnow_throw_error(ctx, "ESPNOW_NOT_OPEN"', open_start)
+            self.assertIn(f'failed_step = "{step}"', open_initialize)
+        self.assertIn("ESP_LOGE", open_initialize)
+        self.assertIn('espnow_throw_error(ctx, "ESPNOW_NOT_OPEN"', open_finish)
 
-    def test_open_confirms_channel_generation_after_espnow_initialization(self):
+    def test_reopen_waits_for_native_deinit_quiescence_without_blocking_start(self):
         source = (
             MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
         ).read_text(encoding="utf-8")
@@ -100,13 +104,36 @@ class EspNowArchitectureTests(unittest.TestCase):
             source.index("static bool espnow_open_start") :
             source.index("static esp32_mquickjs_future_poll_t espnow_open_poll")
         ]
+        close_native = source[
+            source.index("static void espnow_close_native") :
+            source.index("static bool espnow_allocate_receive_pool")
+        ]
 
-        confirm = open_start.rindex("esp32_mquickjs_wifi_radio_get_channel")
-        self.assertGreater(confirm, open_start.index("esp_now_init"))
-        self.assertGreater(confirm, open_start.index("esp_now_add_peer"))
-        self.assertIn("state->channel_fixed &&", open_start)
-        self.assertIn("actual_channel != state->channel", open_start)
-        self.assertIn("session->channel_generation = actual_generation", open_start)
+        self.assertIn("#define ESPNOW_REOPEN_QUIESCE_MS 50U", source)
+        self.assertIn("espnow_note_native_deinit", close_native)
+        self.assertIn("state->open_not_before_us", open_start)
+        self.assertNotIn("vTaskDelay", open_start)
+        self.assertIn("espnow_open_initialize(state)", open_start)
+        self.assertIn("espnow_open_initialize(state)", source[
+            source.index("static esp32_mquickjs_future_poll_t espnow_open_poll") :
+            source.index("static JSValue espnow_open_finish")
+        ])
+
+    def test_open_confirms_channel_generation_after_espnow_initialization(self):
+        source = (
+            MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
+        ).read_text(encoding="utf-8")
+        open_initialize = source[
+            source.index("static void espnow_open_initialize") :
+            source.index("static bool espnow_open_start")
+        ]
+
+        confirm = open_initialize.rindex("esp32_mquickjs_wifi_radio_get_channel")
+        self.assertGreater(confirm, open_initialize.index("esp_now_init"))
+        self.assertGreater(confirm, open_initialize.index("esp_now_add_peer"))
+        self.assertIn("state->channel_fixed &&", open_initialize)
+        self.assertIn("actual_channel != state->channel", open_initialize)
+        self.assertIn("session->channel_generation = actual_generation", open_initialize)
 
     def test_key_material_is_cleared_and_not_exposed(self):
         source = (
@@ -167,6 +194,8 @@ class EspNowArchitectureTests(unittest.TestCase):
         ):
             self.assertIn(token, recovery)
         self.assertIn("espnow_restore_native_session(session)", recovery)
+        self.assertIn("espnow_note_native_deinit", recovery)
+        self.assertIn("s_espnow_reopen_not_before_us", recovery)
         self.assertIn("esp32_mquickjs_wireless_tx_begin_recovery", recovery)
         self.assertIn("esp32_mquickjs_wireless_tx_finish_recovery", recovery)
 

@@ -28,6 +28,7 @@
 #define ESPNOW_ADDRESS_BYTES ESP_NOW_ETH_ALEN
 #define ESPNOW_BROADCAST_ADDRESS "ff:ff:ff:ff:ff:ff"
 #define ESPNOW_DEFAULT_CHANNEL 0U
+#define ESPNOW_REOPEN_QUIESCE_MS 50U
 static const char *TAG = "esp32qjs_espnow";
 #if defined(CONFIG_ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD) && \
     CONFIG_ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD
@@ -162,6 +163,7 @@ struct esp32_mquickjs_future_driver_state {
     bool power_save_enabled;
     uint16_t wake_window_ms;
     uint16_t wake_interval_ms;
+    int64_t open_not_before_us;
     int64_t completed_at_us;
     esp_err_t err;
     const char *failed_step;
@@ -174,6 +176,7 @@ struct esp32_mquickjs_future_driver_state {
     bool peer_reserved;
     bool send_reserved;
     bool started;
+    bool open_initialization_started;
     bool transferred;
     bool cancelled;
     _Atomic bool completed;
@@ -188,12 +191,19 @@ static espnow_session_t s_espnow_session = {
 };
 static _Atomic uint32_t s_espnow_next_generation = 1;
 static _Atomic uint32_t s_espnow_next_peer_generation = 1;
+static int64_t s_espnow_reopen_not_before_us;
 static const uint8_t s_espnow_tx_lane_key;
 static const uint8_t s_espnow_control_lane_key;
 
 static JSValue espnow_status_to_js(JSContext *ctx,
                                    const espnow_session_t *session);
 static void espnow_close_native(espnow_session_t *session);
+
+static void espnow_note_native_deinit(void)
+{
+    s_espnow_reopen_not_before_us =
+        esp_timer_get_time() + (int64_t)ESPNOW_REOPEN_QUIESCE_MS * 1000;
+}
 
 static JSValue espnow_future_call_and_wait(JSContext *ctx,
                                            JSValue receiver,
@@ -794,7 +804,9 @@ static void espnow_close_native(espnow_session_t *session)
         vTaskDelay(1);
     }
     if (session->now_initialized) {
-        (void)esp_now_deinit();
+        if (esp_now_deinit() == ESP_OK) {
+            espnow_note_native_deinit();
+        }
         session->now_initialized = false;
     }
     session->broadcast_peer_added = false;
@@ -1137,10 +1149,7 @@ static bool espnow_open_capture(
     return true;
 }
 
-static bool espnow_open_start(
-    JSContext *ctx,
-    esp32_mquickjs_runtime_t *runtime,
-    esp32_mquickjs_future_token_t token,
+static void espnow_open_initialize(
     esp32_mquickjs_future_driver_state_t *state)
 {
     espnow_session_t *session = &s_espnow_session;
@@ -1149,14 +1158,16 @@ static bool espnow_open_start(
     uint8_t actual_channel = 0;
     uint32_t actual_generation = 0;
 
-    if (state == NULL || session->generation != state->generation ||
-        session->lifecycle != ESPNOW_LIFECYCLE_OPENING) {
-        JS_ThrowReferenceError(ctx, "ESPNOW_STALE_SESSION: open reservation is stale");
-        return false;
+    if (state == NULL || state->open_initialization_started) {
+        return;
     }
-    state->runtime = runtime;
-    state->token = token;
-    state->started = true;
+    state->open_initialization_started = true;
+    if (session->generation != state->generation ||
+        session->lifecycle != ESPNOW_LIFECYCLE_OPENING) {
+        state->failed_step = "open_reservation";
+        state->err = ESP_ERR_INVALID_STATE;
+        goto complete;
+    }
     state->failed_step = "wifi_radio_ensure_started";
     state->err = esp32_mquickjs_wifi_radio_ensure_started(
         &session->radio_lease);
@@ -1226,20 +1237,48 @@ static bool espnow_open_start(
         ESP_LOGE(TAG, "open failed at %s: %s (0x%x)",
                  state->failed_step != NULL ? state->failed_step : "unknown",
                  esp_err_to_name(state->err), (unsigned int)state->err);
-        espnow_throw_error(ctx, "ESPNOW_NOT_OPEN", state->err, NULL,
-                           session->channel > 0 ? (int)session->channel : -1);
+    } else {
+        state->failed_step = NULL;
+        session->lifecycle = ESPNOW_LIFECYCLE_ACTIVE;
+    }
+
+complete:
+    atomic_store_explicit(&state->completed, true, memory_order_release);
+    (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+}
+
+static bool espnow_open_start(
+    JSContext *ctx,
+    esp32_mquickjs_runtime_t *runtime,
+    esp32_mquickjs_future_token_t token,
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    espnow_session_t *session = &s_espnow_session;
+
+    if (state == NULL || session->generation != state->generation ||
+        session->lifecycle != ESPNOW_LIFECYCLE_OPENING) {
+        JS_ThrowReferenceError(ctx,
+                               "ESPNOW_STALE_SESSION: open reservation is stale");
         return false;
     }
-    state->failed_step = NULL;
-    session->lifecycle = ESPNOW_LIFECYCLE_ACTIVE;
-    atomic_store_explicit(&state->completed, true, memory_order_release);
-    (void)esp32_mquickjs_future_wake(runtime, token);
+    state->runtime = runtime;
+    state->token = token;
+    state->started = true;
+    state->open_not_before_us = s_espnow_reopen_not_before_us;
+    if (esp_timer_get_time() >= state->open_not_before_us) {
+        espnow_open_initialize(state);
+    }
     return true;
 }
 
 static esp32_mquickjs_future_poll_t espnow_open_poll(
     esp32_mquickjs_future_driver_state_t *state)
 {
+    if (state != NULL && state->started &&
+        !state->open_initialization_started &&
+        esp_timer_get_time() >= state->open_not_before_us) {
+        espnow_open_initialize(state);
+    }
     return state != NULL && atomic_load_explicit(
                                 &state->completed, memory_order_acquire)
                ? ESP32_MQUICKJS_FUTURE_READY
@@ -1255,6 +1294,12 @@ static JSValue espnow_open_finish(
     JSValue *object = JS_PushGCRef(ctx, &object_ref);
 
     *object = JS_UNDEFINED;
+    if (state != NULL && state->err != ESP_OK) {
+        espnow_throw_error(ctx, "ESPNOW_NOT_OPEN", state->err, NULL,
+                           s_espnow_session.channel > 0
+                               ? (int)s_espnow_session.channel : -1);
+        goto fail;
+    }
     if (state == NULL || state->cancelled ||
         s_espnow_session.generation != state->generation ||
         s_espnow_session.lifecycle != ESPNOW_LIFECYCLE_ACTIVE) {
@@ -2316,6 +2361,9 @@ static esp_err_t espnow_recover_after_timeout(
 
         session->now_initialized = false;
         session->broadcast_peer_added = false;
+        if (deinit_err == ESP_OK) {
+            espnow_note_native_deinit();
+        }
         if (err == ESP_OK) {
             err = deinit_err;
         }
@@ -2323,6 +2371,9 @@ static esp_err_t espnow_recover_after_timeout(
     atomic_store_explicit(&session->active_send, NULL,
                           memory_order_release);
     if (err == ESP_OK) {
+        while (esp_timer_get_time() < s_espnow_reopen_not_before_us) {
+            vTaskDelay(1);
+        }
         err = espnow_restore_native_session(session);
     }
     state->timed_out = true;
