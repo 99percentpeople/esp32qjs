@@ -1208,11 +1208,12 @@ static const JSClassDef js_websocket_client_obj =
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
 static const JSPropDef js_wifi[] = {
     JS_CGETSET_DEF("DEFAULT_TIMEOUT_MS", js_wifi_get_default_timeout_ms, NULL),
-    JS_CFUNC_DEF("connect", 3, js_wifi_connect),
+    JS_CFUNC_DEF("connect", 2, js_wifi_connect),
     JS_CFUNC_DEF("disconnect", 1, js_wifi_disconnect),
+    JS_CFUNC_DEF("setPowerSave", 1, js_wifi_set_power_save),
     JS_CFUNC_DEF("setTxPower", 1, js_wifi_set_tx_power),
     JS_CFUNC_DEF("status", 0, js_wifi_status),
-    JS_CFUNC_DEF("scan", 0, js_wifi_scan),
+    JS_CFUNC_DEF("scan", 1, js_wifi_scan),
     JS_PROP_END,
 };
 

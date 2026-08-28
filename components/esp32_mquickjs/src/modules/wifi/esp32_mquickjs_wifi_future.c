@@ -6,6 +6,8 @@
 #include "esp32_mquickjs_future.h"
 
 #include <inttypes.h>
+#include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_heap_caps.h"
@@ -26,59 +28,360 @@ struct esp32_mquickjs_future_driver_state {
     uint32_t scan_status;
     uint32_t connect_kind;
     int32_t connect_reason;
-    char ssid[ESP32_MQUICKJS_WIFI_SSID_MAX_LEN + 1];
-    char password[ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN + 1];
+    wifi_scan_config_t scan_config;
+    wifi_config_t connect_config;
     bool started;
     bool completed;
     bool cancel_requested;
 };
+
+static bool wifi_is_object(JSContext *ctx, JSValue value)
+{
+    return JS_GetClassID(ctx, value) >= 0 && !JS_IsArray(ctx, value);
+}
+
+static bool wifi_string_equals(JSContext *ctx, JSValue value,
+                               const char *expected)
+{
+    JSCStringBuf buffer;
+    const char *text;
+
+    return JS_IsString(ctx, value) &&
+           (text = JS_ToCString(ctx, value, &buffer)) != NULL &&
+           strcmp(text, expected) == 0;
+}
+
+static bool wifi_key_allowed(const char *key,
+                             const char *const *allowed,
+                             size_t allowed_count)
+{
+    size_t index;
+
+    for (index = 0; index < allowed_count; ++index) {
+        if (strcmp(key, allowed[index]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool wifi_validate_option_keys(JSContext *ctx, JSValue options,
+                                      const char *api_name,
+                                      const char *const *allowed,
+                                      size_t allowed_count)
+{
+    JSGCRef global_ref, object_ref, keys_fn_ref, keys_ref, key_ref;
+    JSValue *global = JS_PushGCRef(ctx, &global_ref);
+    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    JSValue *keys_fn = JS_PushGCRef(ctx, &keys_fn_ref);
+    JSValue *keys = JS_PushGCRef(ctx, &keys_ref);
+    JSValue *key = JS_PushGCRef(ctx, &key_ref);
+    JSValue args[1] = {options};
+    uint32_t length = 0;
+    uint32_t index;
+    bool valid = false;
+
+    *global = JS_GetGlobalObject(ctx);
+    *object = JS_IsException(*global)
+                  ? JS_EXCEPTION
+                  : JS_GetPropertyStr(ctx, *global, "Object");
+    *keys_fn = JS_IsException(*object)
+                   ? JS_EXCEPTION
+                   : JS_GetPropertyStr(ctx, *object, "keys");
+    *keys = JS_IsException(*keys_fn)
+                ? JS_EXCEPTION
+                : esp32_mquickjs_call(
+                      ctx, esp32_mquickjs_get_active_runtime(), *keys_fn,
+                      *object, 1, args);
+    *key = JS_IsException(*keys)
+               ? JS_EXCEPTION
+               : JS_GetPropertyStr(ctx, *keys, "length");
+    if (JS_IsException(*key) || JS_ToUint32(ctx, &length, *key) != 0) {
+        goto done;
+    }
+    for (index = 0; index < length; ++index) {
+        JSCStringBuf buffer;
+        const char *name;
+
+        *key = JS_GetPropertyUint32(ctx, *keys, index);
+        name = JS_IsException(*key) ? NULL : JS_ToCString(ctx, *key, &buffer);
+        if (name == NULL || !wifi_key_allowed(name, allowed, allowed_count)) {
+            JS_ThrowTypeError(ctx, "%s received unknown option '%s'",
+                              api_name, name != NULL ? name : "<invalid>");
+            goto done;
+        }
+    }
+    valid = true;
+
+done:
+    JS_PopGCRef(ctx, &key_ref);
+    JS_PopGCRef(ctx, &keys_ref);
+    JS_PopGCRef(ctx, &keys_fn_ref);
+    JS_PopGCRef(ctx, &object_ref);
+    JS_PopGCRef(ctx, &global_ref);
+    return valid;
+}
+
+static bool wifi_to_integer(JSContext *ctx, JSValue value,
+                            int32_t minimum, int32_t maximum,
+                            int32_t *out)
+{
+    double number;
+
+    if (out == NULL || !JS_IsNumber(ctx, value) ||
+        JS_ToNumber(ctx, &number, value) != 0 || !isfinite(number) ||
+        floor(number) != number || number < minimum || number > maximum) {
+        return false;
+    }
+    *out = (int32_t)number;
+    return true;
+}
+
+static bool wifi_parse_bssid(JSContext *ctx, JSValue value,
+                             uint8_t output[6])
+{
+    JSCStringBuf buffer;
+    const char *text;
+    unsigned int bytes[6];
+    int consumed = 0;
+    size_t index;
+
+    if (!JS_IsString(ctx, value) ||
+        (text = JS_ToCString(ctx, value, &buffer)) == NULL ||
+        sscanf(text, "%2x:%2x:%2x:%2x:%2x:%2x%n",
+               &bytes[0], &bytes[1], &bytes[2], &bytes[3], &bytes[4],
+               &bytes[5], &consumed) != 6 || text[consumed] != '\0') {
+        return false;
+    }
+    for (index = 0; index < 6; ++index) {
+        output[index] = (uint8_t)bytes[index];
+    }
+    return true;
+}
+
+static bool wifi_parse_auth_mode(JSContext *ctx, JSValue value,
+                                 wifi_auth_mode_t *out)
+{
+    if (wifi_string_equals(ctx, value, "open")) {
+        *out = WIFI_AUTH_OPEN;
+    } else if (wifi_string_equals(ctx, value, "wep")) {
+        *out = WIFI_AUTH_WEP;
+    } else if (wifi_string_equals(ctx, value, "wpa")) {
+        *out = WIFI_AUTH_WPA_PSK;
+    } else if (wifi_string_equals(ctx, value, "wpa2")) {
+        *out = WIFI_AUTH_WPA2_PSK;
+    } else if (wifi_string_equals(ctx, value, "wpa/wpa2")) {
+        *out = WIFI_AUTH_WPA_WPA2_PSK;
+    } else if (wifi_string_equals(ctx, value, "wpa3")) {
+        *out = WIFI_AUTH_WPA3_PSK;
+    } else if (wifi_string_equals(ctx, value, "wpa2/wpa3")) {
+        *out = WIFI_AUTH_WPA2_WPA3_PSK;
+    } else if (wifi_string_equals(ctx, value, "wapi")) {
+        *out = WIFI_AUTH_WAPI_PSK;
+    } else if (wifi_string_equals(ctx, value, "owe")) {
+        *out = WIFI_AUTH_OWE;
+    } else {
+        return false;
+    }
+    return true;
+}
 
 static bool wifi_future_parse_connect(JSContext *ctx,
                                       int argc,
                                       JSGCRef *argv,
                                       esp32_mquickjs_future_driver_state_t *state)
 {
+    static const char *const allowed[] = {
+        "password", "timeoutMs", "bssid", "channel", "scanMethod",
+        "sortMethod", "minimumRssi", "minimumAuthMode", "pmf",
+    };
+    JSGCRef property_ref;
+    JSValue *property = JS_PushGCRef(ctx, &property_ref);
     JSCStringBuf ssid_buf;
     JSCStringBuf password_buf;
     const char *ssid;
-    const char *password;
+    const char *password = "";
     size_t ssid_len = 0;
     size_t password_len = 0;
+    int32_t integer;
+    bool result = false;
 
-    if (argc < 2 || argc > 3 || !JS_IsString(ctx, argv[0].val) || !JS_IsString(ctx, argv[1].val)) {
-        JS_ThrowTypeError(ctx,
-                          "wifi.connect(ssid, password, timeoutMs?) expects two strings and an optional timeout");
-        return false;
+    if (argc < 1 || argc > 2 || !JS_IsString(ctx, argv[0].val) ||
+        (argc == 2 && !wifi_is_object(ctx, argv[1].val))) {
+        JS_ThrowTypeError(
+            ctx,
+            "wifi.connect(ssid, options?) expects a string SSID and optional options object");
+        goto done;
     }
+    if (argc == 2 &&
+        !wifi_validate_option_keys(ctx, argv[1].val, "wifi.connect()",
+                                   allowed, 9)) {
+        goto done;
+    }
+    memset(&state->connect_config, 0, sizeof(state->connect_config));
     state->timeout_ms = ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS;
-    if (argc == 3 &&
-        (!JS_IsNumber(ctx, argv[2].val) ||
-         esp32_mquickjs_wifi_value_to_timeout_ms(ctx,
-                                                 argv[2].val,
-                                                 ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS,
-                                                 &state->timeout_ms) != 0)) {
-        JS_ThrowTypeError(ctx, "wifi.connect(..., timeoutMs) expects a non-negative integer");
-        return false;
-    }
+    state->connect_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    state->connect_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    state->connect_config.sta.threshold.rssi = -127;
+    state->connect_config.sta.pmf_cfg.capable = true;
+
     ssid = JS_ToCStringLen(ctx, &ssid_len, argv[0].val, &ssid_buf);
     if (ssid == NULL || ssid_len == 0 || ssid_len > ESP32_MQUICKJS_WIFI_SSID_MAX_LEN) {
         JS_ThrowTypeError(ctx,
-                          "wifi.connect(ssid, ...) expects an SSID of 1..%d bytes",
+                          "wifi.connect(ssid, ...) expects 1..%d bytes",
                           ESP32_MQUICKJS_WIFI_SSID_MAX_LEN);
-        return false;
+        goto done;
     }
-    password = JS_ToCStringLen(ctx, &password_len, argv[1].val, &password_buf);
-    if (password == NULL || password_len > ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN) {
-        JS_ThrowTypeError(ctx,
-                          "wifi.connect(..., password, ...) expects at most %d bytes",
-                          ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN);
-        return false;
+    memcpy(state->connect_config.sta.ssid, ssid, ssid_len);
+    state->connect_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
+    if (argc == 1) {
+        result = true;
+        goto done;
     }
-    memcpy(state->ssid, ssid, ssid_len);
-    state->ssid[ssid_len] = '\0';
-    memcpy(state->password, password, password_len);
-    state->password[password_len] = '\0';
-    return true;
+
+    *property = JS_GetPropertyStr(ctx, argv[1].val, "password");
+    if (JS_IsException(*property)) {
+        goto done;
+    }
+    if (!JS_IsUndefined(*property)) {
+        password = JS_IsString(ctx, *property)
+                       ? JS_ToCStringLen(ctx, &password_len, *property,
+                                         &password_buf)
+                       : NULL;
+        if (password == NULL ||
+            password_len > ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN) {
+            JS_ThrowTypeError(
+                ctx, "wifi.connect({ password }) expects at most %d bytes",
+                ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN);
+            goto done;
+        }
+        memcpy(state->connect_config.sta.password, password, password_len);
+    }
+    state->connect_config.sta.threshold.authmode =
+        password_len > 0 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+
+    *property = JS_GetPropertyStr(ctx, argv[1].val, "timeoutMs");
+    if (JS_IsException(*property)) {
+        goto done;
+    }
+    if (!JS_IsUndefined(*property)) {
+        if (!wifi_to_integer(ctx, *property, 1, 60000, &integer)) {
+            JS_ThrowRangeError(
+                ctx, "wifi.connect({ timeoutMs }) expects 1..60000");
+            goto done;
+        }
+        state->timeout_ms = (uint32_t)integer;
+    }
+
+    *property = JS_GetPropertyStr(ctx, argv[1].val, "bssid");
+    if (JS_IsException(*property)) {
+        goto done;
+    }
+    if (!JS_IsUndefined(*property)) {
+        if (!wifi_parse_bssid(ctx, *property,
+                              state->connect_config.sta.bssid)) {
+            JS_ThrowTypeError(
+                ctx, "wifi.connect({ bssid }) expects xx:xx:xx:xx:xx:xx");
+            goto done;
+        }
+        state->connect_config.sta.bssid_set = true;
+    }
+
+    *property = JS_GetPropertyStr(ctx, argv[1].val, "channel");
+    if (JS_IsException(*property)) {
+        goto done;
+    }
+    if (!JS_IsUndefined(*property)) {
+        if (!wifi_to_integer(ctx, *property, 1, 255, &integer)) {
+            JS_ThrowRangeError(
+                ctx, "wifi.connect({ channel }) expects 1..255");
+            goto done;
+        }
+        state->connect_config.sta.channel = (uint8_t)integer;
+    }
+
+    *property = JS_GetPropertyStr(ctx, argv[1].val, "scanMethod");
+    if (JS_IsException(*property)) {
+        goto done;
+    }
+    if (!JS_IsUndefined(*property)) {
+        if (wifi_string_equals(ctx, *property, "fast")) {
+            state->connect_config.sta.scan_method = WIFI_FAST_SCAN;
+        } else if (wifi_string_equals(ctx, *property, "all")) {
+            state->connect_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+        } else {
+            JS_ThrowRangeError(
+                ctx, "wifi.connect({ scanMethod }) expects fast or all");
+            goto done;
+        }
+    }
+
+    *property = JS_GetPropertyStr(ctx, argv[1].val, "sortMethod");
+    if (JS_IsException(*property)) {
+        goto done;
+    }
+    if (!JS_IsUndefined(*property)) {
+        if (wifi_string_equals(ctx, *property, "signal")) {
+            state->connect_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+        } else if (wifi_string_equals(ctx, *property, "security")) {
+            state->connect_config.sta.sort_method = WIFI_CONNECT_AP_BY_SECURITY;
+        } else {
+            JS_ThrowRangeError(
+                ctx, "wifi.connect({ sortMethod }) expects signal or security");
+            goto done;
+        }
+    }
+
+    *property = JS_GetPropertyStr(ctx, argv[1].val, "minimumRssi");
+    if (JS_IsException(*property)) {
+        goto done;
+    }
+    if (!JS_IsUndefined(*property)) {
+        if (!wifi_to_integer(ctx, *property, -127, 0, &integer)) {
+            JS_ThrowRangeError(
+                ctx, "wifi.connect({ minimumRssi }) expects -127..0");
+            goto done;
+        }
+        state->connect_config.sta.threshold.rssi = (int8_t)integer;
+    }
+
+    *property = JS_GetPropertyStr(ctx, argv[1].val, "minimumAuthMode");
+    if (JS_IsException(*property)) {
+        goto done;
+    }
+    if (!JS_IsUndefined(*property) &&
+        !wifi_parse_auth_mode(
+            ctx, *property, &state->connect_config.sta.threshold.authmode)) {
+        JS_ThrowRangeError(
+            ctx, "wifi.connect({ minimumAuthMode }) is not a supported personal auth mode");
+        goto done;
+    }
+
+    *property = JS_GetPropertyStr(ctx, argv[1].val, "pmf");
+    if (JS_IsException(*property)) {
+        goto done;
+    }
+    if (!JS_IsUndefined(*property)) {
+        if (wifi_string_equals(ctx, *property, "disabled")) {
+            state->connect_config.sta.pmf_cfg.capable = false;
+            state->connect_config.sta.pmf_cfg.required = false;
+        } else if (wifi_string_equals(ctx, *property, "capable")) {
+            state->connect_config.sta.pmf_cfg.capable = true;
+            state->connect_config.sta.pmf_cfg.required = false;
+        } else if (wifi_string_equals(ctx, *property, "required")) {
+            state->connect_config.sta.pmf_cfg.capable = true;
+            state->connect_config.sta.pmf_cfg.required = true;
+        } else {
+            JS_ThrowRangeError(
+                ctx, "wifi.connect({ pmf }) expects disabled, capable, or required");
+            goto done;
+        }
+    }
+    result = true;
+
+done:
+    JS_PopGCRef(ctx, &property_ref);
+    return result;
 }
 
 static bool wifi_scan_future_prepare(JSContext *ctx,
@@ -87,23 +390,118 @@ static bool wifi_scan_future_prepare(JSContext *ctx,
                                      JSGCRef *argv,
                                      esp32_mquickjs_future_driver_state_t **out_state)
 {
+    static const char *const allowed[] = {
+        "channel", "showHidden", "passive", "dwellMs", "timeoutMs",
+    };
     esp32_mquickjs_future_driver_state_t *state;
+    wifi_scan_config_t scan_config = {
+        .show_hidden = true,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+    };
+    JSGCRef property_ref;
+    JSValue *property = JS_PushGCRef(ctx, &property_ref);
+    int32_t integer;
+    bool passive = false;
+    bool result = false;
 
     (void)this_ref;
-    (void)argv;
-    if (argc != 0 || out_state == NULL) {
-        JS_ThrowTypeError(ctx, "wifi.scan() expects no arguments");
-        return false;
+    if (out_state == NULL || argc < 0 || argc > 1 ||
+        (argc == 1 && !wifi_is_object(ctx, argv[0].val))) {
+        JS_ThrowTypeError(ctx, "wifi.scan(options?) expects an options object");
+        goto done;
+    }
+    if (argc == 1 &&
+        !wifi_validate_option_keys(ctx, argv[0].val, "wifi.scan()",
+                                   allowed, 5)) {
+        goto done;
     }
     state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
-        return false;
+        goto done;
     }
     state->kind = WIFI_FUTURE_SCAN;
     state->timeout_ms = ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS;
+    if (argc == 1) {
+        *property = JS_GetPropertyStr(ctx, argv[0].val, "channel");
+        if (JS_IsException(*property)) {
+            goto fail;
+        }
+        if (!JS_IsUndefined(*property)) {
+            if (!wifi_to_integer(ctx, *property, 1, 255, &integer)) {
+                JS_ThrowRangeError(
+                    ctx, "wifi.scan({ channel }) expects 1..255");
+                goto fail;
+            }
+            scan_config.channel = (uint8_t)integer;
+        }
+        *property = JS_GetPropertyStr(ctx, argv[0].val, "showHidden");
+        if (JS_IsException(*property)) {
+            goto fail;
+        }
+        if (!JS_IsUndefined(*property)) {
+            if (!JS_IsBool(*property)) {
+                JS_ThrowTypeError(
+                    ctx, "wifi.scan({ showHidden }) expects a boolean");
+                goto fail;
+            }
+            scan_config.show_hidden = *property == JS_TRUE;
+        }
+        *property = JS_GetPropertyStr(ctx, argv[0].val, "passive");
+        if (JS_IsException(*property)) {
+            goto fail;
+        }
+        if (!JS_IsUndefined(*property)) {
+            if (!JS_IsBool(*property)) {
+                JS_ThrowTypeError(
+                    ctx, "wifi.scan({ passive }) expects a boolean");
+                goto fail;
+            }
+            passive = *property == JS_TRUE;
+            scan_config.scan_type = passive
+                                        ? WIFI_SCAN_TYPE_PASSIVE
+                                        : WIFI_SCAN_TYPE_ACTIVE;
+        }
+        *property = JS_GetPropertyStr(ctx, argv[0].val, "dwellMs");
+        if (JS_IsException(*property)) {
+            goto fail;
+        }
+        if (!JS_IsUndefined(*property)) {
+            if (!wifi_to_integer(ctx, *property, 1, 1500, &integer)) {
+                JS_ThrowRangeError(
+                    ctx, "wifi.scan({ dwellMs }) expects 1..1500");
+                goto fail;
+            }
+            if (passive) {
+                scan_config.scan_time.passive = (uint32_t)integer;
+            } else {
+                scan_config.scan_time.active.min = (uint32_t)integer;
+                scan_config.scan_time.active.max = (uint32_t)integer;
+            }
+        }
+        *property = JS_GetPropertyStr(ctx, argv[0].val, "timeoutMs");
+        if (JS_IsException(*property)) {
+            goto fail;
+        }
+        if (!JS_IsUndefined(*property)) {
+            if (!wifi_to_integer(ctx, *property, 1, 60000, &integer)) {
+                JS_ThrowRangeError(
+                    ctx, "wifi.scan({ timeoutMs }) expects 1..60000");
+                goto fail;
+            }
+            state->timeout_ms = (uint32_t)integer;
+        }
+    }
+    state->scan_config = scan_config;
     *out_state = state;
-    return true;
+    result = true;
+    goto done;
+
+fail:
+    heap_caps_free(state);
+done:
+    JS_PopGCRef(ctx, &property_ref);
+    return result;
 }
 
 static bool wifi_connect_future_prepare(JSContext *ctx,
@@ -174,9 +572,6 @@ static bool wifi_future_start(JSContext *ctx,
                               esp32_mquickjs_future_driver_state_t *state)
 {
     esp32_mquickjs_wifi_state_t *wifi = esp32_mquickjs_wifi_state();
-    wifi_scan_config_t scan_config = {
-        .show_hidden = true,
-    };
     esp_err_t err;
     bool disconnect_pending = false;
 
@@ -238,15 +633,14 @@ static bool wifi_future_start(JSContext *ctx,
         if (wifi->scan_queue != NULL) {
             xQueueReset(wifi->scan_queue);
         }
-        err = esp_wifi_scan_start(&scan_config, false);
+        err = esp_wifi_scan_start(&state->scan_config, false);
         if (err != ESP_OK) {
             esp32_mquickjs_wifi_clear_scan_future();
             esp32_mquickjs_wifi_throw_scan_error(ctx, err);
             return false;
         }
     } else if (state->kind == WIFI_FUTURE_CONNECT) {
-        err = esp32_mquickjs_wifi_start_connect(state->ssid,
-                                                state->password,
+        err = esp32_mquickjs_wifi_start_connect(&state->connect_config,
                                                 state->timeout_ms);
         if (err != ESP_OK) {
             esp32_mquickjs_wifi_clear_connect_future();

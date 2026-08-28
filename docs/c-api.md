@@ -43,7 +43,10 @@ Examples:
 print("hello");
 gc();
 sleep(50);
-wifi.connect("your-ssid", "your-password", 10000);
+wifi.connect("your-ssid", {
+  password: "your-password",
+  timeoutMs: 10000
+});
 sys.time.sync({ servers: ["pool.ntp.org"], timeoutMs: 10000 });
 print(fetch("https://example.com").status);
 load("demo/display_perf.js");
@@ -56,7 +59,10 @@ Example `index.js`:
 print("[startup] boot script running");
 framework.load("vendor/device-support.js");
 load("application/startup.js");
-wifi.connect("your-ssid", "your-password", 10000);
+wifi.connect("your-ssid", {
+  password: "your-password",
+  timeoutMs: 10000
+});
 sys.time.sync({ servers: ["pool.ntp.org"], timeoutMs: 10000 });
 ```
 
@@ -1741,42 +1747,59 @@ changes.close();
 ## `wifi` Module
 
 Wi-Fi credentials are kept in RAM. Rebooting the board clears the active station config.
+`wifi` owns 802.11 Station and shared-radio controls. IP addresses, routes,
+interface readiness, and later Ethernet/PPP state belong exclusively to
+`net.status()` and `net.watch()`.
 
 - `wifi.DEFAULT_TIMEOUT_MS`
   Default station connect timeout in milliseconds.
 - `wifi.status()`
-  Return `{ initialized, started, connected, scanning, ssid, hostname, ip, netmask, gateway, lastDisconnectReason, lastDisconnectReasonName, radio }`.
+  Return `{ initialized, started, connected, scanning, ssid, lastDisconnectReason, lastDisconnectReasonName, radio }`.
   `started` is the boot-scoped physical-radio state rather than the station
   helper's event history. `radio` contains `{ generation, initialized,
-  starting, started, mode, channel, channelGeneration, maxTxPowerDbm, clients }`;
-  client counts distinguish the Wi-Fi station helper from ESP-NOW leases.
+  starting, started, mode, channel, channelGeneration, maxTxPowerDbm,
+  powerSave, clients }`; client counts distinguish the Wi-Fi station helper
+  from ESP-NOW leases.
+- `wifi.setPowerSave(mode)`
+  Set Station modem sleep to `"none"`, `"minimum"`, or `"maximum"` and return
+  the active mode. This is separate from ESP-NOW connectionless wake-window
+  control.
 - `wifi.setTxPower(dbm)`
   Set the shared radio maximum TX power in 0.25 dBm increments from 2 through
   20. It returns the ESP-IDF-mapped actual dBm; read the same value from
   `wifi.status().radio.maxTxPowerDbm` after the radio is started.
-- `wifi.connect(ssid, password, timeoutMs = wifi.DEFAULT_TIMEOUT_MS)`
-  Start station mode through the native Future driver and return the updated status object.
+- `wifi.connect(ssid, options?)`
+  Start Station mode through the native Future driver. `ssid` is a required
+  string; optional `password`, `timeoutMs`, `bssid`, `channel`, `scanMethod`,
+  `sortMethod`, `minimumRssi`, `minimumAuthMode`, and `pmf` control association.
+  Unknown fields are rejected. The returned object is Wi-Fi link/control
+  status; read assigned addresses and default route through `net.status()`.
 - `wifi.disconnect(timeoutMs = wifi.DEFAULT_TIMEOUT_MS)`
   Disconnect through the native Future driver and return only after the
   station state has converged to disconnected. Once submitted to ESP-IDF the
   disconnect side effect cannot be cancelled; a queued call remains
   cancellable before it starts.
-- `wifi.scan()`
-  Run an event-driven AP scan, including hidden access points, and return an array of `{ ssid, bssid, rssi, channel, authMode, hidden }`. Hidden beacon records have an empty `ssid` and require the caller to obtain and enter the exact SSID separately.
+- `wifi.scan(options?)`
+  Run an event-driven AP scan and return an array of
+  `{ ssid, bssid, rssi, channel, authMode, hidden }`. Options are `channel`,
+  `showHidden`, `passive`, `dwellMs`, and `timeoutMs`; unknown fields are
+  rejected. Hidden beacon records have an empty `ssid`.
 
 Example:
 
 ```js
 print(JSON.stringify(wifi.status()));
-var aps = wifi.scan();
+var aps = wifi.scan({ showHidden: true });
 print(aps.length);
-wifi.connect("your-ssid", "your-password");
+wifi.setPowerSave("minimum");
+wifi.connect("your-ssid", { password: "your-password" });
+print(JSON.stringify(net.status()));
 var clock = sys.time.sync({
   servers: ["pool.ntp.org", "time.cloudflare.com"],
   timeoutMs: 10000
 });
 print(clock.unixTimeMs);
-var nextScan = Future.call(wifi.scan, wifi, []);
+var nextScan = Future.call(wifi.scan, wifi, [{ passive: true }]);
 print(nextScan.wait(10000).length);
 print(JSON.stringify(wifi.status()));
 wifi.disconnect();

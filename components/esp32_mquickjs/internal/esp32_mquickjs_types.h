@@ -15,8 +15,6 @@
 #define ESP32_MQUICKJS_PSRAM_MODE CONFIG_ESP32_MQUICKJS_PSRAM_MODE
 #define ESP32_MQUICKJS_WIFI_SSID_MAX_LEN 32
 #define ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN 64
-#define ESP32_MQUICKJS_WIFI_IPV4_STR_LEN 16
-#define ESP32_MQUICKJS_WIFI_HOSTNAME_MAX_LEN 64
 #define ESP32_MQUICKJS_FS_STREAM_ID_KEY "__esp32qjsStreamId"
 #define ESP32_MQUICKJS_FS_STREAM_GENERATION_KEY "__esp32qjsStreamGeneration"
 #define ESP32_MQUICKJS_HEADERS_STORE_KEY "__esp32qjsHeadersStore"
@@ -180,10 +178,6 @@ typedef struct {
     bool connected;
     bool scanning;
     char ssid[ESP32_MQUICKJS_WIFI_SSID_MAX_LEN + 1];
-    char hostname[ESP32_MQUICKJS_WIFI_HOSTNAME_MAX_LEN + 1];
-    char ip[ESP32_MQUICKJS_WIFI_IPV4_STR_LEN];
-    char netmask[ESP32_MQUICKJS_WIFI_IPV4_STR_LEN];
-    char gateway[ESP32_MQUICKJS_WIFI_IPV4_STR_LEN];
     int32_t last_disconnect_reason;
 } esp32_mquickjs_wifi_status_t;
 

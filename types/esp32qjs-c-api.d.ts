@@ -2438,6 +2438,7 @@ namespace ESP32QJS {
    * Current Wi-Fi station status.
    */
   type WiFiRadioMode = "off" | "station" | "softAP" | "station+softAP";
+  type WiFiPowerSaveMode = "none" | "minimum" | "maximum";
 
   interface WiFiRadioStatus {
     generation: number;
@@ -2448,6 +2449,7 @@ namespace ESP32QJS {
     channel: number | null;
     channelGeneration: number;
     maxTxPowerDbm: number | null;
+    powerSave: WiFiPowerSaveMode | null;
     clients: {
       total: number;
       wifiStation: number;
@@ -2461,10 +2463,6 @@ namespace ESP32QJS {
     connected: boolean;
     scanning: boolean;
     ssid: string;
-    hostname: string;
-    ip: string;
-    netmask: string;
-    gateway: string;
     lastDisconnectReason: number;
     lastDisconnectReasonName: WiFiDisconnectReasonName;
     radio: WiFiRadioStatus;
@@ -2480,6 +2478,44 @@ namespace ESP32QJS {
     channel: number;
     authMode: WiFiAuthMode;
     hidden: boolean;
+  }
+
+  interface WiFiScanOptions {
+    /** Limit the scan to one target-supported channel. Omit to scan all channels. */
+    channel?: number;
+    /** Include access points that do not advertise an SSID. Defaults to true. */
+    showHidden?: boolean;
+    /** Use a passive scan instead of transmitting probe requests. */
+    passive?: boolean;
+    /** Per-channel scan duration in milliseconds, from 1 through 1500. */
+    dwellMs?: number;
+    /** Whole-operation deadline in milliseconds, from 1 through 60000. */
+    timeoutMs?: number;
+  }
+
+  type WiFiConnectAuthMode =
+    | "open"
+    | "wep"
+    | "wpa"
+    | "wpa2"
+    | "wpa/wpa2"
+    | "wpa3"
+    | "wpa2/wpa3"
+    | "wapi"
+    | "owe";
+
+  interface WiFiConnectOptions {
+    password?: string;
+    timeoutMs?: number;
+    /** Lock association to one BSSID. */
+    bssid?: string;
+    /** Hint or lock association to one target-supported channel. */
+    channel?: number;
+    scanMethod?: "fast" | "all";
+    sortMethod?: "signal" | "security";
+    minimumRssi?: number;
+    minimumAuthMode?: WiFiConnectAuthMode;
+    pmf?: "disabled" | "capable" | "required";
   }
 
   type TlsErrorCode =
@@ -2536,11 +2572,13 @@ namespace ESP32QJS {
   interface WiFiModule {
     readonly DEFAULT_TIMEOUT_MS: number;
     status(): WiFiStatus;
+    /** Set station modem power saving and return the active mode. */
+    setPowerSave(mode: WiFiPowerSaveMode): WiFiPowerSaveMode;
     /** Set the shared radio maximum TX power and return the mapped actual dBm. */
     setTxPower(dbm: number): number;
-    connect(ssid: string, password: string, timeoutMs?: number): WiFiStatus;
+    connect(ssid: string, options?: WiFiConnectOptions): WiFiStatus;
     disconnect(timeoutMs?: number): WiFiStatus;
-    scan(): WiFiScanResult[];
+    scan(options?: WiFiScanOptions): WiFiScanResult[];
   }
 
   type EspNowAddress = string;

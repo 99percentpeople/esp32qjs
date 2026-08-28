@@ -35,6 +35,8 @@ typedef struct {
     uint32_t channel_generation;
     bool max_tx_power_available;
     int8_t max_tx_power_quarter_dbm;
+    bool power_save_available;
+    wifi_ps_type_t power_save;
     uint32_t clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_COUNT];
 } esp32_mquickjs_wifi_radio_status_t;
 

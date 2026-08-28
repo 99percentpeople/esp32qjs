@@ -1,6 +1,9 @@
 test("http/network", function () {
   var cfg = test.requireConfig("wifiSsid", "wifiPassword", "httpUrl");
   var wifiStatus = wifi.status();
+  var networkStatus;
+  var primaryInterface = null;
+  var interfaceIndex;
   var response;
   var syncResponse;
   var localServer;
@@ -16,10 +19,23 @@ test("http/network", function () {
 
   if (!wifiStatus.connected) {
     wifiStatus = Future.call(wifi.connect, wifi,
-      [cfg.wifiSsid, cfg.wifiPassword, 15000]).wait(20000);
+      [cfg.wifiSsid, {
+        password: cfg.wifiPassword,
+        timeoutMs: 15000
+      }]).wait(20000);
   }
 
   test.ok(wifiStatus.connected, "wifi should be connected before fetch");
+  networkStatus = net.status();
+  for (interfaceIndex = 0;
+       interfaceIndex < networkStatus.interfaces.length;
+       interfaceIndex += 1) {
+    if (networkStatus.interfaces[interfaceIndex].defaultRoute) {
+      primaryInterface = networkStatus.interfaces[interfaceIndex];
+    }
+  }
+  test.ok(primaryInterface && primaryInterface.ipv4,
+    "net should expose the default-route IPv4 state");
 
   test.equal(sys.time.sync({
     servers: ["pool.ntp.org", "time.cloudflare.com"],
@@ -63,7 +79,7 @@ test("http/network", function () {
   test.equal(typeof localServer.close, "function", "HTTP server should expose close()");
   localServer.route("GET", "/bounded");
   localServer.start();
-  localUrl = "http://" + wifiStatus.ip + ":18081/bounded";
+  localUrl = "http://" + primaryInterface.ipv4.address + ":18081/bounded";
 
   boundedRequest = Future.call(fetch, globalThis, [localUrl, { maxBodyBytes: 8 }]);
   incomingRequest = localServer.receive(5000);

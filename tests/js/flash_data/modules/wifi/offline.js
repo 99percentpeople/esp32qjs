@@ -4,7 +4,11 @@ test("wifi/offline", function () {
   var disconnected;
   var disconnectFuture;
   var scanError = "";
+  var scanUnknownOptionError = "";
   var connectError = "";
+  var connectUnknownOptionError = "";
+  var connectTypeError = "";
+  var connectSsidRangeError = "";
   var syncOptionsError = "";
   var syncServersError = "";
   var invalidSync;
@@ -12,6 +16,7 @@ test("wifi/offline", function () {
   var syncLargeTimeoutError = "";
   var syncFractionalTimeoutError = "";
   var txPowerRangeError = "";
+  var powerSaveError = "";
 
   test.ok(status && typeof status === "object", "wifi.status() should return an object");
   test.ok(typeof wifi.DEFAULT_TIMEOUT_MS === "number", "wifi timeout constant");
@@ -19,6 +24,8 @@ test("wifi/offline", function () {
   test.ok(typeof wifi.connectAsync === "undefined", "wifi.connectAsync should not exist");
   test.ok(typeof wifi.disconnect === "function", "wifi.disconnect should exist");
   test.ok(typeof wifi.scan === "function", "wifi.scan should exist");
+  test.ok(typeof wifi.setPowerSave === "function",
+    "wifi.setPowerSave should exist");
   test.ok(typeof wifi.setTxPower === "function", "wifi.setTxPower should exist");
   test.ok(typeof wifi.syncTime === "undefined", "wifi.syncTime should be removed");
   test.ok(typeof sys.time.sync === "function", "sys.time.sync should exist");
@@ -38,6 +45,15 @@ test("wifi/offline", function () {
   test.ok(status.radio.maxTxPowerDbm === null ||
     typeof status.radio.maxTxPowerDbm === "number",
     "actual maximum TX power should be observable when the radio is started");
+  test.ok(status.radio.powerSave === null ||
+    status.radio.powerSave === "none" ||
+    status.radio.powerSave === "minimum" ||
+    status.radio.powerSave === "maximum",
+    "power-save status should be null or a normalized control value");
+  test.equal(typeof status.hostname, "undefined",
+    "network hostname should belong to net instead of wifi");
+  test.equal(typeof status.ip, "undefined",
+    "IP state should belong to net instead of wifi");
   try {
     wifi.setTxPower(1);
   } catch (txPowerFailure) {
@@ -46,11 +62,54 @@ test("wifi/offline", function () {
   }
   test.ok(txPowerRangeError.indexOf("2..20") >= 0,
     "TX power should reject values outside the supported dBm range");
+  try {
+    wifi.setPowerSave("invalid");
+  } catch (powerSaveFailure) {
+    powerSaveError = String(powerSaveFailure && powerSaveFailure.message
+      ? powerSaveFailure.message : powerSaveFailure);
+  }
+  test.ok(powerSaveError.indexOf("none, minimum, or maximum") >= 0,
+    "power-save mode should be strictly validated");
+  try {
+    wifi.scan({ callback: function () {} });
+  } catch (scanUnknownOptionFailure) {
+    scanUnknownOptionError = String(scanUnknownOptionFailure &&
+      scanUnknownOptionFailure.message
+      ? scanUnknownOptionFailure.message : scanUnknownOptionFailure);
+  }
+  test.ok(scanUnknownOptionError.indexOf("unknown option 'callback'") >= 0,
+    "wifi.scan should reject unknown control fields");
+  try {
+    wifi.connect("ssid", { automatic: true });
+  } catch (connectUnknownOptionFailure) {
+    connectUnknownOptionError = String(connectUnknownOptionFailure &&
+      connectUnknownOptionFailure.message
+      ? connectUnknownOptionFailure.message : connectUnknownOptionFailure);
+  }
+  test.ok(connectUnknownOptionError.indexOf("unknown option 'automatic'") >= 0,
+    "wifi.connect should reject unknown control fields");
+  try {
+    wifi.connect(1234);
+  } catch (connectTypeFailure) {
+    connectTypeError = String(connectTypeFailure && connectTypeFailure.message
+      ? connectTypeFailure.message : connectTypeFailure);
+  }
+  test.ok(connectTypeError.indexOf("string SSID") >= 0,
+    "wifi.connect should not coerce a non-string SSID");
+  try {
+    wifi.connect("");
+  } catch (connectSsidRangeFailure) {
+    connectSsidRangeError = String(connectSsidRangeFailure &&
+      connectSsidRangeFailure.message
+      ? connectSsidRangeFailure.message : connectSsidRangeFailure);
+  }
+  test.ok(connectSsidRangeError.indexOf("expects 1..32 bytes") >= 0,
+    "wifi.connect should require a non-empty SSID");
   test.ok(typeof status.connected === "boolean", "connected should be boolean");
   test.ok(typeof status.scanning === "boolean", "scanning should be boolean");
   test.ok(typeof status.lastDisconnectReason === "number", "disconnect reason should be numeric");
   test.ok(typeof status.lastDisconnectReasonName === "string", "disconnect reason name should be string");
-  aps = wifi.scan();
+  aps = wifi.scan({ showHidden: true });
   test.ok(typeof aps.length === "number", "wifi.scan should return an array-like result");
 
   try {
@@ -58,14 +117,16 @@ test("wifi/offline", function () {
   } catch (scanFailure) {
     scanError = scanFailure && scanFailure.message ? scanFailure.message : String(scanFailure);
   }
-  test.ok(scanError.indexOf("expects no arguments") >= 0, "wifi.scan should reject callback overloads");
+  test.ok(scanError.indexOf("options object") >= 0,
+    "wifi.scan should reject callback overloads");
 
   try {
-    wifi.connect("ssid", "password", function () {});
+    wifi.connect({ ssid: "ssid" });
   } catch (connectFailure) {
     connectError = connectFailure && connectFailure.message ? connectFailure.message : String(connectFailure);
   }
-  test.ok(connectError.indexOf("timeout") >= 0, "wifi.connect should reject callback overloads");
+  test.ok(connectError.indexOf("string SSID") >= 0,
+    "wifi.connect should reject the superseded options-only form");
 
   try {
     sys.time.sync();

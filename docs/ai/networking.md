@@ -15,18 +15,26 @@ link modules remain responsible for creating and controlling their interfaces.
 ## Wi-Fi
 
 - `wifi.status()`
-- `wifi.scan()`
-- `wifi.connect(ssid, password, timeoutMs?)`
+- `wifi.scan(options?)`
+- `wifi.connect(ssid, options?)`
 - `wifi.disconnect()`
+- `wifi.setPowerSave(mode)` selects `none`, `minimum`, or `maximum` Station
+  modem sleep independently of ESP-NOW connectionless power-save controls.
 - `wifi.setTxPower(dbm)` sets the shared radio maximum to a 0.25 dBm increment
   from 2 through 20 and returns the ESP-IDF-mapped actual dBm.
 
 Operations are synchronous and bounded by the active deadline. Do not expose passwords in returned results or logs.
+`wifi` owns Station association and physical-radio control only. Read IP
+addresses, interface readiness, and routes from `net.status()` or `net.watch()`;
+those fields are intentionally absent from `wifi.status()`.
 `wifi.status().started` reflects the boot-scoped physical radio, including when
 ESP-NOW started it before the Wi-Fi station helper was initialized. The nested
 `radio` snapshot reports initialization/start state, mode, channel generation,
-bounded client lease counts, and the mapped `maxTxPowerDbm`; it is diagnostic
-state, not a separate public start/stop control surface.
+bounded client lease counts, modem power save, and mapped `maxTxPowerDbm`.
+`wifi.connect()` accepts BSSID/channel selection, scan/sort policy, minimum RSSI
+and personal auth thresholds, PMF policy, and a deadline. `wifi.scan()` accepts
+channel, hidden/passive mode, dwell time, and deadline controls. Both reject
+unknown fields.
 Only workspace code owns these operations. The Agent connectivity observer
 reads status but never calls `wifi.scan`, `wifi.connect`, or `wifi.disconnect`.
 A successful workspace connection automatically makes the paired remote RPC
@@ -47,21 +55,26 @@ does not defend against active network time tampering.
 
 ```js
 (function () {
-    var networks = wifi.scan();
+    var networks = wifi.scan({ showHidden: true });
     return networks.slice(0, 10);
 })()
 ```
 
 ```js
 (function () {
-    var status = wifi.connect("example", "password", 15000);
+    var status = wifi.connect("example", {
+        password: "password",
+        timeoutMs: 15000,
+        pmf: "capable"
+    });
+    var network = net.status();
     var clock = sys.time.sync({
         servers: ["pool.ntp.org"],
         timeoutMs: 10000
     });
     return {
         connected: status.connected,
-        ip: status.ip,
+        network: network,
         unixTimeMs: clock.unixTimeMs
     };
 })()

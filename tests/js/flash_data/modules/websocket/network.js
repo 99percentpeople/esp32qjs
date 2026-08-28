@@ -8,7 +8,10 @@ test("websocket/network", function () {
 
   if (!wifiStatus.connected) {
     wifiStatus = Future.call(wifi.connect, wifi,
-      [cfg.wifiSsid, cfg.wifiPassword, 15000]).wait(20000);
+      [cfg.wifiSsid, {
+        password: cfg.wifiPassword,
+        timeoutMs: 15000
+      }]).wait(20000);
   }
   test.ok(wifiStatus.connected,
     "Wi-Fi should be connected before WebSocket test");

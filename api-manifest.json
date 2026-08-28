@@ -8914,7 +8914,7 @@
       "qualifiedName": "wifi.connect",
       "surface": "wifi",
       "name": "connect",
-      "arity": 3,
+      "arity": 2,
       "implementation": "js_wifi_connect",
       "visibility": "public",
       "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI",
@@ -8966,7 +8966,7 @@
       "qualifiedName": "wifi.scan",
       "surface": "wifi",
       "name": "scan",
-      "arity": 0,
+      "arity": 1,
       "implementation": "js_wifi_scan",
       "visibility": "public",
       "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI",
@@ -8986,6 +8986,28 @@
       "futureRegistration": {
         "file": "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi_future.c",
         "function": "esp32_mquickjs_init_wifi_future_runtime"
+      }
+    },
+    {
+      "qualifiedName": "wifi.setPowerSave",
+      "surface": "wifi",
+      "name": "setPowerSave",
+      "arity": 1,
+      "implementation": "js_wifi_set_power_save",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiModule"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "wifi"
       }
     },
     {

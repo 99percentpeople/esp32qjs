@@ -1,6 +1,9 @@
 test("wifi/network", function () {
   var cfg = test.requireConfig("wifiSsid", "wifiPassword");
   var status;
+  var network;
+  var primary;
+  var interfaceIndex;
   var disconnected;
   var timeOptions = {
     servers: ["pool.ntp.org", "time.cloudflare.com"],
@@ -16,11 +19,27 @@ test("wifi/network", function () {
     wifi.disconnect();
   } catch (ignoredDisconnectError) {}
 
-  status = Future.call(wifi.connect, wifi,
-    [cfg.wifiSsid, cfg.wifiPassword, 15000]).wait(20000);
+  status = Future.call(wifi.connect, wifi, [cfg.wifiSsid, {
+    password: cfg.wifiPassword,
+    timeoutMs: 15000,
+    scanMethod: "all",
+    sortMethod: "signal",
+    pmf: "capable"
+  }]).wait(20000);
 
   test.ok(status.connected, "wifi should connect");
-  test.ok(typeof status.ip === "string" && status.ip.length > 0, "wifi ip should be present");
+  network = net.status();
+  test.equal(network.ready, true, "net should report network readiness");
+  primary = null;
+  for (interfaceIndex = 0;
+       interfaceIndex < network.interfaces.length;
+       interfaceIndex += 1) {
+    if (network.interfaces[interfaceIndex].defaultRoute) {
+      primary = network.interfaces[interfaceIndex];
+    }
+  }
+  test.ok(primary && primary.ipv4 && primary.ipv4.address.length > 0,
+    "net should own the connected interface IPv4 state");
 
   if (!sys.time.status().synchronized) {
     firstClock = Future.call(sys.time.sync, sys.time, [timeOptions]);
@@ -50,18 +69,28 @@ test("wifi/network", function () {
 
   try {
     Future.call(wifi.connect, wifi,
-      ["esp32qjs-e2e-missing", "not-a-secret", 1000]).wait(5000);
+      ["esp32qjs-e2e-missing", {
+        password: "not-a-secret",
+        timeoutMs: 1000,
+        minimumRssi: -90
+      }]).wait(5000);
   } catch (missingNetworkError) {
     failed = true;
   }
   test.ok(failed, "a missing network should fail or time out");
 
   status = Future.call(wifi.connect, wifi,
-    [cfg.wifiSsid, cfg.wifiPassword, 15000]).wait(20000);
+    [cfg.wifiSsid, {
+      password: cfg.wifiPassword,
+      timeoutMs: 15000
+    }]).wait(20000);
   test.ok(status.connected, "wifi should connect again after a failed attempt");
 
   disconnected = wifi.disconnect();
   test.ok(!disconnected.connected, "wifi should disconnect");
 
-  return { ip: status.ip, unixTimeMs: immediateClock.unixTimeMs };
+  return {
+    ip: primary.ipv4.address,
+    unixTimeMs: immediateClock.unixTimeMs
+  };
 });

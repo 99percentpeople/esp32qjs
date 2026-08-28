@@ -66,34 +66,6 @@ void esp32_mquickjs_wifi_unlock(void)
     wifi_unlock();
 }
 
-static void wifi_clear_ip_info_locked(void)
-{
-    s_wifi_state.status.ip[0] = '\0';
-    s_wifi_state.status.netmask[0] = '\0';
-    s_wifi_state.status.gateway[0] = '\0';
-}
-
-static void wifi_copy_ipv4(char *dst, size_t dst_size, esp_ip4_addr_t addr)
-{
-    snprintf(dst, dst_size, IPSTR, IP2STR(&addr));
-}
-
-static void wifi_refresh_hostname_locked(void)
-{
-    const char *hostname = NULL;
-
-    s_wifi_state.status.hostname[0] = '\0';
-    if (s_wifi_state.sta_netif == NULL) {
-        return;
-    }
-    if (esp_netif_get_hostname(s_wifi_state.sta_netif, &hostname) != ESP_OK || hostname == NULL) {
-        return;
-    }
-
-    strncpy(s_wifi_state.status.hostname, hostname, sizeof(s_wifi_state.status.hostname) - 1);
-    s_wifi_state.status.hostname[sizeof(s_wifi_state.status.hostname) - 1] = '\0';
-}
-
 void esp32_mquickjs_wifi_clear_scan_future(void)
 {
     wifi_lock();
@@ -167,7 +139,6 @@ static void wifi_connect_timeout_cb(void *arg)
         s_wifi_state.connect_in_progress = false;
         s_wifi_state.ignore_disconnect_once = true;
         s_wifi_state.status.connected = false;
-        wifi_clear_ip_info_locked();
         should_timeout = true;
     }
     wifi_unlock();
@@ -233,7 +204,6 @@ static void wifi_event_handler(void *arg,
             connect_generation = s_wifi_state.connect_generation;
         }
         s_wifi_state.status.last_disconnect_reason = reason;
-        wifi_clear_ip_info_locked();
         wifi_unlock();
 
         xEventGroupClearBits(s_wifi_state.event_group, WIFI_CONNECTED_BIT);
@@ -276,7 +246,6 @@ static void wifi_event_handler(void *arg,
     }
 
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *event = event_data;
         bool should_queue_connect_success = false;
         uint32_t connect_generation = 0;
 
@@ -286,20 +255,6 @@ static void wifi_event_handler(void *arg,
         should_queue_connect_success = s_wifi_state.connect_future_registered;
         connect_generation = s_wifi_state.connect_generation;
         s_wifi_state.status.last_disconnect_reason = 0;
-        if (event != NULL) {
-            wifi_copy_ipv4(s_wifi_state.status.ip,
-                           sizeof(s_wifi_state.status.ip),
-                           event->ip_info.ip);
-            wifi_copy_ipv4(s_wifi_state.status.netmask,
-                           sizeof(s_wifi_state.status.netmask),
-                           event->ip_info.netmask);
-            wifi_copy_ipv4(s_wifi_state.status.gateway,
-                           sizeof(s_wifi_state.status.gateway),
-                           event->ip_info.gw);
-        } else {
-            wifi_clear_ip_info_locked();
-        }
-        wifi_refresh_hostname_locked();
         wifi_unlock();
 
         wifi_stop_connect_timeout_timer();
@@ -393,7 +348,6 @@ static esp_err_t wifi_init_once(void)
     s_wifi_state.status.connected = false;
     s_wifi_state.status.scanning = false;
     s_wifi_state.status.last_disconnect_reason = 0;
-    wifi_refresh_hostname_locked();
     wifi_unlock();
 
     if (esp32_mquickjs_wifi_radio_get_status(&radio_status) == ESP_OK &&
@@ -591,6 +545,20 @@ static const char *wifi_radio_mode_to_string(wifi_mode_t mode)
     }
 }
 
+static const char *wifi_power_save_to_string(wifi_ps_type_t mode)
+{
+    switch (mode) {
+    case WIFI_PS_NONE:
+        return "none";
+    case WIFI_PS_MIN_MODEM:
+        return "minimum";
+    case WIFI_PS_MAX_MODEM:
+        return "maximum";
+    default:
+        return NULL;
+    }
+}
+
 static JSValue wifi_make_status_object(JSContext *ctx)
 {
     esp32_mquickjs_wifi_status_t status;
@@ -661,6 +629,13 @@ static JSValue wifi_make_status_object(JSContext *ctx)
                       ctx,
                       (double)radio_status.max_tx_power_quarter_dbm / 4.0)
                 : JS_NULL) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, radio_obj, "powerSave",
+            radio_status.power_save_available &&
+                    wifi_power_save_to_string(radio_status.power_save) != NULL
+                ? JS_NewString(
+                      ctx, wifi_power_save_to_string(radio_status.power_save))
+                : JS_NULL) ||
         !esp32_mquickjs_set_property_ref(ctx, radio_obj, "clients",
                                          *clients_obj) ||
         !esp32_mquickjs_set_property_ref(ctx, status_obj, "initialized",
@@ -673,14 +648,6 @@ static JSValue wifi_make_status_object(JSContext *ctx)
                                      JS_NewBool(status.scanning)) ||
         !esp32_mquickjs_set_property_ref(ctx, status_obj, "ssid",
                                      JS_NewString(ctx, status.ssid)) ||
-        !esp32_mquickjs_set_property_ref(ctx, status_obj, "hostname",
-                                     JS_NewString(ctx, status.hostname)) ||
-        !esp32_mquickjs_set_property_ref(ctx, status_obj, "ip",
-                                     JS_NewString(ctx, status.ip)) ||
-        !esp32_mquickjs_set_property_ref(ctx, status_obj, "netmask",
-                                     JS_NewString(ctx, status.netmask)) ||
-        !esp32_mquickjs_set_property_ref(ctx, status_obj, "gateway",
-                                     JS_NewString(ctx, status.gateway)) ||
         !esp32_mquickjs_set_property_ref(ctx, status_obj, "lastDisconnectReason",
                                      JS_NewInt32(ctx, status.last_disconnect_reason)) ||
         !esp32_mquickjs_set_property_ref(ctx, status_obj, "lastDisconnectReasonName",
@@ -794,44 +761,21 @@ esp_err_t esp32_mquickjs_wifi_get_status(esp32_mquickjs_wifi_status_t *status)
     return ESP_OK;
 }
 
-static esp_err_t wifi_apply_config(const char *ssid, const char *password)
-{
-    wifi_config_t wifi_config = {0};
-    size_t ssid_len = strlen(ssid);
-    size_t password_len = password != NULL ? strlen(password) : 0;
-
-    if (ssid_len == 0 || ssid_len > ESP32_MQUICKJS_WIFI_SSID_MAX_LEN ||
-        password_len > ESP32_MQUICKJS_WIFI_PASSWORD_MAX_LEN) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    memcpy(wifi_config.sta.ssid, ssid, ssid_len);
-    if (password_len > 0) {
-        memcpy(wifi_config.sta.password, password, password_len);
-        wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-    } else {
-        wifi_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
-    }
-    wifi_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
-    wifi_config.sta.pmf_cfg.capable = true;
-    wifi_config.sta.pmf_cfg.required = false;
-
-    return esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
-}
-
-esp_err_t esp32_mquickjs_wifi_start_connect(const char *ssid,
-                                            const char *password,
+esp_err_t esp32_mquickjs_wifi_start_connect(const wifi_config_t *config,
                                             uint32_t timeout_ms)
 {
+    wifi_config_t applied_config;
     esp_err_t err;
     bool needs_disconnect = false;
+    size_t ssid_len;
 
-    if (ssid == NULL || password == NULL) {
+    if (config == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
+    applied_config = *config;
 
     ESP_RETURN_ON_ERROR(esp32_mquickjs_wifi_ensure_started(), TAG, "wifi_ensure_started() failed");
-    err = wifi_apply_config(ssid, password);
+    err = esp_wifi_set_config(WIFI_IF_STA, &applied_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_set_config() failed: %s", esp_err_to_name(err));
         return err;
@@ -856,9 +800,10 @@ esp_err_t esp32_mquickjs_wifi_start_connect(const char *ssid,
     s_wifi_state.connect_in_progress = true;
     s_wifi_state.status.connected = false;
     s_wifi_state.status.last_disconnect_reason = 0;
-    strncpy(s_wifi_state.status.ssid, ssid, sizeof(s_wifi_state.status.ssid) - 1);
-    s_wifi_state.status.ssid[sizeof(s_wifi_state.status.ssid) - 1] = '\0';
-    wifi_clear_ip_info_locked();
+    ssid_len = strnlen((const char *)config->sta.ssid,
+                       sizeof(config->sta.ssid));
+    memcpy(s_wifi_state.status.ssid, config->sta.ssid, ssid_len);
+    s_wifi_state.status.ssid[ssid_len] = '\0';
     wifi_unlock();
 
     wifi_stop_connect_timeout_timer();
@@ -913,7 +858,6 @@ esp_err_t esp32_mquickjs_wifi_start_disconnect(bool *out_pending)
         was_active && s_wifi_state.connection_future_operation !=
                           ESP32_MQUICKJS_WIFI_OPERATION_DISCONNECT;
     s_wifi_state.status.connected = false;
-    wifi_clear_ip_info_locked();
     wifi_unlock();
 
     xEventGroupClearBits(s_wifi_state.event_group, WIFI_CONNECTED_BIT | WIFI_FAILED_BIT);
@@ -1075,6 +1019,47 @@ JSValue js_wifi_get_default_timeout_ms(JSContext *ctx, JSValue *this_val, int ar
     (void)argc;
     (void)argv;
     return JS_NewUint32(ctx, ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS);
+}
+
+JSValue js_wifi_set_power_save(JSContext *ctx, JSValue *this_val,
+                               int argc, JSValue *argv)
+{
+    JSCStringBuf buffer;
+    const char *text;
+    const char *actual_text;
+    wifi_ps_type_t requested;
+    wifi_ps_type_t actual;
+    esp_err_t err;
+
+    (void)this_val;
+    if (argc != 1 || !JS_IsString(ctx, argv[0]) ||
+        (text = JS_ToCString(ctx, argv[0], &buffer)) == NULL) {
+        return JS_ThrowTypeError(
+            ctx, "wifi.setPowerSave(mode) expects none, minimum, or maximum");
+    }
+    if (strcmp(text, "none") == 0) {
+        requested = WIFI_PS_NONE;
+    } else if (strcmp(text, "minimum") == 0) {
+        requested = WIFI_PS_MIN_MODEM;
+    } else if (strcmp(text, "maximum") == 0) {
+        requested = WIFI_PS_MAX_MODEM;
+    } else {
+        return JS_ThrowRangeError(
+            ctx, "wifi.setPowerSave(mode) expects none, minimum, or maximum");
+    }
+    err = esp32_mquickjs_wifi_ensure_started();
+    if (err == ESP_OK) {
+        err = esp_wifi_set_ps(requested);
+    }
+    if (err == ESP_OK) {
+        err = esp_wifi_get_ps(&actual);
+    }
+    actual_text = err == ESP_OK ? wifi_power_save_to_string(actual) : NULL;
+    if (err != ESP_OK || actual_text == NULL) {
+        return JS_ThrowInternalError(
+            ctx, "wifi.setPowerSave() failed: %s", esp_err_to_name(err));
+    }
+    return JS_NewString(ctx, actual_text);
 }
 
 JSValue js_wifi_set_tx_power(JSContext *ctx, JSValue *this_val,

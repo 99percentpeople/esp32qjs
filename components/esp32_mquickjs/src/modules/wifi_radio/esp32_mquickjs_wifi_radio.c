@@ -247,6 +247,7 @@ esp_err_t esp32_mquickjs_wifi_radio_get_status(
         wifi_second_chan_t secondary = WIFI_SECOND_CHAN_NONE;
         uint32_t generation = 0;
         int8_t max_tx_power = 0;
+        wifi_ps_type_t power_save = WIFI_PS_NONE;
 
         if (esp32_mquickjs_wifi_radio_get_channel(
                 &primary, &secondary, &generation) == ESP_OK) {
@@ -257,6 +258,10 @@ esp_err_t esp32_mquickjs_wifi_radio_get_status(
         if (esp_wifi_get_max_tx_power(&max_tx_power) == ESP_OK) {
             out_status->max_tx_power_available = true;
             out_status->max_tx_power_quarter_dbm = max_tx_power;
+        }
+        if (esp_wifi_get_ps(&power_save) == ESP_OK) {
+            out_status->power_save_available = true;
+            out_status->power_save = power_save;
         }
     }
     return ESP_OK;

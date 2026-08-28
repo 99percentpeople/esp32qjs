@@ -137,6 +137,84 @@ class WifiRadioArchitectureTests(unittest.TestCase):
         self.assertIn("setTxPower(dbm: number): number", types)
         self.assertIn("maxTxPowerDbm: number | null", types)
 
+    def test_wifi_controls_are_link_scoped_and_network_state_stays_in_net(self):
+        header = (
+            MQUICKJS / "internal/esp32_mquickjs_wifi_radio.h"
+        ).read_text(encoding="utf-8")
+        wifi = (
+            MQUICKJS / "src/modules/wifi/esp32_mquickjs_wifi.c"
+        ).read_text(encoding="utf-8")
+        types = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+
+        wifi_status = types[
+            types.index("interface WiFiStatus") :
+            types.index("interface WiFiScanResult")
+        ]
+        net_status = types[
+            types.index("interface NetInterfaceStatus") :
+            types.index("interface NetStatusEvent")
+        ]
+        make_status = wifi[
+            wifi.index("static JSValue wifi_make_status_object") :
+            wifi.index("JSValue esp32_mquickjs_wifi_make_status_object")
+        ]
+
+        for network_field in ("hostname", "ip", "netmask", "gateway"):
+            self.assertNotIn(f"{network_field}:", wifi_status)
+            self.assertNotIn(f'"{network_field}"', make_status)
+        self.assertIn("ipv4: NetIPv4Status | null", net_status)
+        self.assertIn("wifi_ps_type_t power_save", header)
+        self.assertIn("esp_wifi_get_ps", wifi)
+        self.assertIn("esp_wifi_set_ps", wifi)
+        self.assertIn("setPowerSave(mode: WiFiPowerSaveMode)", types)
+
+    def test_connect_and_scan_use_strict_structured_control_options(self):
+        future = (
+            MQUICKJS / "src/modules/wifi/esp32_mquickjs_wifi_future.c"
+        ).read_text(encoding="utf-8")
+        types = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+
+        connect = future[
+            future.index("static bool wifi_future_parse_connect") :
+            future.index("static bool wifi_scan_future_prepare")
+        ]
+        scan = future[
+            future.index("static bool wifi_scan_future_prepare") :
+            future.index("static bool wifi_connect_future_prepare")
+        ]
+
+        self.assertIn("wifi_validate_option_keys", future)
+        self.assertIn(
+            "wifi.connect(ssid, options?) expects a string SSID and optional options object",
+            connect,
+        )
+        for token in (
+            "bssid_set",
+            "scan_method",
+            "sort_method",
+            "threshold.rssi",
+            "threshold.authmode",
+            "pmf_cfg",
+        ):
+            self.assertIn(token, connect)
+        for token in (
+            "wifi_scan_config_t",
+            "show_hidden",
+            "scan_type",
+            "scan_time",
+            "timeout_ms",
+        ):
+            self.assertIn(token, scan)
+        self.assertIn(
+            "connect(ssid: string, options?: WiFiConnectOptions): WiFiStatus",
+            types,
+        )
+        self.assertIn("scan(options?: WiFiScanOptions): WiFiScanResult[]", types)
+
     def test_internal_feature_is_a_transitive_wifi_dependency(self):
         catalog = json.loads(
             (MQUICKJS / "runtime-features.json").read_text(encoding="utf-8")
