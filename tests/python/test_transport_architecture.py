@@ -8,6 +8,17 @@ MQUICKJS = ROOT / "components" / "esp32_mquickjs"
 
 
 class TransportArchitectureTests(SourceContractTestCase):
+    def test_hardware_identity_uses_six_byte_factory_mac(self):
+        source = (
+            MQUICKJS / "src" / "core" / "esp32_mquickjs_sys.c"
+        ).read_text(encoding="utf-8")
+        function_start = source.index("static bool esp32_hardware_id(")
+        function_end = source.index("\nstatic JSValue sys_profile_js_value(", function_start)
+        function = source[function_start:function_end]
+
+        self.assertIn("esp_read_mac(mac, ESP_MAC_EFUSE_FACTORY)", function)
+        self.assertNotIn("esp_efuse_mac_get_default", function)
+
     def test_usb_serial_and_repl_are_mutually_exclusive(self):
         kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
         interactive_cmake = (

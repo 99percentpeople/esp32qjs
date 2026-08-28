@@ -108,7 +108,7 @@ static bool esp32_hardware_id(char output[16])
     uint8_t mac[6];
     size_t i;
 
-    if (esp_efuse_mac_get_default(mac) != ESP_OK) {
+    if (esp_read_mac(mac, ESP_MAC_EFUSE_FACTORY) != ESP_OK) {
         return false;
     }
     output[0] = 'h';
