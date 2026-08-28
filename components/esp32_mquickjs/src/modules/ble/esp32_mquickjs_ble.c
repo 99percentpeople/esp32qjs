@@ -39,6 +39,7 @@
 #define BLE_DEFAULT_TIMEOUT_MS 10000U
 #define BLE_PAIRING_TIMEOUT_MS 30000U
 #define BLE_REOPEN_QUIESCE_MS 50U
+#define BLE_CONNECT_CANCEL_QUIESCE_MS 2000U
 #define BLE_DEFAULT_MTU 256U
 #define BLE_MAX_DEVICE_NAME 64U
 #define BLE_INVALID_CONN_HANDLE UINT16_MAX
@@ -244,6 +245,7 @@ typedef struct {
     _Atomic uint32_t sequence;
     _Atomic bool terminal_pending;
     _Atomic uint32_t gatt_pending;
+    esp32_mquickjs_wireless_native_operation_t connect_operation;
     uint32_t pairing_request_id;
     int64_t pairing_expires_at_us;
     uint8_t pairing_action;
@@ -487,6 +489,29 @@ static void ble_note_native_deinit(void)
 {
     s_ble_reopen_not_before_us =
         esp_timer_get_time() + (int64_t)BLE_REOPEN_QUIESCE_MS * 1000;
+}
+
+static bool ble_has_pending_connects(void)
+{
+    uint16_t index;
+    for (index = 0; index < s_ble.max_connections; ++index) {
+        if (!esp32_mquickjs_wireless_native_operation_is_quiescent(
+                &s_ble.connections[index].connect_operation)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool ble_wait_for_pending_connects(uint32_t timeout_ms)
+{
+    int64_t deadline_us = esp_timer_get_time() +
+                          (int64_t)timeout_ms * 1000;
+    while (ble_has_pending_connects()) {
+        if (esp_timer_get_time() >= deadline_us) return false;
+        vTaskDelay(1);
+    }
+    return true;
 }
 
 static uint32_t ble_next_generation(_Atomic uint32_t *counter)
@@ -1566,11 +1591,24 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
             if (slot != NULL) state = NULL;
         }
         if (callback_slot != NULL && state == NULL) {
-            if (event->connect.status == 0)
-                (void)ble_gap_terminate(event->connect.conn_handle,
-                                        BLE_ERR_REM_USER_CONN_TERM);
+            if (event->connect.status == 0) {
+                int terminate_rc;
+                slot->allocated = true;
+                slot->reserved = false;
+                slot->open = true;
+                slot->release_on_disconnect = true;
+                slot->conn_handle = event->connect.conn_handle;
+                terminate_rc = ble_gap_terminate(
+                    slot->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+                if (terminate_rc == 0) break;
+            }
+            (void)esp32_mquickjs_wireless_native_operation_complete(
+                &slot->connect_operation);
+            slot->open = false;
+            slot->release_on_disconnect = false;
             slot->reserved = false;
             slot->allocated = false;
+            slot->conn_handle = BLE_INVALID_CONN_HANDLE;
             break;
         }
         if (slot == NULL) {
@@ -1632,6 +1670,10 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
                     state->runtime, state->token, &task_woken);
             }
         }
+        if (callback_slot != NULL) {
+            (void)esp32_mquickjs_wireless_native_operation_complete(
+                &callback_slot->connect_operation);
+        }
         break;
     case BLE_GAP_EVENT_DISCONNECT:
         slot = ble_find_connection(event->disconnect.conn.conn_handle,
@@ -1641,6 +1683,8 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
                 ble_active_state_acquire(&slot->active_gatt_state);
             slot->open = false;
             if (slot->release_on_disconnect) {
+                (void)esp32_mquickjs_wireless_native_operation_complete(
+                    &slot->connect_operation);
                 slot->release_on_disconnect = false;
                 slot->allocated = false;
                 slot->reserved = false;
@@ -2011,6 +2055,11 @@ static JSValue ble_future_on_timeout(
             s_ble.advertiser.stop_reason = BLE_STOP_ERROR;
             break;
         case BLE_OP_CONNECT:
+            if (state->connection_index < s_ble.max_connections) {
+                (void)esp32_mquickjs_wireless_native_operation_request_cancel(
+                    &s_ble.connections[state->connection_index]
+                         .connect_operation);
+            }
             (void)ble_gap_conn_cancel();
             break;
         case BLE_OP_CONNECTION_CLOSE:
@@ -2071,6 +2120,8 @@ static bool ble_allocate_connection_queues(JSContext *ctx,
         atomic_init(&slot->active_gap_state, NULL);
         atomic_init(&slot->active_gatt_state, NULL);
         atomic_init(&slot->gatt_pending, 0);
+        esp32_mquickjs_wireless_native_operation_init(
+            &slot->connect_operation);
         JSValue queue = esp32_mquickjs_event_queue_new(
             ctx, adapter->runtime, sizeof(ble_connection_event_t),
             CONFIG_ESP32_MQUICKJS_BLE_CONNECTION_QUEUE_LEN,
@@ -3036,7 +3087,8 @@ static bool ble_scan_capture(
         return false;
     }
     *out_state = NULL;
-    if (scanner->allocated || adapter->advertiser.active) {
+    if (scanner->allocated || adapter->advertiser.active ||
+        ble_has_pending_connects()) {
         JS_PopGCRef(ctx, &property_ref);
         ble_throw_error(ctx, "BLE_GAP_CONFLICT", BLE_HS_EBUSY, -1, -1, -1);
         return false;
@@ -3393,7 +3445,8 @@ static bool ble_advertise_capture(
         ble_throw_error(ctx, "BLE_NOT_SUPPORTED", BLE_HS_ENOTSUP, -1, -1, -1);
         return false;
     }
-    if (advertiser->allocated || adapter->scanner.active) {
+    if (advertiser->allocated || adapter->scanner.active ||
+        ble_has_pending_connects()) {
         JS_PopGCRef(ctx, &property_ref);
         ble_throw_error(ctx, "BLE_GAP_CONFLICT", BLE_HS_EBUSY, -1, -1, -1);
         return false;
@@ -3722,7 +3775,7 @@ static bool ble_connect_capture(
     }
     *out_state = NULL;
     if (!adapter->role_central || adapter->scanner.active ||
-        adapter->advertiser.active) {
+        ble_has_pending_connects() || adapter->advertiser.active) {
         JS_PopGCRef(ctx, &property_ref);
         ble_throw_error(ctx, !adapter->role_central ? "BLE_NOT_SUPPORTED"
                                                     : "BLE_GAP_CONFLICT",
@@ -3799,10 +3852,21 @@ static bool ble_connect_start(
     state->runtime = runtime;
     state->token = token;
     state->started = true;
+    if (!esp32_mquickjs_wireless_native_operation_begin(
+            &slot->connect_operation)) {
+        state->host_code = BLE_HS_EBUSY;
+        slot->reserved = false;
+        slot->allocated = false;
+        ble_throw_error(ctx, "BLE_GAP_CONFLICT", BLE_HS_EBUSY,
+                        -1, state->connection_index, -1);
+        return false;
+    }
     ble_active_state_bind(&slot->active_gap_state, state);
     rc = ble_gap_connect(s_ble.own_addr_type, &state->peer,
                          state->timeout_ms, NULL, ble_gap_event_callback, slot);
     if (rc != 0) {
+        (void)esp32_mquickjs_wireless_native_operation_complete(
+            &slot->connect_operation);
         ble_active_state_bind(&slot->active_gap_state, NULL);
         state->host_code = rc;
         s_ble.connections[state->connection_index].reserved = false;
@@ -3837,11 +3901,29 @@ static void ble_connect_destroy(esp32_mquickjs_future_driver_state_t *state)
         state->connection_index < s_ble.max_connections) {
         ble_connection_slot_t *slot = &s_ble.connections[state->connection_index];
         if (slot->generation == state->connection_generation) {
-            if (slot->open)
-                (void)ble_gap_terminate(slot->conn_handle,
-                                        BLE_ERR_REM_USER_CONN_TERM);
-            slot->reserved = false;
-            slot->allocated = false;
+            if (slot->open) {
+                int terminate_rc;
+                (void)esp32_mquickjs_wireless_native_operation_begin(
+                    &slot->connect_operation);
+                (void)esp32_mquickjs_wireless_native_operation_request_cancel(
+                    &slot->connect_operation);
+                slot->release_on_disconnect = true;
+                terminate_rc = ble_gap_terminate(
+                    slot->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+                if (terminate_rc == 0) {
+                    ble_future_state_release(state);
+                    return;
+                }
+                (void)esp32_mquickjs_wireless_native_operation_complete(
+                    &slot->connect_operation);
+                slot->open = false;
+                slot->release_on_disconnect = false;
+            }
+            if (esp32_mquickjs_wireless_native_operation_is_quiescent(
+                    &slot->connect_operation)) {
+                slot->reserved = false;
+                slot->allocated = false;
+            }
         }
     }
     ble_future_state_release(state);
@@ -5537,9 +5619,13 @@ static const esp32_mquickjs_future_driver_t s_ble_clear_bonds_driver = {
 static void ble_close_worker(void *opaque)
 {
     esp32_mquickjs_future_driver_state_t *state = opaque;
-    int rc = nimble_port_stop();
+    int rc = ble_wait_for_pending_connects(
+                 BLE_CONNECT_CANCEL_QUIESCE_MS)
+                 ? 0 : BLE_HS_ETIMEOUT;
+    int stop_rc = nimble_port_stop();
     esp_err_t deinit_rc = nimble_port_deinit();
     if (deinit_rc == ESP_OK) ble_note_native_deinit();
+    if (rc == 0 && stop_rc != 0) rc = stop_rc;
     if (rc == 0 && deinit_rc != ESP_OK) rc = deinit_rc;
     state->host_code = rc;
     s_ble.host_started = false;
@@ -5585,7 +5671,8 @@ static bool ble_adapter_close_start(
     if (s_ble.scanner.active) (void)ble_gap_disc_cancel();
     if (s_ble.advertiser.active) (void)ble_gap_adv_stop();
     for (index = 0; index < s_ble.max_connections; ++index) {
-        if (s_ble.connections[index].open)
+        if (s_ble.connections[index].open &&
+            !s_ble.connections[index].release_on_disconnect)
             (void)ble_gap_terminate(s_ble.connections[index].conn_handle,
                                     BLE_ERR_REM_USER_CONN_TERM);
     }
@@ -7034,6 +7121,8 @@ void esp32_mquickjs_deinit_ble_runtime(JSContext *ctx)
         if (s_ble.scanner.active) (void)ble_gap_disc_cancel();
         if (s_ble.advertiser.active) (void)ble_gap_adv_stop();
         if (s_ble.host_started) {
+            (void)ble_wait_for_pending_connects(
+                BLE_CONNECT_CANCEL_QUIESCE_MS);
             (void)nimble_port_stop();
             if (nimble_port_deinit() == ESP_OK) ble_note_native_deinit();
         }

@@ -60,6 +60,26 @@ static void test_timeout_state(void)
     assert(state == ESP32_MQUICKJS_WIRELESS_TX_FAILED);
 }
 
+static void test_native_operation_completion_lifecycle(void)
+{
+    esp32_mquickjs_wireless_native_operation_t operation;
+
+    esp32_mquickjs_wireless_native_operation_init(&operation);
+    assert(esp32_mquickjs_wireless_native_operation_is_quiescent(&operation));
+    assert(esp32_mquickjs_wireless_native_operation_begin(&operation));
+    assert(!esp32_mquickjs_wireless_native_operation_begin(&operation));
+    assert(!esp32_mquickjs_wireless_native_operation_is_quiescent(&operation));
+    assert(esp32_mquickjs_wireless_native_operation_request_cancel(&operation));
+    assert(!esp32_mquickjs_wireless_native_operation_request_cancel(&operation));
+    assert(!esp32_mquickjs_wireless_native_operation_is_quiescent(&operation));
+    assert(!esp32_mquickjs_wireless_native_operation_begin(&operation));
+    assert(esp32_mquickjs_wireless_native_operation_complete(&operation));
+    assert(esp32_mquickjs_wireless_native_operation_is_quiescent(&operation));
+    assert(!esp32_mquickjs_wireless_native_operation_complete(&operation));
+    assert(esp32_mquickjs_wireless_native_operation_begin(&operation));
+    assert(esp32_mquickjs_wireless_native_operation_complete(&operation));
+}
+
 static void test_ble_helpers(void)
 {
     uint8_t value[8] = {0};
@@ -101,6 +121,7 @@ int main(void)
     test_address_and_keys();
     test_pool();
     test_timeout_state();
+    test_native_operation_completion_lifecycle();
     test_ble_helpers();
     puts("wireless core tests passed");
     return 0;

@@ -151,6 +151,53 @@ bool esp32_mquickjs_wireless_tx_finish_recovery(
     return true;
 }
 
+void esp32_mquickjs_wireless_native_operation_init(
+    esp32_mquickjs_wireless_native_operation_t *operation)
+{
+    if (operation == NULL) return;
+    atomic_init(&operation->state,
+                ESP32_MQUICKJS_WIRELESS_NATIVE_OPERATION_IDLE);
+}
+
+bool esp32_mquickjs_wireless_native_operation_begin(
+    esp32_mquickjs_wireless_native_operation_t *operation)
+{
+    uint8_t expected = ESP32_MQUICKJS_WIRELESS_NATIVE_OPERATION_IDLE;
+    return operation != NULL && atomic_compare_exchange_strong_explicit(
+        &operation->state, &expected,
+        ESP32_MQUICKJS_WIRELESS_NATIVE_OPERATION_ACTIVE,
+        memory_order_acq_rel, memory_order_acquire);
+}
+
+bool esp32_mquickjs_wireless_native_operation_request_cancel(
+    esp32_mquickjs_wireless_native_operation_t *operation)
+{
+    uint8_t expected = ESP32_MQUICKJS_WIRELESS_NATIVE_OPERATION_ACTIVE;
+    return operation != NULL && atomic_compare_exchange_strong_explicit(
+        &operation->state, &expected,
+        ESP32_MQUICKJS_WIRELESS_NATIVE_OPERATION_CANCELLING,
+        memory_order_acq_rel, memory_order_acquire);
+}
+
+bool esp32_mquickjs_wireless_native_operation_complete(
+    esp32_mquickjs_wireless_native_operation_t *operation)
+{
+    uint8_t previous;
+    if (operation == NULL) return false;
+    previous = atomic_exchange_explicit(
+        &operation->state, ESP32_MQUICKJS_WIRELESS_NATIVE_OPERATION_IDLE,
+        memory_order_acq_rel);
+    return previous != ESP32_MQUICKJS_WIRELESS_NATIVE_OPERATION_IDLE;
+}
+
+bool esp32_mquickjs_wireless_native_operation_is_quiescent(
+    const esp32_mquickjs_wireless_native_operation_t *operation)
+{
+    return operation == NULL || atomic_load_explicit(
+        &operation->state, memory_order_acquire) ==
+            ESP32_MQUICKJS_WIRELESS_NATIVE_OPERATION_IDLE;
+}
+
 static bool wireless_hex_exact(const char *text, size_t length)
 {
     size_t index;

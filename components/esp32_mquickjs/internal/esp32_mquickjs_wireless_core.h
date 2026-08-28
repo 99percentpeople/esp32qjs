@@ -25,6 +25,16 @@ typedef enum {
     ESP32_MQUICKJS_WIRELESS_TX_FAILED,
 } esp32_mquickjs_wireless_tx_state_t;
 
+typedef enum {
+    ESP32_MQUICKJS_WIRELESS_NATIVE_OPERATION_IDLE = 0,
+    ESP32_MQUICKJS_WIRELESS_NATIVE_OPERATION_ACTIVE,
+    ESP32_MQUICKJS_WIRELESS_NATIVE_OPERATION_CANCELLING,
+} esp32_mquickjs_wireless_native_operation_state_t;
+
+typedef struct {
+    _Atomic uint8_t state;
+} esp32_mquickjs_wireless_native_operation_t;
+
 typedef struct {
     bool occupied;
     uint32_t generation;
@@ -57,6 +67,17 @@ bool esp32_mquickjs_wireless_tx_begin_recovery(
     esp32_mquickjs_wireless_tx_state_t *state);
 bool esp32_mquickjs_wireless_tx_finish_recovery(
     esp32_mquickjs_wireless_tx_state_t *state, bool success);
+
+void esp32_mquickjs_wireless_native_operation_init(
+    esp32_mquickjs_wireless_native_operation_t *operation);
+bool esp32_mquickjs_wireless_native_operation_begin(
+    esp32_mquickjs_wireless_native_operation_t *operation);
+bool esp32_mquickjs_wireless_native_operation_request_cancel(
+    esp32_mquickjs_wireless_native_operation_t *operation);
+bool esp32_mquickjs_wireless_native_operation_complete(
+    esp32_mquickjs_wireless_native_operation_t *operation);
+bool esp32_mquickjs_wireless_native_operation_is_quiescent(
+    const esp32_mquickjs_wireless_native_operation_t *operation);
 
 bool esp32_mquickjs_wireless_uuid_valid(const char *text);
 bool esp32_mquickjs_wireless_local_value_write(

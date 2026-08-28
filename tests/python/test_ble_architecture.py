@@ -236,6 +236,53 @@ class BLEArchitectureTests(unittest.TestCase):
         self.assertIn("ble_hs_id_infer_auto(1", source)
         self.assertIn("ble_hs_id_set_rnd", source)
 
+    def test_connect_timeout_keeps_native_slot_until_callback_completion(self):
+        source = self.source()
+        callback = source[
+            source.index(
+                "static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)"
+            ) : source.index("static void ble_host_task", source.index(
+                "static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)"
+            ))
+        ]
+        timeout = source[
+            source.index("static JSValue ble_future_on_timeout(") :
+            source.index("static bool ble_allocate_connection_queues")
+        ]
+        connect_start = source[
+            source.index("static bool ble_connect_start") :
+            source.index("static JSValue ble_connect_finish")
+        ]
+        connect_destroy_start = source.index("static void ble_connect_destroy")
+        connect_destroy = source[
+            connect_destroy_start : source.index(
+                "static esp32_mquickjs_resource_key_t ble_gap_resource_key",
+                connect_destroy_start,
+            )
+        ]
+        close_worker = source[
+            source.index("static void ble_close_worker") :
+            source.index("static bool ble_adapter_close_capture")
+        ]
+
+        self.assertIn("connect_operation", source)
+        self.assertIn(
+            "esp32_mquickjs_wireless_native_operation_begin", connect_start
+        )
+        self.assertIn(
+            "esp32_mquickjs_wireless_native_operation_request_cancel", timeout
+        )
+        self.assertIn(
+            "esp32_mquickjs_wireless_native_operation_complete", callback
+        )
+        self.assertIn(
+            "esp32_mquickjs_wireless_native_operation_is_quiescent",
+            connect_destroy,
+        )
+        self.assertIn("ble_wait_for_pending_connects", close_worker)
+        self.assertNotIn("slot->reserved = false;\n            slot->allocated = false;",
+                         connect_destroy)
+
     def test_connection_status_tracks_gatt_lane_and_valid_rssi(self):
         source = self.source()
 
