@@ -83,7 +83,7 @@ class ProfileConstantsTests(unittest.TestCase):
 
     def test_mcu_defaults_only_disable_unsupported_modules(self):
         feature_lines = {}
-        for mcu in ("esp32c3", "esp32s3"):
+        for mcu in ("esp32c3", "esp32c5", "esp32s3"):
             defaults = (
                 ROOT / "configs" / "mcus" / mcu / "sdkconfig.defaults"
             ).read_text(encoding="utf-8")
@@ -94,6 +94,10 @@ class ProfileConstantsTests(unittest.TestCase):
             self.assertNotIn("_PIN=", defaults)
 
         self.assertEqual(feature_lines["esp32c3"], {
+            "CONFIG_ESP32_MQUICKJS_FEATURE_DAC=n",
+            "CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA=n",
+        })
+        self.assertEqual(feature_lines["esp32c5"], {
             "CONFIG_ESP32_MQUICKJS_FEATURE_DAC=n",
             "CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA=n",
         })

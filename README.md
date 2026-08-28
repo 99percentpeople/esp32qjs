@@ -11,7 +11,7 @@ libraries, product protocols, and application policy outside the framework.
 | Framework | `0.1.0` |
 | Native Host API | `v1` |
 | ESP-IDF | `6.1` |
-| Targets | ESP32-S3 and ESP32-C3 |
+| Targets | ESP32-S3, ESP32-C5, and ESP32-C3 |
 | JavaScript engine | vendored mquickjs submodule |
 
 ## Framework capabilities

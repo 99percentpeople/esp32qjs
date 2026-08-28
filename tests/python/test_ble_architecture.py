@@ -23,7 +23,7 @@ class BLEArchitectureTests(unittest.TestCase):
         kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
 
         self.assertEqual(features["ble"]["requires"], [])
-        self.assertEqual(features["ble"]["targets"], ["esp32c3", "esp32s3"])
+        self.assertEqual(features["ble"]["targets"], ["esp32c3", "esp32c5", "esp32s3"])
         self.assertIn(
             "depends on SOC_BLE_SUPPORTED && BT_NIMBLE_ENABLED && BT_CONTROLLER_ENABLED",
             kconfig,

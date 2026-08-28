@@ -28,7 +28,7 @@ class RemoteConfigTests(unittest.TestCase):
             cmake,
         )
         self.assertFalse((ROOT / "dependencies.lock").exists())
-        for target in ("esp32c3", "esp32s3"):
+        for target in ("esp32c3", "esp32c5", "esp32s3"):
             lock = (ROOT / f"dependencies.lock.{target}").read_text(encoding="utf-8")
             self.assertIn(f"target: {target}\n", lock)
 

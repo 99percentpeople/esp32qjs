@@ -61,10 +61,10 @@ MONITOR_READY_MARKER = "--- Quit:"
 ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])")
 CTEST_SUMMARY_RE = re.compile(r"(?m)^(\d+)% tests passed, (\d+) tests failed out of (\d+)$")
 TEST_SCOPE_ORDER = ("c", "js")
-SUPPORTED_MCU_TARGETS = frozenset(("esp32c3", "esp32s3"))
+SUPPORTED_MCU_TARGETS = frozenset(("esp32c3", "esp32c5", "esp32s3"))
 SUPPORTED_FLASH_SIZE_MB = frozenset((4, 8, 16, 32))
 SUPPORTED_PSRAM_MODES = frozenset(("none", "quad", "octal"))
-GPIO_MAX_BY_MCU = {"esp32c3": 21, "esp32s3": 48}
+GPIO_MAX_BY_MCU = {"esp32c3": 21, "esp32c5": 28, "esp32s3": 48}
 
 
 @dataclass(frozen=True)
@@ -649,7 +649,8 @@ def load_profile(mcu_override: str | None = None) -> MCUProfile:
     if not idf_target:
         raise SystemExit(f"{mcu_file} must define IDF_TARGET.")
     if idf_target not in SUPPORTED_MCU_TARGETS:
-        raise SystemExit(f"Unsupported MCU target {idf_target!r}; supported: esp32c3, esp32s3.")
+        supported = ", ".join(sorted(SUPPORTED_MCU_TARGETS))
+        raise SystemExit(f"Unsupported MCU target {idf_target!r}; supported: {supported}.")
     default_flash_size_mb = merged_int(repo_env, mcu_env, "DEFAULT_FLASH_SIZE_MB", 4)
     if default_flash_size_mb not in SUPPORTED_FLASH_SIZE_MB:
         raise SystemExit("DEFAULT_FLASH_SIZE_MB must be one of 4, 8, 16, 32.")

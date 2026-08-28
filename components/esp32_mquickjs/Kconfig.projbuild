@@ -3,6 +3,7 @@ menu "ESP32 mquickjs"
 config ESP32_MQUICKJS_MCU_NAME
     string "MCU model name"
     default "ESP32-S3" if IDF_TARGET_ESP32S3
+    default "ESP32-C5" if IDF_TARGET_ESP32C5
     default "ESP32-C3" if IDF_TARGET_ESP32C3
     default "ESP32"
     help

@@ -11,6 +11,11 @@
       "reservedGpios": [12, 13, 14, 15, 16, 17],
       "warningGpios": [2, 8, 9, 18, 19]
     },
+    "esp32c5": {
+      "gpioMax": 28,
+      "reservedGpios": [25, 26, 27, 28],
+      "warningGpios": [2, 8, 9, 13, 14]
+    },
     "esp32s3": {
       "gpioMax": 48,
       "reservedGpios": [26, 27, 28, 29, 30, 31, 32],
