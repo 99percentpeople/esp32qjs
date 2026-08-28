@@ -202,6 +202,7 @@ uv run python scripts/remote.py test --scope js --module socket
 uv run python scripts/remote.py test --scope js --module wifi --module http --network
 uv run python scripts/remote.py test --scope js --module spi --module uart --loopback
 uv run python scripts/remote.py test --scope js --module camera-bitmap --media-hardware
+uv run python scripts/remote.py test --scope js --module espnow --wireless-hardware
 ```
 
 Network tests require `TEST_WIFI_SSID`, `TEST_WIFI_PASSWORD`, and

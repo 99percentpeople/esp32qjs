@@ -76,6 +76,28 @@ class RemoteConfigTests(unittest.TestCase):
         command = streaming.call_args.args[0]
         self.assertEqual(command[-2:], ["--extra-path", str(selected)])
 
+    def test_wireless_hardware_e2e_is_opt_in_and_separate(self):
+        args, _, _ = REMOTE.parse_args(
+            ["test", "--scope", "js", "--module", "espnow",
+             "--wireless-hardware"]
+        )
+        module = REMOTE.resolve_js_modules(["espnow"])[0]
+        hardware_cases = [
+            case for case in module.cases
+            if "wireless-hardware" in case.required_capabilities
+        ]
+
+        self.assertEqual(
+            REMOTE.resolve_js_test_capabilities(args),
+            {"wireless-hardware"},
+        )
+        self.assertEqual(len(hardware_cases), 1)
+        self.assertTrue(hardware_cases[0].path.endswith("-hardware.js"))
+        self.assertEqual(
+            REMOTE.JS_TEST_CAPABILITY_FLAGS["wireless-hardware"],
+            "--wireless-hardware",
+        )
+
     def test_js_test_build_creates_a_real_context_and_selected_tree(self):
         config = self.config()
         modules = REMOTE.resolve_js_modules(["bitmap", "camera-bitmap"])

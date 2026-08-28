@@ -36,6 +36,22 @@ class EspNowArchitectureTests(unittest.TestCase):
         self.assertNotIn("JS_New", callback)
         self.assertNotIn("heap_caps_malloc", callback)
 
+    def test_receive_sequence_accounts_for_pool_exhaustion(self):
+        source = (
+            MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
+        ).read_text(encoding="utf-8")
+        callback_start = source.index("static void espnow_receive_callback")
+        callback_end = source.index("static void espnow_send_callback")
+        callback = source[callback_start:callback_end]
+
+        sequence = callback.index("&session->sequence")
+        pool_acquire = callback.index("esp32_mquickjs_wireless_pool_acquire")
+        self.assertLess(
+            sequence,
+            pool_acquire,
+            "valid native packets must consume a sequence before a full RX pool drops them",
+        )
+
     def test_receive_pool_has_drop_release_and_generation_lifecycle(self):
         source = (
             MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
@@ -181,6 +197,87 @@ class EspNowArchitectureTests(unittest.TestCase):
         status = source[source.rindex("static JSValue espnow_status_to_js"):]
         self.assertNotIn('"pmk"', status)
         self.assertNotIn('"lmk"', status)
+
+    def test_power_save_can_be_disabled_and_native_defaults_are_restored(self):
+        source = (
+            MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
+        ).read_text(encoding="utf-8")
+        types = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+
+        parser = source[
+            source.index("static bool espnow_parse_power_save") :
+            source.index("static bool espnow_parse_open_options")
+        ]
+        close_native = source[
+            source.index("static void espnow_close_native") :
+            source.index("static bool espnow_allocate_receive_pool")
+        ]
+        control = source[
+            source.index("case ESPNOW_OPERATION_SET_POWER_SAVE:") :
+            source.index("case ESPNOW_OPERATION_CLOSE_SESSION:")
+        ]
+
+        self.assertIn('"enabled"', parser)
+        self.assertIn("ESP_WIFI_CONNECTIONLESS_INTERVAL_DEFAULT_MODE", source)
+        self.assertIn("UINT16_MAX", close_native)
+        self.assertIn("state->power_save_enabled", control)
+        self.assertIn("session->power_save_enabled =", control)
+        self.assertIn("enabled: false", types)
+
+    def test_default_open_preserves_native_connectionless_defaults(self):
+        source = (
+            MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
+        ).read_text(encoding="utf-8")
+        open_initialize = source[
+            source.index("static void espnow_open_initialize") :
+            source.index("static bool espnow_open_start")
+        ]
+        restore = source[
+            source.index("static esp_err_t espnow_restore_native_session") :
+            source.index("static esp_err_t espnow_recover_after_timeout")
+        ]
+
+        self.assertIn(
+            "state->err == ESP_OK && session->power_save_enabled",
+            open_initialize,
+        )
+        self.assertNotIn(
+            "session->power_save_enabled ? session->wake_window_ms",
+            open_initialize,
+        )
+        self.assertIn("if (!session->power_save_enabled)", restore)
+        self.assertNotIn(
+            "session->power_save_enabled ? session->wake_window_ms", restore
+        )
+
+    def test_ai_wireless_doc_lists_the_complete_resource_surface(self):
+        wireless = (ROOT / "docs/ai/wireless.md").read_text(encoding="utf-8")
+
+        for token in (
+            "session.stats()",
+            "session.peer(address)",
+            "session.peers()",
+            "session.setPowerSave(options)",
+            "RSSI",
+        ):
+            self.assertIn(token, wireless)
+
+    def test_peer_rate_capability_is_not_advertised_without_a_public_api(self):
+        source = (
+            MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
+        ).read_text(encoding="utf-8")
+        types = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+
+        capabilities = source[
+            source.index("JSValue js_espnow_capabilities") :
+            source.index("JSValue js_espnow_open")
+        ]
+        self.assertIn('"peerRateConfig",\n                                         JS_FALSE', capabilities)
+        self.assertIn("readonly peerRateConfig: false", types)
 
     def test_peer_slots_are_generation_checked_and_keys_are_scrubbed(self):
         source = (

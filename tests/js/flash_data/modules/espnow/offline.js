@@ -78,6 +78,12 @@ test("espnow/offline", function () {
       wakeWindowMs: 20,
       wakeIntervalMs: 100
     }), true, "power-save changes should use a native Future driver");
+    test.equal(session.status().powerSave.enabled, true,
+      "power-save update should be visible in status");
+    test.equal(session.setPowerSave({ enabled: false }), true,
+      "power-save should return to the native always-awake defaults");
+    test.equal(session.status().powerSave.enabled, false,
+      "disabled power-save should be visible in status");
   } finally {
     if (session && session.status) {
       session.close();

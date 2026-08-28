@@ -57,6 +57,86 @@ class WifiRadioArchitectureTests(unittest.TestCase):
         self.assertNotIn("err = esp_wifi_start();", wifi)
         self.assertIn("ESP32_MQUICKJS_WIFI_RADIO_CLIENT_WIFI_STA", wifi)
 
+    def test_wifi_reconciles_a_radio_started_before_its_event_handler(self):
+        header = (
+            MQUICKJS / "internal/esp32_mquickjs_wifi_radio.h"
+        ).read_text(encoding="utf-8")
+        radio = (
+            MQUICKJS
+            / "src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+        ).read_text(encoding="utf-8")
+        wifi = (
+            MQUICKJS / "src/modules/wifi/esp32_mquickjs_wifi.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("esp32_mquickjs_wifi_radio_status_t", header)
+        self.assertIn("esp32_mquickjs_wifi_radio_get_status", header)
+        self.assertIn("esp32_mquickjs_wifi_radio_get_status", radio)
+
+        init_once = wifi[
+            wifi.index("static esp_err_t wifi_init_once") :
+            wifi.index("static EventBits_t wifi_wait_for_bits")
+        ]
+        register = init_once.index("WIFI_EVENT_STA_START")
+        reconcile = init_once.index("esp32_mquickjs_wifi_radio_get_status")
+        self.assertLess(register, reconcile)
+        self.assertIn("radio_status.started", init_once)
+
+        ensure_started = wifi[
+            wifi.index("esp_err_t esp32_mquickjs_wifi_ensure_started") :
+            wifi.index("static const char *wifi_authmode_to_string")
+        ]
+        self.assertIn("esp32_mquickjs_wifi_radio_get_status", ensure_started)
+        self.assertIn("radio_status.started", ensure_started)
+        self.assertLess(
+            ensure_started.index("radio_status.started"),
+            ensure_started.index("wifi_wait_for_bits"),
+        )
+
+    def test_wifi_status_reports_the_boot_scoped_radio_snapshot(self):
+        wifi = (
+            MQUICKJS / "src/modules/wifi/esp32_mquickjs_wifi.c"
+        ).read_text(encoding="utf-8")
+        types = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+
+        make_status = wifi[
+            wifi.index("static JSValue wifi_make_status_object") :
+            wifi.index("JSValue esp32_mquickjs_wifi_make_status_object")
+        ]
+        self.assertIn("esp32_mquickjs_wifi_radio_get_status", make_status)
+        for field in ("mode", "channel", "channelGeneration", "clients"):
+            self.assertIn(f'"{field}"', make_status)
+        self.assertIn("interface WiFiRadioStatus", types)
+        self.assertIn("radio: WiFiRadioStatus", types)
+
+    def test_tx_power_uses_the_shared_radio_and_reports_actual_dbm(self):
+        header = (
+            MQUICKJS / "internal/esp32_mquickjs_wifi.h"
+        ).read_text(encoding="utf-8")
+        wifi = (
+            MQUICKJS / "src/modules/wifi/esp32_mquickjs_wifi.c"
+        ).read_text(encoding="utf-8")
+        stdlib = (
+            MQUICKJS / "src/core/mqjs_stdlib_esp32.c"
+        ).read_text(encoding="utf-8")
+        types = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("js_wifi_set_tx_power", header)
+        setter = wifi[
+            wifi.index("JSValue js_wifi_set_tx_power") :
+            wifi.index("JSValue js_wifi_status")
+        ]
+        self.assertIn("esp32_mquickjs_wifi_ensure_started", setter)
+        self.assertIn("esp_wifi_set_max_tx_power", setter)
+        self.assertIn("esp_wifi_get_max_tx_power", setter)
+        self.assertIn('JS_CFUNC_DEF("setTxPower"', stdlib)
+        self.assertIn("setTxPower(dbm: number): number", types)
+        self.assertIn("maxTxPowerDbm: number | null", types)
+
     def test_internal_feature_is_a_transitive_wifi_dependency(self):
         catalog = json.loads(
             (MQUICKJS / "runtime-features.json").read_text(encoding="utf-8")

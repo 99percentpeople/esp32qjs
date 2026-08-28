@@ -24,6 +24,20 @@ typedef struct {
     bool acquired;
 } esp32_mquickjs_wifi_radio_lease_t;
 
+typedef struct {
+    uint32_t generation;
+    bool initialized;
+    bool starting;
+    bool started;
+    wifi_mode_t mode;
+    uint8_t primary_channel;
+    wifi_second_chan_t secondary_channel;
+    uint32_t channel_generation;
+    bool max_tx_power_available;
+    int8_t max_tx_power_quarter_dbm;
+    uint32_t clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_COUNT];
+} esp32_mquickjs_wifi_radio_status_t;
+
 esp_err_t esp32_mquickjs_wifi_radio_acquire(
     esp32_mquickjs_wifi_radio_client_t client,
     wifi_mode_t required_mode,
@@ -31,6 +45,9 @@ esp_err_t esp32_mquickjs_wifi_radio_acquire(
 
 esp_err_t esp32_mquickjs_wifi_radio_ensure_started(
     esp32_mquickjs_wifi_radio_lease_t *lease);
+
+esp_err_t esp32_mquickjs_wifi_radio_get_status(
+    esp32_mquickjs_wifi_radio_status_t *out_status);
 
 esp_err_t esp32_mquickjs_wifi_radio_get_channel(
     uint8_t *primary,

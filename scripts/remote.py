@@ -174,7 +174,16 @@ JS_TEST_MODULES = (
     ),
     JsTestModule(
         "espnow",
-        (JsTestCase("modules/espnow/offline.js"),),
+        (
+            JsTestCase("modules/espnow/offline.js"),
+            JsTestCase(
+                "modules/espnow/wifi-radio-hardware.js",
+                required_capabilities=("wireless-hardware",),
+                timeout_seconds=20.0,
+                reset_before=True,
+                reset_after=True,
+            ),
+        ),
         required_features=("espnow",),
     ),
     JsTestModule(
@@ -226,6 +235,7 @@ JS_TEST_CAPABILITY_FLAGS = {
     "network": "--network",
     "loopback": "--loopback",
     "media-hardware": "--media-hardware",
+    "wireless-hardware": "--wireless-hardware",
 }
 
 
@@ -1493,6 +1503,8 @@ def resolve_js_test_capabilities(args: argparse.Namespace) -> set[str]:
         capabilities.add("loopback")
     if args.media_hardware:
         capabilities.add("media-hardware")
+    if args.wireless_hardware:
+        capabilities.add("wireless-hardware")
     return capabilities
 
 
@@ -2375,6 +2387,8 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
             raise SystemExit("`--loopback` requires JS scope.")
         if args.media_hardware:
             raise SystemExit("`--media-hardware` requires JS scope.")
+        if args.wireless_hardware:
+            raise SystemExit("`--wireless-hardware` requires JS scope.")
         if args.no_flash_firmware:
             raise SystemExit("`--no-flash-firmware` requires JS scope.")
         if args.no_flash_fs:
@@ -2629,6 +2643,11 @@ def parse_args(
         "--media-hardware",
         action="store_true",
         help="Enable JS cases that require media support in the Build Context and attached camera or microphone hardware.",
+    )
+    test.add_argument(
+        "--wireless-hardware",
+        action="store_true",
+        help="Enable isolated on-device Wi-Fi/ESP-NOW radio lifecycle E2E cases.",
     )
     test.add_argument(
         "--no-flash-firmware",

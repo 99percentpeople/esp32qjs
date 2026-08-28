@@ -8989,6 +8989,28 @@
       }
     },
     {
+      "qualifiedName": "wifi.setTxPower",
+      "surface": "wifi",
+      "name": "setTxPower",
+      "arity": 1,
+      "implementation": "js_wifi_set_tx_power",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiModule"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "wifi"
+      }
+    },
+    {
       "qualifiedName": "wifi.status",
       "surface": "wifi",
       "name": "status",

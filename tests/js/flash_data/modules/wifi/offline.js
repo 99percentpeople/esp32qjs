@@ -11,6 +11,7 @@ test("wifi/offline", function () {
   var syncZeroTimeoutError = "";
   var syncLargeTimeoutError = "";
   var syncFractionalTimeoutError = "";
+  var txPowerRangeError = "";
 
   test.ok(status && typeof status === "object", "wifi.status() should return an object");
   test.ok(typeof wifi.DEFAULT_TIMEOUT_MS === "number", "wifi timeout constant");
@@ -18,12 +19,33 @@ test("wifi/offline", function () {
   test.ok(typeof wifi.connectAsync === "undefined", "wifi.connectAsync should not exist");
   test.ok(typeof wifi.disconnect === "function", "wifi.disconnect should exist");
   test.ok(typeof wifi.scan === "function", "wifi.scan should exist");
+  test.ok(typeof wifi.setTxPower === "function", "wifi.setTxPower should exist");
   test.ok(typeof wifi.syncTime === "undefined", "wifi.syncTime should be removed");
   test.ok(typeof sys.time.sync === "function", "sys.time.sync should exist");
   test.ok(typeof wifi.scanAsync === "undefined", "wifi.scanAsync should not exist");
   test.ok(typeof wifi.async === "undefined", "wifi.async should be removed");
   test.ok(typeof status.initialized === "boolean", "initialized should be boolean");
   test.ok(typeof status.started === "boolean", "started should be boolean");
+  test.ok(status.radio && typeof status.radio === "object",
+    "status should include the shared radio snapshot");
+  test.equal(status.started, status.radio.started,
+    "top-level started should reflect the boot-scoped radio");
+  test.ok(typeof status.radio.mode === "string", "radio mode should be observable");
+  test.ok(status.radio.channel === null || typeof status.radio.channel === "number",
+    "radio channel should be null or numeric");
+  test.ok(status.radio.clients && typeof status.radio.clients.total === "number",
+    "radio client leases should be observable");
+  test.ok(status.radio.maxTxPowerDbm === null ||
+    typeof status.radio.maxTxPowerDbm === "number",
+    "actual maximum TX power should be observable when the radio is started");
+  try {
+    wifi.setTxPower(1);
+  } catch (txPowerFailure) {
+    txPowerRangeError = String(txPowerFailure && txPowerFailure.message
+      ? txPowerFailure.message : txPowerFailure);
+  }
+  test.ok(txPowerRangeError.indexOf("2..20") >= 0,
+    "TX power should reject values outside the supported dBm range");
   test.ok(typeof status.connected === "boolean", "connected should be boolean");
   test.ok(typeof status.scanning === "boolean", "scanning should be boolean");
   test.ok(typeof status.lastDisconnectReason === "number", "disconnect reason should be numeric");

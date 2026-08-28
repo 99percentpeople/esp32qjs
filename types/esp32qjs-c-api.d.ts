@@ -2437,6 +2437,24 @@ namespace ESP32QJS {
   /**
    * Current Wi-Fi station status.
    */
+  type WiFiRadioMode = "off" | "station" | "softAP" | "station+softAP";
+
+  interface WiFiRadioStatus {
+    generation: number;
+    initialized: boolean;
+    starting: boolean;
+    started: boolean;
+    mode: WiFiRadioMode;
+    channel: number | null;
+    channelGeneration: number;
+    maxTxPowerDbm: number | null;
+    clients: {
+      total: number;
+      wifiStation: number;
+      espNow: number;
+    };
+  }
+
   interface WiFiStatus {
     initialized: boolean;
     started: boolean;
@@ -2449,6 +2467,7 @@ namespace ESP32QJS {
     gateway: string;
     lastDisconnectReason: number;
     lastDisconnectReasonName: WiFiDisconnectReasonName;
+    radio: WiFiRadioStatus;
   }
 
   /**
@@ -2517,6 +2536,8 @@ namespace ESP32QJS {
   interface WiFiModule {
     readonly DEFAULT_TIMEOUT_MS: number;
     status(): WiFiStatus;
+    /** Set the shared radio maximum TX power and return the mapped actual dBm. */
+    setTxPower(dbm: number): number;
     connect(ssid: string, password: string, timeoutMs?: number): WiFiStatus;
     disconnect(timeoutMs?: number): WiFiStatus;
     scan(): WiFiScanResult[];
@@ -2534,13 +2555,20 @@ namespace ESP32QJS {
     readonly stationInterface: true;
     readonly softApInterface: false;
     readonly powerSave: boolean;
-    readonly peerRateConfig: boolean;
+    readonly peerRateConfig: false;
   }
 
-  interface EspNowPowerSaveOptions {
-    wakeWindowMs: number;
-    wakeIntervalMs: number;
-  }
+  type EspNowPowerSaveOptions =
+    | {
+        enabled?: true;
+        wakeWindowMs: number;
+        wakeIntervalMs: number;
+      }
+    | {
+        enabled: false;
+        wakeWindowMs?: never;
+        wakeIntervalMs?: never;
+      };
 
   interface EspNowOpenOptions {
     interface?: "station";

@@ -75,6 +75,7 @@ void esp32_mquickjs_deinit_wifi_runtime(JSContext *ctx);
 
 JSValue js_wifi_connect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_wifi_disconnect(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_wifi_set_tx_power(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_wifi_status(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_wifi_scan(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_wifi_get_default_timeout_ms(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

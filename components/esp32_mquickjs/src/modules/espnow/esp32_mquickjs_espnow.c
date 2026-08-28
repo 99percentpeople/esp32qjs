@@ -666,6 +666,7 @@ static void espnow_receive_callback(const esp_now_recv_info_t *receive_info,
     espnow_rx_slot_t *slot;
     uint16_t slot_index;
     uint32_t generation;
+    uint32_t packet_sequence;
 
     atomic_fetch_add_explicit(&session->callbacks_active, 1,
                               memory_order_acq_rel);
@@ -684,6 +685,8 @@ static void espnow_receive_callback(const esp_now_recv_info_t *receive_info,
                                   memory_order_relaxed);
         goto done;
     }
+    packet_sequence = atomic_fetch_add_explicit(
+                          &session->sequence, 1, memory_order_relaxed) + 1U;
     if (!esp32_mquickjs_wireless_pool_acquire(&session->rx_free,
                                                &slot_index)) {
         atomic_fetch_add_explicit(&session->dropped_packets, 1,
@@ -692,8 +695,7 @@ static void espnow_receive_callback(const esp_now_recv_info_t *receive_info,
     }
     slot = &session->rx_slots[slot_index];
     slot->generation = session->generation;
-    slot->sequence = atomic_fetch_add_explicit(
-                         &session->sequence, 1, memory_order_relaxed) + 1U;
+    slot->sequence = packet_sequence;
     slot->timestamp_us = esp_timer_get_time();
     memcpy(slot->source, receive_info->src_addr, ESPNOW_ADDRESS_BYTES);
     memcpy(slot->destination, receive_info->des_addr, ESPNOW_ADDRESS_BYTES);
@@ -820,6 +822,11 @@ static void espnow_close_native(espnow_session_t *session)
         vTaskDelay(1);
     }
     if (session->now_initialized) {
+        if (session->power_save_enabled) {
+            (void)esp_now_set_wake_window(UINT16_MAX);
+            (void)esp_wifi_connectionless_module_set_wake_interval(
+                ESP_WIFI_CONNECTIONLESS_INTERVAL_DEFAULT_MODE);
+        }
         if (esp_now_deinit() == ESP_OK) {
             espnow_note_native_deinit();
         }
@@ -863,24 +870,60 @@ static bool espnow_parse_power_save(
     esp32_mquickjs_future_driver_state_t *state)
 {
     static const char *const allowed[] = {
-        "wakeWindowMs", "wakeIntervalMs",
+        "enabled", "wakeWindowMs", "wakeIntervalMs",
     };
     JSGCRef property_ref;
     JSValue *property = JS_PushGCRef(ctx, &property_ref);
     uint32_t window;
     uint32_t interval;
+    bool enabled = true;
     bool result = false;
 
     if (!espnow_is_object(ctx, value) ||
         !espnow_validate_option_keys(ctx, value, "espNow.open({ powerSave })",
-                                     allowed, 2)) {
+                                     allowed, 3)) {
         if (!JS_HasException(ctx)) {
             JS_ThrowTypeError(ctx,
                               "espNow.open({ powerSave }) expects an options object");
         }
         goto done;
     }
+    *property = JS_GetPropertyStr(ctx, value, "enabled");
+    if (JS_IsException(*property)) {
+        goto done;
+    }
+    if (!JS_IsUndefined(*property)) {
+        if (!JS_IsBool(*property)) {
+            JS_ThrowTypeError(ctx, "powerSave.enabled must be a boolean");
+            goto done;
+        }
+        enabled = *property == JS_TRUE;
+    }
     *property = JS_GetPropertyStr(ctx, value, "wakeWindowMs");
+    if (!enabled) {
+        if (JS_IsException(*property)) {
+            goto done;
+        }
+        if (!JS_IsUndefined(*property)) {
+            JS_ThrowTypeError(
+                ctx, "disabled powerSave must not include wakeWindowMs");
+            goto done;
+        }
+        *property = JS_GetPropertyStr(ctx, value, "wakeIntervalMs");
+        if (JS_IsException(*property)) {
+            goto done;
+        }
+        if (!JS_IsUndefined(*property)) {
+            JS_ThrowTypeError(
+                ctx, "disabled powerSave must not include wakeIntervalMs");
+            goto done;
+        }
+        state->power_save_enabled = false;
+        state->wake_window_ms = 0;
+        state->wake_interval_ms = 0;
+        result = true;
+        goto done;
+    }
     if (JS_IsException(*property) || !espnow_to_u32(ctx, *property, &window) ||
         window == 0 || window > UINT16_MAX) {
         JS_ThrowRangeError(ctx, "wakeWindowMs must be in the range 1..65535");
@@ -1909,13 +1952,16 @@ static bool espnow_control_start(
         }
         break;
     case ESPNOW_OPERATION_SET_POWER_SAVE:
-        state->err = esp_now_set_wake_window(state->wake_window_ms);
+        state->err = esp_now_set_wake_window(
+            state->power_save_enabled ? state->wake_window_ms : UINT16_MAX);
         if (state->err == ESP_OK) {
             state->err = esp_wifi_connectionless_module_set_wake_interval(
-                state->wake_interval_ms);
+                state->power_save_enabled
+                    ? state->wake_interval_ms
+                    : ESP_WIFI_CONNECTIONLESS_INTERVAL_DEFAULT_MODE);
         }
         if (state->err == ESP_OK) {
-            session->power_save_enabled = true;
+            session->power_save_enabled = state->power_save_enabled;
             session->wake_window_ms = state->wake_window_ms;
             session->wake_interval_ms = state->wake_interval_ms;
             state->result_bool = true;
@@ -2368,12 +2414,13 @@ static esp_err_t espnow_restore_native_session(espnow_session_t *session)
             return err;
         }
     }
-    if (session->power_save_enabled) {
-        err = esp_now_set_wake_window(session->wake_window_ms);
-        if (err == ESP_OK) {
-            err = esp_wifi_connectionless_module_set_wake_interval(
-                session->wake_interval_ms);
-        }
+    if (!session->power_save_enabled) {
+        return ESP_OK;
+    }
+    err = esp_now_set_wake_window(session->wake_window_ms);
+    if (err == ESP_OK) {
+        err = esp_wifi_connectionless_module_set_wake_interval(
+            session->wake_interval_ms);
     }
     return err;
 }
@@ -2947,7 +2994,7 @@ JSValue js_espnow_capabilities(JSContext *ctx, JSValue *this_val,
                                          JS_FALSE) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "powerSave", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "peerRateConfig",
-                                         JS_TRUE)) {
+                                         JS_FALSE)) {
         JS_PopGCRef(ctx, &result_ref);
         return JS_EXCEPTION;
     }

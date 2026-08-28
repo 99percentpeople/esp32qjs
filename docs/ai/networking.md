@@ -18,8 +18,15 @@ link modules remain responsible for creating and controlling their interfaces.
 - `wifi.scan()`
 - `wifi.connect(ssid, password, timeoutMs?)`
 - `wifi.disconnect()`
+- `wifi.setTxPower(dbm)` sets the shared radio maximum to a 0.25 dBm increment
+  from 2 through 20 and returns the ESP-IDF-mapped actual dBm.
 
 Operations are synchronous and bounded by the active deadline. Do not expose passwords in returned results or logs.
+`wifi.status().started` reflects the boot-scoped physical radio, including when
+ESP-NOW started it before the Wi-Fi station helper was initialized. The nested
+`radio` snapshot reports initialization/start state, mode, channel generation,
+bounded client lease counts, and the mapped `maxTxPowerDbm`; it is diagnostic
+state, not a separate public start/stop control surface.
 Only workspace code owns these operations. The Agent connectivity observer
 reads status but never calls `wifi.scan`, `wifi.connect`, or `wifi.disconnect`.
 A successful workspace connection automatically makes the paired remote RPC

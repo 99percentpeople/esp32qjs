@@ -1745,7 +1745,15 @@ Wi-Fi credentials are kept in RAM. Rebooting the board clears the active station
 - `wifi.DEFAULT_TIMEOUT_MS`
   Default station connect timeout in milliseconds.
 - `wifi.status()`
-  Return `{ initialized, started, connected, scanning, ssid, hostname, ip, netmask, gateway, lastDisconnectReason, lastDisconnectReasonName }`.
+  Return `{ initialized, started, connected, scanning, ssid, hostname, ip, netmask, gateway, lastDisconnectReason, lastDisconnectReasonName, radio }`.
+  `started` is the boot-scoped physical-radio state rather than the station
+  helper's event history. `radio` contains `{ generation, initialized,
+  starting, started, mode, channel, channelGeneration, maxTxPowerDbm, clients }`;
+  client counts distinguish the Wi-Fi station helper from ESP-NOW leases.
+- `wifi.setTxPower(dbm)`
+  Set the shared radio maximum TX power in 0.25 dBm increments from 2 through
+  20. It returns the ESP-IDF-mapped actual dBm; read the same value from
+  `wifi.status().radio.maxTxPowerDbm` after the radio is started.
 - `wifi.connect(ssid, password, timeoutMs = wifi.DEFAULT_TIMEOUT_MS)`
   Start station mode through the native Future driver and return the updated status object.
 - `wifi.disconnect(timeoutMs = wifi.DEFAULT_TIMEOUT_MS)`
@@ -1792,7 +1800,8 @@ application acknowledgements, retries, deduplication, fragmentation, routing,
 Mesh behavior, provisioning, or a product message schema.
 
 - `espNow.capabilities()` returns the configured peer, encrypted-peer, and
-  payload limits.
+  payload limits. `peerRateConfig` is `false` until a public rate contract can
+  restore automatic rate selection across peer update and timeout recovery.
 - `espNow.open(options?)` opens the only session in the runtime through a native
   Future. Options are `interface: "station"`, `channel: "current" | 1..14`,
   `maxPayloadBytes`, `receiveCapacity`, `sendTimeoutMs`, an optional 16-byte
@@ -1809,7 +1818,10 @@ Mesh behavior, provisioning, or a product message schema.
 - `peer.send(data, options?)` and `session.broadcast(data, options?)` share one
   FIFO transmit lane. `macDelivered` is the MAC result and is not an
   application acknowledgement.
-- `session.setPowerSave(options)` updates the station wake window and interval.
+- `session.setPowerSave(options)` updates the station wake window and interval;
+  `{ enabled: false }` restores the ESP-IDF always-awake/default interval
+  settings. Closing an enabled session also restores those defaults before
+  native deinitialization.
 - `session.close()` closes receive delivery, unregisters callbacks, deinitializes
   ESP-NOW, releases the shared radio lease, clears keys, and invalidates peers.
 

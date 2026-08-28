@@ -198,6 +198,70 @@ esp_err_t esp32_mquickjs_wifi_radio_get_channel(
     return ESP_OK;
 }
 
+esp_err_t esp32_mquickjs_wifi_radio_get_status(
+    esp32_mquickjs_wifi_radio_status_t *out_status)
+{
+    int init_state;
+    int start_state;
+    esp_err_t init_result;
+    esp_err_t start_result;
+    esp_err_t err;
+
+    if (out_status == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(out_status, 0, sizeof(*out_status));
+    out_status->mode = WIFI_MODE_NULL;
+    out_status->secondary_channel = WIFI_SECOND_CHAN_NONE;
+
+    init_state = atomic_load_explicit(&s_init_state, memory_order_acquire);
+    start_state = atomic_load_explicit(&s_start_state, memory_order_acquire);
+    init_result = (esp_err_t)atomic_load_explicit(
+        &s_init_result, memory_order_relaxed);
+    start_result = (esp_err_t)atomic_load_explicit(
+        &s_start_result, memory_order_relaxed);
+    out_status->initialized = init_state == WIFI_RADIO_COMPLETE &&
+                              init_result == ESP_OK;
+    out_status->starting = start_state == WIFI_RADIO_IN_PROGRESS;
+    out_status->started = start_state == WIFI_RADIO_COMPLETE &&
+                          start_result == ESP_OK;
+
+    taskENTER_CRITICAL(&s_radio.lock);
+    out_status->generation = s_radio.generation;
+    memcpy(out_status->clients, s_radio.clients,
+           sizeof(out_status->clients));
+    out_status->primary_channel = s_radio.primary_channel;
+    out_status->secondary_channel = s_radio.secondary_channel;
+    out_status->channel_generation = s_radio.channel_generation;
+    taskEXIT_CRITICAL(&s_radio.lock);
+
+    if (!out_status->initialized) {
+        return ESP_OK;
+    }
+    err = esp_wifi_get_mode(&out_status->mode);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (out_status->started) {
+        uint8_t primary = 0;
+        wifi_second_chan_t secondary = WIFI_SECOND_CHAN_NONE;
+        uint32_t generation = 0;
+        int8_t max_tx_power = 0;
+
+        if (esp32_mquickjs_wifi_radio_get_channel(
+                &primary, &secondary, &generation) == ESP_OK) {
+            out_status->primary_channel = primary;
+            out_status->secondary_channel = secondary;
+            out_status->channel_generation = generation;
+        }
+        if (esp_wifi_get_max_tx_power(&max_tx_power) == ESP_OK) {
+            out_status->max_tx_power_available = true;
+            out_status->max_tx_power_quarter_dbm = max_tx_power;
+        }
+    }
+    return ESP_OK;
+}
+
 esp_err_t esp32_mquickjs_wifi_radio_set_channel(
     esp32_mquickjs_wifi_radio_lease_t *lease,
     uint8_t primary,

@@ -6,6 +6,7 @@
 #include "esp32_mquickjs_net.h"
 #include "esp32_mquickjs_future.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -314,6 +315,8 @@ static void wifi_event_handler(void *arg,
 
 static esp_err_t wifi_init_once(void)
 {
+    esp32_mquickjs_wifi_radio_status_t radio_status;
+
     if (s_wifi_state.initialized) {
         return ESP_OK;
     }
@@ -393,6 +396,15 @@ static esp_err_t wifi_init_once(void)
     wifi_refresh_hostname_locked();
     wifi_unlock();
 
+    if (esp32_mquickjs_wifi_radio_get_status(&radio_status) == ESP_OK &&
+        radio_status.started) {
+        wifi_lock();
+        s_wifi_state.started = true;
+        s_wifi_state.status.started = true;
+        wifi_unlock();
+        xEventGroupSetBits(s_wifi_state.event_group, WIFI_STARTED_BIT);
+    }
+
     return ESP_OK;
 }
 
@@ -449,6 +461,7 @@ static EventBits_t wifi_wait_for_bits(EventBits_t bits_to_wait_for,
 
 esp_err_t esp32_mquickjs_wifi_ensure_started(void)
 {
+    esp32_mquickjs_wifi_radio_status_t radio_status;
     esp_err_t err;
     EventBits_t bits;
     bool interrupted = false;
@@ -459,6 +472,20 @@ esp_err_t esp32_mquickjs_wifi_ensure_started(void)
     }
 
     xEventGroupClearBits(s_wifi_state.event_group, WIFI_STARTED_BIT);
+    err = esp32_mquickjs_wifi_radio_get_status(&radio_status);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "read Wi-Fi radio status failed: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+    if (radio_status.started) {
+        wifi_lock();
+        s_wifi_state.started = true;
+        s_wifi_state.status.started = true;
+        wifi_unlock();
+        xEventGroupSetBits(s_wifi_state.event_group, WIFI_STARTED_BIT);
+        return ESP_OK;
+    }
     err = esp32_mquickjs_wifi_radio_ensure_started(
         &s_wifi_state.radio_lease);
     if (err != ESP_OK) {
@@ -549,26 +576,97 @@ const char *esp32_mquickjs_wifi_reason_to_string(int32_t reason)
     return wifi_reason_to_string(reason);
 }
 
+static const char *wifi_radio_mode_to_string(wifi_mode_t mode)
+{
+    switch (mode) {
+    case WIFI_MODE_STA:
+        return "station";
+    case WIFI_MODE_AP:
+        return "softAP";
+    case WIFI_MODE_APSTA:
+        return "station+softAP";
+    case WIFI_MODE_NULL:
+    default:
+        return "off";
+    }
+}
+
 static JSValue wifi_make_status_object(JSContext *ctx)
 {
     esp32_mquickjs_wifi_status_t status;
-    JSGCRef status_ref;
-    JSValue *status_obj;
+    esp32_mquickjs_wifi_radio_status_t radio_status;
+    JSGCRef status_ref, radio_ref, clients_ref;
+    JSValue *status_obj = JS_PushGCRef(ctx, &status_ref);
+    JSValue *radio_obj = JS_PushGCRef(ctx, &radio_ref);
+    JSValue *clients_obj = JS_PushGCRef(ctx, &clients_ref);
+    uint32_t client_total = 0;
 
-    if (esp32_mquickjs_wifi_get_status(&status) != ESP_OK) {
-        return JS_ThrowInternalError(ctx, "failed to read Wi-Fi status");
-    }
-
-    status_obj = JS_PushGCRef(ctx, &status_ref);
-    *status_obj = JS_NewObject(ctx);
-    if (JS_IsException(*status_obj)) {
+    *status_obj = JS_UNDEFINED;
+    *radio_obj = JS_UNDEFINED;
+    *clients_obj = JS_UNDEFINED;
+    if (esp32_mquickjs_wifi_get_status(&status) != ESP_OK ||
+        esp32_mquickjs_wifi_radio_get_status(&radio_status) != ESP_OK) {
+        JS_ThrowInternalError(ctx, "failed to read Wi-Fi status");
         goto fail;
     }
 
-    if (!esp32_mquickjs_set_property_ref(ctx, status_obj, "initialized",
+    *status_obj = JS_NewObject(ctx);
+    *radio_obj = JS_NewObject(ctx);
+    *clients_obj = JS_NewObject(ctx);
+    client_total =
+        radio_status.clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_WIFI_STA] +
+        radio_status.clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_ESPNOW];
+    if (JS_IsException(*status_obj) || JS_IsException(*radio_obj) ||
+        JS_IsException(*clients_obj)) {
+        goto fail;
+    }
+
+    if (!esp32_mquickjs_set_property_ref(ctx, clients_obj, "total",
+                                         JS_NewUint32(ctx, client_total)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, clients_obj, "wifiStation",
+            JS_NewUint32(
+                ctx, radio_status.clients[
+                         ESP32_MQUICKJS_WIFI_RADIO_CLIENT_WIFI_STA])) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, clients_obj, "espNow",
+            JS_NewUint32(
+                ctx, radio_status.clients[
+                         ESP32_MQUICKJS_WIFI_RADIO_CLIENT_ESPNOW])) ||
+        !esp32_mquickjs_set_property_ref(ctx, radio_obj, "generation",
+                                         JS_NewUint32(
+                                             ctx, radio_status.generation)) ||
+        !esp32_mquickjs_set_property_ref(ctx, radio_obj, "initialized",
+                                         JS_NewBool(
+                                             radio_status.initialized)) ||
+        !esp32_mquickjs_set_property_ref(ctx, radio_obj, "starting",
+                                         JS_NewBool(radio_status.starting)) ||
+        !esp32_mquickjs_set_property_ref(ctx, radio_obj, "started",
+                                         JS_NewBool(radio_status.started)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, radio_obj, "mode",
+            JS_NewString(ctx, wifi_radio_mode_to_string(radio_status.mode))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, radio_obj, "channel",
+            radio_status.primary_channel > 0
+                ? JS_NewUint32(ctx, radio_status.primary_channel)
+                : JS_NULL) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, radio_obj, "channelGeneration",
+            JS_NewUint32(ctx, radio_status.channel_generation)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, radio_obj, "maxTxPowerDbm",
+            radio_status.max_tx_power_available
+                ? JS_NewFloat64(
+                      ctx,
+                      (double)radio_status.max_tx_power_quarter_dbm / 4.0)
+                : JS_NULL) ||
+        !esp32_mquickjs_set_property_ref(ctx, radio_obj, "clients",
+                                         *clients_obj) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "initialized",
                                      JS_NewBool(status.initialized)) ||
         !esp32_mquickjs_set_property_ref(ctx, status_obj, "started",
-                                     JS_NewBool(status.started)) ||
+                                     JS_NewBool(radio_status.started)) ||
         !esp32_mquickjs_set_property_ref(ctx, status_obj, "connected",
                                      JS_NewBool(status.connected)) ||
         !esp32_mquickjs_set_property_ref(ctx, status_obj, "scanning",
@@ -586,13 +684,19 @@ static JSValue wifi_make_status_object(JSContext *ctx)
         !esp32_mquickjs_set_property_ref(ctx, status_obj, "lastDisconnectReason",
                                      JS_NewInt32(ctx, status.last_disconnect_reason)) ||
         !esp32_mquickjs_set_property_ref(ctx, status_obj, "lastDisconnectReasonName",
-                                     JS_NewString(ctx, wifi_reason_to_string(status.last_disconnect_reason)))) {
+                                     JS_NewString(ctx, wifi_reason_to_string(status.last_disconnect_reason))) ||
+        !esp32_mquickjs_set_property_ref(ctx, status_obj, "radio",
+                                         *radio_obj)) {
         goto fail;
     }
 
+    JS_PopGCRef(ctx, &clients_ref);
+    JS_PopGCRef(ctx, &radio_ref);
     return JS_PopGCRef(ctx, &status_ref);
 
 fail:
+    JS_PopGCRef(ctx, &clients_ref);
+    JS_PopGCRef(ctx, &radio_ref);
     JS_PopGCRef(ctx, &status_ref);
     return JS_EXCEPTION;
 }
@@ -971,6 +1075,41 @@ JSValue js_wifi_get_default_timeout_ms(JSContext *ctx, JSValue *this_val, int ar
     (void)argc;
     (void)argv;
     return JS_NewUint32(ctx, ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS);
+}
+
+JSValue js_wifi_set_tx_power(JSContext *ctx, JSValue *this_val,
+                             int argc, JSValue *argv)
+{
+    double dbm;
+    double quarter_dbm;
+    int8_t requested;
+    int8_t actual;
+    esp_err_t err;
+
+    (void)this_val;
+    if (argc != 1 || JS_ToNumber(ctx, &dbm, argv[0]) != 0 ||
+        !isfinite(dbm) || dbm < 2.0 || dbm > 20.0) {
+        return JS_ThrowRangeError(
+            ctx, "wifi.setTxPower(dbm) expects 2..20 dBm");
+    }
+    quarter_dbm = dbm * 4.0;
+    if (floor(quarter_dbm) != quarter_dbm) {
+        return JS_ThrowRangeError(
+            ctx, "wifi.setTxPower(dbm) expects 0.25 dBm increments");
+    }
+    requested = (int8_t)quarter_dbm;
+    err = esp32_mquickjs_wifi_ensure_started();
+    if (err == ESP_OK) {
+        err = esp_wifi_set_max_tx_power(requested);
+    }
+    if (err == ESP_OK) {
+        err = esp_wifi_get_max_tx_power(&actual);
+    }
+    if (err != ESP_OK) {
+        return JS_ThrowInternalError(
+            ctx, "wifi.setTxPower() failed: %s", esp_err_to_name(err));
+    }
+    return JS_NewFloat64(ctx, (double)actual / 4.0);
 }
 
 JSValue js_wifi_status(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
