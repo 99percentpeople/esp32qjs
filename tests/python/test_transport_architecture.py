@@ -225,6 +225,22 @@ class TransportArchitectureTests(SourceContractTestCase):
             "ready timers must not starve the finite USB TX stall deadline",
         )
 
+    def test_usb_serial_future_owns_tx_lane_and_timeout_wake(self):
+        source = (
+            MQUICKJS / "src" / "modules" / "usb_serial" / "esp32_mquickjs_usb_serial.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("usb_serial_future_resource_key", source)
+        self.assertIn(".resource_key = usb_serial_future_resource_key", source)
+        self.assertIn("usb_serial_future_timeout_wake", source)
+        self.assertIn("esp_timer_start_once", source)
+        self.assertIn("esp32_mquickjs_future_wake", source)
+        capture_start = source.index("static bool usb_serial_future_prepare(")
+        capture_end = source.index(
+            "\nstatic void usb_serial_future_timeout_wake", capture_start
+        )
+        self.assertNotIn("s_usb_serial_state.sending", source[capture_start:capture_end])
+
     def test_i2c_device_owns_a_stable_driver_handle(self):
         source = (
             MQUICKJS / "src" / "modules" / "i2c" / "esp32_mquickjs_i2c.c"

@@ -1006,10 +1006,12 @@ consume the same USB input stream.
   the exact bytes without a terminator. Sending remains synchronous, but TX
   backpressure waits cooperatively on the USB write-ready interrupt so timers
   and other ready runtime work continue to run. A physically disconnected USB
-  link fails immediately, and only one send may be active at a time.
+  link fails immediately, and only one direct send may be active at a time.
   `Future.call(handle.send, handle, [value])` uses the native send driver and
-  returns before the write completes; this is the preferred form for a
-  long-running application.
+  returns before the write completes; queued Future sends share one FIFO TX
+  lane. The Future driver owns a progress timer, so a stalled host wakes and
+  rejects the send even when no unrelated runtime event occurs. This is the
+  preferred form for a long-running application.
 
 ```js
 var serial = usbSerial.open({ maxFrameBytes: 4096 });
