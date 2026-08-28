@@ -588,8 +588,12 @@ with ISR wakeups returning control to the runtime poller.
 
 Each operation has an overall deadline plus a no-progress deadline of
 `max(100 ms, 4 * theoretical wire time + 50 ms)`, capped by the remaining
-overall deadline. SPI does not retry with a different frequency, chunk size,
-or memory path. Structured failures use `DMA_STAGING_NO_MEMORY`,
+overall deadline. At each runtime poll SPI first drains every completion that
+ESP-IDF has already published, then evaluates the no-progress deadline. A late
+runtime poll therefore does not turn completed DMA work into a timeout; the
+deadline expires only while an in-flight transaction still has no observable
+completion. SPI does not retry with a different frequency, chunk size, or
+memory path. Structured failures use `DMA_STAGING_NO_MEMORY`,
 `DMA_TX_UNDERFLOW`, `DMA_RX_OVERFLOW`, `DMA_TRANSFER_TIMEOUT`, or
 `DMA_DEVICE_FAULTED` and include the operation, ESP error, completed byte
 count, DMA path, and requested/actual frequencies without payload data. A

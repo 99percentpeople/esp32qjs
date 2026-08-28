@@ -111,3 +111,7 @@ esp32_mquickjs_dma_progress_t esp32_mquickjs_dma_validate_rx_progress(
     size_t expected_bytes);
 uint64_t esp32_mquickjs_dma_progress_timeout_us(size_t bytes,
                                                 uint32_t actual_freq_hz);
+bool esp32_mquickjs_dma_progress_timed_out(
+    uint64_t now_us,
+    uint64_t deadline_us,
+    bool completion_observed);

@@ -166,11 +166,28 @@ static void test_mixed_stats_and_progress_validation(void)
         "large transfers should use four wire times plus 50 ms");
 }
 
+static void test_completion_wins_over_late_deadline_observation(void)
+{
+    expect_true(!esp32_mquickjs_dma_progress_timed_out(
+                    99999, 100000, false),
+                "pending transfer before deadline should keep waiting");
+    expect_true(esp32_mquickjs_dma_progress_timed_out(
+                    100000, 100000, false),
+                "pending transfer at deadline should time out");
+    expect_true(!esp32_mquickjs_dma_progress_timed_out(
+                    150000, 100000, true),
+                "completion reaped after a delayed scheduler turn must win");
+    expect_true(!esp32_mquickjs_dma_progress_timed_out(
+                    UINT64_MAX, 0, false),
+                "disabled progress deadline should never time out");
+}
+
 int main(void)
 {
     test_source_classifier();
     test_empty_odd_and_long_spans();
     test_slot_rotation_and_contention();
     test_mixed_stats_and_progress_validation();
+    test_completion_wins_over_late_deadline_observation();
     return 0;
 }

@@ -81,6 +81,19 @@ class DmaTransferArchitectureTests(SourceContractTestCase):
         self.assertIn("state->in_flight > 0", self.spi)
         self.assertIn("ESP32_MQUICKJS_CANCEL_REQUESTED", self.spi)
 
+    def test_spi_reaps_completion_before_declaring_progress_timeout(self):
+        step = self.spi.split("static void spi_future_step(", 2)[-1].split(
+            "static bool spi_future_start", 1
+        )[0]
+
+        self.assertIn("esp32_mquickjs_dma_progress_timed_out", step)
+        self.assertLess(
+            step.index("spi_device_get_trans_result"),
+            step.index("esp32_mquickjs_dma_progress_timed_out"),
+            "a completion already queued by ESP-IDF must win over a late scheduler poll",
+        )
+        self.assertIn("made_progress", step)
+
     def test_v1_status_stats_timeout_and_fault_contract_is_exact(self):
         for field in (
             '"requestedFreqHz"',

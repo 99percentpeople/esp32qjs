@@ -2412,18 +2412,13 @@ static void spi_future_step(esp32_mquickjs_future_driver_state_t *state)
         return;
     }
 
-    now_us = (uint64_t)esp_timer_get_time();
-    if (!state->timeout_triggered && state->in_flight > 0 &&
-        state->progress_deadline_us > 0 &&
-        now_us >= state->progress_deadline_us) {
-        state->timeout_triggered = true;
-        state->cancelled = true;
-        state->error_code = "DMA_TRANSFER_TIMEOUT";
-        state->err = ESP_ERR_TIMEOUT;
-        device->last_error_code = state->error_code;
-        device->faulted = true;
-    }
-
+    /*
+     * ESP-IDF may have queued a completed transaction while the JavaScript
+     * scheduler was busy. Drain every observable completion before comparing
+     * the scheduler's current time with the no-progress deadline. The
+     * deadline measures DMA progress, not how promptly the runtime task was
+     * scheduled to observe that progress.
+     */
     while (state->in_flight > 0) {
         uint32_t transaction_index = state->queue_head;
         spi_transaction_meta_t *meta =
@@ -2466,6 +2461,19 @@ static void spi_future_step(esp32_mquickjs_future_driver_state_t *state)
         state->queue_head =
             (state->queue_head + 1U) % state->queue_depth;
         state->in_flight--;
+    }
+
+    now_us = (uint64_t)esp_timer_get_time();
+    if (!state->timeout_triggered && !state->cancelled &&
+        state->err == ESP_OK && state->in_flight > 0 &&
+        esp32_mquickjs_dma_progress_timed_out(
+            now_us, state->progress_deadline_us, made_progress)) {
+        state->timeout_triggered = true;
+        state->cancelled = true;
+        state->error_code = "DMA_TRANSFER_TIMEOUT";
+        state->err = ESP_ERR_TIMEOUT;
+        device->last_error_code = state->error_code;
+        device->faulted = true;
     }
 
     if (state->in_flight == 0) {

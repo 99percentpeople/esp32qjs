@@ -267,3 +267,11 @@ uint64_t esp32_mquickjs_dma_progress_timeout_us(size_t bytes,
     }
     return timeout_us < 100000ULL ? 100000ULL : timeout_us;
 }
+
+bool esp32_mquickjs_dma_progress_timed_out(
+    uint64_t now_us,
+    uint64_t deadline_us,
+    bool completion_observed)
+{
+    return !completion_observed && deadline_us > 0 && now_us >= deadline_us;
+}
