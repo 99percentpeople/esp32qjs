@@ -96,14 +96,19 @@ class RuntimeRestartArchitectureTests(SourceContractTestCase):
         self.assertIn("default 2", kconfig)
 
     def test_agent_safe_mode_keeps_system_services_and_skips_workspace(self):
-        agent_startup = (
+        agent_startup_path = (
             ROOT.parent
             / "js-libraries"
             / "agent-runtime"
             / "flash_data"
             / "agent"
             / "startup.js"
-        ).read_text(encoding="utf-8")
+        )
+        if not agent_startup_path.is_file():
+            self.skipTest(
+                "Agent product source is outside the standalone firmware repository"
+            )
+        agent_startup = agent_startup_path.read_text(encoding="utf-8")
 
         service_attach = agent_startup.index(
             "esp32AgentProtocol.attach(agentSerialTransport);"

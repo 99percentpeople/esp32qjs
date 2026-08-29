@@ -212,7 +212,18 @@ class RemoteConfigTests(unittest.TestCase):
     def test_monitor_no_reset_and_workspace_flash_semantics_remain_explicit(self):
         config = self.config()
         config = REMOTE.replace(config, target="/dev/ttyACM0")
-        self.assertIn("monitor --no-reset", " ".join(REMOTE.monitor_cmd(config, no_reset=True)))
+        with (
+            patch.object(REMOTE, "write_monitor_config"),
+            patch.object(
+                REMOTE,
+                "idf_py_cmd",
+                side_effect=lambda project_args, _config: project_args,
+            ),
+        ):
+            self.assertIn(
+                "monitor --no-reset",
+                " ".join(REMOTE.monitor_cmd(config, no_reset=True)),
+            )
         with (
             patch.object(REMOTE, "write_esptool_config"),
             patch.object(REMOTE, "load_flasher_args", return_value={}),
