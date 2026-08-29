@@ -22,6 +22,13 @@ jobs:
         uses: actions/checkout@v6
         with:
           submodules: recursive
+      - name: Check out pinned LittleFS host-test dependency
+        uses: actions/checkout@v6
+        with:
+          repository: joltwallet/esp_littlefs
+          ref: 92ac3c2dce8c62c4b47bdb33e8461a4670411475
+          path: managed_components/joltwallet__littlefs
+          submodules: recursive
       - name: Set up Python
         uses: actions/setup-python@v6
         with:

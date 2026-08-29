@@ -38,6 +38,14 @@ class CiBuildContextTests(unittest.TestCase):
         self.assertIn("remote.py check-js", workflow)
         self.assertIn("unittest discover -s tests/python", workflow)
         self.assertIn("remote.py test --scope c", workflow)
+        self.assertIn("repository: joltwallet/esp_littlefs", workflow)
+        self.assertIn(
+            "ref: 92ac3c2dce8c62c4b47bdb33e8461a4670411475", workflow
+        )
+        self.assertIn(
+            "path: managed_components/joltwallet__littlefs", workflow
+        )
+        self.assertIn("submodules: recursive", workflow)
 
     def test_ci_build_ignores_user_global_esptool_configuration(self):
         source = (ROOT / "scripts" / "ci_build.py").read_text(encoding="utf-8")
