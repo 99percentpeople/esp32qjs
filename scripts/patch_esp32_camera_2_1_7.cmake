@@ -149,3 +149,104 @@ if(_esp32qjs_camera_zero_sensor_patch_position EQUAL -1)
     message(STATUS
         "Applied esp32-camera 2.1.7 zero-sensor probe workaround")
 endif()
+
+# Keep the sensor function type and table out of zero-sensor builds as well.
+# Guarding only the probe loop leaves g_sensors unused, which is another error
+# under ESP-IDF's warning policy.
+file(READ "${_esp32qjs_camera_driver}" _esp32qjs_camera_driver_text)
+set(_esp32qjs_camera_sensor_predicate_marker
+    "ESP32QJS camera sensor support predicate")
+string(FIND "${_esp32qjs_camera_driver_text}"
+    "${_esp32qjs_camera_sensor_predicate_marker}"
+    _esp32qjs_camera_sensor_predicate_patch_position)
+
+if(_esp32qjs_camera_sensor_predicate_patch_position EQUAL -1)
+    set(_esp32qjs_camera_sensor_table_start_before [=[
+typedef struct {
+    int (*detect)(int slv_addr, sensor_id_t *id);
+    int (*init)(sensor_t *sensor);
+} sensor_func_t;
+]=])
+    set(_esp32qjs_camera_sensor_table_start_after [=[
+/* ESP32QJS camera sensor support predicate. */
+#define ESP32QJS_CAMERA_SENSOR_SUPPORT_ENABLED ( \
+    CONFIG_OV2640_SUPPORT || CONFIG_OV3660_SUPPORT || \
+    CONFIG_OV7670_SUPPORT || CONFIG_OV7725_SUPPORT || \
+    CONFIG_NT99141_SUPPORT || CONFIG_OV5640_SUPPORT || \
+    CONFIG_GC2145_SUPPORT || CONFIG_GC032A_SUPPORT || \
+    CONFIG_GC0308_SUPPORT || CONFIG_BF3005_SUPPORT || \
+    CONFIG_BF20A6_SUPPORT || CONFIG_SC101IOT_SUPPORT || \
+    CONFIG_SC030IOT_SUPPORT || CONFIG_SC031GS_SUPPORT || \
+    CONFIG_HM1055_SUPPORT || CONFIG_HM0360_SUPPORT || \
+    CONFIG_MEGA_CCM_SUPPORT)
+
+#if ESP32QJS_CAMERA_SENSOR_SUPPORT_ENABLED
+typedef struct {
+    int (*detect)(int slv_addr, sensor_id_t *id);
+    int (*init)(sensor_t *sensor);
+} sensor_func_t;
+]=])
+    set(_esp32qjs_camera_sensor_table_end_before [=[
+#if CONFIG_HM0360_SUPPORT
+    {esp32_camera_hm0360_detect, esp32_camera_hm0360_init},
+#endif
+};
+]=])
+    set(_esp32qjs_camera_sensor_table_end_after [=[
+#if CONFIG_HM0360_SUPPORT
+    {esp32_camera_hm0360_detect, esp32_camera_hm0360_init},
+#endif
+};
+#endif /* ESP32QJS_CAMERA_SENSOR_SUPPORT_ENABLED */
+]=])
+    set(_esp32qjs_camera_probe_guard_before [=[
+        sensor_id_t *id = &s_state->sensor.id;
+
+#if CONFIG_OV2640_SUPPORT || CONFIG_OV3660_SUPPORT || \
+    CONFIG_OV7670_SUPPORT || CONFIG_OV7725_SUPPORT || \
+    CONFIG_NT99141_SUPPORT || CONFIG_OV5640_SUPPORT || \
+    CONFIG_GC2145_SUPPORT || CONFIG_GC032A_SUPPORT || \
+    CONFIG_GC0308_SUPPORT || CONFIG_BF3005_SUPPORT || \
+    CONFIG_BF20A6_SUPPORT || CONFIG_SC101IOT_SUPPORT || \
+    CONFIG_SC030IOT_SUPPORT || CONFIG_SC031GS_SUPPORT || \
+    CONFIG_HM1055_SUPPORT || CONFIG_HM0360_SUPPORT || \
+    CONFIG_MEGA_CCM_SUPPORT
+]=])
+    set(_esp32qjs_camera_probe_guard_after [=[
+#if ESP32QJS_CAMERA_SENSOR_SUPPORT_ENABLED
+        sensor_id_t *id = &s_state->sensor.id;
+]=])
+
+    foreach(_esp32qjs_camera_expected_site
+            _esp32qjs_camera_sensor_table_start_before
+            _esp32qjs_camera_sensor_table_end_before
+            _esp32qjs_camera_probe_guard_before)
+        string(FIND "${_esp32qjs_camera_driver_text}"
+            "${${_esp32qjs_camera_expected_site}}"
+            _esp32qjs_camera_expected_site_position)
+        if(_esp32qjs_camera_expected_site_position EQUAL -1)
+            message(FATAL_ERROR
+                "esp32-camera 2.1.7 esp_camera.c no longer matches the expected sensor-table patch site")
+        endif()
+    endforeach()
+
+    string(REPLACE
+        "${_esp32qjs_camera_sensor_table_start_before}"
+        "${_esp32qjs_camera_sensor_table_start_after}"
+        _esp32qjs_camera_driver_patched
+        "${_esp32qjs_camera_driver_text}")
+    string(REPLACE
+        "${_esp32qjs_camera_sensor_table_end_before}"
+        "${_esp32qjs_camera_sensor_table_end_after}"
+        _esp32qjs_camera_driver_patched
+        "${_esp32qjs_camera_driver_patched}")
+    string(REPLACE
+        "${_esp32qjs_camera_probe_guard_before}"
+        "${_esp32qjs_camera_probe_guard_after}"
+        _esp32qjs_camera_driver_patched
+        "${_esp32qjs_camera_driver_patched}")
+    file(WRITE "${_esp32qjs_camera_driver}"
+        "${_esp32qjs_camera_driver_patched}")
+    message(STATUS
+        "Applied esp32-camera 2.1.7 zero-sensor table workaround")
+endif()

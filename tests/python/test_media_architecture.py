@@ -62,7 +62,9 @@ class MediaArchitectureTests(SourceContractTestCase):
 
         self.assertIn("driver/esp_camera.c", patch)
         self.assertIn("ESP32QJS zero-sensor build guard", patch)
+        self.assertIn("ESP32QJS_CAMERA_SENSOR_SUPPORT_ENABLED", patch)
         self.assertIn("#if CONFIG_OV2640_SUPPORT ||", patch)
+        self.assertIn("#if ESP32QJS_CAMERA_SENSOR_SUPPORT_ENABLED", patch)
         self.assertIn(
             "#endif /* ESP32QJS zero-sensor build guard */", patch
         )
