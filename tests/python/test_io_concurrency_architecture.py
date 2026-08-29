@@ -1461,7 +1461,9 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("JS_SetOpaque(ctx, value, NULL)", dispose)
         self.assertIn("queue->dispose_requested = true", dispose)
         self.assertIn("event_queue_unregister(queue)", dispose)
-        self.assertIn("event_queue_destroy_if_disposed(queue)", event_queue)
+        self.assertIn(
+            "event_queue_take_destroy_ownership_locked(queue)", dispose
+        )
         self.assertIn("queue->receiver_registered", event_queue)
 
     def test_event_queue_native_producers_can_retain_disposed_storage(self):
@@ -1482,8 +1484,66 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         )
         finalizer = event_queue[finalizer_start:finalizer_end]
         self.assertIn("queue->dispose_requested = true", finalizer)
-        self.assertIn("event_queue_destroy_if_disposed(queue)", finalizer)
-        self.assertNotIn("event_queue_destroy_native(queue)", finalizer)
+        self.assertIn(
+            "event_queue_take_destroy_ownership_locked(queue)", finalizer
+        )
+        self.assertIn("event_queue_destroy_native(queue)", finalizer)
+        self.assertIn("state->native_queue_retained = true", event_queue)
+        self.assertIn("esp32_mquickjs_event_queue_release(queue)", event_queue)
+
+    def test_event_queue_claims_destroy_ownership_with_last_guard_transition(self):
+        event_queue = (
+            MQUICKJS / "src/core/esp32_mquickjs_event_queue.c"
+        ).read_text(encoding="utf-8")
+
+        helper_start = event_queue.index(
+            "static bool event_queue_take_destroy_ownership_locked("
+        )
+        helper_end = event_queue.index("\n}\n", helper_start) + 3
+        helper = event_queue[helper_start:helper_end]
+        self.assertIn("queue->native_retain_count == 0", helper)
+        self.assertIn("queue->destroying = true", helper)
+        self.assertNotIn("portENTER_CRITICAL", helper)
+        self.assertNotIn("portEXIT_CRITICAL", helper)
+
+        function_bounds = (
+            (
+                "void esp32_mquickjs_event_queue_release(",
+                "\nstatic void event_queue_wake_receiver(",
+            ),
+            (
+                "bool esp32_mquickjs_event_queue_dispose(",
+                "\nsize_t esp32_mquickjs_event_queue_discard_all(",
+            ),
+            (
+                "void js_event_queue_finalizer(",
+                "\nJSValue js_event_queue_receive(",
+            ),
+        )
+        for start_marker, end_marker in function_bounds:
+            start = event_queue.index(start_marker)
+            end = event_queue.index(end_marker, start)
+            body = event_queue[start:end]
+            claim = body.index(
+                "event_queue_take_destroy_ownership_locked(queue)"
+            )
+            unlock = body.index("portEXIT_CRITICAL(&queue->lock)", claim)
+            destroy = body.index("event_queue_destroy_native(queue)", unlock)
+            self.assertLess(claim, unlock)
+            self.assertLess(unlock, destroy)
+
+        release_start = event_queue.index(
+            "void esp32_mquickjs_event_queue_release("
+        )
+        release_end = event_queue.index(
+            "\nstatic void event_queue_wake_receiver(", release_start
+        )
+        release = event_queue[release_start:release_end]
+        self.assertLess(
+            release.index("queue->native_retain_count--"),
+            release.index("event_queue_take_destroy_ownership_locked(queue)"),
+        )
+        self.assertNotIn("event_queue_destroy_if_disposed", event_queue)
 
     def test_event_queue_exposes_queue_local_stats(self):
         event_queue = (

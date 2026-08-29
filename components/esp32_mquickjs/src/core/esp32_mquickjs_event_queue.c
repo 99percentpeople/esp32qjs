@@ -52,6 +52,7 @@ struct esp32_mquickjs_future_driver_state {
     _Atomic bool timed_out;
     _Atomic bool completed;
     bool queue_retained;
+    bool native_queue_retained;
 };
 
 static void *event_queue_resource_allocate(size_t bytes, void *opaque)
@@ -165,24 +166,15 @@ static void event_queue_destroy_native(esp32_mquickjs_event_queue_t *queue)
     heap_caps_free(queue);
 }
 
-static void event_queue_destroy_if_disposed(
+static bool event_queue_take_destroy_ownership_locked(
     esp32_mquickjs_event_queue_t *queue)
 {
-    bool destroy;
-
-    if (queue == NULL) {
-        return;
-    }
-    portENTER_CRITICAL(&queue->lock);
-    destroy = queue->dispose_requested && !queue->receiver_registered &&
-              queue->native_retain_count == 0 && !queue->destroying;
-    if (destroy) {
+    if (queue->dispose_requested && !queue->receiver_registered &&
+        queue->native_retain_count == 0 && !queue->destroying) {
         queue->destroying = true;
+        return true;
     }
-    portEXIT_CRITICAL(&queue->lock);
-    if (destroy) {
-        event_queue_destroy_native(queue);
-    }
+    return false;
 }
 
 static bool event_queue_drain_receive(void *source, void *event)
@@ -236,15 +228,20 @@ bool esp32_mquickjs_event_queue_retain(esp32_mquickjs_event_queue_t *queue)
 
 void esp32_mquickjs_event_queue_release(esp32_mquickjs_event_queue_t *queue)
 {
+    bool destroy = false;
+
     if (queue == NULL) {
         return;
     }
     portENTER_CRITICAL(&queue->lock);
     if (queue->native_retain_count > 0) {
         queue->native_retain_count--;
+        destroy = event_queue_take_destroy_ownership_locked(queue);
     }
     portEXIT_CRITICAL(&queue->lock);
-    event_queue_destroy_if_disposed(queue);
+    if (destroy) {
+        event_queue_destroy_native(queue);
+    }
 }
 
 static void event_queue_wake_receiver(esp32_mquickjs_event_queue_t *queue)
@@ -403,6 +400,7 @@ bool esp32_mquickjs_event_queue_close(esp32_mquickjs_event_queue_t *queue)
 bool esp32_mquickjs_event_queue_dispose(JSContext *ctx, JSValue value)
 {
     esp32_mquickjs_event_queue_t *queue;
+    bool destroy;
 
     if (ctx == NULL || JS_GetClassID(ctx, value) != JS_CLASS_EVENT_QUEUE ||
         (queue = JS_GetOpaque(ctx, value)) == NULL) {
@@ -414,8 +412,11 @@ bool esp32_mquickjs_event_queue_dispose(JSContext *ctx, JSValue value)
     (void)esp32_mquickjs_event_queue_discard_all(queue);
     portENTER_CRITICAL(&queue->lock);
     queue->dispose_requested = true;
+    destroy = event_queue_take_destroy_ownership_locked(queue);
     portEXIT_CRITICAL(&queue->lock);
-    event_queue_destroy_if_disposed(queue);
+    if (destroy) {
+        event_queue_destroy_native(queue);
+    }
     return true;
 }
 
@@ -518,7 +519,14 @@ static bool event_queue_future_prepare(JSContext *ctx,
         JS_ThrowOutOfMemory(ctx);
         return false;
     }
+    if (!esp32_mquickjs_event_queue_retain(queue)) {
+        heap_caps_free(state->event);
+        heap_caps_free(state);
+        JS_ThrowInternalError(ctx, "EventQueue.receive() lost its queue");
+        return false;
+    }
     state->queue = queue;
+    state->native_queue_retained = true;
     state->ctx = ctx;
     *JS_AddGCRef(ctx, &state->queue_ref) = this_ref->val;
     state->queue_retained = true;
@@ -625,11 +633,13 @@ static esp32_mquickjs_cancel_result_t event_queue_future_cancel(
 static void event_queue_future_destroy(esp32_mquickjs_future_driver_state_t *state)
 {
     esp32_mquickjs_event_queue_t *queue;
+    bool release_queue;
 
     if (state == NULL) {
         return;
     }
     queue = state->queue;
+    release_queue = state->native_queue_retained;
     if (state->timer != NULL) {
         (void)esp_timer_stop(state->timer);
         esp_timer_delete(state->timer);
@@ -640,7 +650,9 @@ static void event_queue_future_destroy(esp32_mquickjs_future_driver_state_t *sta
     }
     heap_caps_free(state->event);
     heap_caps_free(state);
-    event_queue_destroy_if_disposed(queue);
+    if (release_queue) {
+        esp32_mquickjs_event_queue_release(queue);
+    }
 }
 
 static const esp32_mquickjs_future_driver_t s_event_queue_future_driver = {
@@ -802,6 +814,7 @@ JSValue js_event_queue_constructor(JSContext *ctx, JSValue *this_val, int argc, 
 void js_event_queue_finalizer(JSContext *ctx, void *opaque)
 {
     esp32_mquickjs_event_queue_t *queue = opaque;
+    bool destroy;
 
     (void)ctx;
     if (queue == NULL) {
@@ -812,8 +825,11 @@ void js_event_queue_finalizer(JSContext *ctx, void *opaque)
     (void)esp32_mquickjs_event_queue_discard_all(queue);
     portENTER_CRITICAL(&queue->lock);
     queue->dispose_requested = true;
+    destroy = event_queue_take_destroy_ownership_locked(queue);
     portEXIT_CRITICAL(&queue->lock);
-    event_queue_destroy_if_disposed(queue);
+    if (destroy) {
+        event_queue_destroy_native(queue);
+    }
 }
 
 JSValue js_event_queue_receive(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
