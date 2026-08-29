@@ -4,6 +4,9 @@
 
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_options.h"
+#include "esp32_mquickjs_rmt_channel_resources.h"
+#include "esp32_mquickjs_rmt_symbol_buffer_resources.h"
 
 #include <math.h>
 #include <stdatomic.h>
@@ -106,6 +109,137 @@ static uint32_t s_rmt_next_generation = 1;
 static portMUX_TYPE s_rmt_callback_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static void rmt_request_close(esp32_mquickjs_rmt_channel_slot_t *slot);
+static bool rmt_on_transmit_done(
+    rmt_channel_handle_t channel, const rmt_tx_done_event_data_t *event,
+    void *user_ctx);
+static bool rmt_on_receive_done(
+    rmt_channel_handle_t channel, const rmt_rx_done_event_data_t *event,
+    void *user_ctx);
+
+static void *rmt_symbol_buffer_allocate(size_t size, void *opaque)
+{
+    (void)opaque;
+    return heap_caps_calloc(1, size, MALLOC_CAP_8BIT);
+}
+
+static void *rmt_symbol_buffer_allocate_symbols(size_t size, void *opaque)
+{
+    (void)opaque;
+    return heap_caps_calloc(
+        1, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+}
+
+static void rmt_symbol_buffer_free(void *value, void *opaque)
+{
+    (void)opaque;
+    heap_caps_free(value);
+}
+
+static const esp32_mquickjs_rmt_symbol_buffer_resource_ops_t
+    s_rmt_symbol_buffer_resource_ops = {
+        .allocate_buffer = rmt_symbol_buffer_allocate,
+        .allocate_symbols = rmt_symbol_buffer_allocate_symbols,
+        .release = rmt_symbol_buffer_free,
+    };
+
+typedef struct {
+    esp32_mquickjs_rmt_channel_slot_t *slot;
+    esp32_mquickjs_rmt_direction_t direction;
+    rmt_tx_channel_config_t tx_config;
+    rmt_rx_channel_config_t rx_config;
+} rmt_channel_resource_context_t;
+
+static int rmt_channel_resource_create_channel(void *opaque,
+                                               void **out_channel)
+{
+    rmt_channel_resource_context_t *context = opaque;
+    rmt_channel_handle_t channel = NULL;
+    esp_err_t err;
+
+    if (context == NULL || context->slot == NULL || out_channel == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (context->direction == ESP32_MQUICKJS_RMT_TX) {
+        err = rmt_new_tx_channel(&context->tx_config, &channel);
+    } else {
+        err = rmt_new_rx_channel(&context->rx_config, &channel);
+    }
+    *out_channel = channel;
+    return err;
+}
+
+static int rmt_channel_resource_create_encoder(void *opaque,
+                                               void **out_encoder)
+{
+    rmt_copy_encoder_config_t config = {};
+    rmt_encoder_handle_t encoder = NULL;
+    esp_err_t err;
+
+    if (opaque == NULL || out_encoder == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    err = rmt_new_copy_encoder(&config, &encoder);
+    *out_encoder = encoder;
+    return err;
+}
+
+static int rmt_channel_resource_register_callbacks(void *channel,
+                                                   void *opaque)
+{
+    rmt_channel_resource_context_t *context = opaque;
+
+    if (channel == NULL || context == NULL || context->slot == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (context->direction == ESP32_MQUICKJS_RMT_TX) {
+        rmt_tx_event_callbacks_t callbacks = {
+            .on_trans_done = rmt_on_transmit_done,
+        };
+
+        return rmt_tx_register_event_callbacks(
+            (rmt_channel_handle_t)channel, &callbacks, context->slot);
+    }
+    {
+        rmt_rx_event_callbacks_t callbacks = {
+            .on_recv_done = rmt_on_receive_done,
+        };
+
+        return rmt_rx_register_event_callbacks(
+            (rmt_channel_handle_t)channel, &callbacks, context->slot);
+    }
+}
+
+static int rmt_channel_resource_disable(void *channel, void *opaque)
+{
+    (void)opaque;
+    return rmt_disable((rmt_channel_handle_t)channel);
+}
+
+static int rmt_channel_resource_delete_encoder(void *encoder, void *opaque)
+{
+    (void)opaque;
+    return rmt_del_encoder((rmt_encoder_handle_t)encoder);
+}
+
+static int rmt_channel_resource_delete_channel(void *channel, void *opaque)
+{
+    (void)opaque;
+    return rmt_del_channel((rmt_channel_handle_t)channel);
+}
+
+static esp32_mquickjs_rmt_channel_resource_ops_t rmt_channel_resource_ops(
+    rmt_channel_resource_context_t *context)
+{
+    return (esp32_mquickjs_rmt_channel_resource_ops_t){
+        .create_channel = rmt_channel_resource_create_channel,
+        .create_encoder = rmt_channel_resource_create_encoder,
+        .register_callbacks = rmt_channel_resource_register_callbacks,
+        .disable_channel = rmt_channel_resource_disable,
+        .delete_encoder = rmt_channel_resource_delete_encoder,
+        .delete_channel = rmt_channel_resource_delete_channel,
+        .opaque = context,
+    };
+}
 
 static uint32_t rmt_take_generation(void)
 {
@@ -199,12 +333,18 @@ static esp32_mquickjs_rmt_symbol_buffer_t *rmt_symbol_buffer_from_value(
 static void rmt_symbol_buffer_release(
     esp32_mquickjs_rmt_symbol_buffer_t *buffer)
 {
+    esp32_mquickjs_rmt_symbol_buffer_resources_t resources;
+
     if (buffer == NULL || buffer->symbols == NULL || buffer->leases != 0) {
         return;
     }
-    heap_caps_free(buffer->symbols);
+    resources = (esp32_mquickjs_rmt_symbol_buffer_resources_t){
+        .buffer = buffer,
+        .symbols = buffer->symbols,
+    };
     buffer->symbols = NULL;
-    heap_caps_free(buffer);
+    esp32_mquickjs_rmt_symbol_buffer_resources_deinit(
+        &resources, &s_rmt_symbol_buffer_resource_ops);
 }
 
 static esp32_mquickjs_rmt_channel_slot_t *rmt_channel_get_slot(
@@ -251,26 +391,42 @@ static int rmt_channel_from_value(
     return 0;
 }
 
-static void rmt_channel_cleanup(esp32_mquickjs_rmt_channel_slot_t *slot)
+static esp_err_t rmt_channel_cleanup(esp32_mquickjs_rmt_channel_slot_t *slot)
 {
+    rmt_channel_resource_context_t context;
+    esp32_mquickjs_rmt_channel_resources_t resources;
+    esp32_mquickjs_rmt_channel_resource_ops_t ops;
     uint8_t index;
+    esp_err_t err;
 
-    if (slot == NULL || !slot->allocated || slot->busy ||
-        slot->future_reservations > 0) {
-        return;
+    if (slot == NULL || !slot->allocated) {
+        return ESP_OK;
+    }
+    if (slot->busy || slot->future_reservations > 0) {
+        return ESP_ERR_INVALID_STATE;
     }
     index = slot->index;
-    if (slot->running && slot->handle != NULL) {
-        (void)rmt_disable(slot->handle);
-    }
-    if (slot->encoder != NULL) {
-        (void)rmt_del_encoder(slot->encoder);
-    }
-    if (slot->handle != NULL) {
-        (void)rmt_del_channel(slot->handle);
+    context = (rmt_channel_resource_context_t){
+        .slot = slot,
+        .direction = slot->direction,
+    };
+    resources = (esp32_mquickjs_rmt_channel_resources_t){
+        .channel = slot->handle,
+        .encoder = slot->encoder,
+        .enabled = slot->running,
+    };
+    ops = rmt_channel_resource_ops(&context);
+    err = esp32_mquickjs_rmt_channel_resources_deinit(&resources, &ops);
+    slot->handle = (rmt_channel_handle_t)resources.channel;
+    slot->encoder = (rmt_encoder_handle_t)resources.encoder;
+    slot->running = resources.enabled;
+    if (err != ESP_OK) {
+        slot->release_pending = true;
+        return err;
     }
     memset(slot, 0, sizeof(*slot));
     slot->index = index;
+    return ESP_OK;
 }
 
 static esp_err_t rmt_abort_active(esp32_mquickjs_rmt_channel_slot_t *slot)
@@ -498,7 +654,8 @@ static bool rmt_parse_timeout_option(JSContext *ctx, JSValue options,
         return false;
     }
     if (!JS_IsUndefined(property) &&
-        !rmt_to_u32(ctx, property, timeout_ms)) {
+        !esp32_mquickjs_value_to_bounded_u32(
+            ctx, property, 0, UINT32_MAX, timeout_ms)) {
         JS_ThrowTypeError(ctx, "RMT timeoutMs must be a non-negative integer");
         return false;
     }
@@ -997,9 +1154,13 @@ bool esp32_mquickjs_init_rmt_runtime(JSContext *ctx,
     uint8_t i;
 
     for (i = 0; i < RMT_MAX_CHANNELS; ++i) {
-        if (s_rmt_channels[i].allocated && !s_rmt_channels[i].busy &&
-            s_rmt_channels[i].future_reservations == 0) {
-            rmt_channel_cleanup(&s_rmt_channels[i]);
+        esp_err_t err = rmt_channel_cleanup(&s_rmt_channels[i]);
+
+        if (err != ESP_OK) {
+            JS_ThrowInternalError(
+                ctx, "failed to reset RMT channel slot %u: %s",
+                (unsigned)i, esp_err_to_name(err));
+            return false;
         }
         memset(&s_rmt_channels[i], 0, sizeof(s_rmt_channels[i]));
         s_rmt_channels[i].index = i;
@@ -1336,6 +1497,7 @@ JSValue js_rmt_channel_close(JSContext *ctx, JSValue *this_val,
 {
     esp32_mquickjs_rmt_channel_ref_t *ref;
     esp32_mquickjs_rmt_channel_slot_t *slot;
+    esp_err_t err;
 
     (void)argc;
     (void)argv;
@@ -1348,10 +1510,20 @@ JSValue js_rmt_channel_close(JSContext *ctx, JSValue *this_val,
         return JS_TRUE;
     }
     slot = rmt_channel_get_slot(ref);
-    JS_SetOpaque(ctx, *this_val, NULL);
     if (slot != NULL) {
-        rmt_request_close(slot);
+        if (slot->busy || slot->future_reservations > 0) {
+            rmt_request_close(slot);
+        } else {
+            slot->release_pending = true;
+            err = rmt_channel_cleanup(slot);
+            if (err != ESP_OK) {
+                return JS_ThrowInternalError(
+                    ctx, "RMTChannel.close() failed: %s",
+                    esp_err_to_name(err));
+            }
+        }
     }
+    JS_SetOpaque(ctx, *this_val, NULL);
     heap_caps_free(ref);
     return JS_TRUE;
 }
@@ -1398,6 +1570,7 @@ JSValue js_rmt_create_symbols(JSContext *ctx, JSValue *this_val,
 {
     uint32_t capacity;
     esp32_mquickjs_rmt_symbol_buffer_t *buffer;
+    esp32_mquickjs_rmt_symbol_buffer_resources_t resources = {0};
     JSGCRef object_ref;
     JSValue *object = JS_PushGCRef(ctx, &object_ref);
 
@@ -1409,19 +1582,14 @@ JSValue js_rmt_create_symbols(JSContext *ctx, JSValue *this_val,
             ctx,
             "rmt.createSymbols(capacity) expects 1 through 4096 symbols");
     }
-    buffer = heap_caps_calloc(1, sizeof(*buffer), MALLOC_CAP_8BIT);
-    if (buffer == NULL) {
+    if (!esp32_mquickjs_rmt_symbol_buffer_resources_init(
+            &resources, &s_rmt_symbol_buffer_resource_ops, sizeof(*buffer),
+            capacity, sizeof(*buffer->symbols))) {
         JS_PopGCRef(ctx, &object_ref);
         return JS_ThrowOutOfMemory(ctx);
     }
-    buffer->symbols = heap_caps_calloc(
-        capacity, sizeof(*buffer->symbols),
-        MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
-    if (buffer->symbols == NULL) {
-        heap_caps_free(buffer);
-        JS_PopGCRef(ctx, &object_ref);
-        return JS_ThrowOutOfMemory(ctx);
-    }
+    buffer = resources.buffer;
+    buffer->symbols = resources.symbols;
     buffer->capacity = capacity;
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_RMT_SYMBOL_BUFFER);
     if (JS_IsException(*object)) {
@@ -1444,6 +1612,9 @@ JSValue js_rmt_open(JSContext *ctx, JSValue *this_val,
     bool invert = false;
     int pin;
     esp32_mquickjs_rmt_channel_slot_t *slot = NULL;
+    rmt_channel_resource_context_t resource_context = {0};
+    esp32_mquickjs_rmt_channel_resources_t resources = {0};
+    esp32_mquickjs_rmt_channel_resource_ops_t resource_ops;
     esp_err_t err;
     uint8_t i;
     JSValue result;
@@ -1538,6 +1709,12 @@ parsed:
     }
 #endif
     for (i = 0; i < RMT_MAX_CHANNELS; ++i) {
+        if (s_rmt_channels[i].allocated &&
+            s_rmt_channels[i].release_pending &&
+            !s_rmt_channels[i].busy &&
+            s_rmt_channels[i].future_reservations == 0) {
+            (void)rmt_channel_cleanup(&s_rmt_channels[i]);
+        }
         if (!s_rmt_channels[i].allocated) {
             slot = &s_rmt_channels[i];
             break;
@@ -1547,16 +1724,16 @@ parsed:
         return JS_ThrowInternalError(ctx,
                                      "rmt.open() found no free channel slots");
     }
-    slot->allocated = true;
-    slot->generation = rmt_take_generation();
     slot->direction = direction;
     slot->pin = pin;
     slot->resolution_hz = resolution_hz;
     slot->memory_symbols = memory_symbols;
     slot->dma = dma;
     slot->invert = invert;
+    resource_context.slot = slot;
+    resource_context.direction = direction;
     if (direction == ESP32_MQUICKJS_RMT_TX) {
-        rmt_tx_channel_config_t config = {
+        resource_context.tx_config = (rmt_tx_channel_config_t){
             .gpio_num = (gpio_num_t)pin,
             .clk_src = RMT_CLK_SRC_DEFAULT,
             .resolution_hz = resolution_hz,
@@ -1567,21 +1744,8 @@ parsed:
                 .with_dma = dma,
             },
         };
-        rmt_tx_event_callbacks_t callbacks = {
-            .on_trans_done = rmt_on_transmit_done,
-        };
-        rmt_copy_encoder_config_t encoder_config = {};
-
-        err = rmt_new_tx_channel(&config, &slot->handle);
-        if (err == ESP_OK) {
-            err = rmt_new_copy_encoder(&encoder_config, &slot->encoder);
-        }
-        if (err == ESP_OK) {
-            err = rmt_tx_register_event_callbacks(slot->handle, &callbacks,
-                                                   slot);
-        }
     } else {
-        rmt_rx_channel_config_t config = {
+        resource_context.rx_config = (rmt_rx_channel_config_t){
             .gpio_num = (gpio_num_t)pin,
             .clk_src = RMT_CLK_SRC_DEFAULT,
             .resolution_hz = resolution_hz,
@@ -1591,24 +1755,32 @@ parsed:
                 .with_dma = dma,
             },
         };
-        rmt_rx_event_callbacks_t callbacks = {
-            .on_recv_done = rmt_on_receive_done,
-        };
-
-        err = rmt_new_rx_channel(&config, &slot->handle);
-        if (err == ESP_OK) {
-            err = rmt_rx_register_event_callbacks(slot->handle, &callbacks,
-                                                   slot);
-        }
     }
+    resource_ops = rmt_channel_resource_ops(&resource_context);
+    err = (esp_err_t)esp32_mquickjs_rmt_channel_resources_init(
+        &resources, direction == ESP32_MQUICKJS_RMT_TX, &resource_ops);
+    slot->handle = (rmt_channel_handle_t)resources.channel;
+    slot->encoder = (rmt_encoder_handle_t)resources.encoder;
+    slot->running = resources.enabled;
     if (err != ESP_OK) {
-        rmt_channel_cleanup(slot);
+        uint8_t index = slot->index;
+
+        if (slot->handle != NULL || slot->encoder != NULL || slot->running) {
+            slot->allocated = true;
+            slot->release_pending = true;
+        } else {
+            memset(slot, 0, sizeof(*slot));
+            slot->index = index;
+        }
         return JS_ThrowInternalError(ctx, "rmt.open() failed: %s",
                                      esp_err_to_name(err));
     }
+    slot->allocated = true;
+    slot->generation = rmt_take_generation();
     result = rmt_make_channel(ctx, slot);
     if (JS_IsException(result)) {
-        rmt_channel_cleanup(slot);
+        slot->release_pending = true;
+        (void)rmt_channel_cleanup(slot);
     }
     return result;
 }

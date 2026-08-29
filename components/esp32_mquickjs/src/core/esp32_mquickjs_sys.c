@@ -1,6 +1,7 @@
 #include "esp32_mquickjs_sys.h"
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_memory.h"
+#include "esp32_mquickjs_options.h"
 #include "esp32_mquickjs_version.h"
 #include "mquickjs_priv.h"
 
@@ -1554,51 +1555,9 @@ static bool sys_validate_option_keys(JSContext *ctx,
                                      const char *first,
                                      const char *second)
 {
-    JSGCRef keys_ref;
-    JSGCRef length_ref;
-    JSValue *keys = JS_PushGCRef(ctx, &keys_ref);
-    JSValue *length_value = JS_PushGCRef(ctx, &length_ref);
-    int length = 0;
-    int i;
-    bool valid = false;
-
-    *keys = js_object_keys(ctx, NULL, 1, &options);
-    *length_value = JS_IsException(*keys)
-                        ? JS_EXCEPTION
-                        : JS_GetPropertyStr(ctx, *keys, "length");
-    if (JS_IsException(*length_value) ||
-        JS_ToInt32(ctx, &length, *length_value) != 0 || length < 0) {
-        goto done;
-    }
-    for (i = 0; i < length; ++i) {
-        JSGCRef key_ref;
-        JSValue *key_value = JS_PushGCRef(ctx, &key_ref);
-        JSCStringBuf key_buf;
-        const char *key;
-
-        *key_value = JS_GetPropertyUint32(ctx, *keys, (uint32_t)i);
-        if (JS_IsException(*key_value)) {
-            JS_PopGCRef(ctx, &key_ref);
-            goto done;
-        }
-        key = JS_ToCString(ctx, *key_value, &key_buf);
-        if (key == NULL) {
-            JS_PopGCRef(ctx, &key_ref);
-            goto done;
-        }
-        if (strcmp(key, first) != 0 && (second == NULL || strcmp(key, second) != 0)) {
-            JS_ThrowTypeError(ctx, "%s options contains unknown key '%s'", api_name, key);
-            JS_PopGCRef(ctx, &key_ref);
-            goto done;
-        }
-        JS_PopGCRef(ctx, &key_ref);
-    }
-    valid = true;
-
-done:
-    JS_PopGCRef(ctx, &length_ref);
-    JS_PopGCRef(ctx, &keys_ref);
-    return valid;
+    const char *allowed[2] = {first, second};
+    return esp32_mquickjs_validate_plain_options(
+        ctx, options, api_name, allowed, second != NULL ? 2U : 1U);
 }
 
 #if defined(CONFIG_ESP32_MQUICKJS_SYS_TASK_SNAPSHOT) && CONFIG_ESP32_MQUICKJS_SYS_TASK_SNAPSHOT
@@ -2076,12 +2035,13 @@ JSValue js_sys_withTimeout(JSContext *ctx,
     uint64_t previous_scoped_deadline_us;
     uint64_t requested_deadline_us;
     uint64_t effective_deadline_us;
-    int timeout_ms;
+    uint32_t timeout_ms;
     JSValue result;
 
     (void)this_val;
-    if (argc < 2 || JS_ToInt32(ctx, &timeout_ms, argv[0]) != 0 ||
-        timeout_ms <= 0 || timeout_ms > ESP32_MQUICKJS_MAX_SCOPED_TIMEOUT_MS) {
+    if (argc < 2 || !esp32_mquickjs_value_to_bounded_u32(
+            ctx, argv[0], 1U, ESP32_MQUICKJS_MAX_SCOPED_TIMEOUT_MS,
+            &timeout_ms)) {
         return JS_ThrowRangeError(ctx,
                                   "sys.withTimeout(timeoutMs, callback) expects timeoutMs between 1 and 60000");
     }
@@ -2096,7 +2056,7 @@ JSValue js_sys_withTimeout(JSContext *ctx,
     previous_deadline_us = runtime->deadline_us;
     previous_scoped_deadline_us = runtime->scoped_deadline_us;
     requested_deadline_us = (uint64_t)esp_timer_get_time() +
-                            ((uint64_t)(uint32_t)timeout_ms * 1000ULL);
+                            ((uint64_t)timeout_ms * 1000ULL);
     if (previous_deadline_us == 0 || requested_deadline_us < previous_deadline_us) {
         runtime->deadline_us = requested_deadline_us;
     }

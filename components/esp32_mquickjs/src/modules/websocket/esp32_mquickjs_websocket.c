@@ -5,8 +5,10 @@
 
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_event_queue.h"
+#include "esp32_mquickjs_event_queue_drain.h"
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_net.h"
+#include "esp32_mquickjs_websocket_client_resources.h"
 #include "utils/esp32_mquickjs_byte_source.h"
 #include "utils/esp32_mquickjs_tls_error.h"
 
@@ -15,6 +17,7 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_websocket_client.h"
 #include "freertos/FreeRTOS.h"
@@ -70,6 +73,8 @@ typedef struct {
     esp32_mquickjs_event_queue_t *event_queue;
     QueueHandle_t queue;
     esp_websocket_client_handle_t client;
+    bool client_started;
+    bool events_registered;
     size_t max_message_bytes;
     uint32_t send_timeout_ms;
     char *fragment;
@@ -84,6 +89,7 @@ typedef struct {
     _Atomic uint32_t oversized_messages;
     _Atomic uint32_t event_sequence;
     _Atomic bool close_worker_completed;
+    _Atomic int close_worker_result;
     bool auto_reconnect;
     bool sending;
     bool close_pending;
@@ -91,6 +97,8 @@ typedef struct {
 } esp32_mquickjs_websocket_state_t;
 
 static esp32_mquickjs_websocket_state_t s_websocket_state;
+
+static const char *TAG = "esp32qjs_websocket";
 
 static bool websocket_poller(JSContext *ctx,
                              esp32_mquickjs_runtime_t *runtime,
@@ -118,6 +126,7 @@ static void websocket_reset_state(void)
     atomic_init(&s_websocket_state.oversized_messages, 0);
     atomic_init(&s_websocket_state.event_sequence, 0);
     atomic_init(&s_websocket_state.close_worker_completed, false);
+    atomic_init(&s_websocket_state.close_worker_result, ESP_OK);
 }
 
 static bool websocket_callback_begin(uint32_t *generation)
@@ -208,9 +217,17 @@ static void websocket_reset_fragment(void)
     s_websocket_state.fragment_dropping = false;
 }
 
+static bool websocket_queue_send(void *destination, const void *event)
+{
+    return destination != NULL && event != NULL &&
+           xQueueSend((QueueHandle_t)destination, event, 0) == pdTRUE;
+}
+
 static void websocket_enqueue(esp32_mquickjs_websocket_callback_event_t *event,
                               uint32_t generation)
 {
+    uint32_t dropped = 0;
+
     if (event == NULL || s_websocket_state.queue == NULL ||
         !websocket_generation_is_active(generation)) {
         websocket_free_callback_event(event);
@@ -222,8 +239,10 @@ static void websocket_enqueue(esp32_mquickjs_websocket_callback_event_t *event,
                           memory_order_relaxed) +
                       1U;
     event->timestamp_us = esp_timer_get_time();
-    if (xQueueSend(s_websocket_state.queue, event, 0) != pdTRUE) {
-        atomic_fetch_add_explicit(&s_websocket_state.dropped_events, 1,
+    if (!esp32_mquickjs_event_queue_enqueue(
+            s_websocket_state.queue, event, NULL, false,
+            websocket_queue_send, NULL, NULL, NULL, &dropped)) {
+        atomic_fetch_add_explicit(&s_websocket_state.dropped_events, dropped,
                                   memory_order_relaxed);
         websocket_free_callback_event(event);
         return;
@@ -420,15 +439,73 @@ static void websocket_event_handler(void *handler_args,
     }
 }
 
+static int websocket_client_resource_stop(void *client, void *opaque)
+{
+    (void)opaque;
+    return esp_websocket_client_stop(
+        (esp_websocket_client_handle_t)client);
+}
+
+static int websocket_client_resource_unregister_events(
+    void *client, void *opaque)
+{
+    (void)opaque;
+    return esp_websocket_unregister_events(
+        (esp_websocket_client_handle_t)client,
+        WEBSOCKET_EVENT_ANY,
+        websocket_event_handler);
+}
+
+static int websocket_client_resource_destroy(void *client, void *opaque)
+{
+    (void)opaque;
+    return esp_websocket_client_destroy(
+        (esp_websocket_client_handle_t)client);
+}
+
+static const esp32_mquickjs_websocket_client_resource_ops_t
+    s_websocket_client_resource_ops = {
+        .stop = websocket_client_resource_stop,
+        .unregister_events =
+            websocket_client_resource_unregister_events,
+        .destroy = websocket_client_resource_destroy,
+    };
+
+static esp_err_t websocket_cleanup_client_resources(
+    esp32_mquickjs_websocket_state_t *state)
+{
+    esp32_mquickjs_websocket_client_resources_t resources;
+    esp_err_t err;
+
+    if (state == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    resources = (esp32_mquickjs_websocket_client_resources_t){
+        .client = state->client,
+        .started = state->client_started,
+        .events_registered = state->events_registered,
+    };
+    err = esp32_mquickjs_websocket_client_resources_deinit(
+        &resources, &s_websocket_client_resource_ops);
+    state->client = (esp_websocket_client_handle_t)resources.client;
+    state->client_started = resources.started;
+    state->events_registered = resources.events_registered;
+    return err;
+}
+
 static void websocket_finish_close_source(void)
 {
     s_websocket_state.client = NULL;
+    s_websocket_state.client_started = false;
+    s_websocket_state.events_registered = false;
     websocket_reset_fragment();
     websocket_drain_queue();
     s_websocket_state.auto_reconnect = false;
     s_websocket_state.close_pending = false;
     s_websocket_state.close_worker_submitted = false;
     atomic_store_explicit(&s_websocket_state.close_worker_completed, false,
+                          memory_order_release);
+    atomic_store_explicit(&s_websocket_state.close_worker_result, ESP_OK,
                           memory_order_release);
     atomic_store_explicit(&s_websocket_state.lifecycle,
                           WEBSOCKET_LIFECYCLE_IDLE,
@@ -437,23 +514,23 @@ static void websocket_finish_close_source(void)
 
 static void websocket_close_worker(void *opaque)
 {
-    esp_websocket_client_handle_t client = opaque;
+    esp32_mquickjs_websocket_state_t *state = opaque;
+    esp_err_t err = ESP_OK;
 
-    if (client != NULL) {
-        if (esp_websocket_client_is_connected(client)) {
+    if (state != NULL && state->client != NULL) {
+        if (state->client_started &&
+            esp_websocket_client_is_connected(state->client)) {
             if (esp_websocket_client_close(
-                    client,
-                    pdMS_TO_TICKS(WEBSOCKET_DEFAULT_SEND_TIMEOUT_MS)) !=
+                    state->client,
+                    pdMS_TO_TICKS(WEBSOCKET_DEFAULT_SEND_TIMEOUT_MS)) ==
                 ESP_OK) {
-                (void)esp_websocket_client_stop(client);
+                state->client_started = false;
             }
-        } else {
-            (void)esp_websocket_client_stop(client);
         }
-        (void)esp_websocket_unregister_events(
-            client, WEBSOCKET_EVENT_ANY, websocket_event_handler);
-        (void)esp_websocket_client_destroy(client);
+        err = websocket_cleanup_client_resources(state);
     }
+    atomic_store_explicit(&s_websocket_state.close_worker_result, err,
+                          memory_order_release);
     atomic_store_explicit(&s_websocket_state.close_worker_completed, true,
                           memory_order_release);
 }
@@ -467,10 +544,17 @@ static bool websocket_schedule_close_worker(void)
     if (s_websocket_state.close_worker_submitted) {
         return true;
     }
+    if (atomic_load_explicit(&s_websocket_state.close_worker_result,
+                             memory_order_acquire) != ESP_OK) {
+        return false;
+    }
     atomic_store_explicit(&s_websocket_state.close_worker_completed, false,
                           memory_order_release);
     if (!esp32_mquickjs_submit_background_worker(
-            websocket_close_worker, s_websocket_state.client)) {
+            websocket_close_worker, &s_websocket_state)) {
+        atomic_store_explicit(&s_websocket_state.close_worker_result,
+                              ESP_ERR_NO_MEM,
+                              memory_order_release);
         return false;
     }
     s_websocket_state.close_worker_submitted = true;
@@ -492,6 +576,13 @@ static bool websocket_poll_close(void)
                               memory_order_acquire)) {
         return false;
     }
+    s_websocket_state.close_worker_submitted = false;
+    atomic_store_explicit(&s_websocket_state.close_worker_completed, false,
+                          memory_order_release);
+    if (atomic_load_explicit(&s_websocket_state.close_worker_result,
+                             memory_order_acquire) != ESP_OK) {
+        return false;
+    }
     websocket_finish_close_source();
     return true;
 }
@@ -500,6 +591,8 @@ static void websocket_close_source(void *opaque)
 {
     (void)opaque;
     s_websocket_state.event_queue = NULL;
+    atomic_store_explicit(&s_websocket_state.close_worker_result, ESP_OK,
+                          memory_order_release);
     atomic_store_explicit(&s_websocket_state.lifecycle,
                           WEBSOCKET_LIFECYCLE_CLOSING,
                           memory_order_release);
@@ -522,7 +615,7 @@ static void websocket_close_internal(void)
     }
 }
 
-static void websocket_wait_for_close(void)
+static bool websocket_wait_for_close(void)
 {
     esp32_mquickjs_runtime_t *runtime = s_websocket_state.runtime;
     esp32_mquickjs_native_wait_t wait;
@@ -534,11 +627,18 @@ static void websocket_wait_for_close(void)
         if (websocket_poll_close()) {
             continue;
         }
+        if (!s_websocket_state.close_worker_submitted &&
+            atomic_load_explicit(&s_websocket_state.close_worker_result,
+                                 memory_order_acquire) != ESP_OK) {
+            esp32_mquickjs_native_wait_end(runtime, &wait);
+            return false;
+        }
         (void)esp32_mquickjs_cooperate(runtime);
         (void)esp32_mquickjs_future_cooperate(runtime);
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     esp32_mquickjs_native_wait_end(runtime, &wait);
+    return true;
 }
 
 static bool websocket_make_event_object(
@@ -750,18 +850,26 @@ bool esp32_mquickjs_init_websocket_runtime(JSContext *ctx,
     return true;
 }
 
-void esp32_mquickjs_deinit_websocket_runtime(JSContext *ctx)
+bool esp32_mquickjs_deinit_websocket_runtime(JSContext *ctx)
 {
     if (!s_websocket_state.initialized) {
-        return;
+        return true;
     }
     websocket_close_internal();
-    websocket_wait_for_close();
+    if (!websocket_wait_for_close()) {
+        ESP_LOGE(TAG,
+                 "WebSocket runtime cleanup retained for retry: %s",
+                 esp_err_to_name((esp_err_t)atomic_load_explicit(
+                     &s_websocket_state.close_worker_result,
+                     memory_order_acquire)));
+        return false;
+    }
     if (s_websocket_state.queue != NULL) {
         vQueueDelete(s_websocket_state.queue);
     }
     (void)ctx;
     websocket_reset_state();
+    return true;
 }
 
 JSValue js_websocket_open(JSContext *ctx,
@@ -988,7 +1096,11 @@ JSValue js_websocket_open(JSContext *ctx,
                                         websocket_event_handler,
                                         &s_websocket_state);
     if (err == ESP_OK) {
+        s_websocket_state.events_registered = true;
         err = esp_websocket_client_start(client);
+        if (err == ESP_OK) {
+            s_websocket_state.client_started = true;
+        }
     }
     if (err != ESP_OK) {
         websocket_close_internal();

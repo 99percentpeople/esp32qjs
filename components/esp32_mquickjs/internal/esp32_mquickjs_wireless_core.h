@@ -41,6 +41,9 @@ typedef struct {
     uint16_t index;
 } esp32_mquickjs_wireless_critical_slot_t;
 
+typedef bool (*esp32_mquickjs_wireless_event_send_from_isr_fn)(
+    void *destination, const void *event, int *task_woken);
+
 bool esp32_mquickjs_wireless_parse_address(
     const char *text,
     uint8_t output[ESP32_MQUICKJS_WIRELESS_ADDRESS_BYTES]);
@@ -60,6 +63,13 @@ bool esp32_mquickjs_wireless_pool_release(
     esp32_mquickjs_wireless_pool_t *pool, uint16_t index);
 uint32_t esp32_mquickjs_wireless_pool_available(
     const esp32_mquickjs_wireless_pool_t *pool);
+bool esp32_mquickjs_wireless_pooled_event_publish_from_isr(
+    esp32_mquickjs_wireless_pool_t *pool,
+    uint16_t pool_index,
+    void *destination,
+    const void *event,
+    esp32_mquickjs_wireless_event_send_from_isr_fn send,
+    int *task_woken);
 
 bool esp32_mquickjs_wireless_tx_timeout(
     esp32_mquickjs_wireless_tx_state_t *state);
@@ -78,6 +88,9 @@ bool esp32_mquickjs_wireless_native_operation_complete(
     esp32_mquickjs_wireless_native_operation_t *operation);
 bool esp32_mquickjs_wireless_native_operation_is_quiescent(
     const esp32_mquickjs_wireless_native_operation_t *operation);
+bool esp32_mquickjs_wireless_close_can_release(
+    uint32_t callbacks_active,
+    bool native_operations_quiescent);
 
 bool esp32_mquickjs_wireless_uuid_valid(const char *text);
 bool esp32_mquickjs_wireless_local_value_write(

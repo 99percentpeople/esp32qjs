@@ -93,6 +93,68 @@ class WifiRadioArchitectureTests(unittest.TestCase):
             ensure_started.index("wifi_wait_for_bits"),
         )
 
+    def test_wifi_init_failure_releases_every_owned_stage_in_reverse(self):
+        wifi = (
+            MQUICKJS / "src/modules/wifi/esp32_mquickjs_wifi.c"
+        ).read_text(encoding="utf-8")
+        resources = (
+            MQUICKJS
+            / "src/modules/wifi/esp32_mquickjs_wifi_runtime_resources.c"
+        ).read_text(encoding="utf-8")
+        cleanup = wifi[
+            wifi.index("static void wifi_cleanup_failed_init") :
+            wifi.index("static esp_err_t wifi_init_once")
+        ]
+        init_once = wifi[
+            wifi.index("static esp_err_t wifi_init_once") :
+            wifi.index("static EventBits_t wifi_wait_for_bits")
+        ]
+
+        self.assertIn(
+            "esp32_mquickjs_wifi_runtime_resources_init(", init_once
+        )
+        self.assertNotIn("xSemaphoreCreateMutex", init_once)
+        self.assertNotIn("xEventGroupCreate", init_once)
+        self.assertNotIn("xQueueCreate", init_once)
+        self.assertGreaterEqual(init_once.count("goto fail;"), 7)
+        self.assertIn("wifi_cleanup_failed_init();", init_once)
+        self.assertLess(
+            cleanup.index("esp_timer_delete"),
+            cleanup.index("IP_EVENT_STA_GOT_IP"),
+        )
+        self.assertLess(
+            cleanup.index("IP_EVENT_STA_GOT_IP"),
+            cleanup.index("WIFI_EVENT_SCAN_DONE"),
+        )
+        self.assertLess(
+            cleanup.index("WIFI_EVENT_SCAN_DONE"),
+            cleanup.index("WIFI_EVENT_STA_DISCONNECTED"),
+        )
+        self.assertLess(
+            cleanup.index("WIFI_EVENT_STA_DISCONNECTED"),
+            cleanup.index("WIFI_EVENT_STA_START"),
+        )
+        self.assertLess(
+            cleanup.index("esp32_mquickjs_wifi_radio_release"),
+            cleanup.index("esp_netif_destroy_default_wifi"),
+        )
+        self.assertLess(
+            cleanup.index("esp_netif_destroy_default_wifi"),
+            cleanup.index("esp32_mquickjs_wifi_runtime_resources_deinit"),
+        )
+        self.assertLess(
+            resources.index("resources->connect_queue"),
+            resources.index("resources->scan_queue"),
+        )
+        self.assertLess(
+            resources.index("resources->scan_queue"),
+            resources.index("resources->event_group"),
+        )
+        self.assertLess(
+            resources.index("resources->event_group"),
+            resources.index("resources->lock"),
+        )
+
     def test_wifi_status_reports_the_boot_scoped_radio_snapshot(self):
         wifi = (
             MQUICKJS / "src/modules/wifi/esp32_mquickjs_wifi.c"

@@ -9,6 +9,8 @@
 #include "esp32_mquickjs_event_queue.h"
 #include "esp32_mquickjs_fs_events.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_fs_atomic_write.h"
+#include "esp32_mquickjs_options.h"
 #include "utils/esp32_mquickjs_fs_path.h"
 #include "esp32_mquickjs_stream.h"
 #include "mquickjs_priv.h"
@@ -831,15 +833,10 @@ static bool fs_parse_watch_options(JSContext *ctx,
                                    JSValue *argv,
                                    uint32_t *capacity)
 {
-    JSGCRef keys_ref;
-    JSGCRef length_ref;
     JSGCRef value_ref;
-    JSValue *keys;
-    JSValue *length_value;
     JSValue *value;
-    double number;
-    int length = 0;
-    int index;
+    static const char *const allowed[] = {"capacity"};
+    uint32_t parsed_capacity;
 
     if (capacity == NULL) {
         return false;
@@ -848,66 +845,32 @@ static bool fs_parse_watch_options(JSContext *ctx,
     if (argc == 0 || JS_IsUndefined(argv[0])) {
         return true;
     }
-    if (argc != 1 || JS_GetClassID(ctx, argv[0]) < 0 || JS_IsArray(ctx, argv[0])) {
-        JS_ThrowTypeError(ctx, "fs.watch(options?) expects { capacity? }");
+    if (argc != 1 ||
+        !esp32_mquickjs_validate_plain_options(
+            ctx, argv[0], "fs.watch(options?)", allowed, 1)) {
+        if (!JS_HasException(ctx)) {
+            JS_ThrowTypeError(ctx, "fs.watch(options?) expects { capacity? }");
+        }
         return false;
     }
 
-    keys = JS_PushGCRef(ctx, &keys_ref);
-    length_value = JS_PushGCRef(ctx, &length_ref);
     value = JS_PushGCRef(ctx, &value_ref);
-    *keys = js_object_keys(ctx, NULL, 1, &argv[0]);
-    *length_value = JS_IsException(*keys)
-                        ? JS_EXCEPTION
-                        : JS_GetPropertyStr(ctx, *keys, "length");
-    if (JS_IsException(*length_value) ||
-        JS_ToInt32(ctx, &length, *length_value) != 0 || length < 0) {
-        goto fail;
-    }
-    for (index = 0; index < length; ++index) {
-        JSGCRef key_ref;
-        JSValue *key_value = JS_PushGCRef(ctx, &key_ref);
-        JSCStringBuf key_buf;
-        const char *key;
-
-        *key_value = JS_GetPropertyUint32(ctx, *keys, (uint32_t)index);
-        key = JS_IsException(*key_value)
-                  ? NULL
-                  : JS_ToCString(ctx, *key_value, &key_buf);
-        if (key == NULL || strcmp(key, "capacity") != 0) {
-            if (key != NULL) {
-                JS_ThrowTypeError(
-                    ctx, "fs.watch(options?) options contains unknown key '%s'", key);
-            }
-            JS_PopGCRef(ctx, &key_ref);
-            goto fail;
-        }
-        JS_PopGCRef(ctx, &key_ref);
-    }
     *value = JS_GetPropertyStr(ctx, argv[0], "capacity");
     if (!JS_IsUndefined(*value) &&
-        (!JS_IsNumber(ctx, *value) || JS_ToNumber(ctx, &number, *value) != 0 ||
-         !isfinite(number) || number < 1.0 ||
-         number > (double)ESP32_MQUICKJS_FS_CHANGE_QUEUE_MAX_LEN ||
-         (double)(uint32_t)number != number)) {
+        !esp32_mquickjs_value_to_bounded_u32(
+            ctx, *value, 1U, ESP32_MQUICKJS_FS_CHANGE_QUEUE_MAX_LEN,
+            &parsed_capacity)) {
         JS_ThrowRangeError(
             ctx, "fs.watch({ capacity }) expects an integer in 1..%u",
             (unsigned)ESP32_MQUICKJS_FS_CHANGE_QUEUE_MAX_LEN);
-        goto fail;
+        JS_PopGCRef(ctx, &value_ref);
+        return false;
     }
     if (!JS_IsUndefined(*value)) {
-        *capacity = (uint32_t)number;
+        *capacity = parsed_capacity;
     }
     JS_PopGCRef(ctx, &value_ref);
-    JS_PopGCRef(ctx, &length_ref);
-    JS_PopGCRef(ctx, &keys_ref);
     return true;
-
-fail:
-    JS_PopGCRef(ctx, &value_ref);
-    JS_PopGCRef(ctx, &length_ref);
-    JS_PopGCRef(ctx, &keys_ref);
-    return false;
 }
 
 JSValue js_fs_watch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -1102,14 +1065,9 @@ static bool fs_parse_read_text_options(JSContext *ctx,
                                        JSGCRef *argv,
                                        size_t *max_bytes)
 {
-    JSGCRef keys_ref;
-    JSGCRef length_ref;
     JSGCRef value_ref;
-    JSValue *keys;
-    JSValue *length_value;
     JSValue *value;
-    int length = 0;
-    int index;
+    static const char *const allowed[] = {"maxBytes"};
 
     if (max_bytes == NULL) {
         return false;
@@ -1118,46 +1076,12 @@ static bool fs_parse_read_text_options(JSContext *ctx,
     if (argc < 2 || JS_IsUndefined(argv[1].val) || JS_IsNull(argv[1].val)) {
         return true;
     }
-    if (JS_GetClassID(ctx, argv[1].val) < 0 ||
-        JS_IsArray(ctx, argv[1].val)) {
-        JS_ThrowTypeError(ctx,
-                          "fs.readText(path, options?) expects an options object");
+    if (!esp32_mquickjs_validate_plain_options(
+            ctx, argv[1].val, "fs.readText(path, options?)", allowed, 1)) {
         return false;
     }
 
-    keys = JS_PushGCRef(ctx, &keys_ref);
-    length_value = JS_PushGCRef(ctx, &length_ref);
     value = JS_PushGCRef(ctx, &value_ref);
-    *keys = js_object_keys(ctx, NULL, 1, &argv[1].val);
-    *length_value = JS_IsException(*keys)
-                        ? JS_EXCEPTION
-                        : JS_GetPropertyStr(ctx, *keys, "length");
-    if (JS_IsException(*length_value) ||
-        JS_ToInt32(ctx, &length, *length_value) != 0 || length < 0) {
-        goto fail;
-    }
-    for (index = 0; index < length; ++index) {
-        JSGCRef key_ref;
-        JSValue *key_value = JS_PushGCRef(ctx, &key_ref);
-        JSCStringBuf key_buf;
-        const char *key;
-
-        *key_value = JS_GetPropertyUint32(ctx, *keys, (uint32_t)index);
-        key = JS_IsException(*key_value)
-                  ? NULL
-                  : JS_ToCString(ctx, *key_value, &key_buf);
-        if (key == NULL || strcmp(key, "maxBytes") != 0) {
-            if (key != NULL) {
-                JS_ThrowTypeError(
-                    ctx,
-                    "fs.readText(path, options?) options contains unknown key '%s'",
-                    key);
-            }
-            JS_PopGCRef(ctx, &key_ref);
-            goto fail;
-        }
-        JS_PopGCRef(ctx, &key_ref);
-    }
     *value = JS_GetPropertyStr(ctx, argv[1].val, "maxBytes");
     if (!JS_IsUndefined(*value) &&
         !fs_number_to_bounded_size(
@@ -1170,14 +1094,10 @@ static bool fs_parse_read_text_options(JSContext *ctx,
         goto fail;
     }
     JS_PopGCRef(ctx, &value_ref);
-    JS_PopGCRef(ctx, &length_ref);
-    JS_PopGCRef(ctx, &keys_ref);
     return true;
 
 fail:
     JS_PopGCRef(ctx, &value_ref);
-    JS_PopGCRef(ctx, &length_ref);
-    JS_PopGCRef(ctx, &keys_ref);
     return false;
 }
 
@@ -1546,25 +1466,63 @@ static int fs_write_file_and_sync(FILE *file,
     return result;
 }
 
+static int fs_atomic_open_adapter(const char *target_path,
+                                  char *temp_path,
+                                  size_t temp_path_size,
+                                  void **out_handle,
+                                  void *opaque)
+{
+    FILE *file = NULL;
+    int result;
+
+    (void)opaque;
+    result = fs_open_atomic_temp(
+        target_path, temp_path, temp_path_size, &file);
+    if (out_handle != NULL) {
+        *out_handle = file;
+    }
+    return result;
+}
+
+static int fs_atomic_write_sync_close_adapter(void *handle,
+                                              const char *data,
+                                              size_t data_length,
+                                              void *opaque)
+{
+    (void)opaque;
+    return fs_write_file_and_sync(handle, data, data_length);
+}
+
+static int fs_atomic_replace_adapter(const char *temp_path,
+                                     const char *target_path,
+                                     void *opaque)
+{
+    (void)opaque;
+    return rename(temp_path, target_path) == 0
+               ? 0
+               : (errno != 0 ? errno : EIO);
+}
+
+static void fs_atomic_remove_adapter(const char *temp_path, void *opaque)
+{
+    (void)opaque;
+    (void)unlink(temp_path);
+}
+
 static int fs_write_text_atomic(
     const esp32_mquickjs_future_driver_state_t *state)
 {
+    static const esp32_mquickjs_fs_atomic_write_ops_t ops = {
+        .open_temp = fs_atomic_open_adapter,
+        .write_sync_close = fs_atomic_write_sync_close_adapter,
+        .replace = fs_atomic_replace_adapter,
+        .remove_temp = fs_atomic_remove_adapter,
+    };
     char temp_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
-    FILE *file = NULL;
-    int result = fs_open_atomic_temp(state->path, temp_path,
-                                     sizeof(temp_path), &file);
 
-    if (result != 0) {
-        return result;
-    }
-    result = fs_write_file_and_sync(file, state->data, state->data_length);
-    if (result == 0 && rename(temp_path, state->path) != 0) {
-        result = errno != 0 ? errno : EIO;
-    }
-    if (result != 0) {
-        unlink(temp_path);
-    }
-    return result;
+    return esp32_mquickjs_fs_atomic_write(
+        state->path, state->data, state->data_length,
+        temp_path, sizeof(temp_path), &ops, NULL);
 }
 
 static void fs_future_worker(void *opaque)

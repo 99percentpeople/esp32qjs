@@ -3,6 +3,7 @@
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA
 
+#include "esp32_mquickjs_camera_driver_resources.h"
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_peripheral_lease.h"
@@ -62,6 +63,18 @@ static size_t camera_psram_size(void)
     return 0;
 #endif
 }
+
+static int camera_driver_deinit(void *opaque)
+{
+    (void)opaque;
+    return esp_camera_deinit();
+}
+
+static const esp32_mquickjs_camera_driver_resource_ops_t
+    s_camera_driver_resource_ops = {
+        .deinit = camera_driver_deinit,
+        .opaque = NULL,
+    };
 
 typedef struct {
     uint32_t generation;
@@ -336,7 +349,7 @@ static bool camera_frame_matches(uint32_t camera_generation,
            !s_camera.frame_revoked;
 }
 
-static void camera_cleanup(void);
+static esp_err_t camera_cleanup(void);
 static void camera_close_schedule_cleanup(
     esp32_mquickjs_future_driver_state_t *state);
 
@@ -348,7 +361,7 @@ static void camera_cleanup_if_ready(void)
         if (s_camera.close_state != NULL) {
             camera_close_schedule_cleanup(s_camera.close_state);
         } else {
-            camera_cleanup();
+            (void)camera_cleanup();
         }
     }
 }
@@ -392,19 +405,33 @@ static void camera_release_leases(void)
     esp32_mquickjs_peripheral_lease_release(&s_camera.camera_lease);
 }
 
-static void camera_cleanup(void)
+static esp_err_t camera_cleanup(void)
 {
-    if (!s_camera.allocated || s_camera.busy || s_camera.source_active ||
-        s_camera.bitmap_read_leases != 0) {
-        return;
+    esp32_mquickjs_camera_driver_resources_t resources;
+    esp_err_t err;
+
+    if (!s_camera.allocated) {
+        return ESP_OK;
+    }
+    if (s_camera.busy || s_camera.source_active ||
+        s_camera.bitmap_read_leases != 0 || s_camera.close_state != NULL) {
+        return ESP_ERR_INVALID_STATE;
     }
     s_camera.release_pending = false;
     camera_release_frame();
-    if (s_camera.initialized) {
-        (void)esp_camera_deinit();
+    resources = (esp32_mquickjs_camera_driver_resources_t){
+        .initialized = s_camera.initialized,
+    };
+    err = (esp_err_t)esp32_mquickjs_camera_driver_resources_deinit(
+        &resources, &s_camera_driver_resource_ops);
+    s_camera.initialized = resources.initialized;
+    if (err != ESP_OK) {
+        s_camera.release_pending = true;
+        return err;
     }
     camera_release_leases();
     memset(&s_camera, 0, sizeof(s_camera));
+    return ESP_OK;
 }
 
 static int camera_from_value(JSContext *ctx, JSValue value,
@@ -418,7 +445,7 @@ static int camera_from_value(JSContext *ctx, JSValue value,
         JS_ThrowTypeError(ctx, "%s expects a Camera", api_name);
         return -1;
     }
-    if (!camera_slot_matches(ref->generation)) {
+    if (!camera_slot_matches(ref->generation) || s_camera.release_pending) {
         JS_ThrowReferenceError(ctx, "%s failed because the Camera is closed",
                                api_name);
         return -1;
@@ -947,13 +974,18 @@ static const esp32_mquickjs_future_driver_t s_camera_capture_driver = {
 static void camera_close_worker(void *opaque)
 {
     esp32_mquickjs_future_driver_state_t *state = opaque;
+    esp32_mquickjs_camera_driver_resources_t resources;
 
     if (state == NULL) {
         return;
     }
-    state->close_result = state->close_initialized
-                              ? esp_camera_deinit()
-                              : ESP_OK;
+    resources = (esp32_mquickjs_camera_driver_resources_t){
+        .initialized = state->close_initialized,
+    };
+    state->close_result =
+        (esp_err_t)esp32_mquickjs_camera_driver_resources_deinit(
+            &resources, &s_camera_driver_resource_ops);
+    state->close_initialized = resources.initialized;
     camera_future_complete(state);
 }
 
@@ -1012,8 +1044,6 @@ static bool camera_close_start(
     esp32_mquickjs_future_token_t token,
     esp32_mquickjs_future_driver_state_t *state)
 {
-    esp32_mquickjs_camera_ref_t *camera_ref;
-
     if (state == NULL) {
         return false;
     }
@@ -1029,12 +1059,6 @@ static bool camera_close_start(
     if (s_camera.close_state != NULL) {
         JS_ThrowInternalError(ctx, "Camera close is already pending");
         return false;
-    }
-    camera_ref = JS_GetOpaque(ctx, state->owner_ref.val);
-    if (camera_ref != NULL &&
-        camera_ref->generation == state->camera_generation) {
-        JS_SetOpaque(ctx, state->owner_ref.val, NULL);
-        heap_caps_free(camera_ref);
     }
     state->close_initialized = s_camera.initialized;
     s_camera.release_pending = true;
@@ -1054,11 +1078,35 @@ static esp32_mquickjs_future_poll_t camera_close_poll(
         return ESP32_MQUICKJS_FUTURE_PENDING;
     }
     if (!state->cleanup_finalized) {
-        if (!state->cleanup_submitted && state->close_initialized) {
-            state->close_result = esp_camera_deinit();
+        if (!state->cleanup_submitted) {
+            esp32_mquickjs_camera_driver_resources_t resources = {
+                .initialized = state->close_initialized,
+            };
+
+            state->close_result =
+                (esp_err_t)esp32_mquickjs_camera_driver_resources_deinit(
+                    &resources, &s_camera_driver_resource_ops);
+            state->close_initialized = resources.initialized;
         }
         if (camera_slot_matches(state->camera_generation) &&
             s_camera.close_state == state) {
+            s_camera.initialized = state->close_initialized;
+            if (state->close_result != ESP_OK) {
+                s_camera.release_pending = true;
+                s_camera.close_state = NULL;
+                state->cleanup_finalized = true;
+                return ESP32_MQUICKJS_FUTURE_READY;
+            }
+            if (state->owner_retained) {
+                esp32_mquickjs_camera_ref_t *camera_ref =
+                    JS_GetOpaque(state->ctx, state->owner_ref.val);
+
+                if (camera_ref != NULL &&
+                    camera_ref->generation == state->camera_generation) {
+                    JS_SetOpaque(state->ctx, state->owner_ref.val, NULL);
+                    heap_caps_free(camera_ref);
+                }
+            }
             camera_release_leases();
             memset(&s_camera, 0, sizeof(s_camera));
         }
@@ -1070,8 +1118,11 @@ static esp32_mquickjs_future_poll_t camera_close_poll(
 static JSValue camera_close_finish(
     JSContext *ctx, esp32_mquickjs_future_driver_state_t *state)
 {
-    (void)ctx;
-    (void)state;
+    if (state != NULL && state->close_result != ESP_OK) {
+        return JS_ThrowInternalError(ctx,
+                                     "Camera.close() failed: %s",
+                                     esp_err_to_name(state->close_result));
+    }
     return JS_TRUE;
 }
 
@@ -1139,10 +1190,18 @@ static bool camera_register_future_driver(
 bool esp32_mquickjs_init_camera_runtime(
     JSContext *ctx, esp32_mquickjs_runtime_t *runtime)
 {
-    if (s_camera.allocated && !s_camera.busy) {
-        camera_cleanup();
+    esp_err_t err;
+
+    if (s_camera.allocated) {
+        s_camera.release_pending = true;
+        err = camera_cleanup();
+        if (err != ESP_OK) {
+            JS_ThrowInternalError(ctx,
+                                  "camera runtime cleanup failed: %s",
+                                  esp_err_to_name(err));
+            return false;
+        }
     }
-    memset(&s_camera, 0, sizeof(s_camera));
     return camera_register_future_driver(ctx, runtime);
 }
 
@@ -1681,6 +1740,14 @@ JSValue js_camera_open(JSContext *ctx, JSValue *this_val,
                       JS_IsArray(ctx, argv[0])))) {
         return JS_ThrowTypeError(ctx, "camera.open(options?) expects an object");
     }
+    if (s_camera.allocated && s_camera.release_pending) {
+        err = camera_cleanup();
+        if (err != ESP_OK) {
+            return JS_ThrowInternalError(ctx,
+                                         "camera.open() cleanup failed: %s",
+                                         esp_err_to_name(err));
+        }
+    }
     if (s_camera.allocated) {
         return JS_ThrowInternalError(ctx, "camera.open() supports one Camera at a time");
     }
@@ -1892,18 +1959,23 @@ parsed:
         return JS_ThrowInternalError(ctx, "camera.open() failed: %s",
                                      esp_err_to_name(err));
     }
+    s_camera.allocated = true;
+    s_camera.initialized = true;
     s_camera.sensor = esp_camera_sensor_get();
     if (s_camera.sensor == NULL ||
         (s_camera.sensor->id.PID != OV2640_PID &&
          s_camera.sensor->id.PID != OV3660_PID)) {
-        (void)esp_camera_deinit();
-        camera_release_leases();
-        memset(&s_camera, 0, sizeof(s_camera));
+        s_camera.release_pending = true;
+        err = camera_cleanup();
+        if (err != ESP_OK) {
+            return JS_ThrowInternalError(
+                ctx,
+                "camera.open() detected an unsupported sensor and cleanup failed: %s",
+                esp_err_to_name(err));
+        }
         return JS_ThrowInternalError(ctx,
                                      "camera.open() detected an unsupported sensor");
     }
-    s_camera.allocated = true;
-    s_camera.initialized = true;
     s_camera.generation = camera_take_generation();
     s_camera.default_timeout_ms = timeout_ms;
     s_camera.pixel_format = config.pixel_format;
@@ -1914,7 +1986,8 @@ parsed:
     s_camera.buffer_location = config.fb_location;
     result = camera_make_object(ctx);
     if (JS_IsException(result)) {
-        camera_cleanup();
+        s_camera.release_pending = true;
+        (void)camera_cleanup();
     }
     return result;
 }

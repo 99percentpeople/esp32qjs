@@ -7,7 +7,7 @@
 
 bool esp32_mquickjs_init_ble_runtime(JSContext *ctx,
                                      esp32_mquickjs_runtime_t *runtime);
-void esp32_mquickjs_deinit_ble_runtime(JSContext *ctx);
+bool esp32_mquickjs_deinit_ble_runtime(JSContext *ctx);
 
 JSValue js_ble_capabilities(JSContext *, JSValue *, int, JSValue *);
 JSValue js_ble_open(JSContext *, JSValue *, int, JSValue *);

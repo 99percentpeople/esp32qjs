@@ -122,16 +122,14 @@ class ProfileConstantsTests(unittest.TestCase):
         for symbol, section in feature_sections:
             self.assertRegex(section, r"(?m)^\s+default n\s*$", symbol)
 
-    def test_camera_managed_component_is_feature_gated(self):
+    def test_camera_managed_component_is_available_before_kconfig_resolution(self):
         manifest = (
             ROOT / "components" / "esp32_mquickjs" / "idf_component.yml"
         ).read_text(encoding="utf-8")
 
         self.assertIn("espressif/esp32-camera:", manifest)
-        self.assertIn(
-            '$CONFIG{ESP32_MQUICKJS_FEATURE_CAMERA} == True',
-            manifest,
-        )
+        self.assertIn('if: "target == esp32s3"', manifest)
+        self.assertNotIn("$CONFIG{ESP32_MQUICKJS_FEATURE_CAMERA}", manifest)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -54,6 +55,68 @@ class RemoteConfigTests(unittest.TestCase):
             REMOTE.resolve_build_path("scratch/profile"),
             ROOT / "build" / "scratch" / "profile",
         )
+
+    def test_external_build_directory_requires_explicit_opt_in(self):
+        with tempfile.TemporaryDirectory() as temp_name:
+            external = str(Path(temp_name) / "firmware-build")
+            args, mcu, context = REMOTE.parse_args(
+                ["--build-dir", external, "show-config"]
+            )
+            with self.assertRaisesRegex(SystemExit, "--allow-external-build-dir"):
+                REMOTE.build_project_config(args, mcu, context)
+
+            args, mcu, context = REMOTE.parse_args(
+                [
+                    "--build-dir",
+                    external,
+                    "--allow-external-build-dir",
+                    "show-config",
+                ]
+            )
+            config = REMOTE.build_project_config(args, mcu, context)
+            self.assertTrue(config.allow_external_build_dir)
+
+    def test_build_cleanup_is_limited_to_build_root_without_opt_in(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as temp_name:
+            path = Path(temp_name)
+            with self.assertRaisesRegex(SystemExit, "unsafe build directory"):
+                REMOTE.safe_remove_build_dir(path, allow_external=False)
+            self.assertTrue(path.exists())
+        for path in (Path(path.anchor), Path.home(), ROOT, ROOT / "build"):
+            with self.subTest(path=path), self.assertRaisesRegex(
+                SystemExit, "unsafe build directory"
+            ):
+                REMOTE.safe_remove_build_dir(path, allow_external=True)
+
+    def test_esptool_configuration_is_project_local(self):
+        with tempfile.TemporaryDirectory() as temp_name:
+            config_path = Path(temp_name) / "tooling" / "esptool.cfg"
+            with (
+                patch.object(REMOTE, "ESPTOOL_CONFIG_PATH", config_path),
+                patch.dict(os.environ, {}, clear=False),
+            ):
+                os.environ.pop("ESPTOOL_CFGFILE", None)
+                written = REMOTE.write_esptool_config()
+                self.assertEqual(written, config_path)
+                self.assertEqual(os.environ["ESPTOOL_CFGFILE"], str(config_path))
+                self.assertEqual(config_path.read_text(encoding="ascii"), REMOTE.ESPTOOL_CONFIG_TEXT)
+
+    def test_idf_actions_install_the_project_local_esptool_config(self):
+        source = REMOTE_PATH.read_text(encoding="utf-8")
+        action_start = source.index("def run_idf_action_with_stale_build_recovery(")
+        action_end = source.index("\ndef build(", action_start)
+
+        self.assertIn("write_esptool_config()", source[action_start:action_end])
+
+    def test_rfc2217_stop_is_pid_scoped(self):
+        source = REMOTE_PATH.read_text(encoding="utf-8")
+        stop_start = source.index("def stop_server_processes()")
+        stop_end = source.index("\ndef start_server(", stop_start)
+        stop = source[stop_start:stop_end]
+
+        self.assertIn("read_server_pid()", stop)
+        self.assertIn("os.kill(pid, signal.SIGTERM)", stop)
+        self.assertNotIn("pkill", stop)
 
     def test_explicit_context_drives_mcu_and_rejects_incomplete_input(self):
         with tempfile.TemporaryDirectory() as temp_name:
@@ -116,6 +179,9 @@ class RemoteConfigTests(unittest.TestCase):
         defaults = (context / "sdkconfig.defaults").read_text(encoding="utf-8")
         self.assertIn("CONFIG_ESP32_MQUICKJS_DEBUG_GC=y", defaults)
         self.assertIn("CONFIG_ESP32QJS_JS_HEAP_SIZE=524288", defaults)
+        self.assertIn('CONFIG_ESP32_MQUICKJS_PSRAM_MODE="octal"', defaults)
+        self.assertIn("CONFIG_SPIRAM=y", defaults)
+        self.assertIn("CONFIG_SPIRAM_MODE_OCT=y", defaults)
         self.assertEqual(
             json.loads((context / "precompile.json").read_text(encoding="utf-8"))["inline"],
             ["_test/harness.js"],

@@ -30,6 +30,8 @@ test("http/offline", function () {
   var binaryConstructorBytes;
   var boundedBytesError = "";
   var contentLengthError = "";
+  var intrinsicHeadersError = "";
+  var originalObjectKeys;
 
   test.equal(headers.get("foo"), "Bar", "headers should normalize names");
   test.ok(headers.has("foo"), "headers.has should find normalized key");
@@ -96,6 +98,24 @@ test("http/offline", function () {
   }
   test.ok(contentLengthError.indexOf("Content-Length") >= 0,
     "fetch should reject a mismatched binary Content-Length before dispatch");
+  originalObjectKeys = Object.keys;
+  Object.keys = function () { return []; };
+  try {
+    http.fetch("http://127.0.0.1:9/intrinsic", {
+      method: "POST",
+      headers: { "content-length": "2" },
+      body: "A",
+      timeoutMs: 1
+    });
+  } catch (intrinsicHeadersFailure) {
+    intrinsicHeadersError = String(intrinsicHeadersFailure &&
+      intrinsicHeadersFailure.message
+      ? intrinsicHeadersFailure.message : intrinsicHeadersFailure);
+  } finally {
+    Object.keys = originalObjectKeys;
+  }
+  test.ok(intrinsicHeadersError.indexOf("Content-Length") >= 0,
+    "native header enumeration should ignore mutable Object.keys");
 
   fs.writeText(streamPath, "stream-body");
   streamResponse = Response.stream(fs.open(streamPath, "r"), { status: 202 });

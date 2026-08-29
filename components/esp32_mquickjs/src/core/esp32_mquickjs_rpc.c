@@ -2,6 +2,7 @@
 
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_fs_events.h"
+#include "esp32_mquickjs_options.h"
 #include "utils/esp32_mquickjs_byte_source.h"
 #include "esp32qjs_rpc_wire.h"
 
@@ -412,31 +413,6 @@ static int rpc_map_key_compare(const void *left_value, const void *right_value)
     return compared < 0 ? -1 : compared > 0 ? 1 : 0;
 }
 
-static JSValue rpc_object_keys(JSContext *ctx, JSValue value)
-{
-    esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
-    JSGCRef global_ref;
-    JSGCRef object_ref;
-    JSGCRef function_ref;
-    JSValue *global = JS_PushGCRef(ctx, &global_ref);
-    JSValue *object = JS_PushGCRef(ctx, &object_ref);
-    JSValue *function = JS_PushGCRef(ctx, &function_ref);
-    JSValue result;
-
-    *global = JS_GetGlobalObject(ctx);
-    *object = JS_IsException(*global) ? JS_EXCEPTION
-                                      : JS_GetPropertyStr(ctx, *global, "Object");
-    *function = JS_IsException(*object) ? JS_EXCEPTION
-                                        : JS_GetPropertyStr(ctx, *object, "keys");
-    result = JS_IsException(*function)
-                 ? JS_EXCEPTION
-                 : esp32_mquickjs_call(ctx, runtime, *function, *object, 1, &value);
-    JS_PopGCRef(ctx, &function_ref);
-    JS_PopGCRef(ctx, &object_ref);
-    JS_PopGCRef(ctx, &global_ref);
-    return result;
-}
-
 static bool rpc_encode_value(JSContext *ctx,
                              const rpc_codec_slot_t *codec,
                              JSValue value,
@@ -503,7 +479,7 @@ static bool rpc_encode_map(JSContext *ctx,
     uint32_t i;
     bool ok = false;
 
-    *keys_array = rpc_object_keys(ctx, value);
+    *keys_array = esp32_mquickjs_own_property_keys(ctx, value);
     *length_value = JS_IsException(*keys_array)
                         ? JS_EXCEPTION
                         : JS_GetPropertyStr(ctx, *keys_array, "length");

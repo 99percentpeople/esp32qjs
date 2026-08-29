@@ -23,6 +23,7 @@ test("ble/offline", function () {
   var report;
   var advertiser;
   var reopened;
+  var originalObjectKeys;
 
   test.equal(capabilities.classic, false, "BLE should exclude Bluetooth Classic");
   test.equal(capabilities.central, true, "BLE central role should be compiled");
@@ -50,6 +51,17 @@ test("ble/offline", function () {
     "native open capture should reject unknown options synchronously");
   assertThrowsContains(function () { invalidOpen.wait(100); }, "unknown option",
     "ble.open should report unknown option names");
+  originalObjectKeys = Object.keys;
+  Object.keys = function () { return []; };
+  try {
+    invalidOpen = Future.call(ble.open, ble, [{ unknown: true }]);
+    test.equal(invalidOpen.status(), "rejected",
+      "native BLE option capture should ignore mutable Object.keys");
+    assertThrowsContains(function () { invalidOpen.wait(100); }, "unknown option",
+      "ble.open should retain strict options after Object.keys replacement");
+  } finally {
+    Object.keys = originalObjectKeys;
+  }
   assertThrowsContains(function () { ble.open({ preferredMtu: 22 }); },
     "preferredMtu", "ble.open should reject an undersized ATT MTU");
   assertThrowsContains(function () {

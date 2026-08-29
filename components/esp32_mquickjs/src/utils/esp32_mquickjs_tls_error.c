@@ -257,40 +257,35 @@ JSValue esp32_mquickjs_throw_tls_error(
     JSContext *ctx, const char *operation,
     const esp32_mquickjs_tls_error_t *error)
 {
-    JSGCRef error_ref;
-    JSValue *error_value;
+    JSGCRef details_ref;
+    JSValue *details = JS_PushGCRef(ctx, &details_ref);
+    JSValue result;
     const char *code = esp32_mquickjs_tls_error_code(error);
-    esp_err_t operation_error = error != NULL ? error->operation_error : ESP_FAIL;
     esp_err_t esp_tls_error = error != NULL ? error->esp_tls_error : ESP_OK;
     int mbedtls_error = error != NULL ? error->mbedtls_error : 0;
     uint32_t verify_flags = error != NULL ? error->verify_flags : 0;
 
-    (void)JS_ThrowInternalError(
-        ctx, "%s %s (operation=0x%x, esp-tls=0x%x, mbedtls=%d, verify=0x%x)",
-        operation != NULL ? operation : "TLS operation", code,
-        (unsigned)operation_error, (unsigned)esp_tls_error,
-        mbedtls_error, (unsigned)verify_flags);
-    if (!JS_HasException(ctx)) {
+    *details = JS_NewObject(ctx);
+    if (JS_IsException(*details) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "operationError",
+            JS_NewInt32(ctx, error != NULL ? error->operation_error
+                                           : ESP_FAIL)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "espTlsError",
+            JS_NewInt32(ctx, (int32_t)esp_tls_error)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "mbedtlsError",
+            JS_NewInt32(ctx, (int32_t)mbedtls_error)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "verifyFlags", JS_NewUint32(ctx, verify_flags))) {
+        JS_PopGCRef(ctx, &details_ref);
         return JS_EXCEPTION;
     }
-    error_value = JS_PushGCRef(ctx, &error_ref);
-    *error_value = JS_GetException(ctx);
-    if (JS_GetClassID(ctx, *error_value) >= 0 &&
-        (JS_IsException(JS_SetPropertyStr(
-             ctx, *error_value, "code", JS_NewString(ctx, code))) ||
-         JS_IsException(JS_SetPropertyStr(
-             ctx, *error_value, "espTlsError",
-             JS_NewInt32(ctx, (int32_t)esp_tls_error))) ||
-         JS_IsException(JS_SetPropertyStr(
-             ctx, *error_value, "mbedtlsError",
-             JS_NewInt32(ctx, (int32_t)mbedtls_error))) ||
-         JS_IsException(JS_SetPropertyStr(
-             ctx, *error_value, "verifyFlags",
-             JS_NewUint32(ctx, verify_flags))))) {
-        JS_PopGCRef(ctx, &error_ref);
-        return JS_EXCEPTION;
-    }
-    return JS_Throw(ctx, JS_PopGCRef(ctx, &error_ref));
+    result = esp32_mquickjs_throw_native_error(
+        ctx, code, operation, "TLS operation failed", *details);
+    JS_PopGCRef(ctx, &details_ref);
+    return result;
 }
 
 #endif

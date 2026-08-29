@@ -33,15 +33,42 @@ struct esp32_mquickjs_future_driver_state {
     bool started;
     bool cancel_requested;
     bool worker_uses_caps;
+    bool cleanup_queued;
+    struct esp32_mquickjs_future_driver_state *next_cleanup;
 };
 
 typedef struct {
     bool initialized;
     SemaphoreHandle_t lock;
     uint32_t active_count;
+    esp32_mquickjs_future_driver_state_t *cleanup_pending;
 } esp32_mquickjs_http_future_runtime_t;
 
 static esp32_mquickjs_http_future_runtime_t s_http_future_runtime;
+
+static JSValue http_throw_operation_error(JSContext *ctx,
+                                          const char *code,
+                                          esp_err_t err)
+{
+    JSGCRef details_ref;
+    JSValue *details = JS_PushGCRef(ctx, &details_ref);
+    JSValue result;
+
+    *details = JS_NewObject(ctx);
+    if (JS_IsException(*details) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "espCode", JS_NewInt32(ctx, err)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "espName",
+            JS_NewString(ctx, esp_err_to_name(err)))) {
+        JS_PopGCRef(ctx, &details_ref);
+        return JS_EXCEPTION;
+    }
+    result = esp32_mquickjs_throw_native_error(
+        ctx, code, "http.fetch", "HTTP request failed", *details);
+    JS_PopGCRef(ctx, &details_ref);
+    return result;
+}
 
 static void http_future_lock(void)
 {
@@ -57,9 +84,53 @@ static void http_future_unlock(void)
     }
 }
 
+static void http_future_retry_pending_cleanup(void)
+{
+    esp32_mquickjs_future_driver_state_t **link;
+
+    if (!s_http_future_runtime.initialized) {
+        return;
+    }
+    http_future_lock();
+    link = &s_http_future_runtime.cleanup_pending;
+    while (*link != NULL) {
+        esp32_mquickjs_future_driver_state_t *state = *link;
+
+        if (!esp32_mquickjs_http_operation_destroy(state->operation)) {
+            link = &state->next_cleanup;
+            continue;
+        }
+        state->operation = NULL;
+        *link = state->next_cleanup;
+        state->next_cleanup = NULL;
+        state->cleanup_queued = false;
+        if (state->started && s_http_future_runtime.active_count > 0) {
+            s_http_future_runtime.active_count--;
+        }
+        heap_caps_free(state);
+    }
+    http_future_unlock();
+}
+
+static void http_future_track_pending_cleanup(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    if (state == NULL || state->cleanup_queued) {
+        return;
+    }
+    http_future_lock();
+    if (!state->cleanup_queued) {
+        state->next_cleanup = s_http_future_runtime.cleanup_pending;
+        s_http_future_runtime.cleanup_pending = state;
+        state->cleanup_queued = true;
+    }
+    http_future_unlock();
+}
+
 static bool http_future_init_state(void)
 {
     if (s_http_future_runtime.initialized) {
+        http_future_retry_pending_cleanup();
         return true;
     }
     memset(&s_http_future_runtime, 0, sizeof(s_http_future_runtime));
@@ -75,6 +146,7 @@ static bool http_future_reserve_worker(void)
 {
     bool reserved = false;
 
+    http_future_retry_pending_cleanup();
     http_future_lock();
     if (s_http_future_runtime.active_count < ESP32_MQUICKJS_HTTP_MAX_FUTURES) {
         s_http_future_runtime.active_count++;
@@ -203,7 +275,7 @@ static bool http_future_start(JSContext *ctx,
                               esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL || !http_future_reserve_worker()) {
-        JS_ThrowInternalError(ctx, "too many concurrent fetch requests");
+        http_throw_operation_error(ctx, "HTTP_QUEUE_FULL", ESP_ERR_NO_MEM);
         return false;
     }
     state->runtime = runtime;
@@ -212,7 +284,8 @@ static bool http_future_start(JSContext *ctx,
     if (http_future_create_worker(state) != pdPASS) {
         state->started = false;
         http_future_release_worker();
-        JS_ThrowInternalError(ctx, "failed to start fetch worker task");
+        http_throw_operation_error(
+            ctx, "HTTP_WORKER_START_FAILED", ESP_ERR_NO_MEM);
         return false;
     }
     return true;
@@ -232,11 +305,13 @@ static JSValue http_future_finish(JSContext *ctx,
                                   esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL) {
-        return JS_ThrowInternalError(ctx, "fetch Future lost its driver state");
+        return http_throw_operation_error(
+            ctx, "HTTP_INTERNAL", ESP_ERR_INVALID_STATE);
     }
     if (state->cancel_requested ||
         esp32_mquickjs_http_operation_is_cancelled(state->operation)) {
-        return JS_ThrowInternalError(ctx, "fetch cancelled");
+        return http_throw_operation_error(
+            ctx, "HTTP_CANCELLED", ESP_ERR_INVALID_STATE);
     }
     if (state->err != ESP_OK || state->response == NULL) {
 #if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
@@ -245,10 +320,11 @@ static JSValue http_future_finish(JSContext *ctx,
                 ctx, "fetch()", &state->tls_error);
         }
 #endif
-        return JS_ThrowInternalError(
+        return http_throw_operation_error(
             ctx,
-            "%s",
-            state->error_text[0] != '\0' ? state->error_text : esp_err_to_name(state->err));
+            state->err == ESP_ERR_TIMEOUT ? "HTTP_TIMEOUT"
+                                          : "HTTP_REQUEST_FAILED",
+            state->err);
     }
     return esp32_mquickjs_http_make_response_object(ctx, state->response);
 }
@@ -274,8 +350,13 @@ static void http_future_destroy(esp32_mquickjs_future_driver_state_t *state)
         return;
     }
     esp32_mquickjs_http_free_response(state->response);
+    state->response = NULL;
     esp32_mquickjs_http_free_request(&state->request);
-    esp32_mquickjs_http_operation_destroy(state->operation);
+    if (!esp32_mquickjs_http_operation_destroy(state->operation)) {
+        http_future_track_pending_cleanup(state);
+        return;
+    }
+    state->operation = NULL;
     if (state->started) {
         http_future_release_worker();
     }
@@ -357,6 +438,7 @@ bool esp32_mquickjs_deinit_http_runtime(JSContext *ctx)
     if (!s_http_future_runtime.initialized) {
         return true;
     }
+    http_future_retry_pending_cleanup();
     http_future_lock();
     active = s_http_future_runtime.active_count > 0;
     http_future_unlock();

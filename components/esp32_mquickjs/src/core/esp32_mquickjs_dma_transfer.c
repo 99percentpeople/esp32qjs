@@ -49,6 +49,66 @@ void esp32_mquickjs_dma_workspace_release(
     workspace->slots[slot_index].in_use = false;
 }
 
+void esp32_mquickjs_dma_workspace_release_buffers(
+    uint8_t *tx[ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT],
+    uint8_t *rx[ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT],
+    esp32_mquickjs_dma_buffer_release_fn release,
+    void *opaque)
+{
+    uint32_t index;
+
+    if (tx == NULL || rx == NULL) {
+        return;
+    }
+    for (index = 0; index < ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT;
+         ++index) {
+        if (tx[index] != NULL && release != NULL) {
+            release(tx[index], opaque);
+        }
+        if (rx[index] != NULL && release != NULL) {
+            release(rx[index], opaque);
+        }
+        tx[index] = NULL;
+        rx[index] = NULL;
+    }
+}
+
+bool esp32_mquickjs_dma_workspace_allocate_buffers(
+    uint8_t *tx[ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT],
+    uint8_t *rx[ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT],
+    size_t bytes,
+    esp32_mquickjs_dma_buffer_allocate_fn allocate,
+    esp32_mquickjs_dma_buffer_release_fn release,
+    void *opaque)
+{
+    uint32_t index;
+
+    if (tx == NULL || rx == NULL || bytes == 0 || allocate == NULL ||
+        release == NULL) {
+        return false;
+    }
+    memset(tx, 0,
+           sizeof(*tx) * ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT);
+    memset(rx, 0,
+           sizeof(*rx) * ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT);
+    for (index = 0; index < ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT;
+         ++index) {
+        tx[index] = allocate(bytes, opaque);
+        if (tx[index] == NULL) {
+            esp32_mquickjs_dma_workspace_release_buffers(
+                tx, rx, release, opaque);
+            return false;
+        }
+        rx[index] = allocate(bytes, opaque);
+        if (rx[index] == NULL) {
+            esp32_mquickjs_dma_workspace_release_buffers(
+                tx, rx, release, opaque);
+            return false;
+        }
+    }
+    return true;
+}
+
 void esp32_mquickjs_dma_cursor_begin(
     esp32_mquickjs_dma_cursor_t *cursor,
     const uint8_t *data,
@@ -247,6 +307,132 @@ esp32_mquickjs_dma_progress_t esp32_mquickjs_dma_validate_rx_progress(
                : (actual_bytes < expected_bytes
                       ? ESP32_MQUICKJS_DMA_PROGRESS_UNDERFLOW
                       : ESP32_MQUICKJS_DMA_PROGRESS_OK);
+}
+
+bool esp32_mquickjs_dma_rx_window_fits(
+    size_t output_offset,
+    size_t completed_bytes,
+    size_t output_capacity)
+{
+    return output_offset <= output_capacity &&
+           completed_bytes <= output_capacity - output_offset;
+}
+
+bool esp32_mquickjs_dma_completion_queue_init(
+    esp32_mquickjs_dma_completion_queue_t *queue,
+    uint32_t depth)
+{
+    if (queue == NULL || depth == 0 ||
+        depth > ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT) {
+        return false;
+    }
+    memset(queue, 0, sizeof(*queue));
+    queue->depth = depth;
+    return true;
+}
+
+bool esp32_mquickjs_dma_completion_queue_can_submit(
+    const esp32_mquickjs_dma_completion_queue_t *queue)
+{
+    return queue != NULL && queue->depth > 0 &&
+           queue->depth <= ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT &&
+           queue->occupied < queue->depth &&
+           queue->slots[queue->tail] == ESP32_MQUICKJS_DMA_QUEUE_SLOT_FREE;
+}
+
+bool esp32_mquickjs_dma_completion_queue_next_submit(
+    const esp32_mquickjs_dma_completion_queue_t *queue,
+    uint32_t *out_index)
+{
+    if (out_index == NULL ||
+        !esp32_mquickjs_dma_completion_queue_can_submit(queue)) {
+        return false;
+    }
+    *out_index = queue->tail;
+    return true;
+}
+
+bool esp32_mquickjs_dma_completion_queue_note_submitted(
+    esp32_mquickjs_dma_completion_queue_t *queue,
+    uint32_t index)
+{
+    if (!esp32_mquickjs_dma_completion_queue_can_submit(queue) ||
+        index != queue->tail || index >= queue->depth) {
+        return false;
+    }
+    queue->slots[index] = ESP32_MQUICKJS_DMA_QUEUE_SLOT_SUBMITTED;
+    queue->tail = (queue->tail + 1U) % queue->depth;
+    queue->occupied++;
+    queue->in_flight++;
+    return true;
+}
+
+esp32_mquickjs_dma_completion_t
+esp32_mquickjs_dma_completion_queue_note_returned(
+    esp32_mquickjs_dma_completion_queue_t *queue,
+    uint32_t index)
+{
+    bool in_order;
+
+    if (queue == NULL || queue->depth == 0 || index >= queue->depth ||
+        queue->slots[index] != ESP32_MQUICKJS_DMA_QUEUE_SLOT_SUBMITTED ||
+        queue->in_flight == 0 || queue->occupied == 0) {
+        return ESP32_MQUICKJS_DMA_COMPLETION_INVALID;
+    }
+    in_order = index == queue->head;
+    queue->slots[index] = ESP32_MQUICKJS_DMA_QUEUE_SLOT_RETURNED;
+    queue->in_flight--;
+    while (queue->occupied > 0 &&
+           queue->slots[queue->head] ==
+               ESP32_MQUICKJS_DMA_QUEUE_SLOT_RETURNED) {
+        queue->slots[queue->head] = ESP32_MQUICKJS_DMA_QUEUE_SLOT_FREE;
+        queue->head = (queue->head + 1U) % queue->depth;
+        queue->occupied--;
+    }
+    return in_order ? ESP32_MQUICKJS_DMA_COMPLETION_IN_ORDER
+                    : ESP32_MQUICKJS_DMA_COMPLETION_OUT_OF_ORDER;
+}
+
+bool esp32_mquickjs_dma_completion_queue_peek_in_flight(
+    const esp32_mquickjs_dma_completion_queue_t *queue,
+    uint32_t *out_index)
+{
+    uint32_t offset;
+
+    if (queue == NULL || out_index == NULL || queue->depth == 0 ||
+        queue->in_flight == 0) {
+        return false;
+    }
+    for (offset = 0; offset < queue->depth; ++offset) {
+        uint32_t index = (queue->head + offset) % queue->depth;
+
+        if (queue->slots[index] ==
+            ESP32_MQUICKJS_DMA_QUEUE_SLOT_SUBMITTED) {
+            *out_index = index;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool esp32_mquickjs_dma_completion_queue_releasable(
+    const esp32_mquickjs_dma_completion_queue_t *queue)
+{
+    return queue != NULL && queue->depth > 0 && queue->occupied == 0 &&
+           queue->in_flight == 0;
+}
+
+esp32_mquickjs_dma_cancel_t esp32_mquickjs_dma_cancel_disposition(
+    const esp32_mquickjs_dma_completion_queue_t *queue,
+    bool completed,
+    bool cancellation_requested)
+{
+    if (completed || cancellation_requested || queue == NULL) {
+        return ESP32_MQUICKJS_DMA_CANCEL_REJECTED;
+    }
+    return esp32_mquickjs_dma_completion_queue_releasable(queue)
+               ? ESP32_MQUICKJS_DMA_CANCEL_COMPLETE
+               : ESP32_MQUICKJS_DMA_CANCEL_PENDING;
 }
 
 uint64_t esp32_mquickjs_dma_progress_timeout_us(size_t bytes,

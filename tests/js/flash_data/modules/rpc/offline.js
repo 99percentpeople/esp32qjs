@@ -10,6 +10,7 @@ test("rpc/offline", function () {
   var replacement;
   var closedError = "";
   var i;
+  var originalObjectKeys;
 
   test.equal(rpc.PROTOCOL, "esp32qjs.rpc/1",
     "rpc.PROTOCOL should identify the v1 wire contract");
@@ -61,6 +62,24 @@ test("rpc/offline", function () {
   } finally {
     messages[0].payload.data.close();
   }
+
+  originalObjectKeys = Object.keys;
+  Object.keys = function () { return []; };
+  try {
+    frames = codec.encode(1, 8, 0, { ok: true });
+  } finally {
+    Object.keys = originalObjectKeys;
+  }
+  messages = [];
+  for (i = 0; i < frames.length; i += 1) {
+    try {
+      messages = messages.concat(decoder.feed(frames[i]));
+    } finally {
+      frames[i].close();
+    }
+  }
+  test.equal(messages[0].payload.ok, true,
+    "RPC map enumeration should ignore mutable Object.keys");
 
   decoderStatus = decoder.status();
   test.equal(decoderStatus.open, true, "decoder status should report an open handle");

@@ -3,6 +3,7 @@
 #if CONFIG_ESP32_MQUICKJS_FEATURE_LEDC
 
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_ledc_resources.h"
 #include "esp32_mquickjs_peripheral_lease.h"
 
 #include <stdbool.h>
@@ -12,6 +13,7 @@
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_err.h"
+#include "esp_log.h"
 #include "soc/soc_caps.h"
 
 typedef struct {
@@ -25,6 +27,7 @@ typedef struct {
 
 typedef struct {
     bool configured;
+    bool stopped;
     int pin;
     ledc_timer_t timer;
     uint32_t duty;
@@ -38,6 +41,7 @@ static esp32_mquickjs_ledc_timer_state_t s_ledc_timers[SOC_LEDC_TIMER_NUM];
 static esp32_mquickjs_ledc_channel_state_t s_ledc_channels[SOC_LEDC_CHANNEL_NUM];
 static bool s_ledc_fade_service_installed;
 static bool s_ledc_fade_service_owned;
+static const char *TAG = "esp32qjs_ledc";
 
 static int js_value_to_u32(JSContext *ctx, JSValue value, uint32_t *out_value)
 {
@@ -337,56 +341,171 @@ static bool ledc_read_bool_option(JSContext *ctx,
     return true;
 }
 
-void esp32_mquickjs_deinit_ledc_runtime(void)
+static int ledc_resource_stop_channel(int index, void *opaque)
 {
-    for (size_t i = 0; i < SOC_LEDC_CHANNEL_NUM; ++i) {
-        if (s_ledc_channels[i].configured) {
-            ledc_channel_config_t config = {
-                .speed_mode = LEDC_LOW_SPEED_MODE,
-                .channel = (ledc_channel_t)i,
-                .deconfigure = true,
-            };
+    (void)opaque;
+    return (int)ledc_stop(LEDC_LOW_SPEED_MODE, (ledc_channel_t)index, 0);
+}
 
-            (void)ledc_stop(LEDC_LOW_SPEED_MODE, (ledc_channel_t)i, 0);
-            (void)ledc_channel_config(&config);
-        }
-        esp32_mquickjs_peripheral_lease_release(&s_ledc_channels[i].lease);
-    }
-    for (size_t i = 0; i < SOC_LEDC_TIMER_NUM; ++i) {
-        if (s_ledc_timers[i].configured) {
-            ledc_timer_config_t config = {
-                .speed_mode = LEDC_LOW_SPEED_MODE,
-                .timer_num = (ledc_timer_t)i,
-                .deconfigure = true,
-            };
+static int ledc_resource_deconfigure_channel(int index, void *opaque)
+{
+    ledc_channel_config_t config = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = (ledc_channel_t)index,
+        .deconfigure = true,
+    };
 
-            (void)ledc_timer_pause(LEDC_LOW_SPEED_MODE, (ledc_timer_t)i);
-            (void)ledc_timer_config(&config);
-        }
-        esp32_mquickjs_peripheral_lease_release(&s_ledc_timers[i].lease);
+    (void)opaque;
+    return (int)ledc_channel_config(&config);
+}
+
+static int ledc_resource_pause_timer(int index, void *opaque)
+{
+    (void)opaque;
+    return (int)ledc_timer_pause(LEDC_LOW_SPEED_MODE, (ledc_timer_t)index);
+}
+
+static int ledc_resource_deconfigure_timer(int index, void *opaque)
+{
+    ledc_timer_config_t config = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .timer_num = (ledc_timer_t)index,
+        .deconfigure = true,
+    };
+
+    (void)opaque;
+    return (int)ledc_timer_config(&config);
+}
+
+static const esp32_mquickjs_ledc_resource_ops_t s_ledc_resource_ops = {
+    .stop_channel = ledc_resource_stop_channel,
+    .deconfigure_channel = ledc_resource_deconfigure_channel,
+    .pause_timer = ledc_resource_pause_timer,
+    .deconfigure_timer = ledc_resource_deconfigure_timer,
+    .opaque = NULL,
+};
+
+static void ledc_reset_channel_state(esp32_mquickjs_ledc_channel_state_t *state)
+{
+    memset(state, 0, sizeof(*state));
+    state->pin = -1;
+    state->timer = (ledc_timer_t)-1;
+    state->sleep_mode = LEDC_SLEEP_MODE_NO_ALIVE_NO_PD;
+}
+
+static void ledc_reset_timer_state(esp32_mquickjs_ledc_timer_state_t *state)
+{
+    memset(state, 0, sizeof(*state));
+    state->clock = LEDC_AUTO_CLK;
+}
+
+static esp_err_t ledc_cleanup_channel(ledc_channel_t channel)
+{
+    esp32_mquickjs_ledc_channel_state_t *state = ledc_channel_state(channel);
+    esp32_mquickjs_ledc_channel_resources_t resources = {
+        .configured = state->configured,
+        .stopped = state->stopped,
+    };
+    esp_err_t err = (esp_err_t)esp32_mquickjs_ledc_channel_resources_deinit(
+        &resources, (int)channel, &s_ledc_resource_ops);
+
+    state->configured = resources.configured;
+    state->stopped = resources.stopped;
+    if (err != ESP_OK) {
+        return err;
     }
-    if (s_ledc_fade_service_owned) {
-        ledc_fade_func_uninstall();
+    esp32_mquickjs_peripheral_lease_release(&state->lease);
+    ledc_reset_channel_state(state);
+    return ESP_OK;
+}
+
+static esp_err_t ledc_cleanup_timer(ledc_timer_t timer)
+{
+    esp32_mquickjs_ledc_timer_state_t *state = ledc_timer_state(timer);
+    esp32_mquickjs_ledc_timer_resources_t resources = {
+        .configured = state->configured,
+        .paused = state->paused,
+    };
+    esp_err_t err = (esp_err_t)esp32_mquickjs_ledc_timer_resources_deinit(
+        &resources, (int)timer, &s_ledc_resource_ops);
+
+    state->configured = resources.configured;
+    state->paused = resources.paused;
+    if (err != ESP_OK) {
+        return err;
     }
+    esp32_mquickjs_peripheral_lease_release(&state->lease);
+    ledc_reset_timer_state(state);
+    return ESP_OK;
+}
+
+static void ledc_reset_runtime_state(void)
+{
+    size_t i;
 
     memset(s_ledc_timers, 0, sizeof(s_ledc_timers));
     memset(s_ledc_channels, 0, sizeof(s_ledc_channels));
     s_ledc_fade_service_installed = false;
     s_ledc_fade_service_owned = false;
 
-    for (size_t i = 0; i < SOC_LEDC_CHANNEL_NUM; ++i) {
-        s_ledc_channels[i].pin = -1;
-        s_ledc_channels[i].timer = (ledc_timer_t)-1;
-        s_ledc_channels[i].sleep_mode = LEDC_SLEEP_MODE_NO_ALIVE_NO_PD;
+    for (i = 0; i < SOC_LEDC_CHANNEL_NUM; ++i) {
+        ledc_reset_channel_state(&s_ledc_channels[i]);
     }
-    for (size_t i = 0; i < SOC_LEDC_TIMER_NUM; ++i) {
-        s_ledc_timers[i].clock = LEDC_AUTO_CLK;
+    for (i = 0; i < SOC_LEDC_TIMER_NUM; ++i) {
+        ledc_reset_timer_state(&s_ledc_timers[i]);
     }
 }
 
-void esp32_mquickjs_init_ledc_runtime(void)
+static esp_err_t ledc_cleanup_all(void)
 {
-    esp32_mquickjs_deinit_ledc_runtime();
+    size_t i;
+    esp_err_t err;
+
+    for (i = 0; i < SOC_LEDC_CHANNEL_NUM; ++i) {
+        err = ledc_cleanup_channel((ledc_channel_t)i);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    for (i = 0; i < SOC_LEDC_TIMER_NUM; ++i) {
+        err = ledc_cleanup_timer((ledc_timer_t)i);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    if (s_ledc_fade_service_owned) {
+        ledc_fade_func_uninstall();
+    }
+    s_ledc_fade_service_installed = false;
+    s_ledc_fade_service_owned = false;
+    return ESP_OK;
+}
+
+bool esp32_mquickjs_init_ledc_runtime(JSContext *ctx)
+{
+    esp_err_t err = ledc_cleanup_all();
+
+    if (err != ESP_OK) {
+        JS_ThrowInternalError(ctx,
+                              "LEDC runtime cleanup failed: %s",
+                              esp_err_to_name(err));
+        return false;
+    }
+    ledc_reset_runtime_state();
+    return true;
+}
+
+void esp32_mquickjs_deinit_ledc_runtime(void)
+{
+    esp_err_t err = ledc_cleanup_all();
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG,
+                 "LEDC runtime cleanup retained for retry: %s",
+                 esp_err_to_name(err));
+        return;
+    }
+    ledc_reset_runtime_state();
 }
 
 JSValue js_ledc_timerConfig(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -414,6 +533,14 @@ JSValue js_ledc_timerConfig(JSContext *ctx, JSValue *this_val, int argc, JSValue
     config.speed_mode = LEDC_LOW_SPEED_MODE;
     config.timer_num = timer;
     config.deconfigure = deconfigure;
+
+    if (deconfigure) {
+        err = ledc_cleanup_timer(timer);
+        if (err != ESP_OK) {
+            return ledc_throw_error(ctx, err, "ledc_timer_config", (int)timer);
+        }
+        return ledc_make_timer_status(ctx, timer);
+    }
 
     if (!deconfigure) {
         JSValue property = JS_GetPropertyStr(ctx, argv[1], "freqHz");
@@ -453,8 +580,6 @@ JSValue js_ledc_timerConfig(JSContext *ctx, JSValue *this_val, int argc, JSValue
             }
             acquired = true;
         }
-    } else if (ledc_timer_state(timer)->configured) {
-        (void)ledc_timer_pause(LEDC_LOW_SPEED_MODE, timer);
     }
 
     err = ledc_timer_config(&config);
@@ -466,18 +591,11 @@ JSValue js_ledc_timerConfig(JSContext *ctx, JSValue *this_val, int argc, JSValue
         return ledc_throw_error(ctx, err, "ledc_timer_config", (int)timer);
     }
 
-    if (deconfigure) {
-        esp32_mquickjs_peripheral_lease_release(
-            &ledc_timer_state(timer)->lease);
-        memset(ledc_timer_state(timer), 0, sizeof(*ledc_timer_state(timer)));
-        ledc_timer_state(timer)->clock = LEDC_AUTO_CLK;
-    } else {
-        ledc_timer_state(timer)->configured = true;
-        ledc_timer_state(timer)->paused = false;
-        ledc_timer_state(timer)->freq_hz = freq_hz;
-        ledc_timer_state(timer)->duty_resolution = duty_resolution;
-        ledc_timer_state(timer)->clock = clock;
-    }
+    ledc_timer_state(timer)->configured = true;
+    ledc_timer_state(timer)->paused = false;
+    ledc_timer_state(timer)->freq_hz = freq_hz;
+    ledc_timer_state(timer)->duty_resolution = duty_resolution;
+    ledc_timer_state(timer)->clock = clock;
 
     return ledc_make_timer_status(ctx, timer);
 }
@@ -510,6 +628,14 @@ JSValue js_ledc_channelConfig(JSContext *ctx, JSValue *this_val, int argc, JSVal
     config.speed_mode = LEDC_LOW_SPEED_MODE;
     config.channel = channel;
     config.deconfigure = deconfigure;
+
+    if (deconfigure) {
+        err = ledc_cleanup_channel(channel);
+        if (err != ESP_OK) {
+            return ledc_throw_error(ctx, err, "ledc_channel_config", (int)channel);
+        }
+        return ledc_make_channel_status(ctx, channel);
+    }
 
     if (!deconfigure) {
         JSValue property = JS_GetPropertyStr(ctx, argv[1], "pin");
@@ -587,22 +713,14 @@ JSValue js_ledc_channelConfig(JSContext *ctx, JSValue *this_val, int argc, JSVal
         return ledc_throw_error(ctx, err, "ledc_channel_config", (int)channel);
     }
 
-    if (deconfigure) {
-        esp32_mquickjs_peripheral_lease_release(
-            &ledc_channel_state(channel)->lease);
-        memset(ledc_channel_state(channel), 0, sizeof(*ledc_channel_state(channel)));
-        ledc_channel_state(channel)->pin = -1;
-        ledc_channel_state(channel)->timer = (ledc_timer_t)-1;
-        ledc_channel_state(channel)->sleep_mode = LEDC_SLEEP_MODE_NO_ALIVE_NO_PD;
-    } else {
-        ledc_channel_state(channel)->configured = true;
-        ledc_channel_state(channel)->pin = (int)pin;
-        ledc_channel_state(channel)->timer = timer;
-        ledc_channel_state(channel)->duty = duty;
-        ledc_channel_state(channel)->hpoint = hpoint;
-        ledc_channel_state(channel)->output_invert = output_invert;
-        ledc_channel_state(channel)->sleep_mode = sleep_mode;
-    }
+    ledc_channel_state(channel)->configured = true;
+    ledc_channel_state(channel)->stopped = false;
+    ledc_channel_state(channel)->pin = (int)pin;
+    ledc_channel_state(channel)->timer = timer;
+    ledc_channel_state(channel)->duty = duty;
+    ledc_channel_state(channel)->hpoint = hpoint;
+    ledc_channel_state(channel)->output_invert = output_invert;
+    ledc_channel_state(channel)->sleep_mode = sleep_mode;
 
     return ledc_make_channel_status(ctx, channel);
 }
@@ -684,6 +802,7 @@ JSValue js_ledc_setDutyAndUpdate(JSContext *ctx, JSValue *this_val, int argc, JS
 
     ledc_channel_state(channel)->duty = duty;
     ledc_channel_state(channel)->hpoint = hpoint;
+    ledc_channel_state(channel)->stopped = false;
     return ledc_make_channel_status(ctx, channel);
 }
 
@@ -742,6 +861,7 @@ JSValue js_ledc_updateDuty(JSContext *ctx, JSValue *this_val, int argc, JSValue 
     if (err != ESP_OK) {
         return ledc_throw_error(ctx, err, "ledc_update_duty", (int)channel);
     }
+    ledc_channel_state(channel)->stopped = false;
 
     return ledc_make_channel_status(ctx, channel);
 }
@@ -830,6 +950,7 @@ JSValue js_ledc_stop(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     if (err != ESP_OK) {
         return ledc_throw_error(ctx, err, "ledc_stop", (int)channel);
     }
+    ledc_channel_state(channel)->stopped = true;
 
     return ledc_make_channel_status(ctx, channel);
 }

@@ -227,9 +227,9 @@ test("sys/runtime", function () {
   test.ok(taskSnapshot.tasks.length === 0 || typeof taskSnapshot.tasks[0].id === "number",
     "task snapshots should expose stable numeric IDs without handles");
   test.ok(taskLimitError.indexOf("1 through") >= 0, "task limit should be range checked");
-  test.ok(taskUnknownOptionError.indexOf("unknown key") >= 0,
+  test.ok(taskUnknownOptionError.indexOf("unknown option") >= 0,
     "unknown task options should be rejected");
-  test.ok(intrinsicOptionValidationError.indexOf("unknown key 'limt'") >= 0,
+  test.ok(intrinsicOptionValidationError.indexOf("unknown option 'limt'") >= 0,
     "native option validation should not depend on mutable Object.keys");
   test.ok(taskShapeError.indexOf("expects an object") >= 0,
     "task options should reject arrays");
@@ -254,7 +254,7 @@ test("sys/runtime", function () {
   test.ok(runtimeInfo.control.restartTimeoutMs > 0, "restart timeout should be configured");
   test.ok(controlReasonError.indexOf("1..64") >= 0,
     "empty lifecycle-control reasons should be rejected before scheduling");
-  test.ok(controlUnknownOptionError.indexOf("unknown key") >= 0,
+  test.ok(controlUnknownOptionError.indexOf("unknown option") >= 0,
     "unknown lifecycle-control options should be rejected");
   test.ok(controlShapeError.indexOf("expects an object") >= 0,
     "lifecycle-control options should reject arrays");

@@ -10,6 +10,13 @@ namespace ESP32QJS {
   type HeadersInit = Headers | HeaderRecord;
   type RequestBody = string | Stream | ByteView | ByteSpanSource | null | undefined;
 
+  /** Stable base shape for recoverable native operational failures. */
+  interface NativeError extends Error {
+    code: string;
+    operation: string;
+    details: object;
+  }
+
   /** Opaque generation-checked token returned by the timer globals. */
   type TimerHandle = number & { readonly __timerHandleBrand: never };
 
@@ -1689,15 +1696,17 @@ namespace ESP32QJS {
     | "DMA_TRANSFER_TIMEOUT"
     | "DMA_DEVICE_FAULTED";
 
-  interface SPIError extends Error {
+  interface SPIError extends NativeError {
     code: SPIErrorCode;
     operation: "openBus" | "write" | "transfer" | "read" | "writeChunks" | "writeSource" | "unknown";
-    espCode: number;
-    espName: string;
-    completedBytes: number;
-    path: SPIDmaPath;
-    requestedFreqHz: number;
-    actualFreqHz: number;
+    details: {
+      espCode: number;
+      espName: string;
+      completedBytes: number;
+      path: SPIDmaPath;
+      requestedFreqHz: number;
+      actualFreqHz: number;
+    };
   }
 
   /**
@@ -2525,11 +2534,15 @@ namespace ESP32QJS {
     | "TLS_HANDSHAKE_FAILED"
     | "TLS_TIMEOUT";
 
-  interface TlsError extends Error {
+  interface TlsError extends NativeError {
     code: TlsErrorCode;
-    espTlsError: number;
-    mbedtlsError: number;
-    verifyFlags: number;
+    operation: string;
+    details: {
+      operationError: number;
+      espTlsError: number;
+      mbedtlsError: number;
+      verifyFlags: number;
+    };
   }
 
   type WiFiAuthMode =
@@ -2558,6 +2571,29 @@ namespace ESP32QJS {
     | "no-ap-authmode-threshold"
     | "no-ap-rssi-threshold"
     | "unknown";
+
+  type WiFiErrorCode =
+    | "WIFI_SCAN_BUSY"
+    | "WIFI_SCAN_TIMEOUT"
+    | "WIFI_SCAN_FAILED"
+    | "WIFI_OPERATION_BUSY"
+    | "WIFI_CONNECT_TIMEOUT"
+    | "WIFI_CONNECT_FAILED"
+    | "WIFI_DISCONNECT_FAILED"
+    | "WIFI_CANCELLED";
+
+  interface WiFiError extends NativeError {
+    code: WiFiErrorCode;
+    operation: "wifi" | "wifi.scan" | "wifi.connect" | "wifi.disconnect";
+    details: {
+      espCode: number;
+      espName: string;
+      ssid: string | null;
+      disconnectReason: number | null;
+      disconnectReasonName: WiFiDisconnectReasonName | null;
+      scanStatus: number | null;
+    };
+  }
 
   /**
    * Wi-Fi station helpers.
@@ -2702,13 +2738,17 @@ namespace ESP32QJS {
     | "ESPNOW_SEND_TIMEOUT"
     | "ESPNOW_RECOVERY_FAILED"
     | "ESPNOW_QUEUE_FULL"
-    | "ESPNOW_CLOSING";
+    | "ESPNOW_CLOSING"
+    | "ESPNOW_CLEANUP_PENDING";
 
-  interface EspNowError extends Error {
+  interface EspNowError extends NativeError {
     code: EspNowErrorCode;
-    espCode: number;
-    address: string | null;
-    channel: number | null;
+    operation: "espnow";
+    details: {
+      espCode: number;
+      address: string | null;
+      channel: number | null;
+    };
   }
 
   class EspNowPeer {
@@ -3114,12 +3154,15 @@ namespace ESP32QJS {
     | "BLE_GATT_ERROR" | "BLE_SECURITY_ERROR" | "BLE_PAIRING_EXPIRED"
     | "BLE_PAYLOAD_TOO_LARGE" | "BLE_SERVER_LIMIT" | "BLE_CLOSING";
 
-  interface BLEError extends Error {
+  interface BLEError extends NativeError {
     code: BLEErrorCode;
-    hostCode: number;
-    attCode: number | null;
-    connectionId: number | null;
-    attributeHandle: number | null;
+    operation: "ble";
+    details: {
+      hostCode: number;
+      attCode: number | null;
+      connectionId: number | null;
+      attributeHandle: number | null;
+    };
   }
 
   class BLEAdapter {
@@ -3154,6 +3197,23 @@ namespace ESP32QJS {
   interface FetchOptions extends RequestInit {
     timeoutMs?: number;
     maxBodyBytes?: number;
+  }
+
+  type HTTPErrorCode =
+    | "HTTP_QUEUE_FULL"
+    | "HTTP_WORKER_START_FAILED"
+    | "HTTP_INTERNAL"
+    | "HTTP_CANCELLED"
+    | "HTTP_TIMEOUT"
+    | "HTTP_REQUEST_FAILED";
+
+  interface HTTPError extends NativeError {
+    code: HTTPErrorCode;
+    operation: "http.fetch";
+    details: {
+      espCode: number;
+      espName: string;
+    };
   }
 
   type FetchInput = string | Request;

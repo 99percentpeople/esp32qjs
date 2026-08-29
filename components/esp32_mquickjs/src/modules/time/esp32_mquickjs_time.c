@@ -1,8 +1,8 @@
 #include "esp32_mquickjs_time.h"
 
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_options.h"
 
-#include <math.h>
 #include <string.h>
 #include <sys/time.h>
 #include <time.h>
@@ -156,7 +156,6 @@ static bool time_parse_sync_options(
     JSValue *timeout;
     JSValue *item;
     int server_count = 0;
-    double timeout_ms = 0;
     bool valid = false;
     size_t i;
 
@@ -188,22 +187,14 @@ static bool time_parse_sync_options(
     }
     state->timeout_ms = TIME_DEFAULT_TIMEOUT_MS;
     if (!JS_IsUndefined(*timeout)) {
-        if (!JS_IsNumber(ctx, *timeout) ||
-            JS_ToNumber(ctx, &timeout_ms, *timeout) != 0 ||
-            !isfinite(timeout_ms) || floor(timeout_ms) != timeout_ms) {
-            JS_ThrowTypeError(
-                ctx,
-                "sys.time.sync({ timeoutMs }) expects an integer between 1 and 60000");
-            goto done;
-        }
-        if (timeout_ms < (double)TIME_MIN_TIMEOUT_MS ||
-            timeout_ms > (double)TIME_MAX_TIMEOUT_MS) {
+        if (!esp32_mquickjs_value_to_bounded_u32(
+                ctx, *timeout, TIME_MIN_TIMEOUT_MS, TIME_MAX_TIMEOUT_MS,
+                &state->timeout_ms)) {
             JS_ThrowRangeError(
                 ctx,
                 "sys.time.sync({ timeoutMs }) expects an integer between 1 and 60000");
             goto done;
         }
-        state->timeout_ms = (uint32_t)timeout_ms;
     }
     for (i = 0; i < (size_t)server_count; ++i) {
         JSCStringBuf server_buf;

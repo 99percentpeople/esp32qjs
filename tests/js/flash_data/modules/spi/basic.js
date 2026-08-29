@@ -58,7 +58,7 @@ test("spi/basic", function () {
 
   assertThrowsContains(function () {
     spi.openBus({ unknown: true });
-  }, "unknown key", "spi.openBus should reject unknown fields");
+  }, "unknown option", "spi.openBus should reject unknown fields");
   assertThrowsContains(function () {
     spi.openBus({ maxTransferSize: 8, dmaStagingBytes: 0 });
   }, "dmaStagingBytes", "spi.openBus should reject an empty staging slot");
@@ -90,7 +90,7 @@ test("spi/basic", function () {
 
   assertThrowsContains(function () {
     bus.openDevice({ unknown: true });
-  }, "unknown key", "SPIBus.openDevice should reject unknown fields");
+  }, "unknown option", "SPIBus.openDevice should reject unknown fields");
   assertThrowsContains(function () {
     bus.openDevice({ timeoutMs: 0 });
   }, "1..60000", "SPIBus.openDevice should reject timeoutMs below range");
@@ -122,7 +122,7 @@ test("spi/basic", function () {
   }, "1..60000", "SPIDevice.write should reject timeoutMs below range");
   assertThrowsContains(function () {
     device.transfer([], { unknown: true });
-  }, "unknown key", "SPIDevice.transfer should reject unknown fields");
+  }, "unknown option", "SPIDevice.transfer should reject unknown fields");
   assertThrowsContains(function () {
     device.read(0, { fillByte: 256 });
   }, "0..255", "SPIDevice.read should bound fillByte");

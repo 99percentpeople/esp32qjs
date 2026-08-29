@@ -6,6 +6,8 @@
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_event_queue.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_timer_resource.h"
+#include "esp32_mquickjs_usb_serial_future_lifecycle.h"
 #include "utils/esp32_mquickjs_byte_source.h"
 #include "utils/esp32_mquickjs_line_framer.h"
 
@@ -71,6 +73,7 @@ static bool usb_serial_poller(JSContext *ctx,
 static bool usb_serial_register_future_driver(
     JSContext *ctx,
     esp32_mquickjs_runtime_t *runtime);
+static void usb_serial_future_timeout_wake(void *opaque);
 
 typedef enum {
     USB_SERIAL_WRITE_OK = 0,
@@ -714,29 +717,85 @@ struct esp32_mquickjs_future_driver_state {
     size_t logical_length;
     size_t bytes_sent;
     uint64_t progress_deadline_us;
-    esp_timer_handle_t progress_timer;
+    uint64_t progress_timer_delay_us;
+    esp32_mquickjs_timer_resource_t progress_timer;
     esp32_mquickjs_usb_serial_write_result_t result;
+    esp32_mquickjs_usb_serial_future_lifecycle_t lifecycle;
     bool value_retained;
     bool byte_view_leased;
     bool span_source_opened;
-    bool started;
-    bool completed;
-    bool cancelled;
     bool source_failed;
-    bool stdout_locked;
 };
+
+static int usb_serial_future_progress_timer_create(
+    void *opaque, void **out_timer)
+{
+    esp32_mquickjs_future_driver_state_t *state = opaque;
+    esp_timer_create_args_t timer_args = {
+        .callback = usb_serial_future_timeout_wake,
+        .arg = state,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "usb_tx_stall",
+        .skip_unhandled_events = true,
+    };
+    esp_timer_handle_t timer = NULL;
+    esp_err_t err;
+
+    if (state == NULL || out_timer == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    err = esp_timer_create(&timer_args, &timer);
+    *out_timer = timer;
+    return err;
+}
+
+static int usb_serial_future_progress_timer_start(void *timer, void *opaque)
+{
+    esp32_mquickjs_future_driver_state_t *state = opaque;
+
+    if (state == NULL || state->progress_timer_delay_us == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return esp_timer_start_once((esp_timer_handle_t)timer,
+                                state->progress_timer_delay_us);
+}
+
+static void usb_serial_future_progress_timer_stop(void *timer, void *opaque)
+{
+    (void)opaque;
+    (void)esp_timer_stop((esp_timer_handle_t)timer);
+}
+
+static void usb_serial_future_progress_timer_delete(void *timer, void *opaque)
+{
+    (void)opaque;
+    (void)esp_timer_delete((esp_timer_handle_t)timer);
+}
+
+static esp32_mquickjs_timer_resource_ops_t
+usb_serial_future_progress_timer_ops(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    return (esp32_mquickjs_timer_resource_ops_t){
+        .create = usb_serial_future_progress_timer_create,
+        .start = usb_serial_future_progress_timer_start,
+        .stop = usb_serial_future_progress_timer_stop,
+        .delete_timer = usb_serial_future_progress_timer_delete,
+        .opaque = state,
+    };
+}
 
 static void usb_serial_future_release(
     esp32_mquickjs_future_driver_state_t *state)
 {
+    esp32_mquickjs_timer_resource_ops_t timer_ops;
+
     if (state == NULL) {
         return;
     }
-    if (state->progress_timer != NULL) {
-        (void)esp_timer_stop(state->progress_timer);
-        (void)esp_timer_delete(state->progress_timer);
-        state->progress_timer = NULL;
-    }
+    timer_ops = usb_serial_future_progress_timer_ops(state);
+    esp32_mquickjs_timer_resource_deinit(&state->progress_timer,
+                                         &timer_ops);
     if (state->span_source_opened) {
         esp32_mquickjs_byte_span_source_close(state->ctx,
                                                &state->span_source);
@@ -886,24 +945,32 @@ static void usb_serial_future_timeout_wake(void *opaque)
 static void usb_serial_future_stop_timeout_wake(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state != NULL && state->progress_timer != NULL) {
-        (void)esp_timer_stop(state->progress_timer);
+    if (state != NULL) {
+        esp32_mquickjs_timer_resource_ops_t timer_ops =
+            usb_serial_future_progress_timer_ops(state);
+
+        esp32_mquickjs_timer_resource_stop(&state->progress_timer,
+                                           &timer_ops);
     }
 }
 
-static void usb_serial_future_arm_timeout_wake(
+static bool usb_serial_future_arm_timeout_wake(
     esp32_mquickjs_future_driver_state_t *state,
     uint64_t now_us)
 {
+    esp32_mquickjs_timer_resource_ops_t timer_ops;
     uint64_t remaining_us;
 
-    if (state == NULL || state->progress_timer == NULL ||
+    if (state == NULL || state->progress_timer.timer == NULL ||
         now_us >= state->progress_deadline_us) {
-        return;
+        return false;
     }
     remaining_us = state->progress_deadline_us - now_us;
-    (void)esp_timer_stop(state->progress_timer);
-    (void)esp_timer_start_once(state->progress_timer, remaining_us);
+    timer_ops = usb_serial_future_progress_timer_ops(state);
+    esp32_mquickjs_timer_resource_stop(&state->progress_timer, &timer_ops);
+    state->progress_timer_delay_us = remaining_us;
+    return esp32_mquickjs_timer_resource_start(&state->progress_timer,
+                                               &timer_ops) == ESP_OK;
 }
 
 static bool usb_serial_future_start(
@@ -912,13 +979,7 @@ static bool usb_serial_future_start(
     esp32_mquickjs_future_token_t token,
     esp32_mquickjs_future_driver_state_t *state)
 {
-    esp_timer_create_args_t timer_args = {
-        .callback = usb_serial_future_timeout_wake,
-        .arg = state,
-        .dispatch_method = ESP_TIMER_TASK,
-        .name = "usb_tx_stall",
-        .skip_unhandled_events = true,
-    };
+    esp32_mquickjs_timer_resource_ops_t timer_ops;
     esp_err_t timer_err;
 
     if (state == NULL || s_usb_serial_state.sending) {
@@ -935,19 +996,27 @@ static bool usb_serial_future_start(
     }
     state->runtime = runtime;
     state->token = token;
-    state->started = true;
     state->progress_deadline_us =
         (uint64_t)esp_timer_get_time() +
         (uint64_t)USB_SERIAL_BINARY_WRITE_STALL_TIMEOUT_MS * 1000ULL;
-    timer_err = esp_timer_create(&timer_args, &state->progress_timer);
+    timer_ops = usb_serial_future_progress_timer_ops(state);
+    timer_err = esp32_mquickjs_timer_resource_acquire(
+        &state->progress_timer, &timer_ops);
     if (timer_err != ESP_OK) {
         JS_ThrowInternalError(
             ctx, "usbSerial.send() failed to create the TX stall timer");
         return false;
     }
+    if (!esp32_mquickjs_usb_serial_future_lifecycle_start(
+            &state->lifecycle)) {
+        JS_ThrowInternalError(
+            ctx, "usbSerial.send() failed to acquire its lifecycle");
+        return false;
+    }
     s_usb_serial_state.sending = true;
     flockfile(stdout);
-    state->stdout_locked = true;
+    esp32_mquickjs_usb_serial_future_lifecycle_lock_stdout(
+        &state->lifecycle);
     (void)esp32_mquickjs_future_wake(runtime, token);
     return true;
 }
@@ -957,17 +1026,21 @@ static void usb_serial_future_step(
 {
     size_t budget = USB_SERIAL_BINARY_WRITE_CHUNK_BYTES * 4U;
 
-    if (state == NULL || state->completed || state->cancelled) {
+    if (state == NULL ||
+        esp32_mquickjs_usb_serial_future_lifecycle_ready(
+            &state->lifecycle)) {
         return;
     }
     if (!s_usb_serial_state.initialized || !s_usb_serial_state.opened) {
         state->result = USB_SERIAL_WRITE_CLOSED;
-        state->completed = true;
+        esp32_mquickjs_usb_serial_future_lifecycle_complete(
+            &state->lifecycle);
         return;
     }
     if (!usb_serial_jtag_is_connected()) {
         state->result = USB_SERIAL_WRITE_DISCONNECTED;
-        state->completed = true;
+        esp32_mquickjs_usb_serial_future_lifecycle_complete(
+            &state->lifecycle);
         return;
     }
 
@@ -985,7 +1058,8 @@ static void usb_serial_future_step(
                 if (JS_HasException(state->ctx)) {
                     state->source_failed = true;
                 }
-                state->completed = true;
+                esp32_mquickjs_usb_serial_future_lifecycle_complete(
+                    &state->lifecycle);
                 return;
             }
             state->offset = 0;
@@ -997,7 +1071,8 @@ static void usb_serial_future_step(
                     state->ctx,
                     "usbSerial.send(data) received a non-empty span with null data");
                 state->source_failed = true;
-                state->completed = true;
+                esp32_mquickjs_usb_serial_future_lifecycle_complete(
+                    &state->lifecycle);
                 return;
             }
         }
@@ -1007,7 +1082,8 @@ static void usb_serial_future_step(
             remaining = state->span.length - state->offset;
         } else {
             if (state->offset >= state->length) {
-                state->completed = true;
+                esp32_mquickjs_usb_serial_future_lifecycle_complete(
+                    &state->lifecycle);
                 return;
             }
             data = state->data;
@@ -1024,7 +1100,8 @@ static void usb_serial_future_step(
                                               chunk, 0);
         if (written < 0) {
             state->result = USB_SERIAL_WRITE_INTERRUPTED;
-            state->completed = true;
+            esp32_mquickjs_usb_serial_future_lifecycle_complete(
+                &state->lifecycle);
             return;
         }
         if (written == 0) {
@@ -1032,9 +1109,12 @@ static void usb_serial_future_step(
 
             if (now_us >= state->progress_deadline_us) {
                 state->result = USB_SERIAL_WRITE_TIMEOUT;
-                state->completed = true;
-            } else {
-                usb_serial_future_arm_timeout_wake(state, now_us);
+                esp32_mquickjs_usb_serial_future_lifecycle_complete(
+                    &state->lifecycle);
+            } else if (!usb_serial_future_arm_timeout_wake(state, now_us)) {
+                state->result = USB_SERIAL_WRITE_INTERRUPTED;
+                esp32_mquickjs_usb_serial_future_lifecycle_complete(
+                    &state->lifecycle);
             }
             return;
         }
@@ -1056,7 +1136,9 @@ static esp32_mquickjs_future_poll_t usb_serial_future_poll(
     esp32_mquickjs_future_driver_state_t *state)
 {
     usb_serial_future_step(state);
-    return state != NULL && state->completed
+    return state != NULL &&
+                   esp32_mquickjs_usb_serial_future_lifecycle_ready(
+                       &state->lifecycle)
                ? ESP32_MQUICKJS_FUTURE_READY
                : ESP32_MQUICKJS_FUTURE_PENDING;
 }
@@ -1065,7 +1147,9 @@ static JSValue usb_serial_future_finish(
     JSContext *ctx,
     esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL || state->cancelled) {
+    if (state == NULL ||
+        esp32_mquickjs_usb_serial_future_lifecycle_cancelled(
+            &state->lifecycle)) {
         return JS_ThrowInternalError(ctx, "usbSerial.send() was cancelled");
     }
     if (state->source_failed || JS_HasException(ctx)) {
@@ -1081,11 +1165,11 @@ static JSValue usb_serial_future_finish(
 static esp32_mquickjs_cancel_result_t usb_serial_future_cancel(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL || state->completed || state->cancelled) {
+    if (state == NULL ||
+        !esp32_mquickjs_usb_serial_future_lifecycle_cancel(
+            &state->lifecycle)) {
         return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
-    state->cancelled = true;
-    state->completed = true;
     if (state->runtime != NULL) {
         (void)esp32_mquickjs_future_wake(state->runtime, state->token);
     }
@@ -1095,12 +1179,15 @@ static esp32_mquickjs_cancel_result_t usb_serial_future_cancel(
 static void usb_serial_future_destroy(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state != NULL && state->started) {
-        s_usb_serial_state.sending = false;
-    }
-    if (state != NULL && state->stdout_locked) {
+    uint32_t release =
+        esp32_mquickjs_usb_serial_future_lifecycle_take_release(
+            state != NULL ? &state->lifecycle : NULL);
+
+    if ((release & ESP32_MQUICKJS_USB_SERIAL_RELEASE_STDOUT) != 0) {
         funlockfile(stdout);
-        state->stdout_locked = false;
+    }
+    if ((release & ESP32_MQUICKJS_USB_SERIAL_RELEASE_SEND_LANE) != 0) {
+        s_usb_serial_state.sending = false;
     }
     usb_serial_future_release(state);
 }

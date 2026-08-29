@@ -5,6 +5,7 @@
 
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_timer_resource.h"
 #include "utils/esp32_mquickjs_byte_source.h"
 #if CONFIG_ESP32_MQUICKJS_FEATURE_TLS
 #include "utils/esp32_mquickjs_tls_error.h"
@@ -914,6 +915,7 @@ struct esp32_mquickjs_future_driver_state {
     esp32_mquickjs_runtime_t *runtime;
     esp32_mquickjs_future_token_t token;
     esp_timer_handle_t poll_timer;
+    bool poll_timer_started;
     int entry_id;
     uint32_t entry_generation;
     int fd;
@@ -1448,14 +1450,80 @@ static void socket_future_poll_timer(void *opaque)
     }
 }
 
+typedef struct {
+    esp32_mquickjs_future_driver_state_t *state;
+} socket_future_timer_context_t;
+
+static int socket_future_timer_create(void *opaque, void **out_timer)
+{
+    socket_future_timer_context_t *context = opaque;
+    esp_timer_create_args_t timer_args = {
+        .callback = socket_future_poll_timer,
+        .arg = context != NULL ? context->state : NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "mqjs_socket",
+        .skip_unhandled_events = true,
+    };
+    esp_timer_handle_t timer = NULL;
+    esp_err_t err;
+
+    if (context == NULL || context->state == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    err = esp_timer_create(&timer_args, &timer);
+    *out_timer = timer;
+    return err;
+}
+
+static int socket_future_timer_start(void *timer, void *opaque)
+{
+    (void)opaque;
+    return esp_timer_start_periodic((esp_timer_handle_t)timer,
+                                    SOCKET_POLL_INTERVAL_US);
+}
+
+static void socket_future_timer_stop(void *timer, void *opaque)
+{
+    (void)opaque;
+    (void)esp_timer_stop((esp_timer_handle_t)timer);
+}
+
+static void socket_future_timer_delete(void *timer, void *opaque)
+{
+    (void)opaque;
+    (void)esp_timer_delete((esp_timer_handle_t)timer);
+}
+
+static esp32_mquickjs_timer_resource_ops_t socket_future_timer_ops(
+    socket_future_timer_context_t *context)
+{
+    return (esp32_mquickjs_timer_resource_ops_t){
+        .create = socket_future_timer_create,
+        .start = socket_future_timer_start,
+        .stop = socket_future_timer_stop,
+        .delete_timer = socket_future_timer_delete,
+        .opaque = context,
+    };
+}
+
 static void socket_future_stop_timer(esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL || state->poll_timer == NULL) {
+    socket_future_timer_context_t context;
+    esp32_mquickjs_timer_resource_t resource;
+    esp32_mquickjs_timer_resource_ops_t ops;
+
+    if (state == NULL) {
         return;
     }
-    (void)esp_timer_stop(state->poll_timer);
-    (void)esp_timer_delete(state->poll_timer);
+    context = (socket_future_timer_context_t){.state = state};
+    resource = (esp32_mquickjs_timer_resource_t){
+        .timer = state->poll_timer,
+        .started = state->poll_timer_started,
+    };
+    ops = socket_future_timer_ops(&context);
     state->poll_timer = NULL;
+    state->poll_timer_started = false;
+    esp32_mquickjs_timer_resource_deinit(&resource, &ops);
 }
 
 static bool socket_future_needs_resolution(
@@ -2230,7 +2298,6 @@ static bool socket_future_start(JSContext *ctx,
                                 esp32_mquickjs_future_driver_state_t *state)
 {
     socket_entry_t *entry = socket_future_entry(state);
-    esp_timer_create_args_t timer_args = {0};
     bool needs_resolution;
     bool *busy;
     esp32_mquickjs_future_driver_state_t **active;
@@ -2272,18 +2339,18 @@ static bool socket_future_start(JSContext *ctx,
     }
     socket_future_complete_nonblocking(state);
     if (!state->completed) {
-        timer_args.callback = socket_future_poll_timer;
-        timer_args.arg = state;
-        timer_args.dispatch_method = ESP_TIMER_TASK;
-        timer_args.name = "mqjs_socket";
-        timer_args.skip_unhandled_events = true;
-        if (esp_timer_create(&timer_args, &state->poll_timer) != ESP_OK ||
-            esp_timer_start_periodic(state->poll_timer,
-                                     SOCKET_POLL_INTERVAL_US) != ESP_OK) {
-            socket_future_stop_timer(state);
+        socket_future_timer_context_t timer_context = {.state = state};
+        esp32_mquickjs_timer_resource_t timer_resource = {0};
+        esp32_mquickjs_timer_resource_ops_t timer_ops =
+            socket_future_timer_ops(&timer_context);
+
+        if (esp32_mquickjs_timer_resource_init(
+                &timer_resource, &timer_ops) != ESP_OK) {
             JS_ThrowInternalError(ctx, "failed to start socket readiness poller");
             return false;
         }
+        state->poll_timer = (esp_timer_handle_t)timer_resource.timer;
+        state->poll_timer_started = timer_resource.started;
         if (needs_resolution && !socket_future_begin_resolution(ctx, state)) {
             socket_future_stop_timer(state);
             return false;

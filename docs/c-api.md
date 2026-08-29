@@ -66,6 +66,30 @@ wifi.connect("your-ssid", {
 sys.time.sync({ servers: ["pool.ntp.org"], timeoutMs: 10000 });
 ```
 
+## Native operational errors
+
+Argument and option validation fails before dispatch with the ordinary
+`TypeError` or `RangeError` appropriate to the invalid input. Recoverable
+native operational failures use one v1 shape:
+
+```js
+{
+  name: "Error",
+  message: "human-readable diagnostic",
+  code: "STABLE_MODULE_CODE",
+  operation: "module.operation",
+  details: { /* bounded, module-specific metadata */ }
+}
+```
+
+`code` is the stable programmatic discriminator, `operation` identifies the
+failed native operation, and every module-specific numeric or status field is
+nested under `details`. The sole v1 contract has no legacy top-level detail
+aliases. Error details exclude payload bytes, Wi-Fi passwords, BLE/ESP-NOW
+keys, certificate contents, and other secrets. The exact module unions are
+declared by `NativeError`, `SPIError`, `TlsError`, `WiFiError`, `EspNowError`,
+`BLEError`, and `HTTPError` in `types/esp32qjs-c-api.d.ts`.
+
 ## Futures
 
 - `Future.call(fn, thisValue?, args?)`
@@ -554,7 +578,14 @@ bus.close();
 - `bus.status()`
   Return `{ opened, host, sclk, mosi, miso, maxTransferSize, dmaStagingBytes, deviceCount }`.
 - `bus.close()`
-  Close the bus. Any `SPIDevice` objects opened from that bus become stale. If callers forget to close them, GC finalization still releases the native handles eventually, but explicit `close()` remains the intended lifecycle boundary.
+  Close every idle child device and then the bus. Any `SPIDevice` objects
+  opened from that bus become stale after success. A native device-remove or
+  bus-free failure throws, retains the exact remaining handles and fixed staging
+  workspace, and leaves the bus handle usable only for another `close()`
+  attempt; reopening the same host and runtime initialization can also retry
+  orphaned cleanup. If callers forget to close the bus, GC finalization still
+  requests the same native cleanup, but explicit `close()` remains the intended
+  lifecycle boundary.
 - `bus.openDevice(options?)`
   Open an `SPIDevice` on the bus. `options` can include `{ cs, mode, freqHz, queueSize, csHigh, lsbFirst, directExternalDma, timeoutMs }`. `directExternalDma` defaults to `false`; external memory is staged unless it is explicitly enabled. `timeoutMs` defaults to `1000` and must be in `1..60000`. `cs` defaults to `spi.DEFAULT_CS`, which can be `-1` when chip-select is managed manually in JS or external hardware.
 
@@ -563,7 +594,10 @@ bus.close();
 - `device.status()`
   Return `{ opened, host, cs, mode, requestedFreqHz, actualFreqHz, queueSize, csHigh, lsbFirst, directExternalDma, timeoutMs, dmaStagingBytes, faulted, lastErrorCode }`.
 - `device.close()`
-  Remove the device from its parent SPI bus and make the JS object stale.
+  Remove the device from its parent SPI bus and make the JS object stale only
+  after native removal succeeds. A removal failure throws and retains the
+  handle in close-only state for another `close()` attempt; the next
+  `bus.openDevice()` can also retry orphaned device cleanup.
 - `device.transfer(data, options?)`
   Perform a full-duplex operation from an array-like sequence
   of bytes or native byte view and return the received bytes as an owned
@@ -601,7 +635,7 @@ deadline expires only while an in-flight transaction still has no observable
 completion. SPI does not retry with a different frequency, chunk size, or
 memory path. Structured failures use `DMA_STAGING_NO_MEMORY`,
 `DMA_TX_UNDERFLOW`, `DMA_RX_OVERFLOW`, `DMA_TRANSFER_TIMEOUT`, or
-`DMA_DEVICE_FAULTED` and include the operation, ESP error, completed byte
+`DMA_DEVICE_FAULTED`. Their `details` include the ESP error, completed byte
 count, DMA path, and requested/actual frequencies without payload data. A
 timed-out queued transaction is retained until ESP-IDF returns it; if stopping
 cannot be confirmed, the device becomes faulted and rejects new operations.
@@ -660,8 +694,10 @@ cooperatively and `Future.call()` returns control immediately.
 - `port.close()`
   Close the driver and make the JS object stale. It refuses with a busy error
   while a read, write, or flush is active or queued; it does not implicitly
-  cancel an operation. GC finalization also releases forgotten ports eventually, but
-  explicit `close()` remains the intended lifecycle boundary.
+  cancel an operation. If driver deletion fails, `close()` throws and retains
+  the driver, event queue, watcher lock, and JS generation for a later cleanup
+  retry. GC finalization also requests cleanup for forgotten ports, but explicit
+  `close()` remains the intended lifecycle boundary.
 - `port.write(data)`
   Write an array-like sequence of bytes or native byte view and return the
   number of bytes accepted by the UART driver. TX backpressure keeps the
@@ -780,10 +816,13 @@ bounded FIFO resource lane per
 channel; different channels may progress independently. Use `Future.call()`
 for non-blocking composition. A queued operation can be cancelled without
 touching hardware; cancellation of an active operation synchronously aborts the
-RMT channel before settlement. `close()` detaches the JavaScript handle,
-cancels an active operation after a confirmed hardware abort, prevents queued
-operations from reaching hardware, and releases the channel after all captured
-Future states have drained.
+RMT channel before settlement. With no pending operation, `close()` disables and
+deletes the encoder/channel before detaching the JavaScript handle; a native
+teardown failure keeps the remaining resources and handle available for a
+retry. With pending work, `close()` detaches the JavaScript handle, cancels an
+active operation after a confirmed hardware abort, prevents queued operations
+from reaching hardware, and releases the channel after all captured Future
+states have drained.
 
 ```js
 var symbols = rmt.createSymbols(2);
@@ -831,6 +870,9 @@ is not exposed.
 - `channel.start()` / `channel.stop()`
   Explicit, idempotent DMA lifecycle operations. `stop()` disables the
   channel but retains its native channel and DMA ring for the next `start()`.
+  Duplex lifecycle tracks RX and TX independently: if RX start fails, a newly
+  enabled TX side is rolled back, and any failed rollback or stop retains the
+  exact enabled side for a later `start()`, `stop()`, or `close()` retry.
 - `channel.read(frameCount, timeoutMs?)`
   RX/duplex only. Return `null` at timeout or
   `{ data, frames, byteLength, timestampUs, sequence, overruns }`, where `data`
@@ -845,10 +887,13 @@ is not exposed.
   object includes `storage: "internal"`, the actual aligned `bufferBytes` per
   descriptor, and `totalBufferBytes` across RX/TX directions.
 - `channel.close()`
-  Detach the JavaScript handle idempotently, request cancellation of active
-  reads and writes, prevent queued operations from reaching DMA, and release
-  the native handles after all captured Future states finish releasing their
-  reservations.
+  With no pending operation, disable and delete RX/TX before detaching the
+  JavaScript handle; a native teardown failure retains the remaining handles,
+  DMA accounting, peripheral lease, and JavaScript handle for retry. With
+  pending work, detach idempotently, request cancellation of active reads and
+  writes, prevent queued operations from reaching DMA, and release after all
+  captured Future states finish releasing their reservations. A deferred
+  native teardown failure remains owned by the slot for open/runtime-init retry.
 
 Reads use one bounded FIFO RX lane and writes use an independent bounded FIFO
 TX lane. Duplex allows one operation from each direction to be active
@@ -929,7 +974,7 @@ explicitly pairs two framebuffers with `latest`.
   Read or update `frameSize`, `jpegQuality`, `brightness`, `contrast`,
   `saturation`, `horizontalMirror`, or `verticalFlip`.
 - `cam.close()`
-  Start an irreversible close, cancel active capture, and immediately revoke
+  Start a close, cancel active capture, and immediately revoke
   derived `CameraFrame` and unopened frame-source handles. Revoked frame data
   operations throw a closed-frame `ReferenceError`; `frame.close()` remains
   idempotent. The close waits only for active native bitmap/source readers,
@@ -937,7 +982,11 @@ explicitly pairs two framebuffers with `latest`.
   does not cancel cleanup. Only the current call stack is suspended; timers,
   transports, and other Futures continue to run. Use
   `Future.call(cam.close, cam, [])` when the caller does not need to wait.
-  Repeated calls are safe.
+  Driver deinitialization must succeed before the camera, SCCB, and LEDC leases
+  are released or the JS handle is detached. A native deinitialization failure
+  rejects the call, retains all resources, and leaves that handle usable only
+  for another `close()` attempt; `camera.open()` and runtime initialization can
+  also retry orphaned cleanup. Repeated calls are safe.
 
 `CameraFrame` exposes read-only `width`, `height`, `format`, `byteLength`,
 `timestampUs`, and `sequence` fields:
@@ -1449,8 +1498,14 @@ This module exposes the ESP-IDF LEDC low-level timer/channel primitives. It does
   Maximum duty-resolution bits supported by the active target.
 - `ledc.timerConfig(timer, options)`
   Configure or deconfigure one timer. `options` accepts `{ freqHz, dutyResolution, clock, deconfigure }`.
+  Deconfiguration pauses the timer first; a pause or deconfigure failure keeps
+  the tracked timer and peripheral lease so the same operation or the next
+  runtime initialization can retry it.
 - `ledc.channelConfig(channel, options)`
   Configure or deconfigure one channel. `options` accepts `{ pin, timer, duty, hpoint, outputInvert, sleepMode, deconfigure }`.
+  Deconfiguration stops the channel first and only releases its peripheral
+  lease after the driver confirms deconfiguration. A failed stage remains
+  retryable and an already successful stop is not repeated.
 - `ledc.timerStatus(timer)`
   Return the runtime's tracked timer state as
   `{ timer, configured, paused, freqHz, dutyResolution, maxDuty, clock }`
@@ -1516,13 +1571,23 @@ This module exposes ESP-IDF ADC oneshot primitives and GPIO/channel mapping help
 - `adc.MAX_CHANNEL_COUNT`
   Maximum channels available on any ADC unit for the active target.
 - `adc.open(unit)`
-  Open one ADC unit for oneshot reads and return `adc.status(unit)`.
+  Open one ADC unit for oneshot reads and return `adc.status(unit)`. Reopening
+  first closes the existing unit; if calibration or unit teardown fails, the
+  surviving resources remain owned and the operation throws so a later
+  `adc.open(...)` or `adc.close(...)` can retry cleanup.
 - `adc.close(unit)`
-  Close one ADC unit and release any per-channel calibration state.
+  Close one ADC unit and release all per-channel calibration state before the
+  unit handle. A native deletion failure throws and retains the exact remaining
+  resource suffix for retry; success resets the unit state.
 - `adc.status(unit)`
   Return `{ unit, opened, channelCount, channels }`, where `channels` contains `{ channel, configured, atten, bitwidth, pin, calibrated }`.
 - `adc.configure(unit, channel, options)`
   Configure a channel with `{ atten, bitwidth }` and return `adc.status(unit)`.
+  Existing calibration is deleted before changing the hardware configuration;
+  if deletion fails, the old calibration and configuration remain owned and no
+  replacement is attempted. Creating new calibration remains best effort, so a
+  successfully configured channel can report `calibrated: false` when the
+  target or current conditions cannot provide a calibration scheme.
 - `adc.read(unit, channel)`
   Perform one raw oneshot read and return the integer ADC result.
 - `adc.readMilliVolts(unit, channel)`
@@ -1901,8 +1966,11 @@ profile, or implement provisioning policy.
 - `BLEAdapter.bonds()`, `removeBond()`, and `clearBonds()` operate on the NimBLE
   store. Pairing requests must be answered before `expiresAtUs`.
 - `BLEAdapter.close()` stops GAP sources and connections, then stops and
-  deinitializes NimBLE on a worker before releasing native pools. It invalidates
-  every BLE handle from that adapter generation.
+  deinitializes NimBLE on a worker before releasing native pools. A host-stop
+  failure retains the started host and initialized port; a later deinit failure
+  retains the initialized port alone. The adapter enters a cleanup-only failed
+  state and another `close()` can retry. Only full cleanup invalidates every BLE
+  handle from that adapter generation.
 
 All one-shot BLE operations support the usual cooperative direct-call form and
 the explicit `Future.call(...)` form. GAP start/stop operations share one lane,
@@ -2009,9 +2077,10 @@ udp.close();
 
 Verified TLS failures from raw sockets and HTTPS fetches carry a stable `code`
 of `TLS_ALLOC_FAILED`, `TLS_TIME_INVALID`, `TLS_VERIFY_FAILED`,
-`TLS_HANDSHAKE_FAILED`, or `TLS_TIMEOUT`, plus numeric `espTlsError`,
-`mbedtlsError`, and `verifyFlags` fields. Certificate contents and secrets are
-not included. Close or cancel always releases the per-connection TLS context.
+`TLS_HANDSHAKE_FAILED`, or `TLS_TIMEOUT`. `details.operationError`,
+`details.espTlsError`, `details.mbedtlsError`, and `details.verifyFlags` retain
+the numeric diagnostics. Certificate contents and secrets are not included.
+Close or cancel always releases the per-connection TLS context.
 PSRAM profiles retain the standard 16 KiB RX and 4 KiB TX records while placing
 mbedTLS allocations in external RAM; non-PSRAM profiles continue to use
 internal memory. The full ESP-IDF certificate bundle accepts valid
@@ -2129,8 +2198,11 @@ It uses a bounded `EventQueue` handle and does not invoke application callbacks.
   blocking ESP-IDF stop/destroy work to the shared native worker pool. It does
   not wait for ESP-IDF's connection task. While cleanup is pending,
   `status().closing` is `true` and a new `open()` is rejected; once it becomes
-  `false`, the client is fully released and may be opened again. The first
-  close returns `true`; repeated closes return `false`. A close/error event
+  `false`, the client is fully released and may be opened again. Stop,
+  event-unregister, or destroy failure retains the exact remaining native
+  suffix and keeps `closing` true; another `close()` or runtime teardown retries
+  it. The first close returns `true`; ordinary repeated closes return `false`.
+  A close/error event
   reports `reconnecting: false` when `autoReconnect` is disabled.
 
 ```js
@@ -2161,7 +2233,11 @@ The namespace is present when the HTTP client or server feature is enabled.
   `body`, `timeoutMs`, and `maxBodyBytes`. Before the HTTP worker starts,
   binary input is materialized into a length-exact native PSRAM-first buffer,
   preserving embedded NUL bytes and enforcing a 1 MiB request-body default
-  limit. A source is closed on all terminal paths.
+  limit. A source is closed on all terminal paths. Native client cleanup is part
+  of the request result: cleanup failure discards an otherwise successful
+  response, retains the client handle in a bounded pending-cleanup list, and
+  keeps its Future capacity occupied until a later request or runtime teardown
+  completes the retry.
 
 The HTTP client remains available without TLS for `http://` URLs. An
 `https://` URL is rejected before its worker starts when
@@ -2194,6 +2270,8 @@ print(responses[0].status, responses[1].status);
   Start or stop listening while retaining the server and route table. Each
   returns `true` only when it changed the listening state and `false` when the
   requested state was already active.
+  If the native driver rejects stop, the method throws and preserves the native
+  handle, listening state, and route-registration state for a later retry.
 - `server.receive(timeoutMs?)`
   Return the next matching `Request`, or `null` at the timeout. The request
   queue is bounded and rejects overflow with HTTP 503.
@@ -2209,7 +2287,10 @@ print(responses[0].status, responses[1].status);
   Remove matching declarative routes.
 - `server.close()`
   Stop the listener, close its EventQueue, reject pending requests, and release
-  the native slot. Repeated close is safe.
+  the native slot. Repeated close is safe. A native stop failure is reported
+  before the EventQueue, routes, requests, or JavaScript handle are detached;
+  `close()` remains available as a cleanup retry, and runtime initialization
+  retries any orphaned native handle before constructing a new state.
 
 Request bodies larger than 8192 bytes are rejected with HTTP 413 before they
 enter the queue. `request.bytes(maxBytes?)` preserves binary input as an owned

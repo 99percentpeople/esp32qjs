@@ -27,7 +27,8 @@ libraries, product protocols, and application policy outside the framework.
 
 Feature-gated modules cover LittleFS and NVS; GPIO, LEDC, ADC, DAC, I2C, SPI,
 UART and RMT; I2S and camera; native bitmap/display primitives; ESP-NETIF,
-Wi-Fi, sockets, HTTP, WebSocket and TLS; USB Serial/JTAG and generic binary RPC.
+Wi-Fi, BLE, ESP-NOW, sockets, HTTP client/server, WebSocket and TLS; USB
+Serial/JTAG, generic binary RPC, and runtime logs.
 Read the compiled selection through `sys.info.features`.
 
 ## Framework boundary
@@ -114,6 +115,36 @@ for low-level work but bypasses Build Context validation.
 The Build Context enables only the native modules needed by its resolved Board
 and Libraries. Typical entries include:
 
+<!-- BEGIN GENERATED FEATURE CATALOG -->
+| Feature | Capability | Targets | Requires |
+| --- | --- | --- | --- |
+| `fs` | Filesystem | esp32c3, esp32c5, esp32s3 | none |
+| `nvs` | NVS | esp32c3, esp32c5, esp32s3 | none |
+| `gpio` | GPIO | esp32c3, esp32c5, esp32s3 | none |
+| `ledc` | LEDC | esp32c3, esp32c5, esp32s3 | none |
+| `adc` | ADC | esp32c3, esp32c5, esp32s3 | none |
+| `dac` | DAC | none | none |
+| `i2c` | I2C | esp32c3, esp32c5, esp32s3 | none |
+| `spi` | SPI | esp32c3, esp32c5, esp32s3 | none |
+| `uart` | UART | esp32c3, esp32c5, esp32s3 | none |
+| `rmt` | RMT | esp32c3, esp32c5, esp32s3 | none |
+| `i2s` | I2S / PDM | esp32c3, esp32c5, esp32s3 | none |
+| `camera` | Camera | esp32s3 | none |
+| `net` | Network interfaces | esp32c3, esp32c5, esp32s3 | none |
+| `wifi` | Wi-Fi | esp32c3, esp32c5, esp32s3 | `net` |
+| `espnow` | ESP-NOW | esp32c3, esp32c5, esp32s3 | none |
+| `ble` | Bluetooth LE | esp32c3, esp32c5, esp32s3 | none |
+| `tls` | TLS | esp32c3, esp32c5, esp32s3 | `net` |
+| `socket` | Socket | esp32c3, esp32c5, esp32s3 | `net` |
+| `rpc` | Binary RPC | esp32c3, esp32c5, esp32s3 | none |
+| `http_client` | HTTP Client | esp32c3, esp32c5, esp32s3 | `net` |
+| `http_server` | HTTP Server | esp32c3, esp32c5, esp32s3 | `net` |
+| `usb_serial` | USB Serial | esp32c3, esp32c5, esp32s3 | none |
+| `websocket_client` | WebSocket | esp32c3, esp32c5, esp32s3 | `net`, `tls` |
+| `bitmap` | Bitmap | esp32c3, esp32c5, esp32s3 | none |
+| `runtime_logs` | Runtime logs | esp32c3, esp32c5, esp32s3 | none |
+<!-- END GENERATED FEATURE CATALOG -->
+
 ```text
 CONFIG_ESP32_MQUICKJS_FEATURE_FS=y
 CONFIG_ESP32_MQUICKJS_FEATURE_NET=y
@@ -188,10 +219,16 @@ are destructive.
 Host checks do not require a board:
 
 ```bash
+uv run python scripts/generate_api_manifest.py --check
+uv run python scripts/generate_feature_docs.py --check
 uv run python -m unittest discover -s tests/python
 uv run python scripts/remote.py check-js
 uv run python scripts/remote.py test --scope c
 ```
+
+GitHub Actions runs these checks and representative C3/C5/S3 Build Contexts on
+pull requests. The separate hardware-lab workflow requires a configured
+self-hosted runner and physical fixtures.
 
 The default hardware test rebuilds and flashes dedicated test inputs before
 running enabled JS modules:

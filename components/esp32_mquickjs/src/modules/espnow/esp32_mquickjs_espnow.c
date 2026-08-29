@@ -5,6 +5,7 @@
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_event_queue.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_options.h"
 #include "esp32_mquickjs_wifi_radio.h"
 #include "esp32_mquickjs_wireless_core.h"
 #include "utils/esp32_mquickjs_byte_source.h"
@@ -29,6 +30,7 @@
 #define ESPNOW_BROADCAST_ADDRESS "ff:ff:ff:ff:ff:ff"
 #define ESPNOW_DEFAULT_CHANNEL 0U
 #define ESPNOW_REOPEN_QUIESCE_MS 50U
+#define ESPNOW_CLOSE_TIMEOUT_MS 1000U
 static const char *TAG = "esp32qjs_espnow";
 #if defined(CONFIG_ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD) && \
     CONFIG_ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD
@@ -94,11 +96,12 @@ typedef enum {
 
 typedef struct {
     portMUX_TYPE lock;
-    espnow_lifecycle_t lifecycle;
+    _Atomic espnow_lifecycle_t lifecycle;
     esp32_mquickjs_runtime_t *runtime;
-    uint32_t generation;
+    _Atomic uint32_t generation;
     esp32_mquickjs_wifi_radio_lease_t radio_lease;
     esp32_mquickjs_event_queue_t *event_queue;
+    bool event_queue_retained;
     esp32_mquickjs_wireless_pool_t rx_free;
     espnow_rx_slot_t *rx_slots;
     uint8_t *rx_payloads;
@@ -124,6 +127,8 @@ typedef struct {
     uint16_t wake_window_ms;
     uint16_t wake_interval_ms;
     _Atomic uint32_t callbacks_active;
+    _Atomic bool cleanup_scheduled;
+    _Atomic(esp32_mquickjs_future_driver_state_t *) active_close;
     _Atomic uint32_t sequence;
     _Atomic uint32_t received_packets;
     _Atomic uint32_t received_bytes;
@@ -200,6 +205,7 @@ static const uint8_t s_espnow_control_lane_key;
 static JSValue espnow_status_to_js(JSContext *ctx,
                                    const espnow_session_t *session);
 static void espnow_close_native(espnow_session_t *session);
+static void espnow_close_worker(void *opaque);
 
 static void espnow_note_native_deinit(void)
 {
@@ -275,82 +281,14 @@ static bool espnow_to_u32(JSContext *ctx, JSValue value, uint32_t *out)
     return true;
 }
 
-static bool espnow_key_allowed(const char *key,
-                               const char *const *allowed,
-                               size_t allowed_count)
-{
-    size_t i;
-
-    for (i = 0; i < allowed_count; ++i) {
-        if (strcmp(key, allowed[i]) == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static bool espnow_validate_option_keys(JSContext *ctx,
                                         JSValue options,
                                         const char *api_name,
                                         const char *const *allowed,
                                         size_t allowed_count)
 {
-    JSGCRef global_ref;
-    JSGCRef object_ref;
-    JSGCRef keys_function_ref;
-    JSGCRef keys_ref;
-    JSGCRef key_ref;
-    JSValue *global = JS_PushGCRef(ctx, &global_ref);
-    JSValue *object = JS_PushGCRef(ctx, &object_ref);
-    JSValue *keys_function = JS_PushGCRef(ctx, &keys_function_ref);
-    JSValue *keys = JS_PushGCRef(ctx, &keys_ref);
-    JSValue *key = JS_PushGCRef(ctx, &key_ref);
-    JSValue args[1] = {options};
-    uint32_t length = 0;
-    uint32_t i;
-    bool valid = false;
-
-    *global = JS_GetGlobalObject(ctx);
-    *object = JS_IsException(*global)
-                  ? JS_EXCEPTION
-                  : JS_GetPropertyStr(ctx, *global, "Object");
-    *keys_function = JS_IsException(*object)
-                         ? JS_EXCEPTION
-                         : JS_GetPropertyStr(ctx, *object, "keys");
-    *keys = JS_IsException(*keys_function)
-                ? JS_EXCEPTION
-                : esp32_mquickjs_call(
-                      ctx, esp32_mquickjs_get_active_runtime(),
-                      *keys_function, *object, 1, args);
-    if (JS_IsException(*keys)) {
-        goto done;
-    }
-    *key = JS_GetPropertyStr(ctx, *keys, "length");
-    if (JS_IsException(*key) || !espnow_to_u32(ctx, *key, &length)) {
-        JS_ThrowTypeError(ctx, "%s options could not be inspected", api_name);
-        goto done;
-    }
-    for (i = 0; i < length; ++i) {
-        JSCStringBuf buffer;
-        const char *name;
-
-        *key = JS_GetPropertyUint32(ctx, *keys, i);
-        name = JS_IsException(*key) ? NULL : JS_ToCString(ctx, *key, &buffer);
-        if (name == NULL || !espnow_key_allowed(name, allowed, allowed_count)) {
-            JS_ThrowTypeError(ctx, "%s received unknown option '%s'",
-                              api_name, name != NULL ? name : "<invalid>");
-            goto done;
-        }
-    }
-    valid = true;
-
-done:
-    JS_PopGCRef(ctx, &key_ref);
-    JS_PopGCRef(ctx, &keys_ref);
-    JS_PopGCRef(ctx, &keys_function_ref);
-    JS_PopGCRef(ctx, &object_ref);
-    JS_PopGCRef(ctx, &global_ref);
-    return valid;
+    return esp32_mquickjs_validate_plain_options(
+        ctx, options, api_name, allowed, allowed_count);
 }
 
 static void espnow_format_address(const uint8_t address[ESPNOW_ADDRESS_BYTES],
@@ -509,35 +447,32 @@ static JSValue espnow_throw_error(
     const uint8_t *address,
     int channel)
 {
-    JSGCRef error_ref;
-    JSValue *error;
+    JSGCRef details_ref;
+    JSValue *details = JS_PushGCRef(ctx, &details_ref);
+    JSValue result;
     char normalized_address[18];
 
-    (void)JS_ThrowInternalError(ctx, "%s: ESP-NOW operation failed", code);
-    if (!JS_HasException(ctx)) {
-        return JS_EXCEPTION;
-    }
-    error = JS_PushGCRef(ctx, &error_ref);
-    *error = JS_GetException(ctx);
     if (address != NULL) {
         espnow_format_address(address, normalized_address);
     }
-    if (JS_GetClassID(ctx, *error) >= 0 &&
-        (JS_IsException(JS_SetPropertyStr(
-             ctx, *error, "code", JS_NewString(ctx, code))) ||
-         JS_IsException(JS_SetPropertyStr(
-             ctx, *error, "espCode", JS_NewInt32(ctx, esp_code))) ||
-         JS_IsException(JS_SetPropertyStr(
-             ctx, *error, "address",
-             address != NULL ? JS_NewString(ctx, normalized_address)
-                             : JS_NULL)) ||
-         JS_IsException(JS_SetPropertyStr(
-             ctx, *error, "channel",
-             channel >= 0 ? JS_NewInt32(ctx, channel) : JS_NULL)))) {
-        JS_PopGCRef(ctx, &error_ref);
+    *details = JS_NewObject(ctx);
+    if (JS_IsException(*details) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "espCode", JS_NewInt32(ctx, esp_code)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "address",
+            address != NULL ? JS_NewString(ctx, normalized_address)
+                            : JS_NULL) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "channel",
+            channel >= 0 ? JS_NewInt32(ctx, channel) : JS_NULL)) {
+        JS_PopGCRef(ctx, &details_ref);
         return JS_EXCEPTION;
     }
-    return JS_Throw(ctx, JS_PopGCRef(ctx, &error_ref));
+    result = esp32_mquickjs_throw_native_error(
+        ctx, code, "espnow", "ESP-NOW operation failed", *details);
+    JS_PopGCRef(ctx, &details_ref);
+    return result;
 }
 
 static void espnow_release_rx_slot(espnow_session_t *session,
@@ -794,10 +729,8 @@ static void espnow_reset_session_storage(espnow_session_t *session)
     session->max_payload_bytes = 0;
 }
 
-static void espnow_close_native(espnow_session_t *session)
+static void espnow_begin_close(espnow_session_t *session)
 {
-    uint32_t waits = 0;
-
     if (session == NULL ||
         session->lifecycle == ESPNOW_LIFECYCLE_CLOSED ||
         session->lifecycle == ESPNOW_LIFECYCLE_CLOSING) {
@@ -816,10 +749,19 @@ static void espnow_close_native(espnow_session_t *session)
         (void)esp_now_unregister_send_cb();
         session->send_callback_registered = false;
     }
-    while (atomic_load_explicit(&session->callbacks_active,
-                                memory_order_acquire) != 0 &&
-           waits++ < 1000U) {
-        vTaskDelay(1);
+}
+
+static bool espnow_finish_close(espnow_session_t *session)
+{
+    esp32_mquickjs_event_queue_t *event_queue;
+    bool event_queue_retained;
+
+    if (session == NULL ||
+        !esp32_mquickjs_wireless_close_can_release(
+            atomic_load_explicit(&session->callbacks_active,
+                                 memory_order_acquire),
+            true)) {
+        return false;
     }
     if (session->now_initialized) {
         if (session->power_save_enabled) {
@@ -834,9 +776,78 @@ static void espnow_close_native(espnow_session_t *session)
     }
     session->broadcast_peer_added = false;
     esp32_mquickjs_wifi_radio_release(&session->radio_lease);
+    event_queue = session->event_queue;
+    event_queue_retained = session->event_queue_retained;
     espnow_reset_session_storage(session);
+    session->event_queue_retained = false;
     session->runtime = NULL;
-    session->lifecycle = ESPNOW_LIFECYCLE_CLOSED;
+    atomic_store_explicit(&session->lifecycle, ESPNOW_LIFECYCLE_CLOSED,
+                          memory_order_release);
+    if (event_queue_retained) {
+        esp32_mquickjs_event_queue_release(event_queue);
+    }
+    return true;
+}
+
+static void espnow_close_worker(void *opaque)
+{
+    espnow_session_t *session = opaque;
+    esp32_mquickjs_future_driver_state_t *close_state;
+
+    if (session == NULL) {
+        return;
+    }
+    while (atomic_load_explicit(&session->callbacks_active,
+                                memory_order_acquire) != 0) {
+        vTaskDelay(1);
+    }
+    (void)espnow_finish_close(session);
+    close_state = atomic_exchange_explicit(
+        &session->active_close, NULL, memory_order_acq_rel);
+    atomic_store_explicit(&session->cleanup_scheduled, false,
+                          memory_order_release);
+    if (close_state != NULL) {
+        atomic_store_explicit(&close_state->completed, true,
+                              memory_order_release);
+    }
+}
+
+static bool espnow_schedule_background_close(espnow_session_t *session)
+{
+    bool expected = false;
+
+    if (session == NULL || !atomic_compare_exchange_strong_explicit(
+            &session->cleanup_scheduled, &expected, true,
+            memory_order_acq_rel, memory_order_acquire)) {
+        return session != NULL && expected;
+    }
+    if (esp32_mquickjs_submit_background_worker(
+            espnow_close_worker, session)) {
+        return true;
+    }
+    atomic_store_explicit(&session->cleanup_scheduled, false,
+                          memory_order_release);
+    return false;
+}
+
+static void espnow_close_native(espnow_session_t *session)
+{
+    if (session == NULL ||
+        session->lifecycle == ESPNOW_LIFECYCLE_CLOSED) {
+        return;
+    }
+    espnow_begin_close(session);
+    if (atomic_load_explicit(&session->active_close,
+                             memory_order_acquire) != NULL) {
+        return;
+    }
+    if (espnow_finish_close(session)) {
+        return;
+    }
+    if (!espnow_schedule_background_close(session)) {
+        ESP_LOGE(TAG,
+                 "ESP-NOW cleanup is pending because the worker queue is full");
+    }
 }
 
 static bool espnow_allocate_receive_pool(JSContext *ctx,
@@ -1148,9 +1159,9 @@ static bool espnow_open_capture(
     }
     memset(session, 0, sizeof(*session));
     session->lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
-    session->lifecycle = ESPNOW_LIFECYCLE_OPENING;
+    atomic_init(&session->lifecycle, ESPNOW_LIFECYCLE_OPENING);
     session->runtime = esp32_mquickjs_get_active_runtime();
-    session->generation = generation;
+    atomic_init(&session->generation, generation);
     session->send_timeout_ms = state->send_timeout_ms;
     session->channel_fixed = state->channel_fixed;
     session->channel = state->channel;
@@ -1161,6 +1172,8 @@ static bool espnow_open_capture(
     atomic_init(&session->active_send, NULL);
     atomic_init(&session->pending_sends, 0);
     atomic_init(&session->callbacks_active, 0);
+    atomic_init(&session->cleanup_scheduled, false);
+    atomic_init(&session->active_close, NULL);
     atomic_init(&session->sequence, 0);
     atomic_init(&session->received_packets, 0);
     atomic_init(&session->received_bytes, 0);
@@ -1198,7 +1211,16 @@ static bool espnow_open_capture(
     session->event_queue = esp32_mquickjs_event_queue_from_value(
         ctx, event_queue);
     if (session->event_queue == NULL ||
-        esp32_mquickjs_wifi_radio_acquire(
+        !esp32_mquickjs_event_queue_retain(session->event_queue)) {
+        if (!JS_HasException(ctx)) {
+            JS_ThrowInternalError(ctx, "failed to retain ESP-NOW event queue");
+        }
+        espnow_open_release(state);
+        heap_caps_free(state);
+        return false;
+    }
+    session->event_queue_retained = true;
+    if (esp32_mquickjs_wifi_radio_acquire(
             ESP32_MQUICKJS_WIFI_RADIO_CLIENT_ESPNOW, WIFI_MODE_STA,
             &session->radio_lease) != ESP_OK) {
         if (!JS_HasException(ctx)) {
@@ -1969,7 +1991,26 @@ static bool espnow_control_start(
         break;
     case ESPNOW_OPERATION_CLOSE_SESSION:
         if (state->result_bool) {
+            bool expected = false;
+
+            atomic_store_explicit(&session->active_close, state,
+                                  memory_order_release);
             (void)esp32_mquickjs_event_queue_close(session->event_queue);
+            if (!atomic_compare_exchange_strong_explicit(
+                    &session->cleanup_scheduled, &expected, true,
+                    memory_order_acq_rel, memory_order_acquire) ||
+                !esp32_mquickjs_future_submit_worker(
+                    runtime, token, espnow_close_worker, session)) {
+                atomic_store_explicit(&session->cleanup_scheduled, false,
+                                      memory_order_release);
+                atomic_store_explicit(&session->active_close, NULL,
+                                      memory_order_release);
+                (void)espnow_schedule_background_close(session);
+                JS_ThrowInternalError(
+                    ctx, "ESPNOW_CLEANUP_PENDING: close worker queue is full");
+                return false;
+            }
+            return true;
         }
         state->err = ESP_OK;
         break;
@@ -2099,6 +2140,24 @@ static esp32_mquickjs_resource_key_t espnow_control_resource_key(
     return &s_espnow_control_lane_key;
 }
 
+static uint32_t espnow_close_timeout_ms(
+    const esp32_mquickjs_future_driver_state_t *state)
+{
+    (void)state;
+    return ESPNOW_CLOSE_TIMEOUT_MS;
+}
+
+static JSValue espnow_close_on_timeout(
+    JSContext *ctx,
+    esp32_mquickjs_future_driver_state_t *state,
+    uint32_t timeout_ms)
+{
+    (void)state;
+    (void)timeout_ms;
+    return espnow_throw_error(
+        ctx, "ESPNOW_CLEANUP_PENDING", ESP_ERR_TIMEOUT, NULL, -1);
+}
+
 static const esp32_mquickjs_future_driver_t s_espnow_peer_add_driver = {
     .capture = espnow_peer_add_capture,
     .start = espnow_control_start,
@@ -2146,6 +2205,8 @@ static const esp32_mquickjs_future_driver_t s_espnow_session_close_driver = {
     .finish = espnow_control_finish,
     .cancel = espnow_control_cancel,
     .destroy = espnow_control_destroy,
+    .timeout_ms = espnow_close_timeout_ms,
+    .on_timeout = espnow_close_on_timeout,
     .resource_key = espnow_control_resource_key,
 };
 
@@ -2157,7 +2218,6 @@ static bool espnow_parse_send_timeout(
     static const char *const allowed[] = {"timeoutMs"};
     JSGCRef property_ref;
     JSValue *property = JS_PushGCRef(ctx, &property_ref);
-    uint32_t raw;
     bool result = false;
 
     if (JS_IsUndefined(options)) {
@@ -2177,11 +2237,11 @@ static bool espnow_parse_send_timeout(
         goto done;
     }
     if (!JS_IsUndefined(*property)) {
-        if (!espnow_to_u32(ctx, *property, &raw) || raw == 0 || raw > 60000) {
+        if (!esp32_mquickjs_value_to_bounded_u32(
+                ctx, *property, 1U, 60000U, timeout_ms)) {
             JS_ThrowRangeError(ctx, "timeoutMs must be in the range 1..60000");
             goto done;
         }
-        *timeout_ms = raw;
     }
     result = true;
 

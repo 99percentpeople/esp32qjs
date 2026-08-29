@@ -6,6 +6,7 @@
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_event_queue.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_http_server_resources.h"
 #include "esp32_mquickjs_net.h"
 #include "utils/esp32_mquickjs_request_response.h"
 #include "esp32_mquickjs_stream.h"
@@ -47,6 +48,7 @@ typedef struct {
     uint16_t ctrl_port;
     char *host;
     bool started;
+    bool release_pending;
     httpd_handle_t handle;
     httpd_uri_t dispatch_uri;
     esp32_mquickjs_event_queue_t *events;
@@ -123,6 +125,12 @@ static esp32_mquickjs_http_server_state_t s_http_server_state;
 static bool http_server_glob_match(const char *pattern, const char *text);
 static void http_server_close_request_body(JSContext *ctx,
                                            JSValue request_value);
+static esp_err_t http_server_stop_slot(
+    esp32_mquickjs_http_server_slot_t *server);
+static esp_err_t http_server_close_slot(
+    JSContext *ctx, esp32_mquickjs_http_server_slot_t *server);
+static esp_err_t http_server_cleanup_all(JSContext *ctx);
+static void http_server_reset_state(void);
 
 static httpd_method_t http_server_method_from_name(const char *method_name)
 {
@@ -363,25 +371,32 @@ static bool http_server_resolve_ifreq_for_host(const char *host, struct ifreq *o
     return false;
 }
 
-static bool http_server_init_state(esp32_mquickjs_runtime_t *runtime)
+static esp_err_t http_server_init_state(JSContext *ctx,
+                                        esp32_mquickjs_runtime_t *runtime)
 {
+    esp_err_t err;
     int i;
 
     if (s_http_server_state.initialized) {
-        if (runtime != NULL) {
-            s_http_server_state.runtime = runtime;
+        if (s_http_server_state.shutting_down) {
+            err = http_server_cleanup_all(ctx);
+            if (err != ESP_OK) {
+                return err;
+            }
+            http_server_reset_state();
+        } else {
+            if (runtime != NULL) {
+                s_http_server_state.runtime = runtime;
+            }
+            return ESP_OK;
         }
-        return true;
     }
 
     memset(&s_http_server_state, 0, sizeof(s_http_server_state));
     s_http_server_state.lock = xSemaphoreCreateMutex();
     if (s_http_server_state.lock == NULL) {
-        if (s_http_server_state.lock != NULL) {
-            vSemaphoreDelete(s_http_server_state.lock);
-        }
         memset(&s_http_server_state, 0, sizeof(s_http_server_state));
-        return false;
+        return ESP_ERR_NO_MEM;
     }
 
     for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_SERVERS; ++i) {
@@ -396,7 +411,15 @@ static bool http_server_init_state(esp32_mquickjs_runtime_t *runtime)
 
     s_http_server_state.runtime = runtime;
     s_http_server_state.initialized = true;
-    return true;
+    return ESP_OK;
+}
+
+static void http_server_reset_state(void)
+{
+    if (s_http_server_state.lock != NULL) {
+        vSemaphoreDelete(s_http_server_state.lock);
+    }
+    memset(&s_http_server_state, 0, sizeof(s_http_server_state));
 }
 
 static esp32_mquickjs_http_server_slot_t *http_server_get_slot(int32_t server_id)
@@ -749,7 +772,7 @@ static esp_err_t http_server_dispatch_handler(httpd_req_t *req)
     char *path = NULL;
     char *query_string = NULL;
 
-    if (server == NULL || !server->allocated ||
+    if (server == NULL || !server->allocated || server->release_pending ||
         s_http_server_state.shutting_down) {
         if (req != NULL) {
             http_server_send_error(req, 503, "server shutting down");
@@ -1567,24 +1590,43 @@ static esp_err_t http_server_send_response(httpd_req_t *req,
     return httpd_resp_send(req, NULL, 0);
 }
 
-static bool http_server_start_slot(esp32_mquickjs_http_server_slot_t *server)
+static int http_server_native_stop(void *handle, void *opaque)
+{
+    (void)opaque;
+    return (int)httpd_stop((httpd_handle_t)handle);
+}
+
+static const esp32_mquickjs_http_server_resource_ops_t
+    s_http_server_resource_ops = {
+        .stop = http_server_native_stop,
+        .opaque = NULL,
+    };
+
+static esp_err_t http_server_start_slot(
+    esp32_mquickjs_http_server_slot_t *server)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     struct ifreq ifr;
     esp_err_t err;
 
     if (server == NULL) {
-        return false;
+        return ESP_ERR_INVALID_ARG;
     }
     if (server->started) {
-        return true;
+        return ESP_OK;
+    }
+    if (server->handle != NULL) {
+        err = http_server_stop_slot(server);
+        if (err != ESP_OK) {
+            return err;
+        }
     }
 
     err = esp32_mquickjs_net_ensure_initialized();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "network runtime initialization failed before HTTP server start: %s",
                  esp_err_to_name(err));
-        return false;
+        return err;
     }
 
     config.server_port = server->port;
@@ -1593,13 +1635,14 @@ static bool http_server_start_slot(esp32_mquickjs_http_server_slot_t *server)
     if (!http_server_resolve_ifreq_for_host(server->host, &ifr)) {
         ESP_LOGE(TAG, "failed to resolve HTTP server host binding for %s",
                  server->host != NULL ? server->host : "(null)");
-        return false;
+        return ESP_ERR_INVALID_ARG;
     }
     if (!http_server_host_is_any(server->host)) {
         config.if_name = &ifr;
     }
-    if (httpd_start(&server->handle, &config) != ESP_OK) {
-        return false;
+    err = httpd_start(&server->handle, &config);
+    if (err != ESP_OK) {
+        return err;
     }
 
     memset(&server->dispatch_uri, 0, sizeof(server->dispatch_uri));
@@ -1607,26 +1650,35 @@ static bool http_server_start_slot(esp32_mquickjs_http_server_slot_t *server)
     server->dispatch_uri.method = HTTP_ANY;
     server->dispatch_uri.handler = http_server_dispatch_handler;
     server->dispatch_uri.user_ctx = server;
-    if (httpd_register_uri_handler(server->handle, &server->dispatch_uri) != ESP_OK) {
-        httpd_stop(server->handle);
-        server->handle = NULL;
-        return false;
+    err = httpd_register_uri_handler(server->handle, &server->dispatch_uri);
+    if (err != ESP_OK) {
+        esp_err_t stop_err = http_server_stop_slot(server);
+
+        return stop_err != ESP_OK ? stop_err : err;
     }
 
     server->started = true;
-    return true;
+    return ESP_OK;
 }
 
-static void http_server_stop_slot(esp32_mquickjs_http_server_slot_t *server)
+static esp_err_t http_server_stop_slot(
+    esp32_mquickjs_http_server_slot_t *server)
 {
+    esp32_mquickjs_http_server_resources_t resources;
+    esp_err_t err;
     int i;
 
-    if (server == NULL || !server->started) {
-        return;
+    if (server == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    resources.handle = server->handle;
+    err = (esp_err_t)esp32_mquickjs_http_server_resources_stop(
+        &resources, &s_http_server_resource_ops);
+    server->handle = (httpd_handle_t)resources.handle;
+    if (err != ESP_OK) {
+        return err;
     }
 
-    httpd_stop(server->handle);
-    server->handle = NULL;
     server->started = false;
     for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_ROUTES; ++i) {
         if (s_http_server_state.routes[i].allocated &&
@@ -1634,6 +1686,7 @@ static void http_server_stop_slot(esp32_mquickjs_http_server_slot_t *server)
             s_http_server_state.routes[i].registered = false;
         }
     }
+    return ESP_OK;
 }
 
 static int http_server_clear_routes_for_server(JSContext *ctx, uint8_t server_id)
@@ -1677,18 +1730,52 @@ static bool http_server_has_active_response(uint8_t server_id)
     return false;
 }
 
-static void http_server_close_slot(JSContext *ctx, esp32_mquickjs_http_server_slot_t *server)
+static esp_err_t http_server_close_slot(
+    JSContext *ctx, esp32_mquickjs_http_server_slot_t *server)
 {
+    esp_err_t err;
+
     if (server == NULL) {
-        return;
+        return ESP_OK;
+    }
+    err = http_server_stop_slot(server);
+    if (err != ESP_OK) {
+        return err;
     }
     if (server->events != NULL) {
         esp32_mquickjs_event_queue_close(server->events);
     }
-    http_server_stop_slot(server);
     http_server_cleanup_requests_for_server(server->server_id);
     (void)http_server_clear_routes_for_server(ctx, server->server_id);
     http_server_cleanup_server(server);
+    return ESP_OK;
+}
+
+static esp_err_t http_server_cleanup_all(JSContext *ctx)
+{
+    esp_err_t err;
+    int i;
+
+    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_SERVERS; ++i) {
+        esp32_mquickjs_http_server_slot_t *server =
+            &s_http_server_state.servers[i];
+
+        if (!server->allocated) {
+            continue;
+        }
+        server->release_pending = true;
+        err = http_server_close_slot(ctx, server);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN; ++i) {
+        http_server_cleanup_request(&s_http_server_state.requests[i]);
+    }
+    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_ROUTES; ++i) {
+        http_server_cleanup_route(ctx, &s_http_server_state.routes[i]);
+    }
+    return ESP_OK;
 }
 
 static int http_server_server_id_from_object(JSContext *ctx,
@@ -1711,7 +1798,8 @@ static int http_server_server_id_from_object(JSContext *ctx,
     }
 
     server = http_server_get_slot(ref->server_id);
-    if (server == NULL || server->generation != ref->generation) {
+    if (server == NULL || server->generation != ref->generation ||
+        server->release_pending) {
         JS_ThrowInternalError(ctx, "%s cannot use a closed or stale HttpServer", api_name);
         return -1;
     }
@@ -2160,9 +2248,13 @@ bool esp32_mquickjs_init_http_server_runtime(JSContext *ctx,
     JSValue *receive;
     JSValue *respond;
     bool registered;
+    esp_err_t err;
 
-    if (!http_server_init_state(runtime)) {
-        JS_ThrowOutOfMemory(ctx);
+    err = http_server_init_state(ctx, runtime);
+    if (err != ESP_OK) {
+        JS_ThrowInternalError(ctx,
+                              "HTTP server runtime cleanup failed: %s",
+                              esp_err_to_name(err));
         return false;
     }
     object = JS_PushGCRef(ctx, &object_ref);
@@ -2207,7 +2299,8 @@ void js_http_server_finalizer(JSContext *ctx, void *opaque)
     }
     server = http_server_get_slot(ref->server_id);
     if (server != NULL && server->generation == ref->generation) {
-        http_server_close_slot(ctx, server);
+        server->release_pending = true;
+        (void)http_server_close_slot(ctx, server);
     }
     heap_caps_free(ref);
 }
@@ -2217,6 +2310,7 @@ JSValue js_http_server_start(JSContext *ctx, JSValue *this_val, int argc, JSValu
     int32_t server_id = -1;
     esp32_mquickjs_http_server_slot_t *server;
     bool was_started;
+    esp_err_t err;
 
     (void)argc;
     (void)argv;
@@ -2225,8 +2319,11 @@ JSValue js_http_server_start(JSContext *ctx, JSValue *this_val, int argc, JSValu
     }
     server = http_server_get_slot(server_id);
     was_started = server->started;
-    if (!http_server_start_slot(server)) {
-        return JS_ThrowInternalError(ctx, "failed to start HTTP server");
+    err = http_server_start_slot(server);
+    if (err != ESP_OK) {
+        return JS_ThrowInternalError(ctx,
+                                     "failed to start HTTP server: %s",
+                                     esp_err_to_name(err));
     }
     esp32_mquickjs_set_property_ref(ctx, this_val, "started", JS_TRUE);
     return JS_NewBool(!was_started);
@@ -2237,6 +2334,7 @@ JSValue js_http_server_stop(JSContext *ctx, JSValue *this_val, int argc, JSValue
     int32_t server_id = -1;
     esp32_mquickjs_http_server_slot_t *server;
     bool was_started;
+    esp_err_t err;
 
     (void)argc;
     (void)argv;
@@ -2249,7 +2347,12 @@ JSValue js_http_server_stop(JSContext *ctx, JSValue *this_val, int argc, JSValue
     }
     server = http_server_get_slot(server_id);
     was_started = server->started;
-    http_server_stop_slot(server);
+    err = http_server_stop_slot(server);
+    if (err != ESP_OK) {
+        return JS_ThrowInternalError(ctx,
+                                     "failed to stop HTTP server: %s",
+                                     esp_err_to_name(err));
+    }
     esp32_mquickjs_set_property_ref(ctx, this_val, "started", JS_FALSE);
     return JS_NewBool(was_started);
 }
@@ -2259,7 +2362,9 @@ JSValue js_http_server_close(JSContext *ctx, JSValue *this_val, int argc, JSValu
     JSGCRef closed_ref;
     JSValue *closed_value;
     esp32_mquickjs_http_server_ref_t *ref;
+    esp32_mquickjs_http_server_slot_t *server;
     int32_t server_id = -1;
+    esp_err_t err;
 
     (void)argc;
     (void)argv;
@@ -2278,15 +2383,28 @@ JSValue js_http_server_close(JSContext *ctx, JSValue *this_val, int argc, JSValu
     }
     JS_PopGCRef(ctx, &closed_ref);
 
-    if (http_server_server_id_from_object(ctx, *this_val, "server.close", &server_id) != 0) {
-        return JS_EXCEPTION;
+    ref = JS_GetOpaque(ctx, *this_val);
+    if (ref == NULL) {
+        return JS_ThrowTypeError(
+            ctx, "server.close expects a valid HttpServer instance");
+    }
+    server_id = ref->server_id;
+    server = http_server_get_slot(server_id);
+    if (server == NULL || server->generation != ref->generation) {
+        return JS_ThrowInternalError(
+            ctx, "server.close cannot use a closed or stale HttpServer");
     }
     if (http_server_has_active_response((uint8_t)server_id)) {
         return JS_ThrowInternalError(
             ctx, "server.close() refused while a response is pending");
     }
-    ref = JS_GetOpaque(ctx, *this_val);
-    http_server_close_slot(ctx, http_server_get_slot(server_id));
+    server->release_pending = true;
+    err = http_server_close_slot(ctx, server);
+    if (err != ESP_OK) {
+        return JS_ThrowInternalError(ctx,
+                                     "failed to close HTTP server: %s",
+                                     esp_err_to_name(err));
+    }
     JS_SetOpaque(ctx, *this_val, NULL);
     heap_caps_free(ref);
     if (!esp32_mquickjs_set_property_ref(ctx, this_val, "started", JS_FALSE) ||
@@ -2575,6 +2693,7 @@ JSValue js_http_server_create(JSContext *ctx, JSValue *this_val, int argc, JSVal
     const char *host = "0.0.0.0";
     JSCStringBuf host_buf;
     int i;
+    esp_err_t err;
     esp32_mquickjs_http_server_slot_t *server = NULL;
 
     (void)this_val;
@@ -2639,6 +2758,24 @@ JSValue js_http_server_create(JSContext *ctx, JSValue *this_val, int argc, JSVal
         }
     }
 
+    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_SERVERS; ++i) {
+        server = &s_http_server_state.servers[i];
+        if (!server->allocated || !server->release_pending) {
+            continue;
+        }
+        err = http_server_close_slot(ctx, server);
+        if (err != ESP_OK) {
+            JS_PopGCRef(ctx, &global_ref);
+            JS_PopGCRef(ctx, &host_ref);
+            JS_PopGCRef(ctx, &port_ref);
+            JS_PopGCRef(ctx, &options_ref);
+            return JS_ThrowInternalError(
+                ctx, "HTTP server pending cleanup failed: %s",
+                esp_err_to_name(err));
+        }
+    }
+    server = NULL;
+
     http_server_lock();
     for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_SERVERS; ++i) {
         if (!s_http_server_state.servers[i].allocated) {
@@ -2652,6 +2789,7 @@ JSValue js_http_server_create(JSContext *ctx, JSValue *this_val, int argc, JSVal
             server->ctrl_port = (uint16_t)(ctrl_port + i);
             server->host = http_server_strdup(host);
             server->started = false;
+            server->release_pending = false;
             server->handle = NULL;
             if (server->host == NULL) {
                 http_server_cleanup_server(server);
@@ -2674,7 +2812,8 @@ JSValue js_http_server_create(JSContext *ctx, JSValue *this_val, int argc, JSVal
         JSValue result = http_server_make_server_object(ctx, *global_obj, server->server_id);
 
         if (JS_IsException(result)) {
-            http_server_close_slot(ctx, server);
+            server->release_pending = true;
+            (void)http_server_close_slot(ctx, server);
         }
         JS_PopGCRef(ctx, &global_ref);
         JS_PopGCRef(ctx, &host_ref);
@@ -2686,38 +2825,23 @@ JSValue js_http_server_create(JSContext *ctx, JSValue *this_val, int argc, JSVal
 
 void esp32_mquickjs_deinit_http_server_runtime(JSContext *ctx)
 {
-    int i;
+    esp_err_t err;
 
     if (!s_http_server_state.initialized) {
-        if (s_http_server_state.lock != NULL) {
-            vSemaphoreDelete(s_http_server_state.lock);
-        }
-        memset(&s_http_server_state, 0, sizeof(s_http_server_state));
+        http_server_reset_state();
         return;
     }
 
     s_http_server_state.shutting_down = true;
     s_http_server_state.runtime = NULL;
-    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_SERVERS; ++i) {
-        if (s_http_server_state.servers[i].events != NULL) {
-            esp32_mquickjs_event_queue_close(s_http_server_state.servers[i].events);
-        }
-        http_server_stop_slot(&s_http_server_state.servers[i]);
+    err = http_server_cleanup_all(ctx);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG,
+                 "HTTP server runtime cleanup retained for retry: %s",
+                 esp_err_to_name(err));
+        return;
     }
-    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_QUEUE_LEN; ++i) {
-        http_server_cleanup_request(&s_http_server_state.requests[i]);
-    }
-    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_ROUTES; ++i) {
-        http_server_cleanup_route(ctx, &s_http_server_state.routes[i]);
-    }
-    for (i = 0; i < ESP32_MQUICKJS_HTTP_SERVER_MAX_SERVERS; ++i) {
-        http_server_cleanup_server(&s_http_server_state.servers[i]);
-    }
-
-    if (s_http_server_state.lock != NULL) {
-        vSemaphoreDelete(s_http_server_state.lock);
-    }
-    memset(&s_http_server_state, 0, sizeof(s_http_server_state));
+    http_server_reset_state();
 }
 
 #endif

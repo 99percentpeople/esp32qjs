@@ -121,8 +121,8 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         server = (
             MQUICKJS / "src/modules/http/esp32_mquickjs_http_server.c"
         ).read_text(encoding="utf-8")
-        function_start = server.index("static bool http_server_start_slot(")
-        function_end = server.index("\nstatic void http_server_stop_slot(", function_start)
+        function_start = server.index("static esp_err_t http_server_start_slot(")
+        function_end = server.index("\nstatic esp_err_t http_server_stop_slot(", function_start)
         start = server[function_start:function_end]
 
         self.assertLess(
@@ -131,6 +131,119 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         )
         self.assertNotIn("esp_netif_init()", start)
         self.assertNotIn("esp_event_loop_create_default()", start)
+
+    def test_http_server_stop_failure_retains_native_state_for_retry(self):
+        server = (
+            MQUICKJS / "src/modules/http/esp32_mquickjs_http_server.c"
+        ).read_text(encoding="utf-8")
+        resources = (
+            MQUICKJS
+            / "src/modules/http/esp32_mquickjs_http_server_resources.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "esp32_mquickjs_http_server_resources_stop", resources
+        )
+        self.assertIn("if (result != 0)", resources)
+        self.assertLess(
+            resources.index("if (result != 0)"),
+            resources.index("resources->handle = NULL"),
+        )
+
+        stop_start = server.index(
+            "static esp_err_t http_server_stop_slot(",
+            server.index("static int http_server_native_stop("),
+        )
+        stop_end = server.index("\nstatic int http_server_clear_routes_for_server", stop_start)
+        stop = server[stop_start:stop_end]
+        self.assertIn("esp32_mquickjs_http_server_resources_stop", stop)
+        self.assertNotIn("httpd_stop(", stop)
+        self.assertLess(stop.index("if (err != ESP_OK)"), stop.index("server->started = false"))
+        self.assertLess(stop.index("if (err != ESP_OK)"), stop.index("registered = false"))
+
+        close_start = server.index(
+            "static esp_err_t http_server_close_slot(", stop_end
+        )
+        close_end = server.index("\nstatic int http_server_server_id_from_object", close_start)
+        close = server[close_start:close_end]
+        self.assertLess(
+            close.index("err = http_server_stop_slot(server)"),
+            close.index("esp32_mquickjs_event_queue_close"),
+        )
+        self.assertLess(
+            close.index("if (err != ESP_OK)"),
+            close.index("esp32_mquickjs_event_queue_close"),
+        )
+
+        explicit_stop_start = server.index("JSValue js_http_server_stop(")
+        explicit_stop_end = server.index("\nJSValue js_http_server_close(", explicit_stop_start)
+        explicit_stop = server[explicit_stop_start:explicit_stop_end]
+        self.assertLess(
+            explicit_stop.index("if (err != ESP_OK)"),
+            explicit_stop.index('"started", JS_FALSE'),
+        )
+
+        explicit_close_start = explicit_stop_end + 1
+        explicit_close_end = server.index("\nJSValue js_http_server_receive(", explicit_close_start)
+        explicit_close = server[explicit_close_start:explicit_close_end]
+        self.assertLess(
+            explicit_close.index("if (err != ESP_OK)"),
+            explicit_close.index("JS_SetOpaque"),
+        )
+
+        deinit_start = server.index("void esp32_mquickjs_deinit_http_server_runtime(")
+        deinit = server[deinit_start:]
+        self.assertIn("err = http_server_cleanup_all(ctx)", deinit)
+        cleanup_start = deinit.index("err = http_server_cleanup_all(ctx)")
+        self.assertLess(
+            deinit.index("if (err != ESP_OK)", cleanup_start),
+            deinit.index("http_server_reset_state()", cleanup_start),
+        )
+        init_start = server.index("bool esp32_mquickjs_init_http_server_runtime(")
+        init_end = server.index("\nJSValue js_http_server_constructor", init_start)
+        init = server[init_start:init_end]
+        self.assertIn("http_server_init_state(ctx, runtime)", init)
+        self.assertIn("esp_err_to_name(err)", init)
+
+    def test_ledc_runtime_teardown_retains_failed_resources_for_retry(self):
+        ledc = (
+            MQUICKJS / "src/modules/ledc/esp32_mquickjs_ledc.c"
+        ).read_text(encoding="utf-8")
+        resources = (
+            MQUICKJS / "src/modules/ledc/esp32_mquickjs_ledc_resources.c"
+        ).read_text(encoding="utf-8")
+        core = (MQUICKJS / "src/core/esp32_mquickjs.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("esp32_mquickjs_ledc_channel_resources_deinit", resources)
+        self.assertIn("esp32_mquickjs_ledc_timer_resources_deinit", resources)
+        self.assertLess(
+            resources.index("resources->stopped = true"),
+            resources.index("result = ops->deconfigure_channel"),
+        )
+        self.assertLess(
+            resources.index("resources->paused = true"),
+            resources.index("result = ops->deconfigure_timer"),
+        )
+
+        cleanup_start = ledc.index("static esp_err_t ledc_cleanup_all(")
+        cleanup_end = ledc.index("\nbool esp32_mquickjs_init_ledc_runtime(", cleanup_start)
+        cleanup = ledc[cleanup_start:cleanup_end]
+        self.assertIn("ledc_cleanup_channel", cleanup)
+        self.assertIn("ledc_cleanup_timer", cleanup)
+        self.assertLess(
+            cleanup.index("if (err != ESP_OK)"),
+            cleanup.index("ledc_fade_func_uninstall"),
+        )
+        self.assertNotIn("memset(s_ledc_channels", cleanup)
+
+        init_start = ledc.index("bool esp32_mquickjs_init_ledc_runtime(")
+        init_end = ledc.index("\nJSValue js_ledc_timerConfig", init_start)
+        init = ledc[init_start:init_end]
+        self.assertIn("err = ledc_cleanup_all()", init)
+        self.assertIn("esp_err_to_name(err)", init)
+        self.assertIn("if (!esp32_mquickjs_init_ledc_runtime(ctx))", core)
 
     def test_storage_uses_resource_lanes_before_the_bounded_worker_pool(self):
         filesystem = (
@@ -166,6 +279,68 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("memory_order_release", fs_worker)
         self.assertIn("memory_order_release", nvs_worker)
 
+    def test_future_worker_pool_initialization_is_all_or_nothing(self):
+        future = (
+            MQUICKJS / "src/core/esp32_mquickjs_future.c"
+        ).read_text(encoding="utf-8")
+        init_start = future.index("static bool future_init_worker_pool(void)")
+        init_end = future.index("\nstatic future_runtime_t *future_runtime(", init_start)
+        init = future[init_start:init_end]
+
+        self.assertIn("TaskHandle_t workers[", init)
+        self.assertIn(
+            "started != CONFIG_ESP32_MQUICKJS_FUTURE_WORKER_POOL_SIZE", init
+        )
+        self.assertIn(
+            "esp32_mquickjs_future_worker_pool_cleanup_partial", init
+        )
+        self.assertIn("vTaskDelete(cleanup->workers[worker_index])", future)
+        self.assertIn("vQueueDelete(cleanup->queue)", future)
+        self.assertIn("s_future_worker_queue = NULL", init)
+        self.assertNotIn("started > 0", init)
+
+    def test_future_runtime_resources_are_created_all_or_nothing(self):
+        future = (
+            MQUICKJS / "src/core/esp32_mquickjs_future.c"
+        ).read_text(encoding="utf-8")
+        resources = (
+            MQUICKJS
+            / "src/core/esp32_mquickjs_future_runtime_resources.c"
+        ).read_text(encoding="utf-8")
+        init_start = future.index("bool esp32_mquickjs_init_future_runtime(")
+        init_end = future.index(
+            "\nbool esp32_mquickjs_prepare_future_runtime_destroy(", init_start
+        )
+        init = future[init_start:init_end]
+        deinit_start = future.index(
+            "void esp32_mquickjs_deinit_future_runtime("
+        )
+        deinit_end = future.index(
+            "\nbool esp32_mquickjs_get_future_status(", deinit_start
+        )
+        deinit = future[deinit_start:deinit_end]
+
+        self.assertIn(
+            "esp32_mquickjs_future_runtime_resources_init(", init
+        )
+        self.assertNotIn("heap_caps_calloc", init)
+        self.assertNotIn("xQueueCreate", init)
+        self.assertIn(
+            "esp32_mquickjs_future_runtime_resources_deinit(", deinit
+        )
+        self.assertLess(
+            resources.index("resources->ready"),
+            resources.index("resources->submissions"),
+        )
+        self.assertLess(
+            resources.index("resources->submissions"),
+            resources.index("resources->slots"),
+        )
+        self.assertLess(
+            resources.index("resources->slots"),
+            resources.index("resources->runtime_state"),
+        )
+
     def test_resource_lanes_are_bounded_fifo_and_do_not_occupy_workers(self):
         future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
             encoding="utf-8"
@@ -173,6 +348,9 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         header = (MQUICKJS / "internal/esp32_mquickjs_future.h").read_text(
             encoding="utf-8"
         )
+        scheduler = (
+            MQUICKJS / "src/core/esp32_mquickjs_future_scheduler.c"
+        ).read_text(encoding="utf-8")
         kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
         dispatch_start = future.index("static void future_dispatch_call(")
         dispatch_end = future.index("\nstatic void future_sleep_timer_callback", dispatch_start)
@@ -185,13 +363,14 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
 
         self.assertIn("esp32_mquickjs_resource_key_t", header)
         self.assertIn("(*resource_key)(", header)
-        self.assertIn("future_lane_in_use(state, slot)", dispatch)
+        self.assertIn("future_lane_admission(state, slot)", dispatch)
         self.assertIn("slot->lane_waiting = true", dispatch)
         self.assertNotIn("->start(", dispatch[: dispatch.index("slot->lane_waiting = true")])
-        self.assertIn("submission_sequence", waiting)
+        self.assertIn("esp32_mquickjs_future_scheduler_next_waiting", waiting)
+        self.assertIn("submission_sequence", scheduler)
         self.assertIn("future_start_captured_driver", waiting)
         self.assertIn(
-            "CONFIG_ESP32_MQUICKJS_FUTURE_RESOURCE_LANE_QUEUE_LEN", dispatch
+            "CONFIG_ESP32_MQUICKJS_FUTURE_RESOURCE_LANE_QUEUE_LEN", future
         )
         self.assertIn("ESP32_MQUICKJS_FUTURE_RESOURCE_LANE_QUEUE_LEN", kconfig)
 
@@ -228,6 +407,9 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         filesystem = (
             MQUICKJS / "src/modules/fs/esp32_mquickjs_fs.c"
         ).read_text(encoding="utf-8")
+        atomic_write = (
+            MQUICKJS / "src/core/esp32_mquickjs_fs_atomic_write.c"
+        ).read_text(encoding="utf-8")
         kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
         declarations = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
             encoding="utf-8"
@@ -255,8 +437,14 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("fs_open_atomic_temp", filesystem)
         self.assertIn("O_EXCL", filesystem)
         self.assertIn("fsync(fileno(file))", filesystem)
-        self.assertIn("rename(temp_path, state->path)", filesystem)
+        self.assertIn("rename(temp_path, target_path)", filesystem)
         self.assertIn("unlink(temp_path)", filesystem)
+        self.assertIn("esp32_mquickjs_fs_atomic_write", filesystem)
+        self.assertLess(
+            atomic_write.index("ops->write_sync_close"),
+            atomic_write.index("ops->replace"),
+        )
+        self.assertIn("ops->remove_temp(temp_path, opaque)", atomic_write)
         self.assertIn("maxBytes?: number", declarations)
 
         self.assertNotIn("stream_collect_span_source", stream)
@@ -316,6 +504,28 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("i2s_clear_rx_wake_target(slot)", i2s)
         self.assertIn("i2s_publish_tx_wake_target(slot, runtime, token)", i2s)
         self.assertIn("i2s_clear_tx_wake_target(slot)", i2s)
+
+    def test_gpio_runtime_teardown_retains_failed_isr_handler_removal(self):
+        gpio = (
+            MQUICKJS / "src/modules/gpio/esp32_mquickjs_gpio.c"
+        ).read_text(encoding="utf-8")
+        release_start = gpio.index("static esp_err_t gpio_interrupt_release_slot(")
+        release_end = gpio.index(
+            "\nstatic void gpio_interrupt_close_queue(", release_start
+        )
+        release = gpio[release_start:release_end]
+        deinit_start = gpio.index("void esp32_mquickjs_deinit_gpio_runtime(")
+        deinit = gpio[deinit_start:]
+
+        self.assertLess(
+            release.index("gpio_isr_handler_remove(pin)"),
+            release.index("slot->handler_installed = false"),
+        )
+        self.assertIn(
+            "(void)gpio_interrupt_release_slot((gpio_num_t)pin, NULL)",
+            deinit,
+        )
+        self.assertNotIn("slot->handler_installed = false", deinit)
 
     def test_filesystem_changes_use_the_generic_event_queue(self):
         filesystem = (
@@ -381,6 +591,7 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("CONFIG_ESP32_MQUICKJS_INTERNAL_FUTURE_RESERVE", future)
         self.assertIn("internal_allocation_depth", future)
         self.assertIn("future_find_free_slot(state, internal)", future)
+        self.assertIn("esp32_mquickjs_future_scheduler_find_free", future)
 
     def test_internal_idle_jobs_only_run_outside_javascript_execution(self):
         core = (MQUICKJS / "src/core/esp32_mquickjs.c").read_text(
@@ -584,6 +795,316 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             "expired sleeps must settle even when their ready token was dropped",
         )
 
+    def test_http_operation_and_client_cleanup_resources_retain_failures(self):
+        http = (
+            MQUICKJS / "src/modules/http/esp32_mquickjs_http.c"
+        ).read_text(encoding="utf-8")
+        future = (
+            MQUICKJS / "src/modules/http/esp32_mquickjs_http_future.c"
+        ).read_text(encoding="utf-8")
+        resources = (
+            MQUICKJS
+            / "src/modules/http/esp32_mquickjs_http_operation_resources.c"
+        ).read_text(encoding="utf-8")
+        client_resources = (
+            MQUICKJS
+            / "src/modules/http/esp32_mquickjs_http_client_resources.c"
+        ).read_text(encoding="utf-8")
+        create_start = http.index(
+            "esp32_mquickjs_http_operation_t *esp32_mquickjs_http_operation_create("
+        )
+        create_end = http.index(
+            "\nbool esp32_mquickjs_http_operation_destroy(", create_start
+        )
+        create = http[create_start:create_end]
+        destroy_start = create_end + 1
+        destroy_end = http.index(
+            "\nbool esp32_mquickjs_http_operation_cancel(", destroy_start
+        )
+        destroy = http[destroy_start:destroy_end]
+
+        self.assertIn(
+            "esp32_mquickjs_http_operation_resources_init(", create
+        )
+        self.assertNotIn("heap_caps_calloc", create)
+        self.assertNotIn("xSemaphoreCreateMutex", create)
+        self.assertIn(
+            "esp32_mquickjs_http_operation_resources_deinit(", destroy
+        )
+        self.assertIn("http_operation_cleanup_client", destroy)
+        self.assertLess(
+            destroy.index("if (err != ESP_OK)"),
+            destroy.index("esp32_mquickjs_http_operation_resources_deinit"),
+        )
+        self.assertLess(
+            resources.index("resources->lock"),
+            resources.index("resources->operation"),
+        )
+        self.assertLess(
+            client_resources.index("if (result != 0)"),
+            client_resources.index("resources->client = NULL"),
+        )
+        attach_start = http.index("static bool http_operation_attach_client(")
+        attach_end = http.index(
+            "\nstatic esp_err_t http_operation_cleanup_client(", attach_start
+        )
+        attach = http[attach_start:attach_end]
+        self.assertLess(
+            attach.index("operation->client = client"),
+            attach.index("if (operation->cancel_requested)"),
+        )
+        future_destroy_start = future.index("static void http_future_destroy(")
+        future_destroy_end = future.index(
+            "\nstatic uint32_t http_future_timeout_ms", future_destroy_start
+        )
+        future_destroy = future[future_destroy_start:future_destroy_end]
+        self.assertIn(
+            "if (!esp32_mquickjs_http_operation_destroy(state->operation))",
+            future_destroy,
+        )
+        self.assertLess(
+            future_destroy.index("http_future_track_pending_cleanup(state)"),
+            future_destroy.index("http_future_release_worker()"),
+        )
+        deinit_start = future.index("bool esp32_mquickjs_deinit_http_runtime(")
+        deinit = future[deinit_start:]
+        self.assertLess(
+            deinit.index("http_future_retry_pending_cleanup()"),
+            deinit.index("active = s_http_future_runtime.active_count > 0"),
+        )
+
+    def test_rmt_symbol_buffer_resources_are_created_all_or_nothing(self):
+        rmt = (
+            MQUICKJS / "src/modules/rmt/esp32_mquickjs_rmt.c"
+        ).read_text(encoding="utf-8")
+        resources = (
+            MQUICKJS
+            / "src/modules/rmt/esp32_mquickjs_rmt_symbol_buffer_resources.c"
+        ).read_text(encoding="utf-8")
+        create_start = rmt.index("JSValue js_rmt_create_symbols(")
+        create_end = rmt.index("\nJSValue js_rmt_open(", create_start)
+        create = rmt[create_start:create_end]
+        release_start = rmt.index("static void rmt_symbol_buffer_release(")
+        release_end = rmt.index(
+            "\nstatic esp32_mquickjs_rmt_channel_slot_t", release_start
+        )
+        release = rmt[release_start:release_end]
+
+        self.assertIn(
+            "esp32_mquickjs_rmt_symbol_buffer_resources_init(", create
+        )
+        self.assertNotIn("heap_caps_calloc", create)
+        self.assertNotIn("heap_caps_free", create)
+        self.assertIn(
+            "esp32_mquickjs_rmt_symbol_buffer_resources_deinit(", release
+        )
+        self.assertLess(
+            resources.index("resources->symbols"),
+            resources.index("resources->buffer"),
+        )
+
+    def test_rmt_channel_and_encoder_share_one_retry_safe_owner(self):
+        rmt = (
+            MQUICKJS / "src/modules/rmt/esp32_mquickjs_rmt.c"
+        ).read_text(encoding="utf-8")
+        resources = (
+            MQUICKJS
+            / "src/modules/rmt/esp32_mquickjs_rmt_channel_resources.c"
+        ).read_text(encoding="utf-8")
+        cmake = (MQUICKJS / "CMakeLists.txt").read_text(encoding="utf-8")
+        cleanup_start = rmt.index("static esp_err_t rmt_channel_cleanup(")
+        cleanup_end = rmt.index(
+            "\nstatic esp_err_t rmt_abort_active(", cleanup_start
+        )
+        cleanup = rmt[cleanup_start:cleanup_end]
+        open_start = rmt.index("JSValue js_rmt_open(")
+        open_end = rmt.rindex("\n#endif")
+        open_path = rmt[open_start:open_end]
+        close_start = rmt.index("JSValue js_rmt_channel_close(")
+        close_end = rmt.index("\nJSValue js_rmt_capabilities(", close_start)
+        close = rmt[close_start:close_end]
+
+        self.assertIn(
+            "esp32_mquickjs_rmt_channel_resources_init(", open_path
+        )
+        self.assertNotIn("rmt_new_tx_channel", open_path)
+        self.assertNotIn("rmt_new_rx_channel", open_path)
+        self.assertNotIn("rmt_new_copy_encoder", open_path)
+        self.assertIn(
+            "esp32_mquickjs_rmt_channel_resources_deinit(", cleanup
+        )
+        self.assertNotIn("rmt_disable", cleanup)
+        self.assertNotIn("rmt_del_encoder", cleanup)
+        self.assertNotIn("rmt_del_channel", cleanup)
+        self.assertIn("err = rmt_channel_cleanup(slot)", close)
+        self.assertLess(
+            close.index("if (err != ESP_OK)"),
+            close.index("JS_SetOpaque(ctx, *this_val, NULL)"),
+        )
+        self.assertLess(
+            resources.index("ops->delete_encoder"),
+            resources.index("ops->delete_channel"),
+        )
+        self.assertIn(
+            "src/modules/rmt/esp32_mquickjs_rmt_channel_resources.c", cmake
+        )
+
+    def test_i2s_timeout_timers_are_created_all_or_nothing(self):
+        i2s = (
+            MQUICKJS / "src/modules/i2s/esp32_mquickjs_i2s.c"
+        ).read_text(encoding="utf-8")
+        resources = (
+            MQUICKJS
+            / "src/modules/i2s/esp32_mquickjs_i2s_timer_resources.c"
+        ).read_text(encoding="utf-8")
+        open_start = i2s.index("JSValue js_i2s_open(")
+        open_end = i2s.rindex("\n#endif")
+        open_path = i2s[open_start:open_end]
+        cleanup_start = i2s.index("static esp_err_t i2s_cleanup_slot(")
+        cleanup_end = i2s.index(
+            "\nstatic void i2s_request_close(", cleanup_start
+        )
+        cleanup = i2s[cleanup_start:cleanup_end]
+
+        self.assertIn(
+            "esp32_mquickjs_i2s_timer_resources_init(", open_path
+        )
+        self.assertNotIn("esp_timer_create", open_path)
+        self.assertIn(
+            "esp32_mquickjs_i2s_timer_resources_deinit(", cleanup
+        )
+        self.assertNotIn("esp_timer_delete", cleanup)
+        self.assertLess(
+            resources.index("resources->tx_timer"),
+            resources.index("resources->rx_timer"),
+        )
+
+    def test_i2s_channels_retain_partial_start_stop_and_delete_state(self):
+        i2s = (
+            MQUICKJS / "src/modules/i2s/esp32_mquickjs_i2s.c"
+        ).read_text(encoding="utf-8")
+        resources = (
+            MQUICKJS
+            / "src/modules/i2s/esp32_mquickjs_i2s_channel_resources.c"
+        ).read_text(encoding="utf-8")
+        cmake = (MQUICKJS / "CMakeLists.txt").read_text(encoding="utf-8")
+        cleanup_start = i2s.index("static esp_err_t i2s_cleanup_slot(")
+        cleanup_end = i2s.index(
+            "\nstatic void i2s_request_close(", cleanup_start
+        )
+        cleanup = i2s[cleanup_start:cleanup_end]
+        start_start = i2s.index("JSValue js_i2s_channel_start(")
+        start_end = i2s.index("\nJSValue js_i2s_channel_stop(", start_start)
+        start = i2s[start_start:start_end]
+        stop_start = start_end + 1
+        stop_end = i2s.index("\nJSValue js_i2s_channel_read(", stop_start)
+        stop = i2s[stop_start:stop_end]
+        close_start = i2s.index("JSValue js_i2s_channel_close(")
+        close_end = i2s.index("\nJSValue js_i2s_capabilities(", close_start)
+        close = i2s[close_start:close_end]
+        open_start = i2s.index("JSValue js_i2s_open(")
+        open_end = i2s.rindex("\n#endif")
+        open_path = i2s[open_start:open_end]
+
+        self.assertIn(
+            "esp32_mquickjs_i2s_channel_resources_init(", open_path
+        )
+        self.assertNotIn("i2s_new_channel", open_path)
+        self.assertIn(
+            "esp32_mquickjs_i2s_channel_resources_stop(", cleanup
+        )
+        self.assertIn(
+            "esp32_mquickjs_i2s_channel_resources_delete(", cleanup
+        )
+        self.assertNotIn("i2s_channel_disable", cleanup)
+        self.assertNotIn("i2s_del_channel", cleanup)
+        self.assertIn(
+            "esp32_mquickjs_i2s_channel_resources_start(", start
+        )
+        self.assertNotIn("i2s_channel_enable", start)
+        self.assertIn(
+            "esp32_mquickjs_i2s_channel_resources_stop(", stop
+        )
+        self.assertNotIn("i2s_channel_disable", stop)
+        self.assertIn("err = i2s_cleanup_slot(slot)", close)
+        self.assertLess(
+            close.index("if (err != ESP_OK)"),
+            close.index("JS_SetOpaque(ctx, *this_val, NULL)"),
+        )
+        resource_stop_start = resources.index(
+            "int esp32_mquickjs_i2s_channel_resources_stop("
+        )
+        resource_delete_start = resources.index(
+            "int esp32_mquickjs_i2s_channel_resources_delete("
+        )
+        resource_stop = resources[resource_stop_start:resource_delete_start]
+        resource_deinit_start = resources.index(
+            "int esp32_mquickjs_i2s_channel_resources_deinit("
+        )
+        resource_delete = resources[
+            resource_delete_start:resource_deinit_start
+        ]
+        self.assertLess(
+            resource_stop.index("resources->rx_enabled"),
+            resource_stop.index("resources->tx_enabled"),
+        )
+        self.assertLess(
+            resource_delete.index("resources->rx_channel"),
+            resource_delete.index("resources->tx_channel"),
+        )
+        self.assertIn(
+            "src/modules/i2s/esp32_mquickjs_i2s_channel_resources.c", cmake
+        )
+
+    def test_adc_unit_and_calibrations_share_one_retry_safe_owner(self):
+        adc = (
+            MQUICKJS / "src/modules/adc/esp32_mquickjs_adc.c"
+        ).read_text(encoding="utf-8")
+        resources = (
+            MQUICKJS
+            / "src/modules/adc/esp32_mquickjs_adc_unit_resources.c"
+        ).read_text(encoding="utf-8")
+        core = (MQUICKJS / "src/core/esp32_mquickjs.c").read_text(
+            encoding="utf-8"
+        )
+        cmake = (MQUICKJS / "CMakeLists.txt").read_text(encoding="utf-8")
+        close_state_start = adc.index("static esp_err_t adc_close_unit_state(")
+        close_state_end = adc.index("\nstatic JSValue adc_throw_error(", close_state_start)
+        close_state = adc[close_state_start:close_state_end]
+        open_start = adc.index("JSValue js_adc_open(")
+        open_end = adc.index("\nJSValue js_adc_close(", open_start)
+        open_path = adc[open_start:open_end]
+        close_start = open_end + 1
+        close_end = adc.index("\nJSValue js_adc_status(", close_start)
+        close = adc[close_start:close_end]
+        configure_start = adc.index("JSValue js_adc_configure(")
+        configure_end = adc.index("\nJSValue js_adc_read(", configure_start)
+        configure = adc[configure_start:configure_end]
+
+        self.assertIn("esp32_mquickjs_adc_unit_resources_deinit(", close_state)
+        self.assertNotIn("adc_oneshot_del_unit", close_state)
+        self.assertNotIn("adc_cali_delete_scheme", close_state)
+        self.assertIn("err = adc_close_unit_state(unit)", open_path)
+        self.assertLess(
+            open_path.index("if (err != ESP_OK)"),
+            open_path.index("esp32_mquickjs_adc_unit_resources_init("),
+        )
+        self.assertNotIn("adc_oneshot_new_unit", open_path)
+        self.assertIn("err = adc_close_unit_state(unit)", close)
+        self.assertIn("if (err != ESP_OK)", close)
+        self.assertLess(
+            configure.index("adc_release_cali_handle("),
+            configure.index("adc_oneshot_config_channel("),
+        )
+        self.assertIn("if (!esp32_mquickjs_init_adc_runtime(ctx))", core)
+        self.assertLess(
+            resources.index("resources->calibrations"),
+            resources.index("resources->unit"),
+        )
+        self.assertIn(
+            "src/modules/adc/esp32_mquickjs_adc_unit_resources.c", cmake
+        )
+
     def test_http_and_websocket_workers_publish_results_with_c11_atomics(self):
         http = (
             MQUICKJS / "src/modules/http/esp32_mquickjs_http_future.c"
@@ -619,9 +1140,31 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertNotIn("volatile bool worker_completed;", websocket)
         self.assertNotIn("volatile int sent;", websocket)
 
+    def test_websocket_owned_callback_payloads_use_the_queue_core(self):
+        websocket = (
+            MQUICKJS / "src/modules/websocket/esp32_mquickjs_websocket.c"
+        ).read_text(encoding="utf-8")
+        enqueue = websocket[
+            websocket.index("static void websocket_enqueue(") : websocket.index(
+                "\nstatic void websocket_enqueue_simple("
+            )
+        ]
+
+        self.assertIn("esp32_mquickjs_event_queue_enqueue(", enqueue)
+        self.assertNotIn("xQueueSend", enqueue)
+        self.assertIn("websocket_free_callback_event(event)", enqueue)
+        self.assertIn("dropped_events", enqueue)
+
     def test_websocket_publishes_one_atomic_lifecycle_to_callbacks(self):
         websocket = (
             MQUICKJS / "src/modules/websocket/esp32_mquickjs_websocket.c"
+        ).read_text(encoding="utf-8")
+        resources = (
+            MQUICKJS
+            / "src/modules/websocket/esp32_mquickjs_websocket_client_resources.c"
+        ).read_text(encoding="utf-8")
+        core = (
+            MQUICKJS / "src/core/esp32_mquickjs.c"
         ).read_text(encoding="utf-8")
 
         self.assertNotIn("volatile", websocket)
@@ -647,9 +1190,39 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertNotIn("esp_websocket_client_stop(", close_source)
         self.assertNotIn("esp_websocket_client_destroy(", close_source)
         self.assertIn("static void websocket_close_worker(", websocket)
-        self.assertIn("esp_websocket_client_stop(client)", websocket)
-        self.assertIn("esp_websocket_client_destroy(client)", websocket)
+        self.assertIn("websocket_cleanup_client_resources(state)", websocket)
+        self.assertLess(
+            resources.index("result = ops->stop"),
+            resources.index("result = ops->unregister_events"),
+        )
+        self.assertLess(
+            resources.index("result = ops->unregister_events"),
+            resources.index("result = ops->destroy"),
+        )
+        for operation, marker in (
+            ("result = ops->stop", "resources->started = false"),
+            (
+                "result = ops->unregister_events",
+                "resources->events_registered = false",
+            ),
+            ("result = ops->destroy", "resources->client = NULL"),
+        ):
+            operation_index = resources.index(operation)
+            self.assertLess(
+                resources.index("if (result != 0)", operation_index),
+                resources.index(marker, operation_index),
+                marker,
+            )
         self.assertIn("esp32_mquickjs_submit_background_worker(", websocket)
+        self.assertIn("_Atomic int close_worker_result", websocket)
+        self.assertIn("bool esp32_mquickjs_deinit_websocket_runtime", websocket)
+        self.assertIn(
+            "if (!esp32_mquickjs_deinit_websocket_runtime(ctx))", core
+        )
+        self.assertLess(
+            websocket.index("s_websocket_state.events_registered = true"),
+            websocket.index("s_websocket_state.client_started = true"),
+        )
         self.assertIn('status, "closing"', websocket)
         self.assertIn(
             "&s_websocket_state.close_worker_completed, true,\n"
@@ -713,7 +1286,7 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("socket_dns_request_release(state->resolver);", socket)
         self.assertIn("MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT", socket)
         self.assertIn("strlen(state->host) + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL", socket)
-        timer_start = socket.index("esp_timer_start_periodic(state->poll_timer")
+        timer_start = socket.index("esp32_mquickjs_timer_resource_init(")
         resolver_start = socket.index(
             "socket_future_begin_resolution(ctx, state)", timer_start
         )
@@ -728,6 +1301,28 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("socket_tls_request_release(state->tls_request);", socket)
         self.assertIn("xTaskCreateWithCaps(socket_tls_connect_worker", socket)
         self.assertIn("MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT", socket)
+
+    def test_socket_future_poller_uses_the_shared_timer_owner(self):
+        socket = (
+            MQUICKJS / "src/modules/socket/esp32_mquickjs_socket.c"
+        ).read_text(encoding="utf-8")
+        start = socket[
+            socket.index("static bool socket_future_start(") : socket.index(
+                "\nstatic esp32_mquickjs_future_poll_t socket_future_poll("
+            )
+        ]
+        stop = socket[
+            socket.index("static void socket_future_stop_timer(") : socket.index(
+                "\nstatic bool socket_future_needs_resolution("
+            )
+        ]
+
+        self.assertIn("esp32_mquickjs_timer_resource_init", start)
+        self.assertNotIn("esp_timer_create", start)
+        self.assertNotIn("esp_timer_start_periodic", start)
+        self.assertIn("esp32_mquickjs_timer_resource_deinit", stop)
+        self.assertNotIn("esp_timer_stop", stop)
+        self.assertNotIn("esp_timer_delete", stop)
 
     def test_future_combinators_observe_every_attached_input_rejection(self):
         future = (MQUICKJS / "src/core/esp32_mquickjs_future.c").read_text(
@@ -777,6 +1372,9 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         event_queue = (
             MQUICKJS / "src/core/esp32_mquickjs_event_queue.c"
         ).read_text(encoding="utf-8")
+        resources = (
+            MQUICKJS / "src/core/esp32_mquickjs_event_queue_resources.c"
+        ).read_text(encoding="utf-8")
         create_start = event_queue.index("JSValue esp32_mquickjs_event_queue_new(")
         create_end = event_queue.index(
             "\nJSValue js_event_queue_constructor(", create_start
@@ -798,7 +1396,11 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("queue->drain_scratch = heap_caps_malloc", create)
+        self.assertIn("esp32_mquickjs_event_queue_resources_init(", create)
+        self.assertIn(
+            "resources->drain_scratch = ops->allocate(event_size, opaque)",
+            resources,
+        )
         self.assertIn("esp32_mquickjs_event_queue_discard_all(queue)", finalizer)
         self.assertIn("esp32_mquickjs_event_queue_drain(", discard)
         self.assertNotIn("heap_caps_malloc", finalizer)
@@ -806,6 +1408,39 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("queue.allocations_allowed = false", c_test)
         self.assertIn("assert(queue.drop_calls == 2)", c_test)
         self.assertIn("assert(queue.live_payloads == 0)", c_test)
+
+    def test_event_queue_drop_oldest_reuses_creation_time_scratch(self):
+        event_queue = (
+            MQUICKJS / "src/core/esp32_mquickjs_event_queue.c"
+        ).read_text(encoding="utf-8")
+        resources = (
+            MQUICKJS / "src/core/esp32_mquickjs_event_queue_resources.c"
+        ).read_text(encoding="utf-8")
+        send_start = event_queue.index(
+            "bool esp32_mquickjs_event_queue_send("
+        )
+        send_end = event_queue.index(
+            "\nbool esp32_mquickjs_event_queue_send_from_isr(", send_start
+        )
+        send = event_queue[send_start:send_end]
+        create_start = event_queue.index("JSValue esp32_mquickjs_event_queue_new(")
+        create_end = event_queue.index(
+            "\nJSValue js_event_queue_constructor(", create_start
+        )
+        create = event_queue[create_start:create_end]
+
+        self.assertIn("esp32_mquickjs_event_queue_resources_init(", create)
+        self.assertIn(
+            "resources->overflow_scratch = ops->allocate(event_size, opaque)",
+            resources,
+        )
+        self.assertIn("resources->send_lock = ops->create_lock(opaque)", resources)
+        self.assertIn("queue->resources.overflow_scratch", send)
+        self.assertIn(
+            "(SemaphoreHandle_t)queue->resources.send_lock", send
+        )
+        self.assertNotIn("heap_caps_malloc", send)
+        self.assertNotIn("heap_caps_free", send)
 
     def test_event_queue_explicit_dispose_detaches_js_and_defers_pending_receive(self):
         event_queue = (
@@ -828,6 +1463,27 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("event_queue_unregister(queue)", dispose)
         self.assertIn("event_queue_destroy_if_disposed(queue)", event_queue)
         self.assertIn("queue->receiver_registered", event_queue)
+
+    def test_event_queue_native_producers_can_retain_disposed_storage(self):
+        event_queue = (
+            MQUICKJS / "src/core/esp32_mquickjs_event_queue.c"
+        ).read_text(encoding="utf-8")
+        header = (
+            MQUICKJS / "internal/esp32_mquickjs_event_queue.h"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("uint32_t native_retain_count;", event_queue)
+        self.assertIn("queue->native_retain_count == 0", event_queue)
+        self.assertIn("esp32_mquickjs_event_queue_retain", header)
+        self.assertIn("esp32_mquickjs_event_queue_release", header)
+        finalizer_start = event_queue.index("void js_event_queue_finalizer(")
+        finalizer_end = event_queue.index(
+            "\nJSValue js_event_queue_receive(", finalizer_start
+        )
+        finalizer = event_queue[finalizer_start:finalizer_end]
+        self.assertIn("queue->dispose_requested = true", finalizer)
+        self.assertIn("event_queue_destroy_if_disposed(queue)", finalizer)
+        self.assertNotIn("event_queue_destroy_native(queue)", finalizer)
 
     def test_event_queue_exposes_queue_local_stats(self):
         event_queue = (
@@ -856,6 +1512,159 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         ):
             self.assertIn(f"{field}:", declarations)
 
+    def test_uart_resources_retain_driver_delete_failure_for_retry(self):
+        uart = (
+            MQUICKJS / "src/modules/uart/esp32_mquickjs_uart.c"
+        ).read_text(encoding="utf-8")
+        resources = (
+            MQUICKJS
+            / "src/modules/uart/esp32_mquickjs_uart_port_resources.c"
+        ).read_text(encoding="utf-8")
+        cmake = (MQUICKJS / "CMakeLists.txt").read_text(encoding="utf-8")
+        open_start = uart.index("static JSValue uart_open(")
+        open_end = uart.index("\nstatic esp_err_t uart_cleanup_all(", open_start)
+        open_path = uart[open_start:open_end]
+        cleanup_start = uart.index("static esp_err_t uart_cleanup_slot(")
+        cleanup_end = uart.index(
+            "\nstatic esp32_mquickjs_uart_slot_t *uart_get_slot(", cleanup_start
+        )
+        cleanup = uart[cleanup_start:cleanup_end]
+
+        self.assertIn("esp32_mquickjs_uart_port_resources_init", open_path)
+        self.assertNotIn("xSemaphoreCreateMutex", open_path)
+        self.assertNotIn("uart_driver_install", open_path)
+        self.assertIn("esp32_mquickjs_uart_port_resources_deinit", cleanup)
+        self.assertNotIn("uart_driver_delete", cleanup)
+        self.assertIn("slot->driver_installed = resources.driver_installed", cleanup)
+        self.assertLess(
+            cleanup.index("slot->driver_installed = resources.driver_installed"),
+            cleanup.index("if (err != ESP_OK)"),
+        )
+        self.assertLess(
+            cleanup.index("if (err != ESP_OK)"),
+            cleanup.index("uart_init_slot(slot, port_id)"),
+        )
+        self.assertIn("result = ops->delete_driver", resources)
+        self.assertLess(
+            resources.index("if (result != 0)"),
+            resources.index("resources->driver_installed = false"),
+        )
+        self.assertIn(
+            "return cleanup_result != 0 ? cleanup_result : result", resources
+        )
+        self.assertLess(
+            resources.index("ops->delete_driver"),
+            resources.index("ops->delete_watch_lock"),
+        )
+        delete_start = uart.index("static int uart_port_delete_driver(")
+        delete_end = uart.index(
+            "\nstatic void uart_port_delete_watch_lock(", delete_start
+        )
+        delete_driver = uart[delete_start:delete_end]
+        self.assertIn("err = uart_driver_delete(context->port_id)", delete_driver)
+        self.assertNotIn("(void)uart_driver_delete", delete_driver)
+        close_start = uart.index("JSValue js_uart_port_close(")
+        close_end = uart.index("\nJSValue js_uart_port_status(", close_start)
+        close = uart[close_start:close_end]
+        self.assertIn("err = uart_cleanup_slot(slot)", close)
+        self.assertLess(
+            close.index("if (err != ESP_OK)"),
+            close.index("port_ref_ptr = JS_GetOpaque"),
+        )
+        init_start = uart.index("bool esp32_mquickjs_init_uart_runtime(")
+        init_end = uart.index("\nJSValue js_uart_port_constructor(", init_start)
+        init = uart[init_start:init_end]
+        self.assertIn("err = uart_cleanup_all()", init)
+        self.assertIn("if (err != ESP_OK)", init)
+        self.assertIn(
+            "src/modules/uart/esp32_mquickjs_uart_port_resources.c", cmake
+        )
+
+    def test_uart_future_timer_create_and_start_share_one_owner(self):
+        uart = (
+            MQUICKJS / "src/modules/uart/esp32_mquickjs_uart.c"
+        ).read_text(encoding="utf-8")
+        helper = (
+            MQUICKJS / "src/core/esp32_mquickjs_timer_resource.c"
+        ).read_text(encoding="utf-8")
+        start = uart[
+            uart.index("static bool uart_future_start(") : uart.index(
+                "\nstatic esp32_mquickjs_future_poll_t uart_future_poll("
+            )
+        ]
+        release = uart[
+            uart.index("static void uart_future_release(") : uart.index(
+                "\nstatic const char *uart_future_write_api("
+            )
+        ]
+
+        self.assertIn("esp32_mquickjs_timer_resource_init", start)
+        self.assertNotIn("esp_timer_create", start)
+        self.assertNotIn("esp_timer_start_once", start)
+        self.assertNotIn("esp_timer_start_periodic", start)
+        self.assertIn("esp32_mquickjs_timer_resource_deinit", release)
+        self.assertNotIn("esp_timer_stop", release)
+        self.assertNotIn("esp_timer_delete", release)
+        self.assertLess(
+            helper.index("ops->stop"), helper.index("ops->delete_timer")
+        )
+
+    def test_spi_rearmable_progress_timer_uses_the_shared_owner(self):
+        spi = (
+            MQUICKJS / "src/modules/spi/esp32_mquickjs_spi.c"
+        ).read_text(encoding="utf-8")
+        start = spi[
+            spi.index("static bool spi_future_start(") : spi.index(
+                "\nstatic esp32_mquickjs_future_poll_t spi_future_poll("
+            )
+        ]
+        arm_start = spi.index("static bool spi_future_arm_progress_timer(")
+        arm = spi[
+            arm_start : spi.index(
+                "\nstatic void spi_future_mark_device_fault(", arm_start
+            )
+        ]
+        release = spi[
+            spi.index("static void spi_future_release(") : spi.index(
+                "\nstatic esp32_mquickjs_future_driver_state_t *spi_future_allocate("
+            )
+        ]
+
+        self.assertIn("esp32_mquickjs_timer_resource_acquire", start)
+        self.assertNotIn("esp_timer_create", start)
+        self.assertIn("esp32_mquickjs_timer_resource_stop", arm)
+        self.assertIn("esp32_mquickjs_timer_resource_start", arm)
+        self.assertNotIn("esp_timer_start_once", arm)
+        self.assertIn("esp32_mquickjs_timer_resource_deinit", release)
+        self.assertNotIn("esp_timer_stop", release)
+        self.assertNotIn("esp_timer_delete", release)
+
+    def test_usb_serial_rearmable_stall_timer_uses_the_shared_owner(self):
+        usb_serial = (
+            MQUICKJS / "src/modules/usb_serial/esp32_mquickjs_usb_serial.c"
+        ).read_text(encoding="utf-8")
+        start = usb_serial[
+            usb_serial.index("static bool usb_serial_future_start(") :
+            usb_serial.index("\nstatic void usb_serial_future_step(")
+        ]
+        arm = usb_serial[
+            usb_serial.index("static bool usb_serial_future_arm_timeout_wake(") :
+            usb_serial.index("\nstatic bool usb_serial_future_start(")
+        ]
+        release = usb_serial[
+            usb_serial.index("static void usb_serial_future_release(") :
+            usb_serial.index("\nstatic bool usb_serial_future_prepare(")
+        ]
+
+        self.assertIn("esp32_mquickjs_timer_resource_acquire", start)
+        self.assertNotIn("esp_timer_create", start)
+        self.assertIn("esp32_mquickjs_timer_resource_stop", arm)
+        self.assertIn("esp32_mquickjs_timer_resource_start", arm)
+        self.assertNotIn("esp_timer_start_once", arm)
+        self.assertIn("esp32_mquickjs_timer_resource_deinit", release)
+        self.assertNotIn("esp_timer_stop", release)
+        self.assertNotIn("esp_timer_delete", release)
+
     def test_uart_write_backpressure_and_read_readiness_are_cooperative(self):
         uart = (
             MQUICKJS / "src/modules/uart/esp32_mquickjs_uart.c"
@@ -872,7 +1681,7 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertNotIn("portMAX_DELAY", write)
         self.assertIn("esp32_mquickjs_future_wake_from_isr", notifier)
         self.assertIn("esp32_mquickjs_notify_active_runtime_from_isr", notifier)
-        self.assertIn("esp_timer_start_once(state->poll_timer", uart)
+        self.assertIn("esp_timer_start_once((esp_timer_handle_t)timer", uart)
         self.assertIn("slot->write_busy", uart)
         self.assertIn("uart_future_resource_key", uart)
         self.assertIn("&slot->rx_lane_key", uart)
@@ -885,6 +1694,86 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("slot->timeout_ms", uart)
         self.assertNotIn("UART_WRITE_STALL_TIMEOUT_MS", uart)
         self.assertNotIn("span_copy", uart)
+
+    def test_i2c_bus_lease_and_driver_handle_share_one_owner(self):
+        i2c = (
+            MQUICKJS / "src/modules/i2c/esp32_mquickjs_i2c.c"
+        ).read_text(encoding="utf-8")
+        helper = (
+            MQUICKJS
+            / "src/modules/i2c/esp32_mquickjs_i2c_bus_resources.c"
+        ).read_text(encoding="utf-8")
+        cmake = (MQUICKJS / "CMakeLists.txt").read_text(encoding="utf-8")
+        open_start = i2c.index(
+            "static esp32_mquickjs_i2c_slot_t *i2c_alloc_slot("
+        )
+        open_end = i2c.index(
+            "\nbool esp32_mquickjs_deinit_i2c_runtime(", open_start
+        )
+        open_path = i2c[open_start:open_end]
+        cleanup_start = i2c.index(
+            "static esp_err_t i2c_cleanup_slot(", open_start
+        )
+        cleanup_end = i2c.index(
+            "\nstatic esp_err_t i2c_cleanup_device(", cleanup_start
+        )
+        cleanup = i2c[cleanup_start:cleanup_end]
+
+        self.assertIn("esp32_mquickjs_i2c_bus_resources_init", open_path)
+        self.assertNotIn("esp32_mquickjs_peripheral_lease_acquire", open_path)
+        self.assertNotIn("i2c_new_master_bus", open_path)
+        self.assertIn("esp32_mquickjs_i2c_bus_resources_deinit", cleanup)
+        self.assertNotIn("i2c_del_master_bus", cleanup)
+        self.assertNotIn("esp32_mquickjs_peripheral_lease_release", cleanup)
+        self.assertLess(
+            helper.index("ops->delete_bus"),
+            helper.index("ops->release_lease"),
+        )
+        self.assertIn(
+            "src/modules/i2c/esp32_mquickjs_i2c_bus_resources.c", cmake
+        )
+
+    def test_i2c_and_spi_runtime_destroy_retain_failed_native_cleanup(self):
+        core = (MQUICKJS / "src/core/esp32_mquickjs.c").read_text(
+            encoding="utf-8"
+        )
+        i2c = (
+            MQUICKJS / "src/modules/i2c/esp32_mquickjs_i2c.c"
+        ).read_text(encoding="utf-8")
+        spi = (
+            MQUICKJS / "src/modules/spi/esp32_mquickjs_spi.c"
+        ).read_text(encoding="utf-8")
+
+        i2c_deinit_start = i2c.index(
+            "bool esp32_mquickjs_deinit_i2c_runtime("
+        )
+        i2c_deinit_end = i2c.index(
+            "\nstatic bool i2c_register_future_drivers(", i2c_deinit_start
+        )
+        i2c_deinit = i2c[i2c_deinit_start:i2c_deinit_end]
+        spi_deinit_start = spi.index(
+            "bool esp32_mquickjs_deinit_spi_runtime("
+        )
+        spi_deinit_end = spi.index(
+            "\nbool esp32_mquickjs_init_spi_runtime(", spi_deinit_start
+        )
+        spi_deinit = spi[spi_deinit_start:spi_deinit_end]
+
+        self.assertIn("err = i2c_cleanup_slot", i2c_deinit)
+        self.assertIn("return false", i2c_deinit)
+        self.assertIn("i2c_reset_slots", i2c_deinit)
+        self.assertLess(
+            i2c_deinit.index("return false"),
+            i2c_deinit.index("i2c_reset_slots"),
+        )
+        self.assertIn("err = spi_cleanup_all()", spi_deinit)
+        self.assertIn("return err == ESP_OK", spi_deinit)
+        self.assertIn(
+            "if (!esp32_mquickjs_deinit_i2c_runtime())", core
+        )
+        self.assertIn(
+            "if (!esp32_mquickjs_deinit_spi_runtime())", core
+        )
 
     def test_bus_objects_and_continuous_uart_events_match_phase_three_contract(self):
         i2c = (
@@ -1003,6 +1892,9 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         usb_serial = (
             MQUICKJS / "src/modules/usb_serial/esp32_mquickjs_usb_serial.c"
         ).read_text(encoding="utf-8")
+        runtime = (
+            MQUICKJS / "src/core/esp32_mquickjs.c"
+        ).read_text(encoding="utf-8")
         websocket = (
             MQUICKJS / "src/modules/websocket/esp32_mquickjs_websocket.c"
         ).read_text(encoding="utf-8")
@@ -1015,6 +1907,25 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         )
         self.assertIn("s_usb_serial_send_driver", usb_serial)
         self.assertIn("esp32_mquickjs_future_register_driver(", usb_serial)
+        self.assertIn(
+            "esp32_mquickjs_usb_serial_future_lifecycle_cancel(",
+            usb_serial,
+        )
+        self.assertIn(
+            "esp32_mquickjs_usb_serial_future_lifecycle_take_release(",
+            usb_serial,
+        )
+        destroy_start = runtime.index(
+            "static bool esp32_mquickjs_destroy_internal("
+        )
+        destroy_end = runtime.index(
+            "\nbool esp32_mquickjs_destroy(", destroy_start
+        )
+        destroy = runtime[destroy_start:destroy_end]
+        self.assertLess(
+            destroy.index("esp32_mquickjs_prepare_future_runtime_destroy("),
+            destroy.index("esp32_mquickjs_deinit_usb_serial_runtime("),
+        )
         self.assertIn("s_websocket_send_driver", websocket)
         self.assertIn("esp32_mquickjs_future_register_driver(", websocket)
 

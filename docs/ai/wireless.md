@@ -125,3 +125,6 @@ Direct calls preserve the cooperative synchronous appearance. Use
 `Future.call(method, receiver, args)` when multiple independent operations must
 be in flight. GAP procedures share one lane, while GATT procedures are
 serialized per connection.
+
+Native callback ownership, synchronization, and quiescent teardown rules are
+recorded in the framework repository's `docs/wireless-concurrency.md`.

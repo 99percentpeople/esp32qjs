@@ -35,15 +35,78 @@ class DmaTransferArchitectureTests(SourceContractTestCase):
         )[1].split("static JSValue spi_open_bus", 1)[0]
         cleanup = self.spi.split(
             "static void spi_free_staging_workspace", 1
-        )[1].split("static void spi_cleanup_device_slot", 1)[0]
+        )[1].split("static int spi_resource_remove_device", 1)[0]
 
         self.assertIn("staging_tx[ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT]", self.spi)
         self.assertIn("staging_rx[ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT]", self.spi)
         self.assertIn("esp32_mquickjs_memory_reserve_internal_dma", allocation)
         self.assertIn("esp32_mquickjs_memory_commit_staging_pinned", allocation)
-        self.assertEqual(allocation.count("heap_caps_malloc("), 2)
+        self.assertIn(
+            "esp32_mquickjs_dma_workspace_allocate_buffers", allocation
+        )
+        self.assertNotIn("heap_caps_malloc(", allocation)
         self.assertNotIn("realloc", allocation)
+        self.assertIn(
+            "esp32_mquickjs_dma_workspace_release_buffers", cleanup
+        )
         self.assertIn("esp32_mquickjs_memory_release_driver_pinned", cleanup)
+
+    def test_spi_native_teardown_retains_failed_device_and_bus_resources(self):
+        resources = (
+            MQUICKJS
+            / "src/modules/spi/esp32_mquickjs_spi_native_resources.c"
+        ).read_text(encoding="utf-8")
+        cmake = (MQUICKJS / "CMakeLists.txt").read_text(encoding="utf-8")
+        device_cleanup_start = self.spi.index(
+            "static esp_err_t spi_cleanup_device_slot("
+        )
+        device_cleanup_end = self.spi.index(
+            "\nstatic esp_err_t spi_cleanup_bus_slot(", device_cleanup_start
+        )
+        device_cleanup = self.spi[device_cleanup_start:device_cleanup_end]
+        bus_cleanup_start = device_cleanup_end + 1
+        bus_cleanup_end = self.spi.index(
+            "\nstatic esp_err_t spi_cleanup_all(void)", bus_cleanup_start
+        )
+        bus_cleanup = self.spi[bus_cleanup_start:bus_cleanup_end]
+        bus_close_start = self.spi.index("JSValue js_spi_bus_close(")
+        bus_close_end = self.spi.index(
+            "\nJSValue js_spi_bus_status(", bus_close_start
+        )
+        bus_close = self.spi[bus_close_start:bus_close_end]
+        device_close_start = self.spi.index("JSValue js_spi_device_close(")
+        device_close_end = self.spi.index(
+            "\nJSValue js_spi_device_status(", device_close_start
+        )
+        device_close = self.spi[device_close_start:device_close_end]
+
+        self.assertIn(
+            "esp32_mquickjs_spi_device_resources_deinit(", device_cleanup
+        )
+        self.assertNotIn("spi_bus_remove_device", device_cleanup)
+        self.assertLess(
+            device_cleanup.index("if (err != ESP_OK)"),
+            device_cleanup.index("parent->open_devices--"),
+        )
+        self.assertIn("err = spi_cleanup_device_slot(device_slot)", bus_cleanup)
+        self.assertIn("if (err != ESP_OK)", bus_cleanup)
+        self.assertIn("esp32_mquickjs_spi_bus_resources_deinit(", bus_cleanup)
+        self.assertNotIn("spi_bus_free", bus_cleanup)
+        self.assertLess(
+            bus_cleanup.rindex("if (err != ESP_OK)"),
+            bus_cleanup.index("spi_free_staging_workspace(slot)"),
+        )
+        for close in (bus_close, device_close):
+            self.assertIn("err = spi_cleanup_", close)
+            self.assertLess(
+                close.index("if (err != ESP_OK)"),
+                close.index("generation = 0"),
+            )
+        self.assertIn("resources->handle = NULL", resources)
+        self.assertIn("resources->initialized = false", resources)
+        self.assertIn(
+            "src/modules/spi/esp32_mquickjs_spi_native_resources.c", cmake
+        )
 
     def test_spi_resource_lane_acquire_and_queue_keep_runtime_cooperative(self):
         step = self.spi.split("static void spi_future_step(", 2)[-1].split(
@@ -78,7 +141,13 @@ class DmaTransferArchitectureTests(SourceContractTestCase):
             step.index("spi_device_get_trans_result"),
             step.index("esp32_mquickjs_dma_workspace_release"),
         )
-        self.assertIn("state->in_flight > 0", self.spi)
+        self.assertIn("state->completion_queue.in_flight > 0", self.spi)
+        self.assertIn(
+            "esp32_mquickjs_dma_completion_queue_note_returned", step
+        )
+        self.assertIn(
+            "esp32_mquickjs_dma_completion_queue_releasable", self.spi
+        )
         self.assertIn("ESP32_MQUICKJS_CANCEL_REQUESTED", self.spi)
 
     def test_spi_reaps_completion_before_declaring_progress_timeout(self):

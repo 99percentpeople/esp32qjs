@@ -20,6 +20,24 @@ typedef enum {
     ESP32_MQUICKJS_DMA_PROGRESS_OVERFLOW,
 } esp32_mquickjs_dma_progress_t;
 
+typedef enum {
+    ESP32_MQUICKJS_DMA_COMPLETION_INVALID = 0,
+    ESP32_MQUICKJS_DMA_COMPLETION_IN_ORDER,
+    ESP32_MQUICKJS_DMA_COMPLETION_OUT_OF_ORDER,
+} esp32_mquickjs_dma_completion_t;
+
+typedef enum {
+    ESP32_MQUICKJS_DMA_CANCEL_REJECTED = 0,
+    ESP32_MQUICKJS_DMA_CANCEL_COMPLETE,
+    ESP32_MQUICKJS_DMA_CANCEL_PENDING,
+} esp32_mquickjs_dma_cancel_t;
+
+typedef enum {
+    ESP32_MQUICKJS_DMA_QUEUE_SLOT_FREE = 0,
+    ESP32_MQUICKJS_DMA_QUEUE_SLOT_SUBMITTED,
+    ESP32_MQUICKJS_DMA_QUEUE_SLOT_RETURNED,
+} esp32_mquickjs_dma_queue_slot_state_t;
+
 typedef struct {
     uint8_t *tx;
     uint8_t *rx;
@@ -60,6 +78,28 @@ typedef struct {
     uint8_t path_mask;
 } esp32_mquickjs_dma_stats_t;
 
+/**
+ * Bounded completion state shared by DMA adapters that use the two fixed
+ * staging slots. A returned out-of-order slot remains occupied until every
+ * earlier submission has returned, preventing premature slot reuse.
+ */
+typedef struct {
+    uint32_t depth;
+    uint32_t head;
+    uint32_t tail;
+    uint32_t occupied;
+    uint32_t in_flight;
+    esp32_mquickjs_dma_queue_slot_state_t
+        slots[ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT];
+} esp32_mquickjs_dma_completion_queue_t;
+
+typedef void *(*esp32_mquickjs_dma_buffer_allocate_fn)(
+    size_t bytes,
+    void *opaque);
+typedef void (*esp32_mquickjs_dma_buffer_release_fn)(
+    void *buffer,
+    void *opaque);
+
 esp32_mquickjs_dma_path_t esp32_mquickjs_dma_classify_source(
     bool dma_capable,
     bool external,
@@ -75,6 +115,18 @@ void esp32_mquickjs_dma_workspace_init(
 void esp32_mquickjs_dma_workspace_release(
     esp32_mquickjs_dma_workspace_t *workspace,
     uint8_t slot_index);
+bool esp32_mquickjs_dma_workspace_allocate_buffers(
+    uint8_t *tx[ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT],
+    uint8_t *rx[ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT],
+    size_t bytes,
+    esp32_mquickjs_dma_buffer_allocate_fn allocate,
+    esp32_mquickjs_dma_buffer_release_fn release,
+    void *opaque);
+void esp32_mquickjs_dma_workspace_release_buffers(
+    uint8_t *tx[ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT],
+    uint8_t *rx[ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT],
+    esp32_mquickjs_dma_buffer_release_fn release,
+    void *opaque);
 
 void esp32_mquickjs_dma_cursor_begin(
     esp32_mquickjs_dma_cursor_t *cursor,
@@ -109,6 +161,36 @@ esp32_mquickjs_dma_progress_t esp32_mquickjs_dma_validate_tx_progress(
 esp32_mquickjs_dma_progress_t esp32_mquickjs_dma_validate_rx_progress(
     size_t actual_bytes,
     size_t expected_bytes);
+bool esp32_mquickjs_dma_rx_window_fits(
+    size_t output_offset,
+    size_t completed_bytes,
+    size_t output_capacity);
+
+bool esp32_mquickjs_dma_completion_queue_init(
+    esp32_mquickjs_dma_completion_queue_t *queue,
+    uint32_t depth);
+bool esp32_mquickjs_dma_completion_queue_can_submit(
+    const esp32_mquickjs_dma_completion_queue_t *queue);
+bool esp32_mquickjs_dma_completion_queue_next_submit(
+    const esp32_mquickjs_dma_completion_queue_t *queue,
+    uint32_t *out_index);
+bool esp32_mquickjs_dma_completion_queue_note_submitted(
+    esp32_mquickjs_dma_completion_queue_t *queue,
+    uint32_t index);
+esp32_mquickjs_dma_completion_t
+esp32_mquickjs_dma_completion_queue_note_returned(
+    esp32_mquickjs_dma_completion_queue_t *queue,
+    uint32_t index);
+bool esp32_mquickjs_dma_completion_queue_peek_in_flight(
+    const esp32_mquickjs_dma_completion_queue_t *queue,
+    uint32_t *out_index);
+bool esp32_mquickjs_dma_completion_queue_releasable(
+    const esp32_mquickjs_dma_completion_queue_t *queue);
+esp32_mquickjs_dma_cancel_t esp32_mquickjs_dma_cancel_disposition(
+    const esp32_mquickjs_dma_completion_queue_t *queue,
+    bool completed,
+    bool cancellation_requested);
+
 uint64_t esp32_mquickjs_dma_progress_timeout_us(size_t bytes,
                                                 uint32_t actual_freq_hz);
 bool esp32_mquickjs_dma_progress_timed_out(

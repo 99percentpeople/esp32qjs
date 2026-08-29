@@ -61,7 +61,7 @@ JSValue esp32_mquickjs_http_call_function(JSContext *ctx,
                                           int argc,
                                           JSValue *argv);
 esp32_mquickjs_http_operation_t *esp32_mquickjs_http_operation_create(void);
-void esp32_mquickjs_http_operation_destroy(esp32_mquickjs_http_operation_t *operation);
+bool esp32_mquickjs_http_operation_destroy(esp32_mquickjs_http_operation_t *operation);
 bool esp32_mquickjs_http_operation_cancel(esp32_mquickjs_http_operation_t *operation);
 bool esp32_mquickjs_http_operation_is_cancelled(esp32_mquickjs_http_operation_t *operation);
 esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_mquickjs_http_request_t *request,

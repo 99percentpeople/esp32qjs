@@ -65,6 +65,7 @@ class TlsArchitectureTests(SourceContractTestCase):
         self.assertIn('"espTlsError"', helper)
         self.assertIn('"mbedtlsError"', helper)
         self.assertIn('"verifyFlags"', helper)
+        self.assertIn("esp32_mquickjs_throw_native_error", helper)
         self.assertIn("esp_tls_get_and_clear_last_error", helper)
         self.assertIn("esp_crt_verify_callback", helper)
         self.assertIn("tls_verify_capture_take", helper)
@@ -93,11 +94,19 @@ class TlsArchitectureTests(SourceContractTestCase):
         http = (
             MQUICKJS / "src/modules/http/esp32_mquickjs_http.c"
         ).read_text(encoding="utf-8")
+        http_resources = (
+            MQUICKJS
+            / "src/modules/http/esp32_mquickjs_http_client_resources.c"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("esp_tls_conn_destroy(entry->tls)", socket)
         self.assertIn("socket_future_cancel", socket)
         self.assertIn("socket_future_destroy", socket)
-        self.assertIn("esp_http_client_cleanup(client)", http)
+        self.assertIn("esp_http_client_cleanup", http)
+        self.assertIn(
+            "esp32_mquickjs_http_client_resources_deinit", http
+        )
+        self.assertIn("ops->cleanup(resources->client", http_resources)
         self.assertIn("esp32_mquickjs_http_operation_is_cancelled", http)
 
     def test_system_time_sync_is_future_driven_and_provider_neutral(self):
@@ -124,7 +133,7 @@ class TlsArchitectureTests(SourceContractTestCase):
         self.assertIn("esp32_mquickjs_net_is_ready", source)
         self.assertIn("#define TIME_MIN_TIMEOUT_MS 1U", source)
         self.assertIn("#define TIME_MAX_TIMEOUT_MS 60000U", source)
-        self.assertIn("floor(timeout_ms) != timeout_ms", source)
+        self.assertIn("esp32_mquickjs_value_to_bounded_u32", source)
         self.assertIn("return state->timeout_ms;", source)
         self.assertNotIn("state->timeout_ms == 0 ? 1", source)
         self.assertNotIn("IP_EVENT_STA_GOT_IP", source)

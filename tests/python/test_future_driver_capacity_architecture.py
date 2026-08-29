@@ -29,6 +29,20 @@ class FutureDriverCapacityArchitectureTests(SourceContractTestCase):
 
         self.assertIn("Future driver registry exhausted", source)
 
+    def test_partial_worker_pool_failure_uses_tested_rollback_helper(self):
+        source = (
+            MQUICKJS / "src/core/esp32_mquickjs_future.c"
+        ).read_text(encoding="utf-8")
+        helper = (
+            MQUICKJS / "src/core/esp32_mquickjs_future_worker_pool.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "esp32_mquickjs_future_worker_pool_cleanup_partial", source
+        )
+        self.assertIn("while (started_workers > 0)", helper)
+        self.assertIn("cleanup_queue(opaque)", helper)
+
     def test_runtime_reports_the_global_initialization_stage(self):
         source = (
             ROOT / "components/esp32qjs_runtime/src/esp32qjs_runtime.c"

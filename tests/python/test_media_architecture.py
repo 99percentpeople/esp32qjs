@@ -155,8 +155,15 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn("ESP32_MQUICKJS_I2S_DIRECTION_DUPLEX", source)
         self.assertIn("slot->rx_busy || slot->tx_busy", source)
         self.assertIn("i2s_new_channel(", source)
-        self.assertIn("&slot->tx_handle", source)
-        self.assertIn("&slot->rx_handle", source)
+        self.assertIn("esp32_mquickjs_i2s_channel_resources_init(", source)
+        self.assertIn(
+            "slot->tx_handle = (i2s_chan_handle_t)resources->tx_channel",
+            source,
+        )
+        self.assertIn(
+            "slot->rx_handle = (i2s_chan_handle_t)resources->rx_channel",
+            source,
+        )
         self.assertIn("i2s_channel_init_std_mode(slot->tx_handle", source)
         self.assertIn("i2s_channel_init_std_mode(slot->rx_handle", source)
         self.assertIn("static const esp32_mquickjs_future_driver_t s_i2s_write_driver", source)
@@ -216,8 +223,8 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn('"bufferBytes"', source)
         self.assertIn('"totalBufferBytes"', source)
         self.assertIn("I2S_NO_MEMORY", source)
-        self.assertIn("i2s_del_channel(slot->rx_handle)", source)
-        self.assertIn("i2s_del_channel(slot->tx_handle)", source)
+        self.assertIn("esp32_mquickjs_i2s_channel_resources_delete(", source)
+        self.assertEqual(source.count("i2s_del_channel("), 1)
         self.assertIn("i2s_future_resource_key", source)
         self.assertIn("&slot->rx_lane_key", source)
         self.assertIn("&slot->tx_lane_key", source)
@@ -292,6 +299,56 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn("does not accept a sensor model; the driver probes it", source)
         self.assertIn("OV2640_PID", source)
         self.assertIn("OV3660_PID", source)
+
+    def test_camera_deinit_failure_retains_driver_and_leases_for_retry(self):
+        source = (
+            MQUICKJS / "src/modules/camera/esp32_mquickjs_camera.c"
+        ).read_text(encoding="utf-8")
+        resources = (
+            MQUICKJS
+            / "src/modules/camera/esp32_mquickjs_camera_driver_resources.c"
+        ).read_text(encoding="utf-8")
+        cmake = (MQUICKJS / "CMakeLists.txt").read_text(encoding="utf-8")
+        cleanup_start = source.index("static esp_err_t camera_cleanup(void)")
+        cleanup_end = source.index("\nstatic int camera_from_value(", cleanup_start)
+        cleanup = source[cleanup_start:cleanup_end]
+        close_start = source.index("static bool camera_close_start(")
+        close_end = source.index(
+            "\nstatic const esp32_mquickjs_future_driver_t s_camera_close_driver",
+            close_start,
+        )
+        close = source[close_start:close_end]
+        runtime_start = source.index("bool esp32_mquickjs_init_camera_runtime(")
+        runtime_end = source.index(
+            "\nvoid esp32_mquickjs_deinit_camera_runtime(", runtime_start
+        )
+        runtime_init = source[runtime_start:runtime_end]
+
+        self.assertIn(
+            "esp32_mquickjs_camera_driver_resources_deinit(", cleanup
+        )
+        self.assertNotIn("esp_camera_deinit", cleanup)
+        self.assertLess(
+            cleanup.index("if (err != ESP_OK)"),
+            cleanup.index("camera_release_leases()"),
+        )
+        self.assertNotIn(
+            "JS_SetOpaque", close[0 : close.index("camera_close_poll(")]
+        )
+        self.assertIn("if (state->close_result != ESP_OK)", close)
+        self.assertLess(
+            close.index("if (state->close_result != ESP_OK)"),
+            close.index("camera_release_leases()"),
+        )
+        self.assertIn("return JS_ThrowInternalError", close)
+        self.assertIn("err = camera_cleanup()", runtime_init)
+        self.assertIn("if (err != ESP_OK)", runtime_init)
+        self.assertNotIn("memset(&s_camera", runtime_init)
+        self.assertIn("resources->initialized = false", resources)
+        self.assertIn(
+            "src/modules/camera/esp32_mquickjs_camera_driver_resources.c",
+            cmake,
+        )
 
     def test_bitmap_worker_borrows_raw_camera_frames_with_checked_leases(self):
         camera = (MQUICKJS / "src/modules/camera/esp32_mquickjs_camera.c").read_text(

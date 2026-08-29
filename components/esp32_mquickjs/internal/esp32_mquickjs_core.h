@@ -11,6 +11,19 @@ bool esp32_mquickjs_set_property_ref(JSContext *ctx,
                                      const char *name,
                                      JSValue value);
 
+/**
+ * Throw the sole v1 native operational-error shape.
+ *
+ * The supplied details object is attached as-is. Callers keep module-specific
+ * diagnostics inside details while code and operation remain predictable at
+ * the top level.
+ */
+JSValue esp32_mquickjs_throw_native_error(JSContext *ctx,
+                                          const char *code,
+                                          const char *operation,
+                                          const char *message,
+                                          JSValue details);
+
 esp32_mquickjs_runtime_t *esp32_mquickjs_get_active_runtime(void);
 
 JSValue esp32_mquickjs_load_from_active_fs(JSContext *ctx,

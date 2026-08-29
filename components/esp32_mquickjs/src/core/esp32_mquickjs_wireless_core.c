@@ -123,6 +123,25 @@ uint32_t esp32_mquickjs_wireless_pool_available(
     return available;
 }
 
+bool esp32_mquickjs_wireless_pooled_event_publish_from_isr(
+    esp32_mquickjs_wireless_pool_t *pool,
+    uint16_t pool_index,
+    void *destination,
+    const void *event,
+    esp32_mquickjs_wireless_event_send_from_isr_fn send,
+    int *task_woken)
+{
+    if (pool == NULL || pool_index >= pool->capacity ||
+        destination == NULL || event == NULL || send == NULL ||
+        !send(destination, event, task_woken)) {
+        if (pool != NULL) {
+            (void)esp32_mquickjs_wireless_pool_release(pool, pool_index);
+        }
+        return false;
+    }
+    return true;
+}
+
 bool esp32_mquickjs_wireless_tx_timeout(
     esp32_mquickjs_wireless_tx_state_t *state)
 {
@@ -196,6 +215,13 @@ bool esp32_mquickjs_wireless_native_operation_is_quiescent(
     return operation == NULL || atomic_load_explicit(
         &operation->state, memory_order_acquire) ==
             ESP32_MQUICKJS_WIRELESS_NATIVE_OPERATION_IDLE;
+}
+
+bool esp32_mquickjs_wireless_close_can_release(
+    uint32_t callbacks_active,
+    bool native_operations_quiescent)
+{
+    return callbacks_active == 0U && native_operations_quiescent;
 }
 
 static bool wireless_hex_exact(const char *text, size_t length)

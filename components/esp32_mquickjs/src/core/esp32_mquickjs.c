@@ -699,6 +699,45 @@ bool esp32_mquickjs_set_property_ref(JSContext *ctx,
            !JS_IsException(JS_SetPropertyStr(ctx, *target_obj, name, value));
 }
 
+JSValue esp32_mquickjs_throw_native_error(JSContext *ctx,
+                                          const char *code,
+                                          const char *operation,
+                                          const char *message,
+                                          JSValue details)
+{
+    JSGCRef details_ref;
+    JSGCRef error_ref;
+    JSValue *rooted_details = JS_PushGCRef(ctx, &details_ref);
+    JSValue *error;
+
+    *rooted_details = details;
+    (void)JS_ThrowInternalError(ctx, "%s: %s",
+                                code != NULL ? code : "NATIVE_ERROR",
+                                message != NULL ? message
+                                                : "native operation failed");
+    if (!JS_HasException(ctx)) {
+        JS_PopGCRef(ctx, &details_ref);
+        return JS_EXCEPTION;
+    }
+    error = JS_PushGCRef(ctx, &error_ref);
+    *error = JS_GetException(ctx);
+    if (JS_GetClassID(ctx, *error) < 0 ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, error, "code",
+            JS_NewString(ctx, code != NULL ? code : "NATIVE_ERROR")) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, error, "operation",
+            JS_NewString(ctx, operation != NULL ? operation : "unknown")) ||
+        !esp32_mquickjs_set_property_ref(ctx, error, "details",
+                                         *rooted_details)) {
+        JS_PopGCRef(ctx, &error_ref);
+        JS_PopGCRef(ctx, &details_ref);
+        return JS_EXCEPTION;
+    }
+    JS_PopGCRef(ctx, &details_ref);
+    return JS_Throw(ctx, JS_PopGCRef(ctx, &error_ref));
+}
+
 esp32_mquickjs_runtime_t *esp32_mquickjs_get_active_runtime(void)
 {
     return s_active_runtime;
@@ -1227,7 +1266,9 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
     esp32_mquickjs_deinit_socket_runtime(ctx);
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
-    esp32_mquickjs_deinit_websocket_runtime(ctx);
+    if (!esp32_mquickjs_deinit_websocket_runtime(ctx)) {
+        return false;
+    }
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
     if (!esp32_mquickjs_deinit_http_runtime(ctx)) {
@@ -1248,7 +1289,9 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
 #endif
     esp32_mquickjs_deinit_time_runtime();
 #if CONFIG_ESP32_MQUICKJS_FEATURE_BLE
-    esp32_mquickjs_deinit_ble_runtime(ctx);
+    if (!esp32_mquickjs_deinit_ble_runtime(ctx)) {
+        return false;
+    }
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW
     esp32_mquickjs_deinit_espnow_runtime(ctx);
@@ -1285,10 +1328,14 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
     esp32_mquickjs_deinit_ledc_runtime();
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_I2C
-    esp32_mquickjs_deinit_i2c_runtime();
+    if (!esp32_mquickjs_deinit_i2c_runtime()) {
+        return false;
+    }
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_SPI
-    esp32_mquickjs_deinit_spi_runtime();
+    if (!esp32_mquickjs_deinit_spi_runtime()) {
+        return false;
+    }
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_UART
     esp32_mquickjs_deinit_uart_runtime();
@@ -1487,10 +1534,16 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
     }
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_LEDC
-    esp32_mquickjs_init_ledc_runtime();
+    if (!esp32_mquickjs_init_ledc_runtime(ctx)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_ADC
-    esp32_mquickjs_init_adc_runtime();
+    if (!esp32_mquickjs_init_adc_runtime(ctx)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_DAC
     esp32_mquickjs_init_dac_runtime();

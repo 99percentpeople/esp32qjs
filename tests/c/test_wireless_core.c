@@ -4,6 +4,34 @@
 #include <stdio.h>
 #include <string.h>
 
+typedef struct {
+    uint16_t pool_index;
+    uint32_t sequence;
+} fake_pooled_event_t;
+
+typedef struct {
+    fake_pooled_event_t events[2];
+    size_t count;
+    size_t sends;
+} fake_event_queue_t;
+
+static bool fake_event_queue_send_from_isr(void *destination,
+                                           const void *event,
+                                           int *task_woken)
+{
+    fake_event_queue_t *queue = destination;
+
+    queue->sends++;
+    if (queue->count >= 2) {
+        return false;
+    }
+    queue->events[queue->count++] = *(const fake_pooled_event_t *)event;
+    if (task_woken != NULL) {
+        *task_woken = 1;
+    }
+    return true;
+}
+
 static void test_address_and_keys(void)
 {
     uint8_t address[6];
@@ -45,6 +73,53 @@ static void test_pool(void)
     assert(slot == 33);
 }
 
+static void test_pooled_isr_producer_releases_rejected_slots(void)
+{
+    esp32_mquickjs_wireless_pool_t pool;
+    fake_event_queue_t queue = {0};
+    uint32_t dropped = 0;
+    uint32_t sequence;
+    int task_woken = 0;
+
+    assert(esp32_mquickjs_wireless_pool_init(&pool, 4));
+    for (sequence = 1; sequence <= 100; ++sequence) {
+        fake_pooled_event_t event = {.sequence = sequence};
+
+        assert(esp32_mquickjs_wireless_pool_acquire(
+            &pool, &event.pool_index));
+        if (!esp32_mquickjs_wireless_pooled_event_publish_from_isr(
+                &pool, event.pool_index, &queue, &event,
+                fake_event_queue_send_from_isr, &task_woken)) {
+            dropped++;
+        }
+    }
+    assert(queue.sends == 100);
+    assert(queue.count == 2);
+    assert(queue.events[0].sequence == 1);
+    assert(queue.events[1].sequence == 2);
+    assert(dropped == 98);
+    assert(task_woken == 1);
+    assert(esp32_mquickjs_wireless_pool_available(&pool) == 2);
+
+    assert(esp32_mquickjs_wireless_pool_release(
+        &pool, queue.events[0].pool_index));
+    assert(esp32_mquickjs_wireless_pool_release(
+        &pool, queue.events[1].pool_index));
+    assert(esp32_mquickjs_wireless_pool_available(&pool) == 4);
+
+    {
+        uint16_t index;
+        fake_pooled_event_t event = {0};
+
+        assert(esp32_mquickjs_wireless_pool_acquire(&pool, &index));
+        event.pool_index = index;
+        assert(!esp32_mquickjs_wireless_pooled_event_publish_from_isr(
+            &pool, index, NULL, &event,
+            fake_event_queue_send_from_isr, NULL));
+        assert(esp32_mquickjs_wireless_pool_available(&pool) == 4);
+    }
+}
+
 static void test_timeout_state(void)
 {
     esp32_mquickjs_wireless_tx_state_t state =
@@ -78,6 +153,14 @@ static void test_native_operation_completion_lifecycle(void)
     assert(!esp32_mquickjs_wireless_native_operation_complete(&operation));
     assert(esp32_mquickjs_wireless_native_operation_begin(&operation));
     assert(esp32_mquickjs_wireless_native_operation_complete(&operation));
+}
+
+static void test_close_release_gate_requires_full_quiescence(void)
+{
+    assert(!esp32_mquickjs_wireless_close_can_release(1, true));
+    assert(!esp32_mquickjs_wireless_close_can_release(0, false));
+    assert(!esp32_mquickjs_wireless_close_can_release(3, false));
+    assert(esp32_mquickjs_wireless_close_can_release(0, true));
 }
 
 static void test_ble_helpers(void)
@@ -120,8 +203,10 @@ int main(void)
 {
     test_address_and_keys();
     test_pool();
+    test_pooled_isr_producer_releases_rejected_slots();
     test_timeout_state();
     test_native_operation_completion_lifecycle();
+    test_close_release_gate_requires_full_quiescence();
     test_ble_helpers();
     puts("wireless core tests passed");
     return 0;

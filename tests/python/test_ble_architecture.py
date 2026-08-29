@@ -9,6 +9,24 @@ BLE_SOURCE = MQUICKJS / "src" / "modules" / "ble"
 
 
 class BLEArchitectureTests(unittest.TestCase):
+    def test_cross_task_lifecycle_and_status_fields_are_synchronized(self):
+        source = self.source()
+        self.assertIn("_Atomic ble_lifecycle_t lifecycle;", source)
+        self.assertIn("_Atomic uint32_t generation;", source)
+        self.assertIn("_Atomic bool active;", source)
+        self.assertIn("_Atomic bool open;", source)
+        self.assertIn("static void ble_connection_snapshot(", source)
+        snapshot_start = source.index("static void ble_connection_snapshot(")
+        snapshot_end = source.index(
+            "\nstatic JSValue ble_connection_status_to_js", snapshot_start
+        )
+        snapshot = source[snapshot_start:snapshot_end]
+        self.assertIn("taskENTER_CRITICAL(&s_ble.lock)", snapshot)
+        self.assertIn("snapshot->security = slot->security", snapshot)
+        status_start = snapshot_end
+        status_end = source.index("\nstatic JSValue ble_throw_constructor", status_start)
+        self.assertIn("ble_connection_snapshot(slot, &snapshot)", source[status_start:status_end])
+
     def source(self) -> str:
         return "\n".join(
             path.read_text(encoding="utf-8")
@@ -60,6 +78,12 @@ class BLEArchitectureTests(unittest.TestCase):
         self.assertIn("ble_scan_pool_acquire", callback)
         self.assertIn("BLE_HS_ADV_MAX_SZ", source)
         self.assertIn("ESP32_MQUICKJS_EVENT_QUEUE_DROP_NEWEST", source)
+        self.assertGreaterEqual(
+            callback.count(
+                "esp32_mquickjs_wireless_pooled_event_publish_from_isr("
+            ),
+            2,
+        )
         self.assertNotIn("JS_Call(", callback)
         self.assertNotIn("JS_New", callback)
         self.assertNotIn("heap_caps_malloc", callback)
@@ -149,7 +173,8 @@ class BLEArchitectureTests(unittest.TestCase):
         ]
 
         self.assertIn("#define BLE_REOPEN_QUIESCE_MS 50U", source)
-        self.assertIn("ble_note_native_deinit", close_worker)
+        self.assertIn("ble_cleanup_native(&s_ble)", close_worker)
+        self.assertIn("ble_note_native_deinit", source)
         self.assertIn("state->open_not_before_us", open_start)
         self.assertNotIn("vTaskDelay", open_start)
         self.assertIn("ble_open_initialize(state)", open_start)
@@ -339,6 +364,12 @@ class BLEArchitectureTests(unittest.TestCase):
 
     def test_close_stops_host_before_freeing_native_pools(self):
         source = self.source()
+        resources = (
+            BLE_SOURCE / "esp32_mquickjs_ble_runtime_resources.c"
+        ).read_text(encoding="utf-8")
+        core = (
+            MQUICKJS / "src" / "core" / "esp32_mquickjs.c"
+        ).read_text(encoding="utf-8")
         worker_start = source.index("static void ble_close_worker(void *opaque)\n{")
         worker_end = source.index("static bool ble_adapter_close_capture", worker_start)
         worker = source[worker_start:worker_end]
@@ -346,10 +377,40 @@ class BLEArchitectureTests(unittest.TestCase):
         finish_end = source.index("static esp32_mquickjs_resource_key_t", finish_start)
         finish = source[finish_start:finish_end]
 
-        self.assertLess(worker.index("nimble_port_stop"), worker.index("nimble_port_deinit"))
+        self.assertIn("rc = ble_cleanup_native(&s_ble)", worker)
+        self.assertLess(
+            worker.index("ble_wait_for_pending_connects"),
+            worker.index("ble_cleanup_native(&s_ble)"),
+        )
+        self.assertLess(
+            resources.index("result = ops->stop_host"),
+            resources.index("result = ops->deinit_port"),
+        )
+        stop_result = resources.index("result = ops->stop_host")
+        self.assertLess(
+            resources.index("if (result != 0)", stop_result),
+            resources.index("resources->host_started = false", stop_result),
+        )
+        deinit_result = resources.index("result = ops->deinit_port")
+        self.assertLess(
+            resources.index("if (result != 0)", deinit_result),
+            resources.index("resources->port_initialized = false", deinit_result),
+        )
         self.assertIn("memory_order_release", worker)
         self.assertIn("esp32_mquickjs_future_submit_worker", source)
         self.assertIn("ble_free_pools", finish)
+        self.assertLess(
+            finish.index("if (host_code != 0)"),
+            finish.index("ble_free_pools"),
+        )
+        self.assertLess(
+            finish.index("if (host_code != 0)"),
+            finish.index("ble_retire_handle"),
+        )
+        self.assertIn("bool esp32_mquickjs_deinit_ble_runtime", source)
+        self.assertIn(
+            "if (!esp32_mquickjs_deinit_ble_runtime(ctx))", core
+        )
 
     def test_server_indications_use_a_single_confirm_lane(self):
         source = self.source()

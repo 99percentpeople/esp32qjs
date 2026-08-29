@@ -5,6 +5,7 @@
 #include "utils/esp32_mquickjs_byte_source.h"
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_i2c_bus_resources.h"
 #include "esp32_mquickjs_peripheral_lease.h"
 
 #include <stdbool.h>
@@ -152,12 +153,86 @@ static uint32_t i2c_take_device_generation(void)
     return generation;
 }
 
-static esp32_mquickjs_i2c_slot_t *i2c_alloc_slot(void)
+typedef struct {
+    esp32_mquickjs_i2c_slot_t *slot;
+    i2c_master_bus_config_t config;
+} i2c_bus_resource_context_t;
+
+static bool i2c_bus_resource_acquire_lease(void *opaque)
+{
+    i2c_bus_resource_context_t *context = opaque;
+
+    return context != NULL && context->slot != NULL &&
+           esp32_mquickjs_peripheral_lease_acquire(
+               ESP32_MQUICKJS_PERIPHERAL_I2C_PORT,
+               context->slot->bus_id,
+               ESP32_MQUICKJS_PERIPHERAL_OWNER_I2C,
+               &context->slot->lease);
+}
+
+static void i2c_bus_resource_release_lease(void *opaque)
+{
+    i2c_bus_resource_context_t *context = opaque;
+
+    if (context != NULL && context->slot != NULL) {
+        esp32_mquickjs_peripheral_lease_release(&context->slot->lease);
+    }
+}
+
+static int i2c_bus_resource_create(void *opaque, void **out_bus)
+{
+    i2c_bus_resource_context_t *context = opaque;
+    i2c_master_bus_handle_t bus = NULL;
+    esp_err_t err;
+
+    if (context == NULL || context->slot == NULL || out_bus == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    context->config.i2c_port = (i2c_port_num_t)context->slot->bus_id;
+    err = i2c_new_master_bus(&context->config, &bus);
+    *out_bus = bus;
+    return err;
+}
+
+static int i2c_bus_resource_delete(void *bus, void *opaque)
+{
+    (void)opaque;
+    return i2c_del_master_bus((i2c_master_bus_handle_t)bus);
+}
+
+static esp32_mquickjs_i2c_bus_resource_ops_t i2c_bus_resource_ops(
+    i2c_bus_resource_context_t *context)
+{
+    return (esp32_mquickjs_i2c_bus_resource_ops_t){
+        .acquire_lease = i2c_bus_resource_acquire_lease,
+        .release_lease = i2c_bus_resource_release_lease,
+        .create_bus = i2c_bus_resource_create,
+        .delete_bus = i2c_bus_resource_delete,
+        .opaque = context,
+    };
+}
+
+static esp32_mquickjs_i2c_slot_t *i2c_alloc_slot(
+    const i2c_master_bus_config_t *config,
+    int *out_resource_result)
 {
     int32_t i;
 
+    if (out_resource_result != NULL) {
+        *out_resource_result = ESP32_MQUICKJS_I2C_BUS_RESOURCE_UNAVAILABLE;
+    }
+    if (config == NULL) {
+        if (out_resource_result != NULL) {
+            *out_resource_result = ESP_ERR_INVALID_ARG;
+        }
+        return NULL;
+    }
     for (i = 0; i < (int32_t)SOC_I2C_NUM; ++i) {
         esp32_mquickjs_i2c_slot_t *slot = &s_i2c_slots[i];
+        i2c_bus_resource_context_t context;
+        esp32_mquickjs_i2c_bus_resources_t resources = {0};
+        esp32_mquickjs_i2c_bus_resource_ops_t ops;
+        int result;
 
         if (slot->allocated && slot->release_pending && !slot->busy) {
             (void)i2c_cleanup_slot(slot);
@@ -166,13 +241,33 @@ static esp32_mquickjs_i2c_slot_t *i2c_alloc_slot(void)
             continue;
         }
         i2c_init_slot(slot, i);
-        if (!esp32_mquickjs_peripheral_lease_acquire(
-                ESP32_MQUICKJS_PERIPHERAL_I2C_PORT, i,
-                ESP32_MQUICKJS_PERIPHERAL_OWNER_I2C, &slot->lease)) {
+        context = (i2c_bus_resource_context_t){
+            .slot = slot,
+            .config = *config,
+        };
+        ops = i2c_bus_resource_ops(&context);
+        result = esp32_mquickjs_i2c_bus_resources_init(&resources, &ops);
+        if (result == ESP32_MQUICKJS_I2C_BUS_RESOURCE_UNAVAILABLE) {
             continue;
         }
+        if (result != 0) {
+            if (resources.bus != NULL || resources.lease_acquired) {
+                slot->bus_handle =
+                    (i2c_master_bus_handle_t)resources.bus;
+                slot->allocated = true;
+                slot->release_pending = true;
+            }
+            if (out_resource_result != NULL) {
+                *out_resource_result = result;
+            }
+            return NULL;
+        }
+        slot->bus_handle = (i2c_master_bus_handle_t)resources.bus;
         slot->allocated = true;
         slot->generation = i2c_take_generation();
+        if (out_resource_result != NULL) {
+            *out_resource_result = 0;
+        }
         return slot;
     }
     return NULL;
@@ -180,6 +275,9 @@ static esp32_mquickjs_i2c_slot_t *i2c_alloc_slot(void)
 
 static esp_err_t i2c_cleanup_slot(esp32_mquickjs_i2c_slot_t *slot)
 {
+    i2c_bus_resource_context_t context;
+    esp32_mquickjs_i2c_bus_resources_t resources;
+    esp32_mquickjs_i2c_bus_resource_ops_t ops;
     int32_t bus_id;
     esp32_mquickjs_i2c_device_slot_t *device;
     esp_err_t err;
@@ -203,13 +301,18 @@ static esp_err_t i2c_cleanup_slot(esp32_mquickjs_i2c_slot_t *slot)
             return err;
         }
     }
-    if (slot->bus_handle != NULL) {
-        err = i2c_del_master_bus(slot->bus_handle);
-        if (err != ESP_OK) {
-            return err;
-        }
+    context = (i2c_bus_resource_context_t){.slot = slot};
+    resources = (esp32_mquickjs_i2c_bus_resources_t){
+        .bus = slot->bus_handle,
+        .lease_acquired =
+            esp32_mquickjs_peripheral_lease_is_held(&slot->lease),
+    };
+    ops = i2c_bus_resource_ops(&context);
+    err = esp32_mquickjs_i2c_bus_resources_deinit(&resources, &ops);
+    slot->bus_handle = (i2c_master_bus_handle_t)resources.bus;
+    if (err != ESP_OK) {
+        return err;
     }
-    esp32_mquickjs_peripheral_lease_release(&slot->lease);
     i2c_init_slot(slot, bus_id);
     return ESP_OK;
 }
@@ -557,7 +660,7 @@ static JSValue i2c_open_bus(JSContext *ctx, int argc, JSValue *argv)
     i2c_master_bus_config_t bus_config = {0};
     esp32_mquickjs_i2c_slot_t *slot;
     JSValue result;
-    esp_err_t err;
+    int resource_result;
 
     if (argc > 1) {
         return JS_ThrowTypeError(ctx,
@@ -633,22 +736,22 @@ static JSValue i2c_open_bus(JSContext *ctx, int argc, JSValue *argv)
             "i2c.openBus() requires configured default SDA/SCL GPIOs or explicit { sda, scl } overrides");
     }
 
-    slot = i2c_alloc_slot();
-    if (slot == NULL) {
-        return JS_ThrowInternalError(ctx, "i2c.openBus() failed: no available I2C bus slots");
-    }
-
-    bus_config.i2c_port = (i2c_port_num_t)slot->bus_id;
     bus_config.sda_io_num = sda_pin;
     bus_config.scl_io_num = scl_pin;
     bus_config.clk_source = I2C_CLK_SRC_DEFAULT;
     bus_config.glitch_ignore_cnt = 7;
     bus_config.flags.enable_internal_pullup = internal_pullup ? 1U : 0U;
 
-    err = i2c_new_master_bus(&bus_config, &slot->bus_handle);
-    if (err != ESP_OK) {
-        i2c_cleanup_slot(slot);
-        return i2c_throw_error(ctx, err, "i2c.openBus() failed");
+    slot = i2c_alloc_slot(&bus_config, &resource_result);
+    if (slot == NULL) {
+        if (resource_result ==
+            ESP32_MQUICKJS_I2C_BUS_RESOURCE_UNAVAILABLE) {
+            return JS_ThrowInternalError(
+                ctx,
+                "i2c.openBus() failed: no available I2C bus slots");
+        }
+        return i2c_throw_error(ctx, (esp_err_t)resource_result,
+                               "i2c.openBus() failed");
     }
 
     slot->sda_pin = sda_pin;
@@ -665,17 +768,23 @@ static JSValue i2c_open_bus(JSContext *ctx, int argc, JSValue *argv)
     return result;
 }
 
-void esp32_mquickjs_deinit_i2c_runtime(void)
+bool esp32_mquickjs_deinit_i2c_runtime(void)
 {
     int32_t i;
 
     for (i = 0; i < (int32_t)SOC_I2C_NUM; ++i) {
         if (s_i2c_slots[i].allocated) {
+            esp_err_t err;
+
             s_i2c_slots[i].release_pending = true;
-            (void)i2c_cleanup_slot(&s_i2c_slots[i]);
+            err = i2c_cleanup_slot(&s_i2c_slots[i]);
+            if (err != ESP_OK) {
+                return false;
+            }
         }
     }
     i2c_reset_slots();
+    return true;
 }
 
 static bool i2c_register_future_drivers(JSContext *ctx,
@@ -684,7 +793,10 @@ static bool i2c_register_future_drivers(JSContext *ctx,
 bool esp32_mquickjs_init_i2c_runtime(JSContext *ctx,
                                      esp32_mquickjs_runtime_t *runtime)
 {
-    esp32_mquickjs_deinit_i2c_runtime();
+    if (!esp32_mquickjs_deinit_i2c_runtime()) {
+        JS_ThrowInternalError(ctx, "I2C runtime cleanup failed");
+        return false;
+    }
     return i2c_register_future_drivers(ctx, runtime);
 }
 

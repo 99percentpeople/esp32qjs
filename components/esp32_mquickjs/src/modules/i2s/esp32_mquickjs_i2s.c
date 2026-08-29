@@ -4,6 +4,8 @@
 
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_i2s_channel_resources.h"
+#include "esp32_mquickjs_i2s_timer_resources.h"
 #include "esp32_mquickjs_memory.h"
 #include "esp32_mquickjs_peripheral_lease.h"
 #include "utils/esp32_mquickjs_byte_source.h"
@@ -55,6 +57,8 @@ typedef struct {
 typedef struct {
     bool allocated;
     bool running;
+    bool rx_enabled;
+    bool tx_enabled;
     bool rx_busy;
     bool tx_busy;
     bool rx_cancel_requested;
@@ -95,6 +99,116 @@ static esp32_mquickjs_i2s_slot_t s_i2s_slots[I2S_LL_GET(INST_NUM)];
 static uint32_t s_i2s_next_generation = 1;
 /* Publishes each callback's busy/runtime/token wake target as one snapshot. */
 static portMUX_TYPE s_i2s_callback_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static void i2s_rx_timeout(void *opaque);
+static void i2s_tx_timeout(void *opaque);
+
+typedef struct {
+    const i2s_chan_config_t *config;
+} i2s_channel_resource_context_t;
+
+static int i2s_channel_resource_create(void *opaque, void **out_tx_channel,
+                                       void **out_rx_channel)
+{
+    i2s_channel_resource_context_t *context = opaque;
+    i2s_chan_handle_t tx_channel = NULL;
+    i2s_chan_handle_t rx_channel = NULL;
+    esp_err_t err;
+
+    if (context == NULL || context->config == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    err = i2s_new_channel(context->config,
+                          out_tx_channel != NULL ? &tx_channel : NULL,
+                          out_rx_channel != NULL ? &rx_channel : NULL);
+    if (out_tx_channel != NULL) {
+        *out_tx_channel = tx_channel;
+    }
+    if (out_rx_channel != NULL) {
+        *out_rx_channel = rx_channel;
+    }
+    return err;
+}
+
+static int i2s_channel_resource_enable(void *channel, void *opaque)
+{
+    (void)opaque;
+    return i2s_channel_enable((i2s_chan_handle_t)channel);
+}
+
+static int i2s_channel_resource_disable(void *channel, void *opaque)
+{
+    (void)opaque;
+    return i2s_channel_disable((i2s_chan_handle_t)channel);
+}
+
+static int i2s_channel_resource_delete(void *channel, void *opaque)
+{
+    (void)opaque;
+    return i2s_del_channel((i2s_chan_handle_t)channel);
+}
+
+static esp32_mquickjs_i2s_channel_resource_ops_t i2s_channel_resource_ops(
+    i2s_channel_resource_context_t *context)
+{
+    return (esp32_mquickjs_i2s_channel_resource_ops_t){
+        .create_channels = i2s_channel_resource_create,
+        .enable_channel = i2s_channel_resource_enable,
+        .disable_channel = i2s_channel_resource_disable,
+        .delete_channel = i2s_channel_resource_delete,
+        .opaque = context,
+    };
+}
+
+static int i2s_create_rx_timeout_timer(void *opaque, void **out_timer)
+{
+    esp_timer_create_args_t timer_args = {
+        .callback = i2s_rx_timeout,
+        .arg = opaque,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "mqjs_i2s_rx",
+        .skip_unhandled_events = true,
+    };
+    esp_timer_handle_t timer = NULL;
+    esp_err_t err = esp_timer_create(&timer_args, &timer);
+
+    *out_timer = timer;
+    return err;
+}
+
+static int i2s_create_tx_timeout_timer(void *opaque, void **out_timer)
+{
+    esp_timer_create_args_t timer_args = {
+        .callback = i2s_tx_timeout,
+        .arg = opaque,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "mqjs_i2s_tx",
+        .skip_unhandled_events = true,
+    };
+    esp_timer_handle_t timer = NULL;
+    esp_err_t err = esp_timer_create(&timer_args, &timer);
+
+    *out_timer = timer;
+    return err;
+}
+
+static void i2s_delete_timeout_timer(void *timer, void *opaque)
+{
+    (void)opaque;
+    (void)esp_timer_stop((esp_timer_handle_t)timer);
+    (void)esp_timer_delete((esp_timer_handle_t)timer);
+}
+
+static esp32_mquickjs_i2s_timer_resource_ops_t i2s_timer_resource_ops(
+    esp32_mquickjs_i2s_slot_t *slot)
+{
+    return (esp32_mquickjs_i2s_timer_resource_ops_t){
+        .create_rx = i2s_create_rx_timeout_timer,
+        .create_tx = i2s_create_tx_timeout_timer,
+        .delete_timer = i2s_delete_timeout_timer,
+        .opaque = slot,
+    };
+}
 
 struct esp32_mquickjs_future_driver_state {
     JSContext *ctx;
@@ -341,41 +455,89 @@ static esp32_mquickjs_i2s_slot_t *i2s_get_slot(
     return slot;
 }
 
-static void i2s_cleanup_slot(esp32_mquickjs_i2s_slot_t *slot)
+static esp32_mquickjs_i2s_channel_resources_t i2s_channel_resources_from_slot(
+    const esp32_mquickjs_i2s_slot_t *slot)
 {
+    return (esp32_mquickjs_i2s_channel_resources_t){
+        .rx_channel = slot->rx_handle,
+        .tx_channel = slot->tx_handle,
+        .rx_enabled = slot->rx_enabled,
+        .tx_enabled = slot->tx_enabled,
+    };
+}
+
+static void i2s_store_channel_resources(
+    esp32_mquickjs_i2s_slot_t *slot,
+    const esp32_mquickjs_i2s_channel_resources_t *resources)
+{
+    slot->rx_handle = (i2s_chan_handle_t)resources->rx_channel;
+    slot->tx_handle = (i2s_chan_handle_t)resources->tx_channel;
+    slot->rx_enabled = resources->rx_enabled;
+    slot->tx_enabled = resources->tx_enabled;
+}
+
+static bool i2s_channels_fully_enabled(
+    const esp32_mquickjs_i2s_slot_t *slot)
+{
+    bool has_channel = slot->rx_handle != NULL || slot->tx_handle != NULL;
+
+    return has_channel &&
+           (slot->rx_handle == NULL || slot->rx_enabled) &&
+           (slot->tx_handle == NULL || slot->tx_enabled);
+}
+
+static esp_err_t i2s_cleanup_slot(esp32_mquickjs_i2s_slot_t *slot)
+{
+    i2s_channel_resource_context_t channel_context = {0};
+    esp32_mquickjs_i2s_channel_resources_t channel_resources;
+    esp32_mquickjs_i2s_channel_resource_ops_t channel_ops;
+    esp32_mquickjs_i2s_timer_resources_t timer_resources;
+    esp32_mquickjs_i2s_timer_resource_ops_t timer_ops;
+    esp_err_t err;
     int32_t port;
 
-    if (slot == NULL || !slot->allocated || i2s_slot_busy(slot) ||
-        slot->future_reservations > 0) {
-        return;
+    if (slot == NULL || !slot->allocated) {
+        return ESP_OK;
+    }
+    if (i2s_slot_busy(slot) || slot->future_reservations > 0) {
+        return ESP_ERR_INVALID_STATE;
     }
     port = slot->port;
-    if (slot->running) {
-        if (slot->rx_handle != NULL) {
-            (void)i2s_channel_disable(slot->rx_handle);
-        }
-        if (slot->tx_handle != NULL) {
-            (void)i2s_channel_disable(slot->tx_handle);
-        }
+    channel_resources = i2s_channel_resources_from_slot(slot);
+    channel_ops = i2s_channel_resource_ops(&channel_context);
+    err = (esp_err_t)esp32_mquickjs_i2s_channel_resources_stop(
+        &channel_resources, &channel_ops);
+    i2s_store_channel_resources(slot, &channel_resources);
+    slot->running = i2s_channels_fully_enabled(slot);
+    if (err != ESP_OK) {
+        slot->release_pending = true;
+        return err;
     }
-    if (slot->rx_timeout_timer != NULL) {
-        (void)esp_timer_stop(slot->rx_timeout_timer);
-        (void)esp_timer_delete(slot->rx_timeout_timer);
+    timer_resources = (esp32_mquickjs_i2s_timer_resources_t){
+        .rx_timer = slot->rx_timeout_timer,
+        .tx_timer = slot->tx_timeout_timer,
+    };
+    timer_ops = i2s_timer_resource_ops(slot);
+    slot->rx_timeout_timer = NULL;
+    slot->tx_timeout_timer = NULL;
+    esp32_mquickjs_i2s_timer_resources_deinit(
+        &timer_resources, &timer_ops);
+    err = (esp_err_t)esp32_mquickjs_i2s_channel_resources_delete(
+        &channel_resources, &channel_ops);
+    i2s_store_channel_resources(slot, &channel_resources);
+    if (err != ESP_OK) {
+        slot->release_pending = true;
+        return err;
     }
-    if (slot->tx_timeout_timer != NULL) {
-        (void)esp_timer_stop(slot->tx_timeout_timer);
-        (void)esp_timer_delete(slot->tx_timeout_timer);
+    if (slot->dma_reservation.state != ESP32_MQUICKJS_MEMORY_DMA_IDLE &&
+        !esp32_mquickjs_memory_release_driver_pinned(
+            &slot->dma_reservation)) {
+        slot->release_pending = true;
+        return ESP_ERR_INVALID_STATE;
     }
-    if (slot->rx_handle != NULL) {
-        (void)i2s_del_channel(slot->rx_handle);
-    }
-    if (slot->tx_handle != NULL) {
-        (void)i2s_del_channel(slot->tx_handle);
-    }
-    (void)esp32_mquickjs_memory_release_driver_pinned(
-        &slot->dma_reservation);
     esp32_mquickjs_peripheral_lease_release(&slot->lease);
     i2s_reset_slot(slot, port);
+    return ESP_OK;
 }
 
 static void i2s_request_close(esp32_mquickjs_i2s_slot_t *slot)
@@ -393,7 +555,7 @@ static void i2s_request_close(esp32_mquickjs_i2s_slot_t *slot)
         i2s_wake_tx(slot);
     }
     if (!i2s_slot_busy(slot) && slot->future_reservations == 0) {
-        i2s_cleanup_slot(slot);
+        (void)i2s_cleanup_slot(slot);
     }
 }
 
@@ -1312,9 +1474,13 @@ bool esp32_mquickjs_init_i2s_runtime(JSContext *ctx,
     int i;
 
     for (i = 0; i < I2S_LL_GET(INST_NUM); ++i) {
-        if (s_i2s_slots[i].allocated && !i2s_slot_busy(&s_i2s_slots[i]) &&
-            s_i2s_slots[i].future_reservations == 0) {
-            i2s_cleanup_slot(&s_i2s_slots[i]);
+        esp_err_t err = i2s_cleanup_slot(&s_i2s_slots[i]);
+
+        if (err != ESP_OK) {
+            JS_ThrowInternalError(
+                ctx, "failed to reset I2S slot %d: %s", i,
+                esp_err_to_name(err));
+            return false;
         }
         i2s_reset_slot(&s_i2s_slots[i], i);
     }
@@ -1356,6 +1522,9 @@ void js_i2s_channel_finalizer(JSContext *ctx, void *opaque)
 JSValue js_i2s_channel_start(JSContext *ctx, JSValue *this_val,
                            int argc, JSValue *argv)
 {
+    i2s_channel_resource_context_t channel_context = {0};
+    esp32_mquickjs_i2s_channel_resources_t channel_resources;
+    esp32_mquickjs_i2s_channel_resource_ops_t channel_ops;
     esp32_mquickjs_i2s_slot_t *slot;
     esp_err_t err;
 
@@ -1368,25 +1537,25 @@ JSValue js_i2s_channel_start(JSContext *ctx, JSValue *this_val,
     if (slot->running) {
         return JS_TRUE;
     }
-    err = slot->tx_handle != NULL ? i2s_channel_enable(slot->tx_handle)
-                                  : ESP_OK;
-    if (err == ESP_OK && slot->rx_handle != NULL) {
-        err = i2s_channel_enable(slot->rx_handle);
-        if (err != ESP_OK && slot->tx_handle != NULL) {
-            (void)i2s_channel_disable(slot->tx_handle);
-        }
-    }
+    channel_resources = i2s_channel_resources_from_slot(slot);
+    channel_ops = i2s_channel_resource_ops(&channel_context);
+    err = (esp_err_t)esp32_mquickjs_i2s_channel_resources_start(
+        &channel_resources, &channel_ops);
+    i2s_store_channel_resources(slot, &channel_resources);
+    slot->running = i2s_channels_fully_enabled(slot);
     if (err != ESP_OK) {
         return JS_ThrowInternalError(ctx, "I2SChannel.start() failed: %s",
                                      esp_err_to_name(err));
     }
-    slot->running = true;
     return JS_TRUE;
 }
 
 JSValue js_i2s_channel_stop(JSContext *ctx, JSValue *this_val,
                           int argc, JSValue *argv)
 {
+    i2s_channel_resource_context_t channel_context = {0};
+    esp32_mquickjs_i2s_channel_resources_t channel_resources;
+    esp32_mquickjs_i2s_channel_resource_ops_t channel_ops;
     esp32_mquickjs_i2s_slot_t *slot;
     esp_err_t err;
 
@@ -1396,26 +1565,23 @@ JSValue js_i2s_channel_stop(JSContext *ctx, JSValue *this_val,
                            &slot) != 0) {
         return JS_EXCEPTION;
     }
-    if (!slot->running) {
+    if (!slot->running && !slot->rx_enabled && !slot->tx_enabled) {
         return JS_TRUE;
     }
     if (i2s_slot_busy(slot) || slot->future_reservations > 0) {
         return JS_ThrowInternalError(ctx,
                                      "I2SChannel.stop() refused while I/O is pending");
     }
-    err = slot->rx_handle != NULL ? i2s_channel_disable(slot->rx_handle)
-                                  : ESP_OK;
-    if (slot->tx_handle != NULL) {
-        esp_err_t tx_err = i2s_channel_disable(slot->tx_handle);
-        if (err == ESP_OK) {
-            err = tx_err;
-        }
-    }
+    channel_resources = i2s_channel_resources_from_slot(slot);
+    channel_ops = i2s_channel_resource_ops(&channel_context);
+    err = (esp_err_t)esp32_mquickjs_i2s_channel_resources_stop(
+        &channel_resources, &channel_ops);
+    i2s_store_channel_resources(slot, &channel_resources);
+    slot->running = i2s_channels_fully_enabled(slot);
     if (err != ESP_OK) {
         return JS_ThrowInternalError(ctx, "I2SChannel.stop() failed: %s",
                                      esp_err_to_name(err));
     }
-    slot->running = false;
     return JS_TRUE;
 }
 
@@ -1472,6 +1638,7 @@ JSValue js_i2s_channel_close(JSContext *ctx, JSValue *this_val,
 {
     esp32_mquickjs_i2s_ref_t *ref;
     esp32_mquickjs_i2s_slot_t *slot;
+    esp_err_t err;
 
     (void)argc;
     (void)argv;
@@ -1483,10 +1650,20 @@ JSValue js_i2s_channel_close(JSContext *ctx, JSValue *this_val,
         return JS_TRUE;
     }
     slot = i2s_get_slot(ref);
-    JS_SetOpaque(ctx, *this_val, NULL);
     if (slot != NULL) {
-        i2s_request_close(slot);
+        if (!i2s_slot_busy(slot) && slot->future_reservations == 0) {
+            slot->release_pending = true;
+            err = i2s_cleanup_slot(slot);
+            if (err != ESP_OK) {
+                return JS_ThrowInternalError(
+                    ctx, "I2SChannel.close() failed: %s",
+                    esp_err_to_name(err));
+            }
+        } else {
+            i2s_request_close(slot);
+        }
     }
+    JS_SetOpaque(ctx, *this_val, NULL);
     heap_caps_free(ref);
     return JS_TRUE;
 }
@@ -1623,6 +1800,11 @@ static bool i2s_commit_dma_accounting(esp32_mquickjs_i2s_slot_t *slot)
 JSValue js_i2s_open(JSContext *ctx, JSValue *this_val, int argc,
                     JSValue *argv)
 {
+    esp32_mquickjs_i2s_channel_resources_t channel_resources = {0};
+    esp32_mquickjs_i2s_channel_resource_ops_t channel_ops;
+    i2s_channel_resource_context_t channel_context;
+    esp32_mquickjs_i2s_timer_resources_t timer_resources = {0};
+    esp32_mquickjs_i2s_timer_resource_ops_t timer_ops;
     esp32_mquickjs_i2s_mode_t mode = ESP32_MQUICKJS_I2S_MODE_STANDARD;
     esp32_mquickjs_i2s_direction_t direction =
         ESP32_MQUICKJS_I2S_DIRECTION_RX;
@@ -1947,6 +2129,14 @@ parsed:
     dma_request =
         (direction == ESP32_MQUICKJS_I2S_DIRECTION_DUPLEX ? 2U : 1U) *
         (size_t)dma_descriptors * (dma_buffer_bytes + 32U);
+    for (i = 0; i < I2S_LL_GET(INST_NUM); ++i) {
+        if (s_i2s_slots[i].allocated &&
+            s_i2s_slots[i].release_pending &&
+            !i2s_slot_busy(&s_i2s_slots[i]) &&
+            s_i2s_slots[i].future_reservations == 0) {
+            (void)i2s_cleanup_slot(&s_i2s_slots[i]);
+        }
+    }
     if (requested_port == I2S_NUM_AUTO) {
         for (i = 0; i < I2S_LL_GET(INST_NUM); ++i) {
             if (!s_i2s_slots[i].allocated &&
@@ -1991,16 +2181,22 @@ parsed:
     channel_config.dma_frame_num = dma_frames;
     channel_config.auto_clear_after_cb =
         (direction & ESP32_MQUICKJS_I2S_DIRECTION_TX) != 0;
-    err = i2s_new_channel(
-        &channel_config,
-        (direction & ESP32_MQUICKJS_I2S_DIRECTION_TX) != 0
-            ? &slot->tx_handle
-            : NULL,
-        (direction & ESP32_MQUICKJS_I2S_DIRECTION_RX) != 0
-            ? &slot->rx_handle
-            : NULL);
+    channel_context = (i2s_channel_resource_context_t){
+        .config = &channel_config,
+    };
+    channel_ops = i2s_channel_resource_ops(&channel_context);
+    err = (esp_err_t)esp32_mquickjs_i2s_channel_resources_init(
+        &channel_resources,
+        (direction & ESP32_MQUICKJS_I2S_DIRECTION_RX) != 0,
+        (direction & ESP32_MQUICKJS_I2S_DIRECTION_TX) != 0,
+        &channel_ops);
+    i2s_store_channel_resources(slot, &channel_resources);
     if (err != ESP_OK) {
-        i2s_cleanup_slot(slot);
+        esp_err_t cleanup_err = i2s_cleanup_slot(slot);
+
+        if (cleanup_err != ESP_OK) {
+            err = cleanup_err;
+        }
         if (err == ESP_ERR_NO_MEM) {
             return i2s_throw_no_memory(ctx, "i2s.open()");
         }
@@ -2069,30 +2265,22 @@ parsed:
         err = i2s_channel_register_event_callback(slot->tx_handle,
                                                   &callbacks, slot);
     }
-    if (err == ESP_OK && timeout_ms > 0 && slot->rx_handle != NULL) {
-        esp_timer_create_args_t timer_args = {
-            .callback = i2s_rx_timeout,
-            .arg = slot,
-            .dispatch_method = ESP_TIMER_TASK,
-            .name = "mqjs_i2s_rx",
-            .skip_unhandled_events = true,
-        };
-
-        err = esp_timer_create(&timer_args, &slot->rx_timeout_timer);
-    }
-    if (err == ESP_OK && timeout_ms > 0 && slot->tx_handle != NULL) {
-        esp_timer_create_args_t timer_args = {
-            .callback = i2s_tx_timeout,
-            .arg = slot,
-            .dispatch_method = ESP_TIMER_TASK,
-            .name = "mqjs_i2s_tx",
-            .skip_unhandled_events = true,
-        };
-
-        err = esp_timer_create(&timer_args, &slot->tx_timeout_timer);
+    if (err == ESP_OK && timeout_ms > 0) {
+        timer_ops = i2s_timer_resource_ops(slot);
+        err = (esp_err_t)esp32_mquickjs_i2s_timer_resources_init(
+            &timer_resources, &timer_ops, slot->rx_handle != NULL,
+            slot->tx_handle != NULL);
+        if (err == ESP_OK) {
+            slot->rx_timeout_timer = timer_resources.rx_timer;
+            slot->tx_timeout_timer = timer_resources.tx_timer;
+        }
     }
     if (err != ESP_OK) {
-        i2s_cleanup_slot(slot);
+        esp_err_t cleanup_err = i2s_cleanup_slot(slot);
+
+        if (cleanup_err != ESP_OK) {
+            err = cleanup_err;
+        }
         if (err == ESP_ERR_NO_MEM) {
             return i2s_throw_no_memory(ctx, "i2s.open()");
         }
@@ -2101,7 +2289,8 @@ parsed:
     }
     result = i2s_make_channel(ctx, slot);
     if (JS_IsException(result)) {
-        i2s_cleanup_slot(slot);
+        slot->release_pending = true;
+        (void)i2s_cleanup_slot(slot);
     }
     return result;
 }

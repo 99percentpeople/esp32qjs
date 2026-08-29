@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-checks:
+    name: Host checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out recursive repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+      - name: Sync locked tooling environment
+        run: uv sync --locked
+      - name: Check generated API manifest
+        run: uv run python scripts/generate_api_manifest.py --check
+      - name: Check generated feature documentation
+        run: uv run python scripts/generate_feature_docs.py --check
+      - name: Check flashed JavaScript syntax
+        run: uv run python scripts/remote.py check-js
+      - name: Run Python unit and architecture tests
+        run: uv run python -m unittest discover -s tests/python
+      - name: Run host C tests
+        run: uv run python scripts/remote.py test --scope c
+
+  firmware-build:
+    name: Firmware ${{ matrix.target }} / ${{ matrix.profile }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: esp32c3
+            profile: minimal
+          - target: esp32c3
+            profile: representative
+          - target: esp32c5
+            profile: minimal
+          - target: esp32c5
+            profile: representative
+          - target: esp32s3
+            profile: minimal
+          - target: esp32s3
+            profile: representative
+          - target: esp32s3
+            profile: representative-psram
+          - target: esp32s3
+            profile: disabled
+    steps:
+      - name: Check out recursive repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Build with ESP-IDF 6.1
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.1
+          target: ${{ matrix.target }}
+          path: .
+          command: >-
+            python3 scripts/ci_build.py
+            --target ${{ matrix.target }}
+            --profile ${{ matrix.profile }}

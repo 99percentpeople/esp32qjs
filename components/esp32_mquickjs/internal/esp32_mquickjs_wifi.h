@@ -96,6 +96,13 @@ void esp32_mquickjs_wifi_clear_connect_future(void);
 const char *esp32_mquickjs_wifi_reason_to_string(int32_t reason);
 JSValue esp32_mquickjs_wifi_make_status_object(JSContext *ctx);
 JSValue esp32_mquickjs_wifi_make_scan_results_array(JSContext *ctx);
+JSValue esp32_mquickjs_wifi_throw_operation_error(
+    JSContext *ctx,
+    const char *code,
+    const char *operation,
+    esp_err_t err,
+    int32_t disconnect_reason,
+    uint32_t scan_status);
 JSValue esp32_mquickjs_wifi_throw_connect_error(JSContext *ctx, esp_err_t err);
 JSValue esp32_mquickjs_wifi_throw_scan_error(JSContext *ctx, esp_err_t err);
 int esp32_mquickjs_wifi_value_to_timeout_ms(JSContext *ctx,

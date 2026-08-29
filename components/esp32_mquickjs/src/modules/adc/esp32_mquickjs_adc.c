@@ -2,6 +2,7 @@
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_ADC
 
+#include "esp32_mquickjs_adc_unit_resources.h"
 #include "esp32_mquickjs_core.h"
 
 #include <stdbool.h>
@@ -30,6 +31,62 @@ typedef struct {
 
 static esp32_mquickjs_adc_unit_state_t s_adc_units[SOC_ADC_PERIPH_NUM];
 static adc_cali_scheme_ver_t s_adc_cali_schemes;
+
+typedef struct {
+    const adc_oneshot_unit_init_cfg_t *config;
+} adc_unit_resource_context_t;
+
+static int adc_resource_create_unit(void *opaque, void **out_unit)
+{
+    adc_unit_resource_context_t *context = opaque;
+    adc_oneshot_unit_handle_t handle = NULL;
+    esp_err_t err;
+
+    if (context == NULL || context->config == NULL || out_unit == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    err = adc_oneshot_new_unit(context->config, &handle);
+    *out_unit = handle;
+    return err;
+}
+
+static int adc_resource_delete_calibration(void *calibration, int scheme,
+                                           void *opaque)
+{
+    (void)opaque;
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    if ((adc_cali_scheme_ver_t)scheme ==
+        ADC_CALI_SCHEME_VER_CURVE_FITTING) {
+        return adc_cali_delete_scheme_curve_fitting(
+            (adc_cali_handle_t)calibration);
+    }
+#endif
+#if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    if ((adc_cali_scheme_ver_t)scheme ==
+        ADC_CALI_SCHEME_VER_LINE_FITTING) {
+        return adc_cali_delete_scheme_line_fitting(
+            (adc_cali_handle_t)calibration);
+    }
+#endif
+    return ESP_ERR_INVALID_STATE;
+}
+
+static int adc_resource_delete_unit(void *unit, void *opaque)
+{
+    (void)opaque;
+    return adc_oneshot_del_unit((adc_oneshot_unit_handle_t)unit);
+}
+
+static esp32_mquickjs_adc_unit_resource_ops_t adc_unit_resource_ops(
+    adc_unit_resource_context_t *context)
+{
+    return (esp32_mquickjs_adc_unit_resource_ops_t){
+        .create_unit = adc_resource_create_unit,
+        .delete_calibration = adc_resource_delete_calibration,
+        .delete_unit = adc_resource_delete_unit,
+        .opaque = context,
+    };
+}
 
 static int adc_unit_to_number(adc_unit_t unit)
 {
@@ -123,25 +180,67 @@ static esp32_mquickjs_adc_channel_state_t *adc_channel_state(adc_unit_t unit, ad
     return &adc_unit_state(unit)->channels[(int)channel];
 }
 
-static void adc_release_cali_handle(esp32_mquickjs_adc_channel_state_t *channel_state)
+static esp32_mquickjs_adc_unit_resources_t adc_resources_from_state(
+    esp32_mquickjs_adc_unit_state_t *unit_state,
+    esp32_mquickjs_adc_calibration_resource_t
+        calibrations[SOC_ADC_MAX_CHANNEL_NUM])
 {
-    if (channel_state == NULL || channel_state->cali_handle == NULL) {
-        return;
+    for (int i = 0; i < SOC_ADC_MAX_CHANNEL_NUM; ++i) {
+        calibrations[i].handle = unit_state->channels[i].cali_handle;
+        calibrations[i].scheme = (int)unit_state->channels[i].cali_scheme;
     }
 
-#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
-    if (channel_state->cali_scheme == ADC_CALI_SCHEME_VER_CURVE_FITTING) {
-        (void)adc_cali_delete_scheme_curve_fitting(channel_state->cali_handle);
-    }
-#endif
-#if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
-    if (channel_state->cali_scheme == ADC_CALI_SCHEME_VER_LINE_FITTING) {
-        (void)adc_cali_delete_scheme_line_fitting(channel_state->cali_handle);
-    }
-#endif
+    return (esp32_mquickjs_adc_unit_resources_t){
+        .unit = unit_state->handle,
+        .calibrations = calibrations,
+        .calibration_count = SOC_ADC_MAX_CHANNEL_NUM,
+    };
+}
 
-    channel_state->cali_handle = NULL;
-    channel_state->cali_scheme = 0;
+static void adc_store_resources(
+    esp32_mquickjs_adc_unit_state_t *unit_state,
+    const esp32_mquickjs_adc_unit_resources_t *resources)
+{
+    unit_state->handle = (adc_oneshot_unit_handle_t)resources->unit;
+    for (int i = 0; i < SOC_ADC_MAX_CHANNEL_NUM; ++i) {
+        unit_state->channels[i].cali_handle =
+            (adc_cali_handle_t)resources->calibrations[i].handle;
+        unit_state->channels[i].cali_scheme =
+            (adc_cali_scheme_ver_t)resources->calibrations[i].scheme;
+    }
+}
+
+static esp_err_t adc_release_cali_handle(
+    esp32_mquickjs_adc_channel_state_t *channel_state)
+{
+    adc_unit_resource_context_t context = {0};
+    esp32_mquickjs_adc_unit_resource_ops_t ops =
+        adc_unit_resource_ops(&context);
+    esp32_mquickjs_adc_calibration_resource_t calibration;
+    esp32_mquickjs_adc_unit_resources_t resources;
+    esp_err_t err;
+
+    if (channel_state == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (channel_state->cali_handle == NULL) {
+        channel_state->cali_scheme = 0;
+        return ESP_OK;
+    }
+
+    calibration.handle = channel_state->cali_handle;
+    calibration.scheme = (int)channel_state->cali_scheme;
+    resources = (esp32_mquickjs_adc_unit_resources_t){
+        .unit = NULL,
+        .calibrations = &calibration,
+        .calibration_count = 1,
+    };
+    err = (esp_err_t)esp32_mquickjs_adc_unit_resources_deinit(
+        &resources, &ops);
+    channel_state->cali_handle = (adc_cali_handle_t)calibration.handle;
+    channel_state->cali_scheme =
+        (adc_cali_scheme_ver_t)calibration.scheme;
+    return err;
 }
 
 static void adc_reset_unit_state(adc_unit_t unit)
@@ -155,19 +254,27 @@ static void adc_reset_unit_state(adc_unit_t unit)
     }
 }
 
-static void adc_close_unit_state(adc_unit_t unit)
+static esp_err_t adc_close_unit_state(adc_unit_t unit)
 {
     esp32_mquickjs_adc_unit_state_t *unit_state = adc_unit_state(unit);
+    adc_unit_resource_context_t context = {0};
+    esp32_mquickjs_adc_unit_resource_ops_t ops =
+        adc_unit_resource_ops(&context);
+    esp32_mquickjs_adc_calibration_resource_t
+        calibrations[SOC_ADC_MAX_CHANNEL_NUM];
+    esp32_mquickjs_adc_unit_resources_t resources =
+        adc_resources_from_state(unit_state, calibrations);
+    esp_err_t err;
 
-    for (int i = 0; i < SOC_ADC_MAX_CHANNEL_NUM; ++i) {
-        adc_release_cali_handle(&unit_state->channels[i]);
-    }
-
-    if (unit_state->handle != NULL) {
-        (void)adc_oneshot_del_unit(unit_state->handle);
+    err = (esp_err_t)esp32_mquickjs_adc_unit_resources_deinit(
+        &resources, &ops);
+    adc_store_resources(unit_state, &resources);
+    if (err != ESP_OK) {
+        return err;
     }
 
     adc_reset_unit_state(unit);
+    return ESP_OK;
 }
 
 static JSValue adc_throw_error(JSContext *ctx,
@@ -213,15 +320,13 @@ static bool adc_require_configured(JSContext *ctx, adc_unit_t unit, adc_channel_
     return true;
 }
 
-static void adc_update_cali_state(adc_unit_t unit,
+static void adc_create_cali_state(adc_unit_t unit,
                                   adc_channel_t channel,
                                   adc_atten_t atten,
                                   adc_bitwidth_t bitwidth)
 {
     esp32_mquickjs_adc_channel_state_t *channel_state = adc_channel_state(unit, channel);
     adc_cali_handle_t handle = NULL;
-
-    adc_release_cali_handle(channel_state);
 
 #if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
     if ((s_adc_cali_schemes & ADC_CALI_SCHEME_VER_CURVE_FITTING) != 0) {
@@ -347,23 +452,41 @@ fail:
 void esp32_mquickjs_deinit_adc_runtime(void)
 {
     for (int unit = 0; unit < SOC_ADC_PERIPH_NUM; ++unit) {
-        adc_close_unit_state((adc_unit_t)unit);
+        (void)adc_close_unit_state((adc_unit_t)unit);
     }
     s_adc_cali_schemes = 0;
 }
 
-void esp32_mquickjs_init_adc_runtime(void)
+bool esp32_mquickjs_init_adc_runtime(JSContext *ctx)
 {
-    esp32_mquickjs_deinit_adc_runtime();
+    for (int unit = 0; unit < SOC_ADC_PERIPH_NUM; ++unit) {
+        esp_err_t err = adc_close_unit_state((adc_unit_t)unit);
+
+        if (err != ESP_OK) {
+            (void)adc_throw_error(ctx,
+                                  err,
+                                  "adc runtime cleanup",
+                                  (adc_unit_t)unit,
+                                  -1);
+            return false;
+        }
+    }
+    s_adc_cali_schemes = 0;
     if (adc_cali_check_scheme(&s_adc_cali_schemes) != ESP_OK) {
         s_adc_cali_schemes = 0;
     }
+    return true;
 }
 
 JSValue js_adc_open(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     adc_unit_t unit;
     adc_oneshot_unit_init_cfg_t config = {0};
+    adc_unit_resource_context_t resource_context;
+    esp32_mquickjs_adc_unit_resource_ops_t resource_ops;
+    esp32_mquickjs_adc_calibration_resource_t
+        calibrations[SOC_ADC_MAX_CHANNEL_NUM];
+    esp32_mquickjs_adc_unit_resources_t resources;
     esp_err_t err;
 
     (void)this_val;
@@ -372,16 +495,25 @@ JSValue js_adc_open(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
         return JS_ThrowTypeError(ctx, "adc.open(unit) expects adc.UNIT_1 or adc.UNIT_2");
     }
 
-    adc_close_unit_state(unit);
+    err = adc_close_unit_state(unit);
+    if (err != ESP_OK) {
+        return adc_throw_error(ctx, err, "adc.open cleanup", unit, -1);
+    }
 
     config.unit_id = unit;
     config.clk_src = 0;
     config.ulp_mode = ADC_ULP_MODE_DISABLE;
+    resource_context = (adc_unit_resource_context_t){
+        .config = &config,
+    };
+    resource_ops = adc_unit_resource_ops(&resource_context);
+    resources = adc_resources_from_state(adc_unit_state(unit), calibrations);
 
-    err = adc_oneshot_new_unit(&config, &adc_unit_state(unit)->handle);
+    err = (esp_err_t)esp32_mquickjs_adc_unit_resources_init(
+        &resources, &resource_ops);
+    adc_store_resources(adc_unit_state(unit), &resources);
     if (err != ESP_OK) {
-        adc_reset_unit_state(unit);
-        return adc_throw_error(ctx, err, "adc_oneshot_new_unit", unit, -1);
+        return adc_throw_error(ctx, err, "adc.open create", unit, -1);
     }
 
     adc_unit_state(unit)->opened = true;
@@ -391,6 +523,7 @@ JSValue js_adc_open(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 JSValue js_adc_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     adc_unit_t unit;
+    esp_err_t err;
 
     (void)this_val;
 
@@ -398,7 +531,10 @@ JSValue js_adc_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
         return JS_ThrowTypeError(ctx, "adc.close(unit) expects adc.UNIT_1 or adc.UNIT_2");
     }
 
-    adc_close_unit_state(unit);
+    err = adc_close_unit_state(unit);
+    if (err != ESP_OK) {
+        return adc_throw_error(ctx, err, "adc.close", unit, -1);
+    }
     return JS_NewBool(true);
 }
 
@@ -457,6 +593,15 @@ JSValue js_adc_configure(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
     config.atten = atten;
     config.bitwidth = bitwidth;
 
+    err = adc_release_cali_handle(adc_channel_state(unit, channel));
+    if (err != ESP_OK) {
+        return adc_throw_error(ctx,
+                               err,
+                               "adc.configure calibration cleanup",
+                               unit,
+                               (int)channel);
+    }
+
     err = adc_oneshot_config_channel(adc_unit_state(unit)->handle, channel, &config);
     if (err != ESP_OK) {
         return adc_throw_error(ctx, err, "adc_oneshot_config_channel", unit, (int)channel);
@@ -465,7 +610,7 @@ JSValue js_adc_configure(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
     adc_channel_state(unit, channel)->configured = true;
     adc_channel_state(unit, channel)->atten = atten;
     adc_channel_state(unit, channel)->bitwidth = bitwidth;
-    adc_update_cali_state(unit, channel, atten, bitwidth);
+    adc_create_cali_state(unit, channel, atten, bitwidth);
 
     return adc_make_status_object(ctx, unit);
 }

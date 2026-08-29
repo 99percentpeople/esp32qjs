@@ -7,6 +7,8 @@
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_event_queue.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_timer_resource.h"
+#include "esp32_mquickjs_uart_port_resources.h"
 
 #include <limits.h>
 #include <stdbool.h>
@@ -20,6 +22,7 @@
 #include "esp_attr.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -35,6 +38,8 @@
 #define UART_WATCH_MAX_CAPACITY 64U
 #define UART_WATCH_TASK_STACK_SIZE 3072U
 #define UART_WATCH_TASK_PRIORITY (tskIDLE_PRIORITY + 2U)
+
+static const char *TAG = "esp32qjs_uart";
 
 typedef struct {
     int32_t port_id;
@@ -97,6 +102,7 @@ typedef struct {
     uint8_t tx_lane_key;
     esp32_mquickjs_runtime_t *runtime;
     QueueHandle_t driver_events;
+    bool driver_installed;
     SemaphoreHandle_t watch_lock;
     SemaphoreHandle_t watch_task_done;
     TaskHandle_t watch_task;
@@ -110,6 +116,13 @@ typedef struct {
     uint64_t last_rx_us;
     uint32_t event_sequence;
 } esp32_mquickjs_uart_slot_t;
+
+typedef struct {
+    uart_port_t port_id;
+    int rx_buffer_size;
+    int tx_buffer_size;
+    bool driver_install_attempted;
+} uart_port_resource_context_t;
 
 static esp32_mquickjs_uart_slot_t s_uart_slots[SOC_UART_NUM];
 static uint32_t s_uart_next_generation = 1;
@@ -188,6 +201,67 @@ static void uart_set_future_waiter(
         slot->read_future_waiting = waiting;
     }
     portEXIT_CRITICAL(uart_get_selectlock());
+}
+
+static int uart_port_create_watch_lock(void *opaque, void **out_lock)
+{
+    SemaphoreHandle_t lock;
+
+    (void)opaque;
+    lock = xSemaphoreCreateMutex();
+    *out_lock = lock;
+    return lock != NULL ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+static int uart_port_install_driver(void *opaque, void **out_driver_events)
+{
+    uart_port_resource_context_t *context = opaque;
+    QueueHandle_t events = NULL;
+    esp_err_t err;
+
+    if (context == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    context->driver_install_attempted = true;
+    err = uart_driver_install(context->port_id,
+                              context->rx_buffer_size,
+                              context->tx_buffer_size,
+                              (int)UART_DRIVER_EVENT_QUEUE_LEN,
+                              &events,
+                              0);
+    *out_driver_events = events;
+    return err;
+}
+
+static int uart_port_delete_driver(void *opaque)
+{
+    uart_port_resource_context_t *context = opaque;
+    esp_err_t err;
+
+    if (context == NULL || !uart_is_driver_installed(context->port_id)) {
+        return ESP_OK;
+    }
+    uart_set_notifier(context->port_id, NULL);
+    err = uart_driver_delete(context->port_id);
+    return err;
+}
+
+static void uart_port_delete_watch_lock(void *lock, void *opaque)
+{
+    (void)opaque;
+    vSemaphoreDelete((SemaphoreHandle_t)lock);
+}
+
+static esp32_mquickjs_uart_port_resource_ops_t uart_port_resource_ops(
+    uart_port_resource_context_t *context)
+{
+    return (esp32_mquickjs_uart_port_resource_ops_t){
+        .create_watch_lock = uart_port_create_watch_lock,
+        .install_driver = uart_port_install_driver,
+        .delete_driver = uart_port_delete_driver,
+        .delete_watch_lock = uart_port_delete_watch_lock,
+        .opaque = context,
+    };
 }
 
 static bool js_value_to_i32(JSContext *ctx, JSValue value, int32_t *out_value)
@@ -712,32 +786,50 @@ static void uart_close_watcher(esp32_mquickjs_uart_slot_t *slot)
     }
 }
 
-static void uart_cleanup_slot(esp32_mquickjs_uart_slot_t *slot)
+static esp_err_t uart_cleanup_slot(esp32_mquickjs_uart_slot_t *slot)
 {
     int32_t port_id;
-    SemaphoreHandle_t watch_lock;
     SemaphoreHandle_t watch_task_done;
+    uart_port_resource_context_t resource_context;
+    esp32_mquickjs_uart_port_resources_t resources;
+    esp32_mquickjs_uart_port_resource_ops_t resource_ops;
+    esp_err_t err;
 
     if (slot == NULL || !slot->allocated) {
-        return;
+        return ESP_OK;
+    }
+    if (slot->future_reservations > 0 || slot->read_busy ||
+        slot->write_busy) {
+        return ESP_ERR_INVALID_STATE;
     }
 
     port_id = slot->port_id;
+    slot->release_pending = true;
     uart_stop_watch_task(slot);
     uart_close_watcher(slot);
-    if (uart_is_driver_installed((uart_port_t)port_id)) {
-        uart_set_notifier((uart_port_t)port_id, NULL);
-        uart_driver_delete((uart_port_t)port_id);
-    }
-    watch_lock = slot->watch_lock;
     watch_task_done = slot->watch_task_done;
-    uart_init_slot(slot, port_id);
+    slot->watch_task_done = NULL;
     if (watch_task_done != NULL) {
         vSemaphoreDelete(watch_task_done);
     }
-    if (watch_lock != NULL) {
-        vSemaphoreDelete(watch_lock);
+    resource_context = (uart_port_resource_context_t){
+        .port_id = (uart_port_t)port_id,
+    };
+    resources = (esp32_mquickjs_uart_port_resources_t){
+        .watch_lock = slot->watch_lock,
+        .driver_events = slot->driver_events,
+        .driver_installed = slot->driver_installed,
+    };
+    resource_ops = uart_port_resource_ops(&resource_context);
+    err = esp32_mquickjs_uart_port_resources_deinit(&resources, &resource_ops);
+    slot->watch_lock = (SemaphoreHandle_t)resources.watch_lock;
+    slot->driver_events = (QueueHandle_t)resources.driver_events;
+    slot->driver_installed = resources.driver_installed;
+    if (err != ESP_OK) {
+        return err;
     }
+    uart_init_slot(slot, port_id);
+    return ESP_OK;
 }
 
 static esp32_mquickjs_uart_slot_t *uart_get_slot(const esp32_mquickjs_uart_port_ref_t *ref)
@@ -888,6 +980,11 @@ static int uart_get_bound_slot(JSContext *ctx,
     slot = uart_get_slot(out_ref);
     if (slot == NULL) {
         JS_ThrowReferenceError(ctx, "%s failed because the UART port is closed", api_name);
+        return -1;
+    }
+    if (slot->release_pending) {
+        JS_ThrowReferenceError(
+            ctx, "%s failed because the UART port is closing", api_name);
         return -1;
     }
     if (out_slot != NULL) {
@@ -1235,6 +1332,9 @@ static JSValue uart_open(JSContext *ctx, int argc, JSValue *argv)
     uint32_t timeout_ms = ESP32_MQUICKJS_UART_DEFAULT_TIMEOUT_MS;
     uart_config_t uart_config = {0};
     esp32_mquickjs_uart_slot_t *slot;
+    uart_port_resource_context_t resource_context;
+    esp32_mquickjs_uart_port_resources_t resources = {0};
+    esp32_mquickjs_uart_port_resource_ops_t resource_ops;
     JSValue result;
     esp_err_t err;
 
@@ -1374,14 +1474,17 @@ static JSValue uart_open(JSContext *ctx, int argc, JSValue *argv)
     }
 #endif
 
+    slot = &s_uart_slots[port_id];
+    if (slot->allocated && slot->release_pending) {
+        err = uart_cleanup_slot(slot);
+        if (err != ESP_OK) {
+            return uart_throw_error(
+                ctx, err, "uart.open() failed to finish pending cleanup");
+        }
+    }
     slot = uart_alloc_slot(port_id);
     if (slot == NULL) {
         return JS_ThrowInternalError(ctx, "uart.open() failed: selected UART port is unavailable or already in use");
-    }
-    slot->watch_lock = xSemaphoreCreateMutex();
-    if (slot->watch_lock == NULL) {
-        uart_cleanup_slot(slot);
-        return JS_ThrowOutOfMemory(ctx);
     }
     slot->runtime = esp32_mquickjs_get_active_runtime();
     if (slot->runtime == NULL) {
@@ -1414,14 +1517,27 @@ static JSValue uart_open(JSContext *ctx, int argc, JSValue *argv)
         return uart_throw_error(ctx, err, "uart.open() failed to configure pins");
     }
 
-    err = uart_driver_install((uart_port_t)port_id,
-                              (int)rx_buffer_size,
-                              (int)tx_buffer_size,
-                              (int)UART_DRIVER_EVENT_QUEUE_LEN,
-                              &slot->driver_events,
-                              0);
+    resource_context = (uart_port_resource_context_t){
+        .port_id = (uart_port_t)port_id,
+        .rx_buffer_size = (int)rx_buffer_size,
+        .tx_buffer_size = (int)tx_buffer_size,
+    };
+    resource_ops = uart_port_resource_ops(&resource_context);
+    err = esp32_mquickjs_uart_port_resources_init(&resources, &resource_ops);
+    slot->watch_lock = (SemaphoreHandle_t)resources.watch_lock;
+    slot->driver_events = (QueueHandle_t)resources.driver_events;
+    slot->driver_installed = resources.driver_installed;
     if (err != ESP_OK) {
-        uart_cleanup_slot(slot);
+        esp_err_t cleanup_err = uart_cleanup_slot(slot);
+
+        if (cleanup_err != ESP_OK) {
+            return uart_throw_error(
+                ctx, cleanup_err,
+                "uart.open() failed and pending cleanup was retained");
+        }
+        if (!resource_context.driver_install_attempted) {
+            return JS_ThrowOutOfMemory(ctx);
+        }
         return uart_throw_error(ctx, err, "uart.open() failed to install driver");
     }
 
@@ -1443,14 +1559,32 @@ static JSValue uart_open(JSContext *ctx, int argc, JSValue *argv)
     return result;
 }
 
-void esp32_mquickjs_deinit_uart_runtime(void)
+static esp_err_t uart_cleanup_all(void)
 {
     int32_t i;
+    esp_err_t err;
 
     for (i = 0; i < (int32_t)SOC_UART_NUM; ++i) {
         if (s_uart_slots[i].allocated) {
-            uart_cleanup_slot(&s_uart_slots[i]);
+            s_uart_slots[i].release_pending = true;
+            err = uart_cleanup_slot(&s_uart_slots[i]);
+            if (err != ESP_OK) {
+                return err;
+            }
         }
+    }
+    return ESP_OK;
+}
+
+void esp32_mquickjs_deinit_uart_runtime(void)
+{
+    esp_err_t err = uart_cleanup_all();
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG,
+                 "UART runtime cleanup retained for retry: %s",
+                 esp_err_to_name(err));
+        return;
     }
     uart_reset_slots();
 }
@@ -1458,7 +1592,15 @@ void esp32_mquickjs_deinit_uart_runtime(void)
 bool esp32_mquickjs_init_uart_runtime(JSContext *ctx,
                                       esp32_mquickjs_runtime_t *runtime)
 {
-    esp32_mquickjs_deinit_uart_runtime();
+    esp_err_t err = uart_cleanup_all();
+
+    if (err != ESP_OK) {
+        JS_ThrowInternalError(ctx,
+                              "UART runtime cleanup failed: %s",
+                              esp_err_to_name(err));
+        return false;
+    }
+    uart_reset_slots();
     return uart_register_future_drivers(ctx, runtime);
 }
 
@@ -1512,7 +1654,11 @@ JSValue js_uart_port_close(JSContext *ctx, JSValue *this_val, int argc, JSValue 
             return JS_ThrowInternalError(ctx,
                                          "UARTPort.close() refused while an operation is pending");
         }
-        uart_cleanup_slot(slot);
+        esp_err_t err = uart_cleanup_slot(slot);
+
+        if (err != ESP_OK) {
+            return uart_throw_error(ctx, err, "UARTPort.close() failed");
+        }
     }
     port_ref_ptr = JS_GetOpaque(ctx, *this_val);
     if (port_ref_ptr != NULL) {
@@ -1569,6 +1715,7 @@ struct esp32_mquickjs_future_driver_state {
     esp32_mquickjs_runtime_t *runtime;
     esp32_mquickjs_future_token_t token;
     esp_timer_handle_t poll_timer;
+    bool poll_timer_started;
     uint64_t deadline_us;
     uint32_t timeout_ms;
     uint32_t length;
@@ -1601,6 +1748,73 @@ struct esp32_mquickjs_future_driver_state {
     _Atomic bool completed;
     bool cancelled;
 };
+
+typedef struct {
+    esp32_mquickjs_future_driver_state_t *state;
+    uint64_t interval_us;
+    bool start_once;
+} uart_future_timer_context_t;
+
+static void uart_future_timer(void *opaque);
+
+static int uart_future_timer_create(void *opaque, void **out_timer)
+{
+    uart_future_timer_context_t *context = opaque;
+    esp_timer_create_args_t timer_args = {
+        .callback = uart_future_timer,
+        .arg = context != NULL ? context->state : NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "mqjs_uart",
+        .skip_unhandled_events = true,
+    };
+    esp_timer_handle_t timer = NULL;
+    esp_err_t err;
+
+    if (context == NULL || context->state == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    err = esp_timer_create(&timer_args, &timer);
+    *out_timer = timer;
+    return err;
+}
+
+static int uart_future_timer_start(void *timer, void *opaque)
+{
+    uart_future_timer_context_t *context = opaque;
+
+    if (timer == NULL || context == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return context->start_once
+        ? esp_timer_start_once((esp_timer_handle_t)timer,
+                               context->interval_us)
+        : esp_timer_start_periodic((esp_timer_handle_t)timer,
+                                   context->interval_us);
+}
+
+static void uart_future_timer_stop(void *timer, void *opaque)
+{
+    (void)opaque;
+    (void)esp_timer_stop((esp_timer_handle_t)timer);
+}
+
+static void uart_future_timer_delete(void *timer, void *opaque)
+{
+    (void)opaque;
+    (void)esp_timer_delete((esp_timer_handle_t)timer);
+}
+
+static esp32_mquickjs_timer_resource_ops_t uart_future_timer_ops(
+    uart_future_timer_context_t *context)
+{
+    return (esp32_mquickjs_timer_resource_ops_t){
+        .create = uart_future_timer_create,
+        .start = uart_future_timer_start,
+        .stop = uart_future_timer_stop,
+        .delete_timer = uart_future_timer_delete,
+        .opaque = context,
+    };
+}
 
 static bool uart_future_is_completed(
     const esp32_mquickjs_future_driver_state_t *state)
@@ -1650,14 +1864,22 @@ static esp32_mquickjs_future_driver_state_t *uart_future_allocate(
 static void uart_future_release(esp32_mquickjs_future_driver_state_t *state)
 {
     esp32_mquickjs_uart_slot_t *slot;
+    uart_future_timer_context_t timer_context;
+    esp32_mquickjs_timer_resource_t timer_resource;
+    esp32_mquickjs_timer_resource_ops_t timer_ops;
 
     if (state == NULL) {
         return;
     }
-    if (state->poll_timer != NULL) {
-        (void)esp_timer_stop(state->poll_timer);
-        (void)esp_timer_delete(state->poll_timer);
-    }
+    timer_context = (uart_future_timer_context_t){.state = state};
+    timer_resource = (esp32_mquickjs_timer_resource_t){
+        .timer = state->poll_timer,
+        .started = state->poll_timer_started,
+    };
+    timer_ops = uart_future_timer_ops(&timer_context);
+    state->poll_timer = NULL;
+    state->poll_timer_started = false;
+    esp32_mquickjs_timer_resource_deinit(&timer_resource, &timer_ops);
     if (state->owner_retained) {
         JS_DeleteGCRef(state->ctx, &state->owner_ref);
     }
@@ -2165,13 +2387,6 @@ static bool uart_future_start(JSContext *ctx,
     esp32_mquickjs_uart_slot_t *slot = state != NULL
         ? uart_get_slot(&state->port_ref) : NULL;
     bool write_lane = state != NULL && state->kind != UART_FUTURE_READ;
-    esp_timer_create_args_t timer_args = {
-        .callback = uart_future_timer,
-        .arg = state,
-        .dispatch_method = ESP_TIMER_TASK,
-        .name = "mqjs_uart",
-        .skip_unhandled_events = true,
-    };
 
     if (state == NULL || slot == NULL) {
         JS_ThrowReferenceError(ctx, "UART port closed before operation start");
@@ -2207,33 +2422,30 @@ static bool uart_future_start(JSContext *ctx,
     uart_future_step(state);
     if (!uart_future_is_completed(state)) {
         uint64_t timeout_us = (uint64_t)state->timeout_ms * 1000ULL;
-        esp_err_t timer_err = esp_timer_create(&timer_args,
-                                               &state->poll_timer);
+        uint64_t maximum_period_us = uart_future_is_write(state)
+                                         ? UART_WRITE_FIFO_POLL_MS * 1000ULL
+                                         : UART_FLUSH_POLL_US;
+        uart_future_timer_context_t timer_context = {
+            .state = state,
+            .interval_us = state->kind == UART_FUTURE_READ
+                ? timeout_us
+                : (timeout_us < maximum_period_us
+                       ? timeout_us : maximum_period_us),
+            .start_once = state->kind == UART_FUTURE_READ,
+        };
+        esp32_mquickjs_timer_resource_t timer_resource = {0};
+        esp32_mquickjs_timer_resource_ops_t timer_ops =
+            uart_future_timer_ops(&timer_context);
+        esp_err_t timer_err = esp32_mquickjs_timer_resource_init(
+            &timer_resource, &timer_ops);
 
-        if (timer_err == ESP_OK) {
-            if (state->kind == UART_FUTURE_READ) {
-                timer_err = esp_timer_start_once(state->poll_timer,
-                                                 timeout_us);
-            } else {
-                /* ESP-IDF exposes ring-buffer write readiness through the
-                 * select callback, but not final hardware TX-done. Keep the
-                 * flush probe bounded and let its timer only wake the Future. */
-                uint64_t maximum_period_us = uart_future_is_write(state)
-                                                 ? UART_WRITE_FIFO_POLL_MS * 1000ULL
-                                                 : UART_FLUSH_POLL_US;
-                uint64_t period_us = timeout_us < maximum_period_us
-                                         ? timeout_us
-                                         : maximum_period_us;
-
-                timer_err = esp_timer_start_periodic(state->poll_timer,
-                                                     period_us);
-            }
-        }
         if (timer_err != ESP_OK) {
             JS_ThrowInternalError(ctx,
                                   "failed to start UART readiness timer");
             return false;
         }
+        state->poll_timer = (esp_timer_handle_t)timer_resource.timer;
+        state->poll_timer_started = timer_resource.started;
     }
     (void)esp32_mquickjs_future_wake(runtime, token);
     return true;

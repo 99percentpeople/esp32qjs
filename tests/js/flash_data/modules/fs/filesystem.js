@@ -91,7 +91,7 @@ test("fs/filesystem", function () {
   } catch (unknownReadOptionError) {
     unknownOptionError = String(unknownReadOptionError);
   }
-  test.ok(unknownOptionError.indexOf("unknown key 'limit'") >= 0,
+  test.ok(unknownOptionError.indexOf("unknown option 'limit'") >= 0,
     "readText should reject unknown options");
   appended = fs.appendText(filePath, "!");
   test.equal(appended, 1, "appendText byte count");
@@ -182,7 +182,7 @@ test("fs/filesystem", function () {
   } catch (invalidWatchOptions) {
     watchOptionsError = String(invalidWatchOptions);
   }
-  test.ok(watchOptionsError.indexOf("unknown key 'cap'") >= 0,
+  test.ok(watchOptionsError.indexOf("unknown option 'cap'") >= 0,
     "fs.watch should reject unknown option keys");
 
   for (index = 0; index < 20; index += 1) {

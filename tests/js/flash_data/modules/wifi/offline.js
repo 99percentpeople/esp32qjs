@@ -17,6 +17,8 @@ test("wifi/offline", function () {
   var syncFractionalTimeoutError = "";
   var txPowerRangeError = "";
   var powerSaveError = "";
+  var originalObjectKeys;
+  var intrinsicOptionError = "";
 
   test.ok(status && typeof status === "object", "wifi.status() should return an object");
   test.ok(typeof wifi.DEFAULT_TIMEOUT_MS === "number", "wifi timeout constant");
@@ -88,6 +90,19 @@ test("wifi/offline", function () {
   }
   test.ok(connectUnknownOptionError.indexOf("unknown option 'automatic'") >= 0,
     "wifi.connect should reject unknown control fields");
+  originalObjectKeys = Object.keys;
+  Object.keys = function () { return []; };
+  try {
+    wifi.scan({ callback: function () {} });
+  } catch (intrinsicOptionFailure) {
+    intrinsicOptionError = String(intrinsicOptionFailure &&
+      intrinsicOptionFailure.message
+      ? intrinsicOptionFailure.message : intrinsicOptionFailure);
+  } finally {
+    Object.keys = originalObjectKeys;
+  }
+  test.ok(intrinsicOptionError.indexOf("unknown option 'callback'") >= 0,
+    "wifi options should ignore mutable Object.keys");
   try {
     wifi.connect(1234);
   } catch (connectTypeFailure) {

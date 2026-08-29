@@ -1,7 +1,11 @@
 #include "esp32_mquickjs_future.h"
 
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_future_runtime_resources.h"
+#include "esp32_mquickjs_future_scheduler.h"
 #include "esp32_mquickjs_future_timeout.h"
+#include "esp32_mquickjs_future_worker_pool.h"
+#include "esp32_mquickjs_options.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -96,6 +100,7 @@ typedef struct {
     QueueHandle_t submissions;
     QueueHandle_t ready;
     future_slot_t *slots;
+    esp32_mquickjs_future_runtime_resources_t resources;
     future_driver_entry_t drivers[ESP32_MQUICKJS_FUTURE_MAX_DRIVERS];
     size_t driver_count;
     int running_slot;
@@ -115,6 +120,86 @@ typedef struct {
 static const char *TAG = "esp32qjs_future";
 static QueueHandle_t s_future_worker_queue;
 static bool s_future_worker_pool_initialized;
+
+static void *future_runtime_resource_allocate(size_t count,
+                                              size_t size,
+                                              void *opaque)
+{
+    (void)opaque;
+    return heap_caps_calloc(count, size, MALLOC_CAP_8BIT);
+}
+
+static void future_runtime_resource_release(void *value, void *opaque)
+{
+    (void)opaque;
+    heap_caps_free(value);
+}
+
+static void *future_runtime_queue_create(size_t length,
+                                         size_t item_size,
+                                         void *opaque)
+{
+    (void)opaque;
+    return xQueueCreate((UBaseType_t)length, (UBaseType_t)item_size);
+}
+
+static void future_runtime_queue_delete(void *queue, void *opaque)
+{
+    (void)opaque;
+    vQueueDelete((QueueHandle_t)queue);
+}
+
+static const esp32_mquickjs_future_runtime_resource_ops_t
+    s_future_runtime_resource_ops = {
+        .allocate = future_runtime_resource_allocate,
+        .release = future_runtime_resource_release,
+        .queue_create = future_runtime_queue_create,
+        .queue_delete = future_runtime_queue_delete,
+    };
+
+typedef struct {
+    TaskHandle_t *workers;
+    QueueHandle_t queue;
+} future_worker_pool_cleanup_t;
+
+static void future_scheduler_snapshot(
+    const future_runtime_t *state,
+    esp32_mquickjs_future_scheduler_slot_t *out_slots)
+{
+    int i;
+
+    if (state == NULL || state->slots == NULL || out_slots == NULL) {
+        return;
+    }
+    for (i = 0; i < ESP32_MQUICKJS_FUTURE_SLOT_COUNT; ++i) {
+        const future_slot_t *slot = &state->slots[i];
+
+        out_slots[i].allocated = slot->allocated;
+        out_slots[i].driver_active = slot->driver_active;
+        out_slots[i].driver_started = slot->driver_started;
+        out_slots[i].lane_waiting = slot->lane_waiting;
+        out_slots[i].submission_sequence = slot->submission_sequence;
+        out_slots[i].resource_key = slot->resource_key;
+    }
+}
+
+static void future_cleanup_partial_worker(size_t worker_index, void *opaque)
+{
+    future_worker_pool_cleanup_t *cleanup = opaque;
+
+    if (cleanup != NULL && cleanup->workers != NULL) {
+        vTaskDelete(cleanup->workers[worker_index]);
+    }
+}
+
+static void future_cleanup_partial_queue(void *opaque)
+{
+    future_worker_pool_cleanup_t *cleanup = opaque;
+
+    if (cleanup != NULL && cleanup->queue != NULL) {
+        vQueueDelete(cleanup->queue);
+    }
+}
 
 static void future_worker_task(void *opaque)
 {
@@ -136,6 +221,10 @@ static void future_worker_task(void *opaque)
 
 static bool future_init_worker_pool(void)
 {
+    TaskHandle_t workers[CONFIG_ESP32_MQUICKJS_FUTURE_WORKER_POOL_SIZE] = {0};
+    future_worker_pool_cleanup_t cleanup = {
+        .workers = workers,
+    };
     int started = 0;
     int i;
 
@@ -154,12 +243,26 @@ static bool future_init_worker_pool(void)
                         4096,
                         NULL,
                         tskIDLE_PRIORITY + 2,
-                        NULL) == pdPASS) {
+                        &workers[i]) == pdPASS) {
             started++;
+        } else {
+            break;
         }
     }
-    s_future_worker_pool_initialized = started > 0;
-    return s_future_worker_pool_initialized;
+    if (started != CONFIG_ESP32_MQUICKJS_FUTURE_WORKER_POOL_SIZE) {
+        ESP_LOGE(TAG,
+                 "Future worker pool initialization failed (%d/%d workers)",
+                 started,
+                 CONFIG_ESP32_MQUICKJS_FUTURE_WORKER_POOL_SIZE);
+        cleanup.queue = s_future_worker_queue;
+        esp32_mquickjs_future_worker_pool_cleanup_partial(
+            (size_t)started, future_cleanup_partial_worker,
+            future_cleanup_partial_queue, &cleanup);
+        s_future_worker_queue = NULL;
+        return false;
+    }
+    s_future_worker_pool_initialized = true;
+    return true;
 }
 
 static future_runtime_t *future_runtime(esp32_mquickjs_runtime_t *runtime)
@@ -400,26 +503,20 @@ static void future_reject_message(JSContext *ctx, future_slot_t *slot, const cha
 static future_slot_t *future_find_free_slot(future_runtime_t *state,
                                             bool internal)
 {
-    int i;
+    esp32_mquickjs_future_scheduler_slot_t
+        slots[ESP32_MQUICKJS_FUTURE_SLOT_COUNT];
+    size_t index;
 
     if (state == NULL || state->slots == NULL) {
         return NULL;
     }
-    if (internal) {
-        for (i = CONFIG_ESP32_MQUICKJS_MAX_FUTURES;
-             i < ESP32_MQUICKJS_FUTURE_SLOT_COUNT;
-             ++i) {
-            if (!state->slots[i].allocated) {
-                return &state->slots[i];
-            }
-        }
-    }
-    for (i = 0; i < CONFIG_ESP32_MQUICKJS_MAX_FUTURES; ++i) {
-        if (!state->slots[i].allocated) {
-            return &state->slots[i];
-        }
-    }
-    return NULL;
+    future_scheduler_snapshot(state, slots);
+    index = esp32_mquickjs_future_scheduler_find_free(
+        slots, ESP32_MQUICKJS_FUTURE_SLOT_COUNT,
+        CONFIG_ESP32_MQUICKJS_MAX_FUTURES, internal);
+    return index != ESP32_MQUICKJS_FUTURE_SCHEDULER_NO_SLOT
+               ? &state->slots[index]
+               : NULL;
 }
 
 static future_slot_t *future_allocate_slot(esp32_mquickjs_runtime_t *runtime,
@@ -835,45 +932,21 @@ static bool future_capture_call_driver(JSContext *ctx,
     return true;
 }
 
-static bool future_lane_in_use(const future_runtime_t *state,
-                               const future_slot_t *candidate)
+static esp32_mquickjs_future_lane_admission_t future_lane_admission(
+    const future_runtime_t *state,
+    const future_slot_t *candidate)
 {
-    int i;
+    esp32_mquickjs_future_scheduler_slot_t
+        slots[ESP32_MQUICKJS_FUTURE_SLOT_COUNT];
 
-    if (state == NULL || candidate == NULL || candidate->resource_key == NULL) {
-        return false;
+    if (state == NULL || candidate == NULL ||
+        candidate->slot_id >= ESP32_MQUICKJS_FUTURE_SLOT_COUNT) {
+        return ESP32_MQUICKJS_FUTURE_LANE_REJECT;
     }
-    for (i = 0; i < ESP32_MQUICKJS_FUTURE_SLOT_COUNT; ++i) {
-        const future_slot_t *slot = &state->slots[i];
-
-        if (slot != candidate && slot->allocated && slot->driver_active &&
-            slot->driver_started &&
-            slot->resource_key == candidate->resource_key) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static size_t future_lane_waiter_count(const future_runtime_t *state,
-                                       const future_slot_t *candidate)
-{
-    size_t count = 0;
-    int i;
-
-    if (state == NULL || candidate == NULL || candidate->resource_key == NULL) {
-        return 0;
-    }
-    for (i = 0; i < ESP32_MQUICKJS_FUTURE_SLOT_COUNT; ++i) {
-        const future_slot_t *slot = &state->slots[i];
-
-        if (slot != candidate && slot->allocated && slot->driver_active &&
-            slot->lane_waiting &&
-            slot->resource_key == candidate->resource_key) {
-            count++;
-        }
-    }
-    return count;
+    future_scheduler_snapshot(state, slots);
+    return esp32_mquickjs_future_scheduler_lane_admission(
+        slots, ESP32_MQUICKJS_FUTURE_SLOT_COUNT, candidate->slot_id,
+        CONFIG_ESP32_MQUICKJS_FUTURE_RESOURCE_LANE_QUEUE_LEN);
 }
 
 static bool future_start_captured_driver(JSContext *ctx,
@@ -911,6 +984,8 @@ static void future_dispatch_call(JSContext *ctx,
         return;
     }
     if (slot->kind == FUTURE_KIND_DRIVER) {
+        esp32_mquickjs_future_lane_admission_t admission;
+
         if (!slot->driver_active || slot->driver == NULL ||
             slot->driver_state == NULL || slot->driver->start == NULL) {
             future_reject_message(ctx, slot, "Future native driver was not captured");
@@ -918,17 +993,15 @@ static void future_dispatch_call(JSContext *ctx,
             future_release_if_terminal(ctx, slot);
             return;
         }
-        if (slot->resource_key != NULL &&
-            (future_lane_in_use(state, slot) ||
-             future_lane_waiter_count(state, slot) > 0)) {
-            if (future_lane_waiter_count(state, slot) >=
-                CONFIG_ESP32_MQUICKJS_FUTURE_RESOURCE_LANE_QUEUE_LEN) {
-                future_reject_message(ctx, slot,
-                                      "Future resource lane queue is full");
-                future_destroy_driver(slot);
-                future_release_if_terminal(ctx, slot);
-                return;
-            }
+        admission = future_lane_admission(state, slot);
+        if (admission == ESP32_MQUICKJS_FUTURE_LANE_REJECT) {
+            future_reject_message(ctx, slot,
+                                  "Future resource lane queue is full");
+            future_destroy_driver(slot);
+            future_release_if_terminal(ctx, slot);
+            return;
+        }
+        if (admission == ESP32_MQUICKJS_FUTURE_LANE_WAIT) {
             slot->lane_waiting = true;
             return;
         }
@@ -1500,24 +1573,21 @@ static bool future_dispatch_waiting_lanes(JSContext *ctx,
         return false;
     }
     while (dispatched < CONFIG_ESP32_MQUICKJS_FUTURE_DISPATCH_BATCH) {
-        future_slot_t *candidate = NULL;
-        int i;
+        esp32_mquickjs_future_scheduler_slot_t
+            slots[ESP32_MQUICKJS_FUTURE_SLOT_COUNT];
+        future_slot_t *candidate;
+        size_t candidate_index;
 
-        for (i = 0; i < ESP32_MQUICKJS_FUTURE_SLOT_COUNT; ++i) {
-            future_slot_t *slot = &state->slots[i];
-
-            if (!slot->allocated || !slot->driver_active ||
-                !slot->lane_waiting || slot->state != FUTURE_STATE_QUEUED ||
-                future_lane_in_use(state, slot)) {
-                continue;
-            }
-            if (candidate == NULL ||
-                slot->submission_sequence < candidate->submission_sequence) {
-                candidate = slot;
-            }
-        }
-        if (candidate == NULL) {
+        future_scheduler_snapshot(state, slots);
+        candidate_index = esp32_mquickjs_future_scheduler_next_waiting(
+            slots, ESP32_MQUICKJS_FUTURE_SLOT_COUNT);
+        if (candidate_index == ESP32_MQUICKJS_FUTURE_SCHEDULER_NO_SLOT) {
             break;
+        }
+        candidate = &state->slots[candidate_index];
+        if (candidate->state != FUTURE_STATE_QUEUED) {
+            candidate->lane_waiting = false;
+            continue;
         }
         handled = future_start_captured_driver(ctx, runtime, candidate) || handled;
         dispatched++;
@@ -1528,6 +1598,7 @@ static bool future_dispatch_waiting_lanes(JSContext *ctx,
 bool esp32_mquickjs_init_future_runtime(JSContext *ctx,
                                         esp32_mquickjs_runtime_t *runtime)
 {
+    esp32_mquickjs_future_runtime_resources_t resources;
     future_runtime_t *state;
     int i;
 
@@ -1540,28 +1611,18 @@ bool esp32_mquickjs_init_future_runtime(JSContext *ctx,
     if (!future_init_worker_pool()) {
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
-    if (state == NULL) {
+    if (!esp32_mquickjs_future_runtime_resources_init(
+            &resources, &s_future_runtime_resource_ops, sizeof(*state),
+            ESP32_MQUICKJS_FUTURE_SLOT_COUNT, sizeof(*state->slots),
+            CONFIG_ESP32_MQUICKJS_FUTURE_READY_QUEUE_LEN,
+            sizeof(esp32_mquickjs_future_token_t))) {
         return false;
     }
-    state->slots = heap_caps_calloc(ESP32_MQUICKJS_FUTURE_SLOT_COUNT,
-                                    sizeof(*state->slots),
-                                    MALLOC_CAP_8BIT);
-    state->submissions = xQueueCreate(ESP32_MQUICKJS_FUTURE_SLOT_COUNT,
-                                      sizeof(esp32_mquickjs_future_token_t));
-    state->ready = xQueueCreate(CONFIG_ESP32_MQUICKJS_FUTURE_READY_QUEUE_LEN,
-                                sizeof(esp32_mquickjs_future_token_t));
-    if (state->slots == NULL || state->submissions == NULL || state->ready == NULL) {
-        if (state->submissions != NULL) {
-            vQueueDelete(state->submissions);
-        }
-        if (state->ready != NULL) {
-            vQueueDelete(state->ready);
-        }
-        heap_caps_free(state->slots);
-        heap_caps_free(state);
-        return false;
-    }
+    state = resources.runtime_state;
+    state->resources = resources;
+    state->slots = resources.slots;
+    state->submissions = resources.submissions;
+    state->ready = resources.ready;
     state->ctx = ctx;
     state->running_slot = -1;
     for (i = 0; i < ESP32_MQUICKJS_FUTURE_SLOT_COUNT; ++i) {
@@ -1590,6 +1651,9 @@ bool esp32_mquickjs_prepare_future_runtime_destroy(JSContext *ctx,
             continue;
         }
         if (slot->driver_active) {
+            bool driver_ready;
+            bool poll_available;
+
             if (slot->state == FUTURE_STATE_QUEUED) {
                 future_clear_slot(ctx, slot);
                 continue;
@@ -1605,8 +1669,13 @@ bool esp32_mquickjs_prepare_future_runtime_destroy(JSContext *ctx,
                     slot->cancel_requested = true;
                 }
             }
-            if (slot->driver == NULL || slot->driver->poll == NULL ||
-                slot->driver->poll(slot->driver_state) != ESP32_MQUICKJS_FUTURE_READY) {
+            poll_available = slot->driver != NULL &&
+                             slot->driver->poll != NULL;
+            driver_ready = poll_available &&
+                           slot->driver->poll(slot->driver_state) ==
+                               ESP32_MQUICKJS_FUTURE_READY;
+            if (esp32_mquickjs_future_scheduler_teardown_must_wait(
+                    slot->driver_active, poll_available, driver_ready)) {
                 driver_pending = true;
                 continue;
             }
@@ -1629,19 +1698,15 @@ bool esp32_mquickjs_prepare_future_runtime_destroy(JSContext *ctx,
 void esp32_mquickjs_deinit_future_runtime(esp32_mquickjs_runtime_t *runtime)
 {
     future_runtime_t *state = future_runtime(runtime);
+    esp32_mquickjs_future_runtime_resources_t resources;
 
     if (state == NULL) {
         return;
     }
-    if (state->submissions != NULL) {
-        vQueueDelete(state->submissions);
-    }
-    if (state->ready != NULL) {
-        vQueueDelete(state->ready);
-    }
-    heap_caps_free(state->slots);
-    heap_caps_free(state);
+    resources = state->resources;
     runtime->future_state = NULL;
+    esp32_mquickjs_future_runtime_resources_deinit(
+        &resources, &s_future_runtime_resource_ops);
 }
 
 bool esp32_mquickjs_get_future_status(esp32_mquickjs_runtime_t *runtime,
@@ -2111,11 +2176,12 @@ JSValue js_future_timeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *
     JSGCRef inputs_ref;
     JSValue *inputs;
     JSValue result;
-    int timeout_ms;
+    uint32_t timeout_ms;
 
     (void)this_val;
     if (argc != 2 || future_handle_from_value(ctx, argv[0]) == NULL ||
-        JS_ToInt32(ctx, &timeout_ms, argv[1]) != 0 || timeout_ms < 0) {
+        !esp32_mquickjs_value_to_bounded_u32(
+            ctx, argv[1], 0, INT32_MAX, &timeout_ms)) {
         return JS_ThrowTypeError(ctx, "Future.timeout(future, timeoutMs) expects a Future and non-negative integer");
     }
     slot = future_allocate_slot(runtime, FUTURE_KIND_TIMEOUT);
@@ -2131,7 +2197,8 @@ JSValue js_future_timeout(JSContext *ctx, JSValue *this_val, int argc, JSValue *
         return JS_EXCEPTION;
     }
     JS_PopGCRef(ctx, &inputs_ref);
-    slot->deadline_us = slot->submitted_us + ((uint64_t)(uint32_t)timeout_ms * 1000ULL);
+    slot->deadline_us = slot->submitted_us +
+                        ((uint64_t)timeout_ms * 1000ULL);
     result = future_make_handle(ctx, slot);
     if (JS_IsException(result)) {
         return result;
@@ -2213,19 +2280,20 @@ JSValue js_future_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
     future_handle_t *handle = future_this_handle(ctx, this_val, "future.wait()");
     esp32_mquickjs_native_wait_t native_wait;
     uint64_t wait_deadline_us = 0;
-    int timeout_ms = 0;
+    uint32_t timeout_ms = 0;
     JSValue result;
 
     if (handle == NULL) {
         return JS_EXCEPTION;
     }
     if (argc > 1 ||
-        (argc == 1 && (JS_ToInt32(ctx, &timeout_ms, argv[0]) != 0 || timeout_ms < 0))) {
+        (argc == 1 && !esp32_mquickjs_value_to_bounded_u32(
+            ctx, argv[0], 0, INT32_MAX, &timeout_ms))) {
         return JS_ThrowTypeError(ctx, "future.wait(timeoutMs?) expects a non-negative integer");
     }
     if (argc == 1) {
         wait_deadline_us = (uint64_t)esp_timer_get_time() +
-                           ((uint64_t)(uint32_t)timeout_ms * 1000ULL);
+                           ((uint64_t)timeout_ms * 1000ULL);
     }
     future_mark_observed(handle);
     esp32_mquickjs_native_wait_begin(runtime, &native_wait);
@@ -2246,7 +2314,8 @@ JSValue js_future_wait(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
         now_us = (uint64_t)esp_timer_get_time();
         if (wait_deadline_us > 0 && now_us >= wait_deadline_us) {
             result = JS_ThrowInternalError(
-                ctx, "future.wait() timed out after %d ms", timeout_ms);
+                ctx, "future.wait() timed out after %" PRIu32 " ms",
+                timeout_ms);
             goto done;
         }
         if (!esp32_mquickjs_cooperate(runtime)) {

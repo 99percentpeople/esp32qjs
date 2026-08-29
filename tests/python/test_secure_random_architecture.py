@@ -27,7 +27,7 @@ class SecureRandomArchitectureTests(SourceContractTestCase):
     def test_drbg_is_seeded_before_peripheral_modules_initialize(self):
         source = CORE_SOURCE.read_text(encoding="utf-8")
         secure_random = source.index("esp32_mquickjs_init_secure_random(ctx)")
-        adc = source.index("esp32_mquickjs_init_adc_runtime()")
+        adc = source.index("esp32_mquickjs_init_adc_runtime(ctx)")
         wifi = source.index("esp32_mquickjs_init_wifi_runtime(ctx, runtime)")
 
         self.assertLess(secure_random, adc)

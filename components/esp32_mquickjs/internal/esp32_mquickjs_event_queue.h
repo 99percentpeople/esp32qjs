@@ -65,6 +65,8 @@ bool esp32_mquickjs_event_queue_register_receive_alias(
 esp32_mquickjs_event_queue_t *esp32_mquickjs_event_queue_from_value(
     JSContext *ctx,
     JSValue value);
+bool esp32_mquickjs_event_queue_retain(esp32_mquickjs_event_queue_t *queue);
+void esp32_mquickjs_event_queue_release(esp32_mquickjs_event_queue_t *queue);
 
 JSValue js_event_queue_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 void js_event_queue_finalizer(JSContext *ctx, void *opaque);

@@ -1123,7 +1123,6 @@ void esp32_mquickjs_deinit_gpio_runtime(JSContext *ctx)
             continue;
         }
         (void)gpio_interrupt_release_slot((gpio_num_t)pin, NULL);
-        slot->handler_installed = false;
     }
 }
 

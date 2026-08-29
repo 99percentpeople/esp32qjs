@@ -259,9 +259,11 @@ then close that same object.
 
 HTTPS and raw TLS failures expose `code` as `TLS_ALLOC_FAILED`,
 `TLS_TIME_INVALID`, `TLS_VERIFY_FAILED`, `TLS_HANDSHAKE_FAILED`, or
-`TLS_TIMEOUT`, with numeric `espTlsError`, `mbedtlsError`, and `verifyFlags`.
+`TLS_TIMEOUT`, with numeric `details.operationError`, `details.espTlsError`,
+`details.mbedtlsError`, and `details.verifyFlags`.
 For framework-built firmware, `sys.info.features.tls === true` means the public
-CA bundle is present. `verifyFlags === 0x8` is the mbedTLS `NOT_TRUSTED` result,
+CA bundle is present. `error.details.verifyFlags === 0x8` is the mbedTLS
+`NOT_TRUSTED` result,
 but by itself does not distinguish a missing root from a chain or bundle
 integration failure; inspect the generated profile and test another public-CA
 host before assigning the cause.

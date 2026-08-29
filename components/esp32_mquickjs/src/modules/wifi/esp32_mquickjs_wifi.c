@@ -5,6 +5,8 @@
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_net.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_options.h"
+#include "esp32_mquickjs_wifi_runtime_resources.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -18,6 +20,7 @@
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "esp_wifi_default.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
@@ -36,6 +39,52 @@ static const char *TAG = "esp32qjs_wifi";
 
 static esp32_mquickjs_wifi_state_t s_wifi_state;
 static void wifi_stop_connect_timeout_timer(void);
+
+static void *wifi_create_lock(void *opaque)
+{
+    (void)opaque;
+    return xSemaphoreCreateMutex();
+}
+
+static void wifi_delete_lock(void *value, void *opaque)
+{
+    (void)opaque;
+    vSemaphoreDelete((SemaphoreHandle_t)value);
+}
+
+static void *wifi_create_event_group(void *opaque)
+{
+    (void)opaque;
+    return xEventGroupCreate();
+}
+
+static void wifi_delete_event_group(void *value, void *opaque)
+{
+    (void)opaque;
+    vEventGroupDelete((EventGroupHandle_t)value);
+}
+
+static void *wifi_create_queue(size_t length, size_t item_size, void *opaque)
+{
+    (void)opaque;
+    return xQueueCreate(length, item_size);
+}
+
+static void wifi_delete_queue(void *value, void *opaque)
+{
+    (void)opaque;
+    vQueueDelete((QueueHandle_t)value);
+}
+
+static const esp32_mquickjs_wifi_runtime_resource_ops_t
+    s_wifi_runtime_resource_ops = {
+        .create_lock = wifi_create_lock,
+        .delete_lock = wifi_delete_lock,
+        .create_event_group = wifi_create_event_group,
+        .delete_event_group = wifi_delete_event_group,
+        .create_queue = wifi_create_queue,
+        .delete_queue = wifi_delete_queue,
+    };
 
 esp32_mquickjs_wifi_state_t *esp32_mquickjs_wifi_state(void)
 {
@@ -268,77 +317,147 @@ static void wifi_event_handler(void *arg,
     }
 }
 
+static void wifi_cleanup_failed_init(void)
+{
+    esp32_mquickjs_wifi_runtime_resources_t resources;
+
+    if (s_wifi_state.connect_timeout_timer != NULL) {
+        wifi_stop_connect_timeout_timer();
+        if (esp_timer_delete(s_wifi_state.connect_timeout_timer) != ESP_OK) {
+            ESP_LOGE(TAG, "delete Wi-Fi connect timeout timer failed");
+        }
+        s_wifi_state.connect_timeout_timer = NULL;
+    }
+    if (s_wifi_state.ip_event_instance != NULL) {
+        (void)esp_event_handler_instance_unregister(
+            IP_EVENT, IP_EVENT_STA_GOT_IP,
+            s_wifi_state.ip_event_instance);
+        s_wifi_state.ip_event_instance = NULL;
+    }
+    if (s_wifi_state.wifi_scan_event_instance != NULL) {
+        (void)esp_event_handler_instance_unregister(
+            WIFI_EVENT, WIFI_EVENT_SCAN_DONE,
+            s_wifi_state.wifi_scan_event_instance);
+        s_wifi_state.wifi_scan_event_instance = NULL;
+    }
+    if (s_wifi_state.wifi_disconnect_event_instance != NULL) {
+        (void)esp_event_handler_instance_unregister(
+            WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
+            s_wifi_state.wifi_disconnect_event_instance);
+        s_wifi_state.wifi_disconnect_event_instance = NULL;
+    }
+    if (s_wifi_state.wifi_start_event_instance != NULL) {
+        (void)esp_event_handler_instance_unregister(
+            WIFI_EVENT, WIFI_EVENT_STA_START,
+            s_wifi_state.wifi_start_event_instance);
+        s_wifi_state.wifi_start_event_instance = NULL;
+    }
+    esp32_mquickjs_wifi_radio_release(&s_wifi_state.radio_lease);
+    if (s_wifi_state.sta_netif != NULL) {
+        esp_netif_destroy_default_wifi(s_wifi_state.sta_netif);
+        s_wifi_state.sta_netif = NULL;
+    }
+    resources = (esp32_mquickjs_wifi_runtime_resources_t){
+        .lock = s_wifi_state.lock,
+        .event_group = s_wifi_state.event_group,
+        .scan_queue = s_wifi_state.scan_queue,
+        .connect_queue = s_wifi_state.connect_queue,
+    };
+    esp32_mquickjs_wifi_runtime_resources_deinit(
+        &resources, &s_wifi_runtime_resource_ops);
+    memset(&s_wifi_state, 0, sizeof(s_wifi_state));
+}
+
 static esp_err_t wifi_init_once(void)
 {
+    esp32_mquickjs_wifi_runtime_resources_t resources = {0};
     esp32_mquickjs_wifi_radio_status_t radio_status;
+    esp_err_t err;
 
     if (s_wifi_state.initialized) {
         return ESP_OK;
     }
 
     memset(&s_wifi_state, 0, sizeof(s_wifi_state));
-    s_wifi_state.lock = xSemaphoreCreateMutex();
-    s_wifi_state.event_group = xEventGroupCreate();
-    s_wifi_state.scan_queue = xQueueCreate(WIFI_SCAN_EVENT_QUEUE_LEN,
-                                           sizeof(esp32_mquickjs_wifi_scan_event_t));
-    s_wifi_state.connect_queue = xQueueCreate(WIFI_CONNECT_EVENT_QUEUE_LEN,
-                                              sizeof(esp32_mquickjs_wifi_connect_event_t));
-    if (s_wifi_state.lock == NULL || s_wifi_state.event_group == NULL ||
-        s_wifi_state.scan_queue == NULL || s_wifi_state.connect_queue == NULL) {
+    if (!esp32_mquickjs_wifi_runtime_resources_init(
+            &resources, &s_wifi_runtime_resource_ops,
+            WIFI_SCAN_EVENT_QUEUE_LEN,
+            sizeof(esp32_mquickjs_wifi_scan_event_t),
+            WIFI_CONNECT_EVENT_QUEUE_LEN,
+            sizeof(esp32_mquickjs_wifi_connect_event_t))) {
         return ESP_ERR_NO_MEM;
     }
+    s_wifi_state.lock = resources.lock;
+    s_wifi_state.event_group = resources.event_group;
+    s_wifi_state.scan_queue = resources.scan_queue;
+    s_wifi_state.connect_queue = resources.connect_queue;
 
-    ESP_RETURN_ON_ERROR(esp32_mquickjs_net_ensure_initialized(), TAG,
-                        "network runtime initialization failed");
+    err = esp32_mquickjs_net_ensure_initialized();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "network runtime initialization failed: %s",
+                 esp_err_to_name(err));
+        goto fail;
+    }
 
     s_wifi_state.sta_netif = esp_netif_create_default_wifi_sta();
     if (s_wifi_state.sta_netif == NULL) {
         ESP_LOGE(TAG, "esp_netif_create_default_wifi_sta() failed");
-        return ESP_FAIL;
+        err = ESP_FAIL;
+        goto fail;
     }
 
-    ESP_RETURN_ON_ERROR(
-        esp32_mquickjs_wifi_radio_acquire(
-            ESP32_MQUICKJS_WIFI_RADIO_CLIENT_WIFI_STA,
-            WIFI_MODE_STA, &s_wifi_state.radio_lease),
-        TAG, "acquire Wi-Fi radio failed");
+    err = esp32_mquickjs_wifi_radio_acquire(
+        ESP32_MQUICKJS_WIFI_RADIO_CLIENT_WIFI_STA,
+        WIFI_MODE_STA, &s_wifi_state.radio_lease);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "acquire Wi-Fi radio failed: %s", esp_err_to_name(err));
+        goto fail;
+    }
 
-    ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(WIFI_EVENT,
-                                                            WIFI_EVENT_STA_START,
-                                                            wifi_event_handler,
-                                                            NULL,
-                                                            &s_wifi_state.wifi_start_event_instance),
-                        TAG,
-                        "register WIFI_EVENT start handler failed");
-    ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(WIFI_EVENT,
-                                                            WIFI_EVENT_STA_DISCONNECTED,
-                                                            wifi_event_handler,
-                                                            NULL,
-                                                            &s_wifi_state.wifi_disconnect_event_instance),
-                        TAG,
-                        "register WIFI_EVENT disconnect handler failed");
-    ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(WIFI_EVENT,
-                                                            WIFI_EVENT_SCAN_DONE,
-                                                            wifi_event_handler,
-                                                            NULL,
-                                                            &s_wifi_state.wifi_scan_event_instance),
-                        TAG,
-                        "register WIFI_EVENT scan handler failed");
-    ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(IP_EVENT,
-                                                            IP_EVENT_STA_GOT_IP,
-                                                            wifi_event_handler,
-                                                            NULL,
-                                                            &s_wifi_state.ip_event_instance),
-                        TAG,
-                        "register IP_EVENT handler failed");
+    err = esp_event_handler_instance_register(
+        WIFI_EVENT, WIFI_EVENT_STA_START, wifi_event_handler, NULL,
+        &s_wifi_state.wifi_start_event_instance);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register WIFI_EVENT start handler failed: %s",
+                 esp_err_to_name(err));
+        goto fail;
+    }
+    err = esp_event_handler_instance_register(
+        WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, wifi_event_handler, NULL,
+        &s_wifi_state.wifi_disconnect_event_instance);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register WIFI_EVENT disconnect handler failed: %s",
+                 esp_err_to_name(err));
+        goto fail;
+    }
+    err = esp_event_handler_instance_register(
+        WIFI_EVENT, WIFI_EVENT_SCAN_DONE, wifi_event_handler, NULL,
+        &s_wifi_state.wifi_scan_event_instance);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register WIFI_EVENT scan handler failed: %s",
+                 esp_err_to_name(err));
+        goto fail;
+    }
+    err = esp_event_handler_instance_register(
+        IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL,
+        &s_wifi_state.ip_event_instance);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "register IP_EVENT handler failed: %s",
+                 esp_err_to_name(err));
+        goto fail;
+    }
     {
         esp_timer_create_args_t timer_args = {
             .callback = wifi_connect_timeout_cb,
             .name = "wifi_connect_timeout",
         };
-        ESP_RETURN_ON_ERROR(esp_timer_create(&timer_args, &s_wifi_state.connect_timeout_timer),
-                            TAG,
-                            "create Wi-Fi connect timeout timer failed");
+        err = esp_timer_create(
+            &timer_args, &s_wifi_state.connect_timeout_timer);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "create Wi-Fi connect timeout timer failed: %s",
+                     esp_err_to_name(err));
+            goto fail;
+        }
     }
 
     wifi_lock();
@@ -360,6 +479,10 @@ static esp_err_t wifi_init_once(void)
     }
 
     return ESP_OK;
+
+fail:
+    wifi_cleanup_failed_init();
+    return err;
 }
 
 static EventBits_t wifi_wait_for_bits(EventBits_t bits_to_wait_for,
@@ -673,26 +796,69 @@ JSValue esp32_mquickjs_wifi_make_status_object(JSContext *ctx)
     return wifi_make_status_object(ctx);
 }
 
+JSValue esp32_mquickjs_wifi_throw_operation_error(
+    JSContext *ctx,
+    const char *code,
+    const char *operation,
+    esp_err_t err,
+    int32_t disconnect_reason,
+    uint32_t scan_status)
+{
+    esp32_mquickjs_wifi_status_t status;
+    JSGCRef details_ref;
+    JSValue *details = JS_PushGCRef(ctx, &details_ref);
+    JSValue result;
+    bool has_status = esp32_mquickjs_wifi_get_status(&status) == ESP_OK;
+
+    *details = JS_NewObject(ctx);
+    if (JS_IsException(*details) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "espCode", JS_NewInt32(ctx, err)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "espName",
+            JS_NewString(ctx, esp_err_to_name(err))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "ssid",
+            has_status && status.ssid[0] != '\0'
+                ? JS_NewString(ctx, status.ssid)
+                : JS_NULL) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "disconnectReason",
+            disconnect_reason >= 0
+                ? JS_NewInt32(ctx, disconnect_reason)
+                : JS_NULL) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "disconnectReasonName",
+            disconnect_reason >= 0
+                ? JS_NewString(ctx, wifi_reason_to_string(disconnect_reason))
+                : JS_NULL) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "scanStatus",
+            scan_status != UINT32_MAX
+                ? JS_NewUint32(ctx, scan_status)
+                : JS_NULL)) {
+        JS_PopGCRef(ctx, &details_ref);
+        return JS_EXCEPTION;
+    }
+    result = esp32_mquickjs_throw_native_error(
+        ctx, code, operation, "Wi-Fi operation failed", *details);
+    JS_PopGCRef(ctx, &details_ref);
+    return result;
+}
+
 static JSValue wifi_throw_connect_error(JSContext *ctx, esp_err_t err)
 {
     esp32_mquickjs_wifi_status_t status;
+    int32_t disconnect_reason = -1;
 
-    if (esp32_mquickjs_wifi_get_status(&status) != ESP_OK) {
-        return JS_ThrowInternalError(ctx, "wifi.connect() failed: %s", esp_err_to_name(err));
+    if (esp32_mquickjs_wifi_get_status(&status) == ESP_OK) {
+        disconnect_reason = status.last_disconnect_reason;
     }
-
-    if (err == ESP_ERR_TIMEOUT) {
-        return JS_ThrowInternalError(ctx,
-                                     "wifi.connect() timed out while connecting to %s",
-                                     status.ssid[0] != '\0' ? status.ssid : "<unknown>");
-    }
-
-    return JS_ThrowInternalError(ctx,
-                                 "wifi.connect() failed for %s (reason=%d:%s, err=%s)",
-                                 status.ssid[0] != '\0' ? status.ssid : "<unknown>",
-                                 (int)status.last_disconnect_reason,
-                                 wifi_reason_to_string(status.last_disconnect_reason),
-                                 esp_err_to_name(err));
+    return esp32_mquickjs_wifi_throw_operation_error(
+        ctx,
+        err == ESP_ERR_TIMEOUT ? "WIFI_CONNECT_TIMEOUT"
+                               : "WIFI_CONNECT_FAILED",
+        "wifi.connect", err, disconnect_reason, UINT32_MAX);
 }
 
 JSValue esp32_mquickjs_wifi_throw_connect_error(JSContext *ctx, esp_err_t err)
@@ -702,14 +868,13 @@ JSValue esp32_mquickjs_wifi_throw_connect_error(JSContext *ctx, esp_err_t err)
 
 static JSValue wifi_throw_scan_error(JSContext *ctx, esp_err_t err)
 {
-    if (err == ESP_ERR_WIFI_STATE) {
-        return JS_ThrowInternalError(ctx,
-                                     "wifi.scan() cannot run while Wi-Fi is still connecting");
-    }
-    if (err == ESP_ERR_WIFI_TIMEOUT) {
-        return JS_ThrowInternalError(ctx, "wifi.scan() timed out");
-    }
-    return JS_ThrowInternalError(ctx, "wifi.scan() failed: %s", esp_err_to_name(err));
+    const char *code = err == ESP_ERR_WIFI_STATE
+                           ? "WIFI_SCAN_BUSY"
+                           : err == ESP_ERR_WIFI_TIMEOUT
+                                 ? "WIFI_SCAN_TIMEOUT"
+                                 : "WIFI_SCAN_FAILED";
+    return esp32_mquickjs_wifi_throw_operation_error(
+        ctx, code, "wifi.scan", err, -1, UINT32_MAX);
 }
 
 JSValue esp32_mquickjs_wifi_throw_scan_error(JSContext *ctx, esp_err_t err)
@@ -722,17 +887,14 @@ static int js_value_to_timeout_ms(JSContext *ctx,
                                   uint32_t default_timeout_ms,
                                   uint32_t *out_timeout_ms)
 {
-    int timeout_ms = 0;
-
     if (JS_IsUndefined(value)) {
         *out_timeout_ms = default_timeout_ms;
         return 0;
     }
-    if (JS_ToInt32(ctx, &timeout_ms, value) != 0 || timeout_ms < 0) {
+    if (!esp32_mquickjs_value_to_bounded_u32(
+            ctx, value, 0, INT32_MAX, out_timeout_ms)) {
         return -1;
     }
-
-    *out_timeout_ms = (uint32_t)timeout_ms;
     return 0;
 }
 

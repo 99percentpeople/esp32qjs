@@ -5,7 +5,8 @@ LittleFS mount, startup script, runtime task, optional REPL, callback polling,
 and task-watchdog subscription.
 
 Applications that only provide JavaScript normally do not need this API. Their
-entry point belongs in `apps/<name>/flash_data/index.js`.
+resolved entry point is the immutable Build Context's `flash_data/index.js`;
+the firmware repository does not own an `apps/` layout.
 
 ## Lifecycle
 
@@ -39,10 +40,10 @@ Available operations:
 - `esp32qjs_runtime_stop(runtime, timeout_ms)`
   Request a stop and wait for the task. Passing `0` uses the configured default.
 - `esp32qjs_runtime_destroy(runtime)`
-  Stop HTTP/WebSocket clients and servers, detach USB serial and GPIO/Wi-Fi
-  callbacks, close every Stream and native byte source, deinitialize ADC, DAC,
-  LEDC, I2C, SPI, UART, I2S, and camera resources, return any leased camera
-  framebuffer, release the context and native timer/poller state, unmount
+  Stop network and wireless clients, servers, sessions, and protocol-stack
+  callbacks; close every Stream, EventQueue, native byte source, and peripheral
+  handle; return leased media buffers; release the context and native
+  timer/poller state; unmount
   LittleFS, and free the JS heap. The runtime must
   already be stopped. It requests cancellation and returns
   `ESP_ERR_INVALID_STATE` while an outgoing asynchronous HTTP worker is still

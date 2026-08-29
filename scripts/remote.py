@@ -26,6 +26,9 @@ if str(SCRIPT_DIR) not in sys.path:
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 BUILD_ROOT = ROOT_DIR / "build"
+TOOL_STATE_DIR = BUILD_ROOT / "tooling"
+ESPTOOL_CONFIG_PATH = TOOL_STATE_DIR / "esptool.cfg"
+RFC2217_SERVER_PID_PATH = TOOL_STATE_DIR / "rfc2217-server.pid"
 ENV_PATH = ROOT_DIR / ".env"
 CONFIG_DIR = ROOT_DIR / "configs"
 MCU_DIR = CONFIG_DIR / "mcus"
@@ -382,6 +385,7 @@ class ProjectConfig:
     server_python_exe: str
     esptool_bin: str
     assume_prompt: str
+    allow_external_build_dir: bool
     test_wifi_ssid: str
     test_wifi_password: str
     test_http_url: str
@@ -797,8 +801,8 @@ def resolve_server_cmd(python_exe: str) -> list[str]:
 
 
 def esptool_config_path() -> Path:
-    """Return the per-user esptool config path used by esptool / esp_rfc2217_server."""
-    return Path.home() / "esptool.cfg"
+    """Return the project-local config used by esptool / esp_rfc2217_server."""
+    return ESPTOOL_CONFIG_PATH
 
 
 def monitor_config_path() -> Path:
@@ -808,7 +812,9 @@ def monitor_config_path() -> Path:
 
 def write_esptool_config() -> Path:
     path = esptool_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(ESPTOOL_CONFIG_TEXT, encoding="ascii")
+    os.environ["ESPTOOL_CFGFILE"] = str(path)
     return path
 
 
@@ -822,10 +828,21 @@ def write_all_configs() -> tuple[Path, Path]:
     return write_esptool_config(), write_monitor_config()
 
 
-def list_server_processes() -> list[str]:
-    """Return running esp_rfc2217_server processes for the current platform."""
-    target = "esp_rfc2217_server"
+def read_server_pid() -> int | None:
+    """Return the project-owned RFC2217 PID, dropping invalid state."""
+    try:
+        pid = int(RFC2217_SERVER_PID_PATH.read_text(encoding="ascii").strip())
+    except (FileNotFoundError, OSError, ValueError):
+        RFC2217_SERVER_PID_PATH.unlink(missing_ok=True)
+        return None
+    if pid <= 0:
+        RFC2217_SERVER_PID_PATH.unlink(missing_ok=True)
+        return None
+    return pid
 
+
+def server_process_command(pid: int) -> str:
+    """Return a PID's command line, or an empty string when it is gone."""
     if platform.system() == "Windows":
         result = subprocess.run(
             [
@@ -833,47 +850,65 @@ def list_server_processes() -> list[str]:
                 "-NoProfile",
                 "-Command",
                 (
-                    "Get-CimInstance Win32_Process | "
-                    "Where-Object { $_.Name -eq 'python.exe' -and "
-                    "$_.CommandLine -like '*esp_rfc2217_server*' } | "
-                    "ForEach-Object { '{0}`t{1}' -f $_.ProcessId, $_.CommandLine }"
+                    f"Get-CimInstance Win32_Process -Filter \"ProcessId = {pid}\" | "
+                    "Select-Object -ExpandProperty CommandLine"
                 ),
             ],
             capture_output=True,
             text=True,
             check=False,
         )
-        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        return result.stdout.strip()
 
     result = subprocess.run(
-        ["ps", "-ax", "-o", "pid=,command="],
+        ["ps", "-p", str(pid), "-o", "command="],
         capture_output=True,
         text=True,
         check=False,
     )
-    return [line.strip() for line in result.stdout.splitlines() if target in line]
+    return result.stdout.strip()
+
+
+def list_server_processes() -> list[str]:
+    """Return the running project-owned RFC2217 server, if any."""
+    pid = read_server_pid()
+    if pid is None:
+        return []
+    command = server_process_command(pid)
+    if "esp_rfc2217_server" not in command:
+        RFC2217_SERVER_PID_PATH.unlink(missing_ok=True)
+        return []
+    return [f"{pid}\t{command}"]
 
 
 def stop_server_processes() -> None:
-    """Stop existing RFC2217 server processes before restarting them."""
+    """Stop only the RFC2217 server recorded in the project PID file."""
+    pid = read_server_pid()
+    if pid is None:
+        return
+    if "esp_rfc2217_server" not in server_process_command(pid):
+        RFC2217_SERVER_PID_PATH.unlink(missing_ok=True)
+        return
     if platform.system() == "Windows":
         subprocess.run(
             [
                 "powershell",
                 "-NoProfile",
                 "-Command",
-                (
-                    "Get-CimInstance Win32_Process | "
-                    "Where-Object { $_.Name -eq 'python.exe' -and "
-                    "$_.CommandLine -like '*esp_rfc2217_server*' } | "
-                    "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
-                ),
+                f"Stop-Process -Id {pid} -Force",
             ],
             check=False,
         )
-        return
-
-    subprocess.run(["pkill", "-f", "esp_rfc2217_server"], check=False)
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except PermissionError as exc:
+            raise SystemExit(
+                f"Cannot stop project RFC2217 server PID {pid}: {exc}"
+            ) from exc
+    RFC2217_SERVER_PID_PATH.unlink(missing_ok=True)
 
 
 def start_server(config: ProjectConfig, force_restart: bool) -> int:
@@ -905,11 +940,14 @@ def start_server(config: ProjectConfig, force_restart: bool) -> int:
     if platform.system() == "Windows":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
 
-    subprocess.Popen(cmd, **kwargs)
+    process = subprocess.Popen(cmd, **kwargs)
+    RFC2217_SERVER_PID_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RFC2217_SERVER_PID_PATH.write_text(f"{process.pid}\n", encoding="ascii")
     time.sleep(1)
 
     existing = list_server_processes()
     if not existing:
+        RFC2217_SERVER_PID_PATH.unlink(missing_ok=True)
         print("Failed to confirm esp_rfc2217_server startup.", file=sys.stderr)
         return 1
 
@@ -1012,17 +1050,25 @@ def confirm_build_dir_reset(build_dir: Path, assume_prompt: str) -> bool:
     )
 
 
-def safe_remove_build_dir(build_dir: Path) -> None:
+def safe_remove_build_dir(build_dir: Path, allow_external: bool = False) -> None:
     """Remove a generated build directory after explicit confirmation."""
     resolved_build_dir = build_dir.resolve()
-    resolved_root = ROOT_DIR.resolve()
-    if resolved_build_dir == resolved_root or resolved_root not in resolved_build_dir.parents:
+    resolved_build_root = BUILD_ROOT.resolve()
+    always_unsafe = {
+        Path(resolved_build_dir.anchor),
+        Path.home().resolve(),
+        ROOT_DIR.resolve(),
+        resolved_build_root,
+    }
+    if (resolved_build_dir in always_unsafe or
+        (resolved_build_root not in resolved_build_dir.parents and not allow_external)):
         raise SystemExit(f"Refusing to delete unsafe build directory: {build_dir}")
     shutil.rmtree(resolved_build_dir)
 
 
 def run_idf_action_with_stale_build_recovery(project_args: list[str], config: ProjectConfig) -> None:
     """Run an idf.py action, offering one confirmed clean rebuild on stale-cache failures."""
+    write_esptool_config()
     refresh_generated_sdkconfig(config)
     existing_build_dir = config.build_dir.exists()
     cmd = idf_py_cmd(project_args, config)
@@ -1033,7 +1079,10 @@ def run_idf_action_with_stale_build_recovery(project_args: list[str], config: Pr
     if existing_build_dir and is_stale_build_dir_failure(output):
         if not confirm_build_dir_reset(config.build_dir, config.assume_prompt):
             raise SystemExit(return_code)
-        safe_remove_build_dir(config.build_dir)
+        safe_remove_build_dir(
+            config.build_dir,
+            allow_external=config.allow_external_build_dir,
+        )
         print(f"Retrying with a clean build directory: {config.build_dir}")
         return_code, _ = run_streaming(idf_py_cmd(project_args, config), cwd=ROOT_DIR)
         if return_code == 0:
@@ -2450,6 +2499,14 @@ def build_project_config(
         )
 
     build_dir = resolve_build_path(args.build_dir)
+    build_root = BUILD_ROOT.resolve()
+    allow_external_build_dir = bool(args.allow_external_build_dir)
+    if (build_root not in build_dir.parents and
+        not allow_external_build_dir):
+        raise SystemExit(
+            f"Build directory {build_dir} is outside {BUILD_ROOT}; pass "
+            "--allow-external-build-dir to opt in explicitly."
+        )
     sdkconfig_defaults = tuple(
         dict.fromkeys(
             path for path in (mcu_defaults, build_context.sdkconfig_defaults) if path is not None
@@ -2493,6 +2550,7 @@ def build_project_config(
         server_python_exe=getattr(args, "python_exe", profile.server_python_exe),
         esptool_bin=getattr(args, "esptool_bin", profile.esptool_bin),
         assume_prompt=args.assume,
+        allow_external_build_dir=allow_external_build_dir,
         test_wifi_ssid=profile.test_wifi_ssid,
         test_wifi_password=profile.test_wifi_password,
         test_http_url=profile.test_http_url,
@@ -2506,7 +2564,12 @@ def add_common_mcu_args(parser: argparse.ArgumentParser, profile: MCUProfile) ->
     parser.add_argument(
         "--build-dir",
         default=format_path(profile.build_dir),
-        help="Build subdirectory under build/; absolute paths remain available for temporary test builds.",
+        help="Build subdirectory under build/.",
+    )
+    parser.add_argument(
+        "--allow-external-build-dir",
+        action="store_true",
+        help="Explicitly allow an absolute build directory outside the project build/ root.",
     )
     parser.add_argument(
         "--sdkconfig-defaults",

@@ -239,11 +239,18 @@ endif()
 set(ESP32_MQUICKJS_SRCS
     "src/core/esp32_mquickjs.c"
     "src/core/esp32_mquickjs_future.c"
+    "src/core/esp32_mquickjs_future_runtime_resources.c"
+    "src/core/esp32_mquickjs_future_scheduler.c"
     "src/core/esp32_mquickjs_future_timeout.c"
+    "src/core/esp32_mquickjs_timer_resource.c"
+    "src/core/esp32_mquickjs_future_worker_pool.c"
     "src/core/esp32_mquickjs_event_queue.c"
     "src/core/esp32_mquickjs_event_queue_drain.c"
+    "src/core/esp32_mquickjs_event_queue_resources.c"
+    "src/core/esp32_mquickjs_fs_atomic_write.c"
     "src/core/esp32_mquickjs_byte_span.c"
     "src/core/esp32_mquickjs_byte_source.c"
+    "src/core/esp32_mquickjs_options.c"
     "src/core/esp32_mquickjs_memory.c"
     "src/core/esp32_mquickjs_memory_dma_accounting.c"
     "src/core/esp32_mquickjs_dma_transfer.c"
@@ -253,6 +260,7 @@ set(ESP32_MQUICKJS_SRCS
     "src/core/esp32_mquickjs_sys.c"
     "src/core/esp32_mquickjs_stream.c"
     "src/core/esp32_mquickjs_request_response.c"
+    "src/modules/fs/esp32_mquickjs_fs_stub.c"
     "src/modules/nvs/esp32_mquickjs_nvs_flash_boot.c"
     "src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
     "src/modules/time/esp32_mquickjs_time.c"
@@ -345,6 +353,7 @@ esp32_mquickjs_append_feature_component(
 
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_LEDC
+    "src/modules/ledc/esp32_mquickjs_ledc_resources.c"
     "src/modules/ledc/esp32_mquickjs_ledc.c"
     PRIV_REQUIRES
         esp_driver_gpio
@@ -354,6 +363,7 @@ esp32_mquickjs_append_feature_component(
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_ADC
     "src/modules/adc/esp32_mquickjs_adc.c"
+    "src/modules/adc/esp32_mquickjs_adc_unit_resources.c"
     PRIV_REQUIRES
         esp_adc
 )
@@ -368,6 +378,7 @@ esp32_mquickjs_append_feature_component(
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_I2C
     "src/modules/i2c/esp32_mquickjs_i2c.c"
+    "src/modules/i2c/esp32_mquickjs_i2c_bus_resources.c"
     PRIV_REQUIRES
         esp_driver_gpio
         esp_driver_i2c
@@ -376,6 +387,7 @@ esp32_mquickjs_append_feature_component(
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_SPI
     "src/modules/spi/esp32_mquickjs_spi.c"
+    "src/modules/spi/esp32_mquickjs_spi_native_resources.c"
     PRIV_REQUIRES
         esp_driver_gpio
         esp_driver_spi
@@ -388,6 +400,7 @@ endif()
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_UART
     "src/modules/uart/esp32_mquickjs_uart.c"
+    "src/modules/uart/esp32_mquickjs_uart_port_resources.c"
     PRIV_REQUIRES
         esp_driver_gpio
         esp_driver_uart
@@ -396,6 +409,8 @@ esp32_mquickjs_append_feature_component(
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_RMT
     "src/modules/rmt/esp32_mquickjs_rmt.c"
+    "src/modules/rmt/esp32_mquickjs_rmt_channel_resources.c"
+    "src/modules/rmt/esp32_mquickjs_rmt_symbol_buffer_resources.c"
     PRIV_REQUIRES
         esp_driver_gpio
         esp_driver_rmt
@@ -404,6 +419,8 @@ esp32_mquickjs_append_feature_component(
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_I2S
     "src/modules/i2s/esp32_mquickjs_i2s.c"
+    "src/modules/i2s/esp32_mquickjs_i2s_channel_resources.c"
+    "src/modules/i2s/esp32_mquickjs_i2s_timer_resources.c"
     PRIV_REQUIRES
         esp_driver_gpio
         esp_driver_i2s
@@ -413,6 +430,7 @@ if(IDF_TARGET STREQUAL "esp32s3")
     esp32_mquickjs_append_feature_component(
         CONFIG_ESP32_MQUICKJS_FEATURE_CAMERA
         "src/modules/camera/esp32_mquickjs_camera.c"
+        "src/modules/camera/esp32_mquickjs_camera_driver_resources.c"
         PRIV_REQUIRES
             espressif__esp32-camera
             esp_driver_gpio
@@ -435,6 +453,8 @@ esp32_mquickjs_append_feature_component(
 
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
+    "src/modules/http/esp32_mquickjs_http_client_resources.c"
+    "src/modules/http/esp32_mquickjs_http_operation_resources.c"
     "src/modules/http/esp32_mquickjs_http.c"
     "src/modules/http/esp32_mquickjs_http_future.c"
     PRIV_REQUIRES
@@ -444,6 +464,7 @@ esp32_mquickjs_append_feature_component(
 
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
+    "src/modules/http/esp32_mquickjs_http_server_resources.c"
     "src/modules/http/esp32_mquickjs_http_server.c"
     PRIV_REQUIRES
         esp_http_server
@@ -454,6 +475,7 @@ esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     "src/modules/wifi/esp32_mquickjs_wifi.c"
     "src/modules/wifi/esp32_mquickjs_wifi_future.c"
+    "src/modules/wifi/esp32_mquickjs_wifi_runtime_resources.c"
     PRIV_REQUIRES
         esp_event
         esp_netif
@@ -470,6 +492,7 @@ esp32_mquickjs_append_feature_component(
 
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_BLE
+    "src/modules/ble/esp32_mquickjs_ble_runtime_resources.c"
     "src/modules/ble/esp32_mquickjs_ble.c"
     PRIV_REQUIRES
         bt
@@ -498,6 +521,7 @@ endif()
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
     "src/core/esp32_mquickjs_line_framer.c"
+    "src/modules/usb_serial/esp32_mquickjs_usb_serial_future_lifecycle.c"
     "src/modules/usb_serial/esp32_mquickjs_usb_serial.c"
     PRIV_REQUIRES
         esp_driver_usb_serial_jtag
@@ -509,6 +533,7 @@ endif()
 
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
+    "src/modules/websocket/esp32_mquickjs_websocket_client_resources.c"
     "src/modules/websocket/esp32_mquickjs_websocket.c"
     PRIV_REQUIRES
         esp_websocket_client

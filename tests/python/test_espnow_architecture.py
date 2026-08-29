@@ -67,6 +67,33 @@ class EspNowArchitectureTests(unittest.TestCase):
         )
         self.assertIn("esp32_mquickjs_wifi_radio_release", source)
 
+    def test_close_retains_storage_until_callbacks_are_quiescent(self):
+        source = (
+            MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
+        ).read_text(encoding="utf-8")
+        begin_start = source.index("static void espnow_begin_close")
+        finish_start = source.index("static bool espnow_finish_close", begin_start)
+        worker_start = source.index("static void espnow_close_worker", begin_start)
+        begin = source[begin_start:finish_start]
+        finish = source[finish_start:worker_start]
+        worker = source[
+            worker_start : source.index(
+                "static bool espnow_schedule_background_close", worker_start
+            )
+        ]
+
+        self.assertIn("esp_now_unregister_recv_cb", begin)
+        self.assertIn("esp_now_unregister_send_cb", begin)
+        self.assertNotIn("espnow_reset_session_storage", begin)
+        self.assertIn("callbacks_active", worker)
+        self.assertIn("espnow_finish_close(session)", worker)
+        self.assertIn("callbacks_active", finish)
+        self.assertIn("espnow_reset_session_storage", finish)
+        self.assertIn("esp32_mquickjs_event_queue_retain", source)
+        self.assertIn("esp32_mquickjs_event_queue_release", finish)
+        self.assertIn("ESPNOW_CLEANUP_PENDING", source)
+        self.assertIn(".on_timeout = espnow_close_on_timeout", source)
+
     def test_session_close_disposes_native_event_queue_without_waiting_for_gc(self):
         source = (
             MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"

@@ -8,6 +8,7 @@ test("espnow/offline", function () {
   var lookup;
   var peerStatus;
   var staleError = "";
+  var originalObjectKeys;
 
   test.equal(espNow.BROADCAST_ADDRESS, "ff:ff:ff:ff:ff:ff",
     "ESP-NOW should expose its normalized broadcast address");
@@ -31,6 +32,22 @@ test("espnow/offline", function () {
   }
   test.ok(invalidOpenError.indexOf("unknown option") >= 0,
     "open should report unknown option names");
+  originalObjectKeys = Object.keys;
+  Object.keys = function () { return []; };
+  try {
+    invalidOpenError = "";
+    invalidOpen = Future.call(espNow.open, espNow, [{ unknown: true }]);
+    try {
+      invalidOpen.wait(100);
+    } catch (intrinsicOpenError) {
+      invalidOpenError = String(intrinsicOpenError && intrinsicOpenError.message
+        ? intrinsicOpenError.message : intrinsicOpenError);
+    }
+    test.ok(invalidOpenError.indexOf("unknown option") >= 0,
+      "ESP-NOW options should ignore mutable Object.keys");
+  } finally {
+    Object.keys = originalObjectKeys;
+  }
 
   session = espNow.open({ receiveCapacity: 2, sendTimeoutMs: 250 });
   try {

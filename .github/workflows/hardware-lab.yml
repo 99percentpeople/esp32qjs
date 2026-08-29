@@ -1,0 +1,45 @@
+name: Hardware lab
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 18 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: esp32qjs-hardware-lab
+  cancel-in-progress: false
+
+jobs:
+  device-regression:
+    name: Device regression
+    runs-on: [self-hosted, esp32qjs-hardware-lab]
+    timeout-minutes: 180
+    environment: hardware-lab
+    steps:
+      - name: Check out recursive repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+      - name: Sync locked tooling environment
+        run: uv sync --locked
+      - name: Run device JavaScript regression suite
+        env:
+          TEST_WIFI_SSID: ${{ secrets.TEST_WIFI_SSID }}
+          TEST_WIFI_PASSWORD: ${{ secrets.TEST_WIFI_PASSWORD }}
+          TEST_HTTP_URL: ${{ vars.TEST_HTTP_URL }}
+        run: >-
+          uv run python scripts/remote.py
+          --build-context "${{ vars.BUILD_CONTEXT }}"
+          --target "${{ vars.TARGET }}"
+          test --scope js --network --loopback --media-hardware --wireless-hardware

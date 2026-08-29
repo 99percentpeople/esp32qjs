@@ -16,7 +16,8 @@ class SysArchitectureTests(unittest.TestCase):
         validator = source[start:end]
 
         self.assertIn('#include "mquickjs_priv.h"', source)
-        self.assertIn("js_object_keys(ctx, NULL, 1, &options)", validator)
+        self.assertIn("esp32_mquickjs_validate_plain_options", validator)
+        self.assertNotIn("JS_GetGlobalObject", validator)
         self.assertNotIn("JS_GetGlobalObject", validator)
         self.assertNotIn('"Object"', validator)
         self.assertNotIn('"keys"', validator)

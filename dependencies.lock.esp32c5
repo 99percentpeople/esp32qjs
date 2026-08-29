@@ -37,6 +37,6 @@ direct_dependencies:
 - espressif/cbor
 - espressif/esp_websocket_client
 - joltwallet/littlefs
-manifest_hash: 59efc918cf66309e8b62c807d29f3e7ce3de81dcc1f735238911e194f90172a3
+manifest_hash: fa76bdaf0211a6b5da2fb6c6665eb2039a366d81f9e607f3a5b8c6e26525f743
 target: esp32c5
 version: 3.0.0

@@ -1,5 +1,7 @@
 #include "esp32_mquickjs_spi.h"
 #include "esp32_mquickjs_memory.h"
+#include "esp32_mquickjs_options.h"
+#include "esp32_mquickjs_spi_native_resources.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_SPI
 
@@ -7,6 +9,7 @@
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_dma_transfer.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_timer_resource.h"
 #include "mquickjs_priv.h"
 
 #include <stdbool.h>
@@ -95,6 +98,7 @@ static uint32_t s_spi_next_generation = 1;
 static bool spi_register_future_drivers(JSContext *ctx,
                                         esp32_mquickjs_runtime_t *runtime);
 static void spi_future_transaction_done(spi_transaction_t *transaction);
+static void spi_future_progress_timer_callback(void *opaque);
 static JSValue spi_throw_operation_error(
     JSContext *ctx,
     const char *code,
@@ -103,6 +107,11 @@ static JSValue spi_throw_operation_error(
     size_t completed_bytes,
     esp32_mquickjs_dma_path_t path,
     const esp32_mquickjs_spi_device_slot_t *device);
+static void spi_future_mark_device_fault(
+    esp32_mquickjs_future_driver_state_t *state,
+    esp32_mquickjs_spi_device_slot_t *device,
+    const char *code,
+    esp_err_t err);
 
 static bool js_value_to_u32(JSContext *ctx, JSValue value, uint32_t *out_value)
 {
@@ -191,59 +200,8 @@ static bool spi_validate_option_keys(JSContext *ctx,
                                      const char *const *known,
                                      size_t known_count)
 {
-    JSGCRef keys_ref;
-    JSGCRef length_ref;
-    JSValue *keys = JS_PushGCRef(ctx, &keys_ref);
-    JSValue *length_value = JS_PushGCRef(ctx, &length_ref);
-    int length = 0;
-    int index;
-    bool valid = false;
-
-    *keys = js_object_keys(ctx, NULL, 1, &options);
-    *length_value = JS_IsException(*keys)
-                        ? JS_EXCEPTION
-                        : JS_GetPropertyStr(ctx, *keys, "length");
-    if (JS_IsException(*length_value) ||
-        JS_ToInt32(ctx, &length, *length_value) != 0 || length < 0) {
-        goto done;
-    }
-    for (index = 0; index < length; ++index) {
-        JSGCRef key_ref;
-        JSValue *key_value = JS_PushGCRef(ctx, &key_ref);
-        JSCStringBuf key_buf;
-        const char *key;
-        size_t known_index;
-        bool matched = false;
-
-        *key_value = JS_GetPropertyUint32(ctx, *keys, (uint32_t)index);
-        key = JS_IsException(*key_value)
-                  ? NULL
-                  : JS_ToCString(ctx, *key_value, &key_buf);
-        if (key != NULL) {
-            for (known_index = 0; known_index < known_count; ++known_index) {
-                if (strcmp(key, known[known_index]) == 0) {
-                    matched = true;
-                    break;
-                }
-            }
-        }
-        if (!matched) {
-            if (key != NULL) {
-                JS_ThrowTypeError(
-                    ctx, "%s options contains unknown key '%s'",
-                    api_name, key);
-            }
-            JS_PopGCRef(ctx, &key_ref);
-            goto done;
-        }
-        JS_PopGCRef(ctx, &key_ref);
-    }
-    valid = true;
-
-done:
-    JS_PopGCRef(ctx, &length_ref);
-    JS_PopGCRef(ctx, &keys_ref);
-    return valid;
+    return esp32_mquickjs_validate_plain_options(
+        ctx, options, api_name, known, known_count);
 }
 
 static spi_host_device_t spi_slot_id_to_host_id(int32_t slot_id)
@@ -373,20 +331,17 @@ static esp32_mquickjs_spi_device_slot_t *spi_get_device_slot(const esp32_mquickj
     return slot;
 }
 
+static void *spi_allocate_dma_buffer(size_t bytes, void *opaque);
+static void spi_release_dma_buffer(void *buffer, void *opaque);
+
 static void spi_free_staging_workspace(esp32_mquickjs_spi_bus_slot_t *slot)
 {
-    uint32_t index;
-
     if (slot == NULL) {
         return;
     }
-    for (index = 0; index < ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT;
-         ++index) {
-        heap_caps_free(slot->staging_tx[index]);
-        heap_caps_free(slot->staging_rx[index]);
-        slot->staging_tx[index] = NULL;
-        slot->staging_rx[index] = NULL;
-    }
+    esp32_mquickjs_dma_workspace_release_buffers(
+        slot->staging_tx, slot->staging_rx,
+        spi_release_dma_buffer, NULL);
     memset(&slot->dma_workspace, 0, sizeof(slot->dma_workspace));
     if (slot->staging_reservation.state !=
         ESP32_MQUICKJS_MEMORY_DMA_IDLE) {
@@ -395,35 +350,86 @@ static void spi_free_staging_workspace(esp32_mquickjs_spi_bus_slot_t *slot)
     }
 }
 
-static void spi_cleanup_device_slot(esp32_mquickjs_spi_device_slot_t *slot)
+static void *spi_allocate_dma_buffer(size_t bytes, void *opaque)
+{
+    (void)opaque;
+    return heap_caps_malloc(
+        bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+}
+
+static void spi_release_dma_buffer(void *buffer, void *opaque)
+{
+    (void)opaque;
+    heap_caps_free(buffer);
+}
+
+static int spi_resource_remove_device(void *device, void *opaque)
+{
+    (void)opaque;
+    return spi_bus_remove_device((spi_device_handle_t)device);
+}
+
+static int spi_resource_free_bus(int host_id, void *opaque)
+{
+    (void)opaque;
+    return spi_bus_free((spi_host_device_t)host_id);
+}
+
+static const esp32_mquickjs_spi_device_resource_ops_t
+    s_spi_device_resource_ops = {
+        .remove = spi_resource_remove_device,
+        .opaque = NULL,
+    };
+
+static const esp32_mquickjs_spi_bus_resource_ops_t s_spi_bus_resource_ops = {
+    .free = spi_resource_free_bus,
+    .opaque = NULL,
+};
+
+static esp_err_t spi_cleanup_device_slot(esp32_mquickjs_spi_device_slot_t *slot)
 {
     esp32_mquickjs_spi_bus_slot_t *parent;
+    esp32_mquickjs_spi_device_resources_t resources;
     int32_t slot_id;
+    esp_err_t err;
 
-    if (slot == NULL || !slot->allocated || slot->busy ||
-        slot->future_reservations > 0) {
-        return;
+    if (slot == NULL || !slot->allocated) {
+        return ESP_OK;
+    }
+    if (slot->busy || slot->future_reservations > 0) {
+        return ESP_ERR_INVALID_STATE;
     }
 
     slot_id = slot->slot_id;
-    if (slot->handle != NULL) {
-        spi_bus_remove_device(slot->handle);
+    resources = (esp32_mquickjs_spi_device_resources_t){
+        .handle = slot->handle,
+    };
+    err = (esp_err_t)esp32_mquickjs_spi_device_resources_deinit(
+        &resources, &s_spi_device_resource_ops);
+    slot->handle = (spi_device_handle_t)resources.handle;
+    if (err != ESP_OK) {
+        return err;
     }
     parent = spi_get_bus_slot_by_ids(slot->parent_bus_slot_id, slot->parent_bus_generation);
     if (parent != NULL && parent->open_devices > 0) {
         parent->open_devices--;
     }
     spi_init_device_slot(slot, slot_id);
+    return ESP_OK;
 }
 
-static void spi_cleanup_bus_slot(esp32_mquickjs_spi_bus_slot_t *slot)
+static esp_err_t spi_cleanup_bus_slot(esp32_mquickjs_spi_bus_slot_t *slot)
 {
+    esp32_mquickjs_spi_bus_resources_t resources;
     int32_t i;
     int32_t slot_id;
+    esp_err_t err;
 
-    if (slot == NULL || !slot->allocated ||
-        slot->future_reservations > 0) {
-        return;
+    if (slot == NULL || !slot->allocated) {
+        return ESP_OK;
+    }
+    if (slot->future_reservations > 0) {
+        return ESP_ERR_INVALID_STATE;
     }
 
     slot_id = slot->slot_id;
@@ -435,7 +441,7 @@ static void spi_cleanup_bus_slot(esp32_mquickjs_spi_bus_slot_t *slot)
             continue;
         }
         if (device_slot->busy || device_slot->future_reservations > 0) {
-            return;
+            return ESP_ERR_INVALID_STATE;
         }
     }
     for (i = 0; i < (int32_t)ESP32_MQUICKJS_SPI_DEVICE_SLOT_COUNT; ++i) {
@@ -445,14 +451,71 @@ static void spi_cleanup_bus_slot(esp32_mquickjs_spi_bus_slot_t *slot)
             device_slot->parent_bus_generation != slot->generation) {
             continue;
         }
-        spi_cleanup_device_slot(device_slot);
+        err = spi_cleanup_device_slot(device_slot);
+        if (err != ESP_OK) {
+            return err;
+        }
     }
 
-    if (slot->initialized) {
-        spi_bus_free(slot->host_id);
+    resources = (esp32_mquickjs_spi_bus_resources_t){
+        .initialized = slot->initialized,
+        .host_id = (int)slot->host_id,
+    };
+    err = (esp_err_t)esp32_mquickjs_spi_bus_resources_deinit(
+        &resources, &s_spi_bus_resource_ops);
+    slot->initialized = resources.initialized;
+    if (err != ESP_OK) {
+        return err;
     }
     spi_free_staging_workspace(slot);
     spi_init_bus_slot(slot, slot_id);
+    return ESP_OK;
+}
+
+static esp_err_t spi_cleanup_all(void)
+{
+    int32_t i;
+    esp_err_t err;
+
+    for (i = 0; i < (int32_t)ESP32_MQUICKJS_SPI_BUS_SLOT_COUNT; ++i) {
+        err = spi_cleanup_bus_slot(&s_spi_bus_slots[i]);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    for (i = 0; i < (int32_t)ESP32_MQUICKJS_SPI_DEVICE_SLOT_COUNT; ++i) {
+        err = spi_cleanup_device_slot(&s_spi_device_slots[i]);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    spi_reset_slots();
+    return ESP_OK;
+}
+
+static esp_err_t spi_cleanup_pending_devices(
+    esp32_mquickjs_spi_bus_slot_t *bus_slot)
+{
+    int32_t i;
+
+    if (bus_slot == NULL || !bus_slot->allocated) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (i = 0; i < (int32_t)ESP32_MQUICKJS_SPI_DEVICE_SLOT_COUNT; ++i) {
+        esp32_mquickjs_spi_device_slot_t *device_slot = &s_spi_device_slots[i];
+        esp_err_t err;
+
+        if (!device_slot->allocated || !device_slot->release_pending ||
+            device_slot->parent_bus_slot_id != bus_slot->slot_id ||
+            device_slot->parent_bus_generation != bus_slot->generation) {
+            continue;
+        }
+        err = spi_cleanup_device_slot(device_slot);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    return ESP_OK;
 }
 
 static esp32_mquickjs_spi_bus_slot_t *spi_alloc_bus_slot(int32_t host_number)
@@ -561,6 +624,12 @@ static int spi_get_this_bus_slot(JSContext *ctx,
         JS_ThrowReferenceError(ctx, "%s failed because the SPI bus is closed", api_name);
         return -1;
     }
+    if (slot->release_pending) {
+        JS_ThrowReferenceError(ctx,
+                               "%s failed because the SPI bus is closing",
+                               api_name);
+        return -1;
+    }
     if (out_slot != NULL) {
         *out_slot = slot;
     }
@@ -585,9 +654,20 @@ static int spi_get_this_device_slots(JSContext *ctx,
         JS_ThrowReferenceError(ctx, "%s failed because the SPI device is closed", api_name);
         return -1;
     }
+    if (device_slot->release_pending) {
+        JS_ThrowReferenceError(ctx,
+                               "%s failed because the SPI device is closing",
+                               api_name);
+        return -1;
+    }
     bus_slot = spi_get_bus_slot_by_ids(device_slot->parent_bus_slot_id, device_slot->parent_bus_generation);
     if (bus_slot == NULL) {
         JS_ThrowReferenceError(ctx, "%s failed because the parent SPI bus is closed", api_name);
+        return -1;
+    }
+    if (bus_slot->release_pending) {
+        JS_ThrowReferenceError(
+            ctx, "%s failed because the parent SPI bus is closing", api_name);
         return -1;
     }
     if (out_device_slot != NULL) {
@@ -797,9 +877,9 @@ static bool spi_parse_write_chunks_options(JSContext *ctx,
             return false;
         }
         if (!JS_IsUndefined(*property) && !JS_IsNull(*property) &&
-            (!js_value_to_u32(ctx, *property, &out_options->timeout_ms) ||
-             out_options->timeout_ms < 1U ||
-             out_options->timeout_ms > ESP32_MQUICKJS_SPI_MAX_TIMEOUT_MS)) {
+            !esp32_mquickjs_value_to_bounded_u32(
+                ctx, *property, 1U, ESP32_MQUICKJS_SPI_MAX_TIMEOUT_MS,
+                &out_options->timeout_ms)) {
             JS_PopGCRef(ctx, &property_ref);
             JS_ThrowRangeError(
                 ctx, "%s option 'timeoutMs' expects an integer in 1..60000",
@@ -844,9 +924,9 @@ static bool spi_parse_timeout_options(JSContext *ctx,
         return false;
     }
     if (!JS_IsUndefined(*property) && !JS_IsNull(*property) &&
-        (!js_value_to_u32(ctx, *property, out_timeout_ms) ||
-         *out_timeout_ms < 1U ||
-         *out_timeout_ms > ESP32_MQUICKJS_SPI_MAX_TIMEOUT_MS)) {
+        !esp32_mquickjs_value_to_bounded_u32(
+            ctx, *property, 1U, ESP32_MQUICKJS_SPI_MAX_TIMEOUT_MS,
+            out_timeout_ms)) {
         JS_PopGCRef(ctx, &property_ref);
         JS_ThrowRangeError(
             ctx, "%s option 'timeoutMs' expects an integer in 1..60000",
@@ -955,8 +1035,6 @@ static bool spi_allocate_staging_workspace(
     uint32_t staging_bytes)
 {
     size_t total_bytes;
-    uint32_t index;
-
     if (slot == NULL || staging_bytes == 0 ||
         staging_bytes > SIZE_MAX / ESP32_MQUICKJS_SPI_STAGING_BUFFER_COUNT) {
         return false;
@@ -967,19 +1045,11 @@ static bool spi_allocate_staging_workspace(
             &slot->staging_reservation, total_bytes, staging_bytes)) {
         return false;
     }
-    for (index = 0; index < ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT;
-         ++index) {
-        slot->staging_tx[index] = heap_caps_malloc(
-            staging_bytes,
-            MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
-        slot->staging_rx[index] = heap_caps_malloc(
-            staging_bytes,
-            MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
-        if (slot->staging_tx[index] == NULL ||
-            slot->staging_rx[index] == NULL) {
-            spi_free_staging_workspace(slot);
-            return false;
-        }
+    if (!esp32_mquickjs_dma_workspace_allocate_buffers(
+            slot->staging_tx, slot->staging_rx, staging_bytes,
+            spi_allocate_dma_buffer, spi_release_dma_buffer, NULL)) {
+        spi_free_staging_workspace(slot);
+        return false;
     }
     if (!esp32_mquickjs_memory_commit_staging_pinned(
             &slot->staging_reservation, total_bytes, 1)) {
@@ -997,6 +1067,7 @@ static bool spi_allocate_staging_workspace(
 static JSValue spi_open_bus(JSContext *ctx, int argc, JSValue *argv)
 {
     int32_t host_number = ESP32_MQUICKJS_SPI_DEFAULT_HOST_NUMBER;
+    int32_t slot_id = -1;
     int32_t sclk_pin = ESP32_MQUICKJS_SPI_DEFAULT_SCLK_PIN;
     int32_t mosi_pin = ESP32_MQUICKJS_SPI_DEFAULT_MOSI_PIN;
     int32_t miso_pin = ESP32_MQUICKJS_SPI_DEFAULT_MISO_PIN;
@@ -1114,12 +1185,20 @@ static JSValue spi_open_bus(JSContext *ctx, int argc, JSValue *argv)
         return JS_ThrowTypeError(ctx, "spi.openBus() requires a valid default SCLK GPIO or an explicit { sclk } override");
     }
 
+    if (spi_host_number_to_ids(host_number, &slot_id, NULL) &&
+        s_spi_bus_slots[slot_id].allocated &&
+        s_spi_bus_slots[slot_id].release_pending) {
+        err = spi_cleanup_bus_slot(&s_spi_bus_slots[slot_id]);
+        if (err != ESP_OK) {
+            return spi_throw_error(ctx, err, "spi.openBus() cleanup failed");
+        }
+    }
     slot = spi_alloc_bus_slot(host_number);
     if (slot == NULL) {
         return JS_ThrowInternalError(ctx, "spi.openBus() failed: selected SPI host is unavailable or already in use");
     }
     if (!spi_allocate_staging_workspace(slot, dma_staging_bytes)) {
-        spi_cleanup_bus_slot(slot);
+        (void)spi_cleanup_bus_slot(slot);
         return spi_throw_operation_error(
             ctx, "DMA_STAGING_NO_MEMORY", "openBus", ESP_ERR_NO_MEM, 0,
             ESP32_MQUICKJS_DMA_PATH_STAGED_INTERNAL, NULL);
@@ -1145,7 +1224,7 @@ static JSValue spi_open_bus(JSContext *ctx, int argc, JSValue *argv)
 
     err = spi_bus_initialize(slot->host_id, &bus_config, SPI_DMA_CH_AUTO);
     if (err != ESP_OK) {
-        spi_cleanup_bus_slot(slot);
+        (void)spi_cleanup_bus_slot(slot);
         return spi_throw_error(ctx, err, "spi.openBus() failed");
     }
 
@@ -1158,32 +1237,30 @@ static JSValue spi_open_bus(JSContext *ctx, int argc, JSValue *argv)
 
     result = spi_make_bus_object(ctx, slot);
     if (JS_IsException(result)) {
-        spi_cleanup_bus_slot(slot);
+        slot->release_pending = true;
+        (void)spi_cleanup_bus_slot(slot);
     }
     return result;
 }
 
-void esp32_mquickjs_deinit_spi_runtime(void)
+bool esp32_mquickjs_deinit_spi_runtime(void)
 {
-    int32_t i;
+    esp_err_t err = spi_cleanup_all();
 
-    for (i = 0; i < (int32_t)ESP32_MQUICKJS_SPI_BUS_SLOT_COUNT; ++i) {
-        if (s_spi_bus_slots[i].allocated) {
-            spi_cleanup_bus_slot(&s_spi_bus_slots[i]);
-        }
-    }
-    for (i = 0; i < (int32_t)ESP32_MQUICKJS_SPI_DEVICE_SLOT_COUNT; ++i) {
-        if (s_spi_device_slots[i].allocated) {
-            spi_cleanup_device_slot(&s_spi_device_slots[i]);
-        }
-    }
-    spi_reset_slots();
+    return err == ESP_OK;
 }
 
 bool esp32_mquickjs_init_spi_runtime(JSContext *ctx,
                                      esp32_mquickjs_runtime_t *runtime)
 {
-    esp32_mquickjs_deinit_spi_runtime();
+    esp_err_t err = spi_cleanup_all();
+
+    if (err != ESP_OK) {
+        JS_ThrowInternalError(ctx,
+                              "SPI runtime cleanup failed: %s",
+                              esp_err_to_name(err));
+        return false;
+    }
     return spi_register_future_drivers(ctx, runtime);
 }
 
@@ -1209,7 +1286,7 @@ void js_spi_bus_finalizer(JSContext *ctx, void *opaque)
     slot = spi_get_bus_slot(bus_ref);
     if (slot != NULL) {
         slot->release_pending = true;
-        spi_cleanup_bus_slot(slot);
+        (void)spi_cleanup_bus_slot(slot);
     }
     heap_caps_free(bus_ref);
 }
@@ -1219,6 +1296,8 @@ JSValue js_spi_bus_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
     esp32_mquickjs_spi_bus_ref_t bus_ref;
     esp32_mquickjs_spi_bus_ref_t *bus_ref_ptr;
     esp32_mquickjs_spi_bus_slot_t *slot;
+    int32_t i;
+    esp_err_t err;
 
     (void)argc;
     (void)argv;
@@ -1232,10 +1311,24 @@ JSValue js_spi_bus_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
             return JS_ThrowInternalError(
                 ctx, "SPIBus.close() refused while an operation is pending");
         }
-        spi_cleanup_bus_slot(slot);
-        if (slot->allocated) {
-            return JS_ThrowInternalError(
-                ctx, "SPIBus.close() refused while an operation is pending");
+        for (i = 0; i < (int32_t)ESP32_MQUICKJS_SPI_DEVICE_SLOT_COUNT; ++i) {
+            esp32_mquickjs_spi_device_slot_t *device_slot =
+                &s_spi_device_slots[i];
+
+            if (device_slot->allocated &&
+                device_slot->parent_bus_slot_id == slot->slot_id &&
+                device_slot->parent_bus_generation == slot->generation &&
+                (device_slot->busy ||
+                 device_slot->future_reservations > 0)) {
+                return JS_ThrowInternalError(
+                    ctx,
+                    "SPIBus.close() refused while an operation is pending");
+            }
+        }
+        slot->release_pending = true;
+        err = spi_cleanup_bus_slot(slot);
+        if (err != ESP_OK) {
+            return spi_throw_error(ctx, err, "SPIBus.close() failed");
         }
     }
     bus_ref_ptr = JS_GetOpaque(ctx, *this_val);
@@ -1396,6 +1489,11 @@ JSValue js_spi_bus_open_device(JSContext *ctx, JSValue *this_val, int argc, JSVa
         JS_PopGCRef(ctx, &property_ref);
     }
 
+    err = spi_cleanup_pending_devices(bus_slot);
+    if (err != ESP_OK) {
+        return spi_throw_error(
+            ctx, err, "SPIBus.openDevice() cleanup failed");
+    }
     device_slot = spi_alloc_device_slot(bus_slot);
     if (device_slot == NULL) {
         return JS_ThrowInternalError(ctx, "SPIBus.openDevice() failed: no available SPIDevice slots");
@@ -1417,12 +1515,14 @@ JSValue js_spi_bus_open_device(JSContext *ctx, JSValue *this_val, int argc, JSVa
 
     err = spi_bus_add_device(bus_slot->host_id, &device_config, &device_slot->handle);
     if (err != ESP_OK) {
-        spi_cleanup_device_slot(device_slot);
+        device_slot->release_pending = true;
+        (void)spi_cleanup_device_slot(device_slot);
         return spi_throw_error(ctx, err, "SPIBus.openDevice() failed");
     }
     err = spi_device_get_actual_freq(device_slot->handle, &actual_freq_khz);
     if (err != ESP_OK || actual_freq_khz <= 0) {
-        spi_cleanup_device_slot(device_slot);
+        device_slot->release_pending = true;
+        (void)spi_cleanup_device_slot(device_slot);
         return spi_throw_error(
             ctx, err != ESP_OK ? err : ESP_ERR_INVALID_STATE,
             "SPIBus.openDevice() failed to resolve actual frequency");
@@ -1440,7 +1540,8 @@ JSValue js_spi_bus_open_device(JSContext *ctx, JSValue *this_val, int argc, JSVa
 
     result = spi_make_device_object(ctx, device_slot);
     if (JS_IsException(result)) {
-        spi_cleanup_device_slot(device_slot);
+        device_slot->release_pending = true;
+        (void)spi_cleanup_device_slot(device_slot);
     }
     return result;
 }
@@ -1467,7 +1568,7 @@ void js_spi_device_finalizer(JSContext *ctx, void *opaque)
     slot = spi_get_device_slot(device_ref);
     if (slot != NULL) {
         slot->release_pending = true;
-        spi_cleanup_device_slot(slot);
+        (void)spi_cleanup_device_slot(slot);
     }
     heap_caps_free(device_ref);
 }
@@ -1477,6 +1578,7 @@ JSValue js_spi_device_close(JSContext *ctx, JSValue *this_val, int argc, JSValue
     esp32_mquickjs_spi_device_ref_t device_ref;
     esp32_mquickjs_spi_device_ref_t *device_ref_ptr;
     esp32_mquickjs_spi_device_slot_t *slot;
+    esp_err_t err;
 
     (void)argc;
     (void)argv;
@@ -1490,7 +1592,11 @@ JSValue js_spi_device_close(JSContext *ctx, JSValue *this_val, int argc, JSValue
             return JS_ThrowInternalError(ctx,
                                          "SPIDevice.close() refused while a transaction is pending");
         }
-        spi_cleanup_device_slot(slot);
+        slot->release_pending = true;
+        err = spi_cleanup_device_slot(slot);
+        if (err != ESP_OK) {
+            return spi_throw_error(ctx, err, "SPIDevice.close() failed");
+        }
     }
     device_ref_ptr = JS_GetOpaque(ctx, *this_val);
     if (device_ref_ptr != NULL) {
@@ -1559,7 +1665,8 @@ struct esp32_mquickjs_future_driver_state {
     esp32_mquickjs_spi_device_ref_t device_ref;
     esp32_mquickjs_runtime_t *runtime;
     esp32_mquickjs_future_token_t token;
-    esp_timer_handle_t progress_timer;
+    esp32_mquickjs_timer_resource_t progress_timer;
+    uint64_t progress_timer_delay_us;
     spi_transaction_t transactions[ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT];
     spi_transaction_meta_t transaction_meta[ESP32_MQUICKJS_DMA_STAGING_SLOT_COUNT];
     esp32_mquickjs_byte_span_source_t span_source;
@@ -1579,9 +1686,7 @@ struct esp32_mquickjs_future_driver_state {
     uint32_t chunk_count;
     uint32_t next_chunk;
     uint32_t queue_depth;
-    uint32_t queue_head;
-    uint32_t queue_tail;
-    uint32_t in_flight;
+    esp32_mquickjs_dma_completion_queue_t completion_queue;
     uint32_t timeout_ms;
     uint8_t fill_byte;
     uint64_t copy_us;
@@ -1640,65 +1745,111 @@ static JSValue spi_throw_operation_error(
     esp32_mquickjs_dma_path_t path,
     const esp32_mquickjs_spi_device_slot_t *device)
 {
-    JSGCRef error_ref;
-    JSValue *error;
+    JSGCRef details_ref;
+    JSValue *details = JS_PushGCRef(ctx, &details_ref);
+    JSValue result;
 
-    (void)JS_ThrowInternalError(
-        ctx, "%s: SPI %s failed after %u completed bytes",
-        code, operation != NULL ? operation : "operation",
-        (unsigned)completed_bytes);
-    if (!JS_HasException(ctx)) {
+    *details = JS_NewObject(ctx);
+    if (JS_IsException(*details) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "espCode", JS_NewInt32(ctx, esp_code)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "espName",
+            JS_NewString(ctx, esp_err_to_name(esp_code))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "completedBytes",
+            JS_NewInt64(ctx, (int64_t)completed_bytes)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "path",
+            JS_NewString(ctx, esp32_mquickjs_dma_path_name(path))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "requestedFreqHz",
+            JS_NewUint32(ctx, device != NULL
+                                  ? device->requested_freq_hz
+                                  : ESP32_MQUICKJS_SPI_DEFAULT_FREQ_HZ)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, details, "actualFreqHz",
+            JS_NewUint32(ctx, device != NULL
+                                  ? device->actual_freq_hz
+                                  : ESP32_MQUICKJS_SPI_DEFAULT_FREQ_HZ))) {
+        JS_PopGCRef(ctx, &details_ref);
         return JS_EXCEPTION;
     }
-    error = JS_PushGCRef(ctx, &error_ref);
-    *error = JS_GetException(ctx);
-    if (JS_GetClassID(ctx, *error) >= 0 &&
-        (JS_IsException(JS_SetPropertyStr(
-             ctx, *error, "code", JS_NewString(ctx, code))) ||
-         JS_IsException(JS_SetPropertyStr(
-             ctx, *error, "operation",
-             JS_NewString(ctx, operation != NULL ? operation : "unknown"))) ||
-         JS_IsException(JS_SetPropertyStr(
-             ctx, *error, "espCode", JS_NewInt32(ctx, esp_code))) ||
-         JS_IsException(JS_SetPropertyStr(
-             ctx, *error, "espName",
-             JS_NewString(ctx, esp_err_to_name(esp_code)))) ||
-         JS_IsException(JS_SetPropertyStr(
-             ctx, *error, "completedBytes",
-             JS_NewInt64(ctx, (int64_t)completed_bytes))) ||
-         JS_IsException(JS_SetPropertyStr(
-             ctx, *error, "path",
-             JS_NewString(ctx, esp32_mquickjs_dma_path_name(path)))) ||
-         JS_IsException(JS_SetPropertyStr(
-             ctx, *error, "requestedFreqHz",
-             JS_NewUint32(ctx, device != NULL
-                                   ? device->requested_freq_hz
-                                   : ESP32_MQUICKJS_SPI_DEFAULT_FREQ_HZ))) ||
-         JS_IsException(JS_SetPropertyStr(
-             ctx, *error, "actualFreqHz",
-             JS_NewUint32(ctx, device != NULL
-                                   ? device->actual_freq_hz
-                                   : ESP32_MQUICKJS_SPI_DEFAULT_FREQ_HZ))))) {
-        JS_PopGCRef(ctx, &error_ref);
-        return JS_EXCEPTION;
+    result = esp32_mquickjs_throw_native_error(
+        ctx, code, operation, "SPI operation failed", *details);
+    JS_PopGCRef(ctx, &details_ref);
+    return result;
+}
+
+static int spi_future_progress_timer_create(void *opaque, void **out_timer)
+{
+    esp32_mquickjs_future_driver_state_t *state = opaque;
+    esp_timer_create_args_t timer_args = {
+        .callback = spi_future_progress_timer_callback,
+        .arg = state,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "spi_progress",
+        .skip_unhandled_events = true,
+    };
+    esp_timer_handle_t timer = NULL;
+    esp_err_t err;
+
+    if (state == NULL || out_timer == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
-    return JS_Throw(ctx, JS_PopGCRef(ctx, &error_ref));
+    err = esp_timer_create(&timer_args, &timer);
+    *out_timer = timer;
+    return err;
+}
+
+static int spi_future_progress_timer_start(void *timer, void *opaque)
+{
+    esp32_mquickjs_future_driver_state_t *state = opaque;
+
+    if (state == NULL || state->progress_timer_delay_us == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return esp_timer_start_once((esp_timer_handle_t)timer,
+                                state->progress_timer_delay_us);
+}
+
+static void spi_future_progress_timer_stop(void *timer, void *opaque)
+{
+    (void)opaque;
+    (void)esp_timer_stop((esp_timer_handle_t)timer);
+}
+
+static void spi_future_progress_timer_delete(void *timer, void *opaque)
+{
+    (void)opaque;
+    (void)esp_timer_delete((esp_timer_handle_t)timer);
+}
+
+static esp32_mquickjs_timer_resource_ops_t spi_future_progress_timer_ops(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    return (esp32_mquickjs_timer_resource_ops_t){
+        .create = spi_future_progress_timer_create,
+        .start = spi_future_progress_timer_start,
+        .stop = spi_future_progress_timer_stop,
+        .delete_timer = spi_future_progress_timer_delete,
+        .opaque = state,
+    };
 }
 
 static void spi_future_release(esp32_mquickjs_future_driver_state_t *state)
 {
     esp32_mquickjs_spi_device_slot_t *device;
     esp32_mquickjs_spi_bus_slot_t *bus;
+    esp32_mquickjs_timer_resource_ops_t timer_ops;
     int32_t index;
 
     if (state == NULL) {
         return;
     }
-    if (state->progress_timer != NULL) {
-        (void)esp_timer_stop(state->progress_timer);
-        (void)esp_timer_delete(state->progress_timer);
-        state->progress_timer = NULL;
-    }
+    timer_ops = spi_future_progress_timer_ops(state);
+    esp32_mquickjs_timer_resource_deinit(&state->progress_timer,
+                                         &timer_ops);
     device = spi_get_device_slot(&state->device_ref);
     if (state->bus_acquired && device != NULL) {
         spi_device_release_bus(device->handle);
@@ -1760,11 +1911,11 @@ static void spi_future_release(esp32_mquickjs_future_driver_state_t *state)
                 !candidate->busy && candidate->future_reservations == 0 &&
                 candidate->parent_bus_slot_id == bus->slot_id &&
                 candidate->parent_bus_generation == bus->generation) {
-                spi_cleanup_device_slot(candidate);
+                (void)spi_cleanup_device_slot(candidate);
             }
         }
         if (bus->release_pending && bus->future_reservations == 0) {
-            spi_cleanup_bus_slot(bus);
+            (void)spi_cleanup_bus_slot(bus);
         }
     }
     heap_caps_free(state);
@@ -1913,6 +2064,8 @@ static bool spi_source_future_prepare(
     state->source_length_known = true;
     state->timeout_ms = timeout_ms;
     state->queue_depth = spi_clamp_queue_depth(device, 2);
+    (void)esp32_mquickjs_dma_completion_queue_init(
+        &state->completion_queue, state->queue_depth);
     if (kind == SPI_FUTURE_TRANSFER &&
         !spi_future_allocate_rx_buffer(ctx, state, source.length)) {
         spi_future_release(state);
@@ -2013,6 +2166,8 @@ static bool spi_read_future_prepare(
     state->source_length_known = true;
     state->timeout_ms = timeout_ms;
     state->queue_depth = spi_clamp_queue_depth(device, 2);
+    (void)esp32_mquickjs_dma_completion_queue_init(
+        &state->completion_queue, state->queue_depth);
     state->operation = "read";
     if (!spi_future_allocate_rx_buffer(ctx, state, length)) {
         spi_future_release(state);
@@ -2067,6 +2222,8 @@ static bool spi_write_chunks_future_prepare(
         return false;
     }
     state->queue_depth = spi_clamp_queue_depth(device, options.queue_depth);
+    (void)esp32_mquickjs_dma_completion_queue_init(
+        &state->completion_queue, state->queue_depth);
     state->timeout_ms = options.timeout_ms;
     state->operation = "writeChunks";
     if (state->chunk_count > 0) {
@@ -2156,6 +2313,8 @@ static bool spi_write_source_future_prepare(
     }
     state->span_source_opened = true;
     state->queue_depth = spi_clamp_queue_depth(device, options.queue_depth);
+    (void)esp32_mquickjs_dma_completion_queue_init(
+        &state->completion_queue, state->queue_depth);
     state->timeout_ms = options.timeout_ms;
     state->operation = "writeSource";
     state->source_length_known = length_known;
@@ -2311,7 +2470,10 @@ static bool spi_future_prepare_next_span(
         state->pending_span_ready = true;
     }
     if (state->source_done && state->source_length_known &&
-        state->produced_source_bytes != state->expected_source_bytes &&
+        esp32_mquickjs_dma_validate_tx_progress(
+            state->produced_source_bytes,
+            state->expected_source_bytes) !=
+            ESP32_MQUICKJS_DMA_PROGRESS_OK &&
         state->error_code == NULL && !state->source_error_retained) {
         state->err = ESP_ERR_INVALID_SIZE;
         state->error_code = "DMA_TX_UNDERFLOW";
@@ -2335,22 +2497,29 @@ static void spi_future_progress_timer_callback(void *opaque)
 static void spi_future_stop_progress_timer(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state != NULL && state->progress_timer != NULL) {
-        (void)esp_timer_stop(state->progress_timer);
+    if (state != NULL) {
+        esp32_mquickjs_timer_resource_ops_t timer_ops =
+            spi_future_progress_timer_ops(state);
+
+        esp32_mquickjs_timer_resource_stop(&state->progress_timer,
+                                           &timer_ops);
     }
 }
 
-static void spi_future_arm_progress_timer(
+static bool spi_future_arm_progress_timer(
     esp32_mquickjs_future_driver_state_t *state,
-    const esp32_mquickjs_spi_device_slot_t *device,
+    esp32_mquickjs_spi_device_slot_t *device,
     size_t bytes,
     uint64_t now_us)
 {
+    esp32_mquickjs_timer_resource_ops_t timer_ops;
     uint64_t interval_us;
     uint64_t deadline_us;
+    esp_err_t err;
 
-    if (state == NULL || device == NULL || state->progress_timer == NULL) {
-        return;
+    if (state == NULL || device == NULL ||
+        state->progress_timer.timer == NULL) {
+        return false;
     }
     interval_us = esp32_mquickjs_dma_progress_timeout_us(
         bytes, device->actual_freq_hz);
@@ -2362,11 +2531,19 @@ static void spi_future_arm_progress_timer(
         deadline_us = state->operation_deadline_us;
     }
     state->progress_deadline_us = deadline_us;
-    (void)esp_timer_stop(state->progress_timer);
-    if (deadline_us > now_us) {
-        (void)esp_timer_start_once(state->progress_timer,
-                                   deadline_us - now_us);
+    timer_ops = spi_future_progress_timer_ops(state);
+    esp32_mquickjs_timer_resource_stop(&state->progress_timer, &timer_ops);
+    if (deadline_us <= now_us) {
+        return true;
     }
+    state->progress_timer_delay_us = deadline_us - now_us;
+    err = esp32_mquickjs_timer_resource_start(&state->progress_timer,
+                                              &timer_ops);
+    if (err != ESP_OK) {
+        spi_future_mark_device_fault(state, device, "DMA_DEVICE_FAULTED", err);
+        return false;
+    }
+    return true;
 }
 
 static void spi_future_mark_device_fault(
@@ -2383,6 +2560,25 @@ static void spi_future_mark_device_fault(
         device->faulted = true;
         device->last_error_code = code;
     }
+}
+
+static bool spi_future_transaction_index(
+    const esp32_mquickjs_future_driver_state_t *state,
+    const spi_transaction_t *transaction,
+    uint32_t *out_index)
+{
+    uint32_t index;
+
+    if (state == NULL || transaction == NULL || out_index == NULL) {
+        return false;
+    }
+    for (index = 0; index < state->queue_depth; ++index) {
+        if (transaction == &state->transactions[index]) {
+            *out_index = index;
+            return true;
+        }
+    }
+    return false;
 }
 
 static void spi_future_step(esp32_mquickjs_future_driver_state_t *state)
@@ -2403,7 +2599,8 @@ static void spi_future_step(esp32_mquickjs_future_driver_state_t *state)
                                   device->parent_bus_generation)
         : NULL;
     if (device == NULL || bus == NULL) {
-        if (state->in_flight == 0) {
+        if (esp32_mquickjs_dma_completion_queue_releasable(
+                &state->completion_queue)) {
             state->error_code = "DMA_DEVICE_FAULTED";
             state->err = ESP_ERR_INVALID_STATE;
             atomic_store_explicit(&state->completed, true,
@@ -2419,20 +2616,48 @@ static void spi_future_step(esp32_mquickjs_future_driver_state_t *state)
      * deadline measures DMA progress, not how promptly the runtime task was
      * scheduled to observe that progress.
      */
-    while (state->in_flight > 0) {
-        uint32_t transaction_index = state->queue_head;
-        spi_transaction_meta_t *meta =
-            &state->transaction_meta[transaction_index];
+    while (state->completion_queue.in_flight > 0) {
+        esp32_mquickjs_dma_completion_t completion_order;
+        uint32_t expected_index;
+        uint32_t transaction_index;
+        spi_transaction_meta_t *meta;
         esp_err_t err = spi_device_get_trans_result(
             device->handle, &completed, 0);
 
         if (err == ESP_ERR_TIMEOUT) {
             break;
         }
+        if (!esp32_mquickjs_dma_completion_queue_peek_in_flight(
+                &state->completion_queue, &expected_index)) {
+            spi_future_mark_device_fault(
+                state, device, "DMA_DEVICE_FAULTED",
+                ESP_ERR_INVALID_STATE);
+            break;
+        }
+        transaction_index = expected_index;
+        if (completed != NULL &&
+            !spi_future_transaction_index(
+                state, completed, &transaction_index)) {
+            spi_future_mark_device_fault(
+                state, device, "DMA_DEVICE_FAULTED",
+                ESP_ERR_INVALID_STATE);
+            break;
+        }
+        completion_order =
+            esp32_mquickjs_dma_completion_queue_note_returned(
+                &state->completion_queue, transaction_index);
+        if (completion_order == ESP32_MQUICKJS_DMA_COMPLETION_INVALID) {
+            spi_future_mark_device_fault(
+                state, device, "DMA_DEVICE_FAULTED",
+                ESP_ERR_INVALID_STATE);
+            break;
+        }
+        meta = &state->transaction_meta[transaction_index];
         now_us = (uint64_t)esp_timer_get_time();
         if (meta->chunk.rx_data != NULL && err == ESP_OK) {
-            if (meta->output_offset > state->length ||
-                meta->chunk.length > state->length - meta->output_offset) {
+            if (!esp32_mquickjs_dma_rx_window_fits(
+                    meta->output_offset, meta->chunk.length,
+                    state->length)) {
                 spi_future_mark_device_fault(
                     state, device, "DMA_RX_OVERFLOW", ESP_ERR_INVALID_SIZE);
             } else {
@@ -2457,15 +2682,19 @@ static void spi_future_step(esp32_mquickjs_future_driver_state_t *state)
             spi_future_mark_device_fault(
                 state, device, "DMA_DEVICE_FAULTED", err);
         }
+        if (completion_order ==
+            ESP32_MQUICKJS_DMA_COMPLETION_OUT_OF_ORDER) {
+            spi_future_mark_device_fault(
+                state, device, "DMA_DEVICE_FAULTED",
+                ESP_ERR_INVALID_STATE);
+        }
         memset(meta, 0, sizeof(*meta));
-        state->queue_head =
-            (state->queue_head + 1U) % state->queue_depth;
-        state->in_flight--;
+        completed = NULL;
     }
 
     now_us = (uint64_t)esp_timer_get_time();
     if (!state->timeout_triggered && !state->cancelled &&
-        state->err == ESP_OK && state->in_flight > 0 &&
+        state->err == ESP_OK && state->completion_queue.in_flight > 0 &&
         esp32_mquickjs_dma_progress_timed_out(
             now_us, state->progress_deadline_us, made_progress)) {
         state->timeout_triggered = true;
@@ -2476,24 +2705,30 @@ static void spi_future_step(esp32_mquickjs_future_driver_state_t *state)
         device->faulted = true;
     }
 
-    if (state->in_flight == 0) {
+    if (state->completion_queue.in_flight == 0) {
         spi_future_stop_progress_timer(state);
         state->progress_deadline_us = 0;
     } else if (!state->timeout_triggered && made_progress) {
-        spi_transaction_meta_t *head =
-            &state->transaction_meta[state->queue_head];
-        spi_future_arm_progress_timer(
-            state, device, head->chunk.length,
-            (uint64_t)esp_timer_get_time());
+        uint32_t head_index;
+
+        if (esp32_mquickjs_dma_completion_queue_peek_in_flight(
+                &state->completion_queue, &head_index)) {
+            spi_transaction_meta_t *head =
+                &state->transaction_meta[head_index];
+
+            spi_future_arm_progress_timer(
+                state, device, head->chunk.length,
+                (uint64_t)esp_timer_get_time());
+        }
     }
 
     while (state->err == ESP_OK && !state->cancelled &&
-           state->in_flight < state->queue_depth) {
-        uint32_t transaction_index = state->queue_tail;
+           esp32_mquickjs_dma_completion_queue_can_submit(
+               &state->completion_queue)) {
+        uint32_t transaction_index;
         spi_transaction_t *transaction =
-            &state->transactions[transaction_index];
-        spi_transaction_meta_t *meta =
-            &state->transaction_meta[transaction_index];
+            NULL;
+        spi_transaction_meta_t *meta = NULL;
         esp32_mquickjs_dma_chunk_t chunk;
         bool transmit = state->kind != SPI_FUTURE_READ;
         bool receive = state->kind == SPI_FUTURE_READ ||
@@ -2501,6 +2736,13 @@ static void spi_future_step(esp32_mquickjs_future_driver_state_t *state)
         int64_t copy_started_us;
         int64_t queue_started_us;
         esp_err_t err;
+
+        if (!esp32_mquickjs_dma_completion_queue_next_submit(
+                &state->completion_queue, &transaction_index)) {
+            break;
+        }
+        transaction = &state->transactions[transaction_index];
+        meta = &state->transaction_meta[transaction_index];
 
         if (!spi_future_prepare_next_span(state)) {
             break;
@@ -2567,20 +2809,26 @@ static void spi_future_step(esp32_mquickjs_future_driver_state_t *state)
         if (state->first_queue_us == 0) {
             state->first_queue_us = queue_started_us;
         }
-        state->queue_tail =
-            (state->queue_tail + 1U) % state->queue_depth;
-        state->in_flight++;
+        if (!esp32_mquickjs_dma_completion_queue_note_submitted(
+                &state->completion_queue, transaction_index)) {
+            spi_future_mark_device_fault(
+                state, device, "DMA_DEVICE_FAULTED",
+                ESP_ERR_INVALID_STATE);
+            break;
+        }
         spi_future_arm_progress_timer(
             state, device, chunk.length,
             (uint64_t)esp_timer_get_time());
     }
 
     if (!state->cancelled && state->err == ESP_OK &&
-        state->in_flight == 0 && !state->source_done) {
+        state->completion_queue.in_flight == 0 && !state->source_done) {
         (void)spi_future_prepare_next_span(state);
     }
     if ((state->source_done || state->cancelled || state->err != ESP_OK ||
-         state->source_error_retained) && state->in_flight == 0) {
+         state->source_error_retained) &&
+        esp32_mquickjs_dma_completion_queue_releasable(
+            &state->completion_queue)) {
         if (state->bus_acquired) {
             spi_device_release_bus(device->handle);
             state->bus_acquired = false;
@@ -2605,6 +2853,8 @@ static bool spi_future_start(JSContext *ctx,
 {
     esp32_mquickjs_spi_device_slot_t *device = state != NULL
         ? spi_get_device_slot(&state->device_ref) : NULL;
+    esp32_mquickjs_timer_resource_ops_t timer_ops;
+    esp_err_t timer_err;
 
     if (state == NULL || device == NULL) {
         JS_ThrowReferenceError(ctx, "SPI device closed before transaction start");
@@ -2629,26 +2879,17 @@ static bool spi_future_start(JSContext *ctx,
     state->operation_deadline_us =
         (uint64_t)state->total_start_us +
         ((uint64_t)state->timeout_ms * 1000ULL);
-    {
-        esp_timer_create_args_t timer_args = {
-            .callback = spi_future_progress_timer_callback,
-            .arg = state,
-            .dispatch_method = ESP_TIMER_TASK,
-            .name = "spi_progress",
-            .skip_unhandled_events = true,
-        };
-        esp_err_t timer_err = esp_timer_create(
-            &timer_args, &state->progress_timer);
-
-        if (timer_err != ESP_OK) {
-            state->err = timer_err;
-            state->error_code = "DMA_STAGING_NO_MEMORY";
-            (void)spi_throw_operation_error(
-                ctx, state->error_code, state->operation,
-                timer_err, 0,
-                ESP32_MQUICKJS_DMA_PATH_DIRECT_INTERNAL, device);
-            return false;
-        }
+    timer_ops = spi_future_progress_timer_ops(state);
+    timer_err = esp32_mquickjs_timer_resource_acquire(
+        &state->progress_timer, &timer_ops);
+    if (timer_err != ESP_OK) {
+        state->err = timer_err;
+        state->error_code = "DMA_STAGING_NO_MEMORY";
+        (void)spi_throw_operation_error(
+            ctx, state->error_code, state->operation,
+            timer_err, 0,
+            ESP32_MQUICKJS_DMA_PATH_DIRECT_INTERNAL, device);
+        return false;
     }
     spi_future_step(state);
     (void)esp32_mquickjs_future_wake(runtime, token);
@@ -2719,22 +2960,29 @@ static JSValue spi_future_finish(JSContext *ctx,
 static esp32_mquickjs_cancel_result_t spi_future_cancel(
     esp32_mquickjs_future_driver_state_t *state)
 {
-    if (state == NULL ||
-        atomic_load_explicit(&state->completed, memory_order_acquire) ||
-        state->cancelled) {
+    esp32_mquickjs_dma_cancel_t disposition;
+
+    if (state == NULL) {
+        return ESP32_MQUICKJS_CANCEL_REJECTED;
+    }
+    disposition = esp32_mquickjs_dma_cancel_disposition(
+        &state->completion_queue,
+        atomic_load_explicit(&state->completed, memory_order_acquire),
+        state->cancelled);
+    if (disposition == ESP32_MQUICKJS_DMA_CANCEL_REJECTED) {
         return ESP32_MQUICKJS_CANCEL_REJECTED;
     }
     state->cancelled = true;
-    if (state->in_flight == 0) {
+    if (disposition == ESP32_MQUICKJS_DMA_CANCEL_COMPLETE) {
         atomic_store_explicit(&state->completed, true,
                               memory_order_release);
     }
     if (state->runtime != NULL) {
         (void)esp32_mquickjs_future_wake(state->runtime, state->token);
     }
-    return state->in_flight > 0
-        ? ESP32_MQUICKJS_CANCEL_REQUESTED
-        : ESP32_MQUICKJS_CANCELLED;
+    return disposition == ESP32_MQUICKJS_DMA_CANCEL_PENDING
+               ? ESP32_MQUICKJS_CANCEL_REQUESTED
+               : ESP32_MQUICKJS_CANCELLED;
 }
 
 static uint32_t spi_future_timeout_ms(
@@ -2763,11 +3011,12 @@ static JSValue spi_future_on_timeout(
     state->err = ESP_ERR_TIMEOUT;
     if (device != NULL) {
         device->last_error_code = state->error_code;
-        if (state->in_flight > 0) {
+        if (state->completion_queue.in_flight > 0) {
             device->faulted = true;
         }
     }
-    if (state->in_flight == 0) {
+    if (esp32_mquickjs_dma_completion_queue_releasable(
+            &state->completion_queue)) {
         atomic_store_explicit(&state->completed, true,
                               memory_order_release);
     }

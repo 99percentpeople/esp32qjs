@@ -5,6 +5,9 @@
 
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_http_client_resources.h"
+#include "esp32_mquickjs_http_operation_resources.h"
+#include "esp32_mquickjs_options.h"
 #include "utils/esp32_mquickjs_request_response.h"
 #include "esp32_mquickjs_stream.h"
 #include "utils/esp32_mquickjs_byte_source.h"
@@ -28,10 +31,58 @@
 #define ESP32_MQUICKJS_HTTP_USER_AGENT "esp32qjs/1.0"
 
 struct esp32_mquickjs_http_operation {
+    esp32_mquickjs_http_operation_resources_t resources;
     SemaphoreHandle_t lock;
     esp_http_client_handle_t client;
     bool cancel_requested;
 };
+
+static void *http_operation_resource_allocate(size_t size, void *opaque)
+{
+    (void)opaque;
+    return heap_caps_calloc(1, size, MALLOC_CAP_8BIT);
+}
+
+static void http_operation_resource_release(void *value, void *opaque)
+{
+    (void)opaque;
+    heap_caps_free(value);
+}
+
+static void *http_operation_resource_create_lock(void *opaque)
+{
+    (void)opaque;
+    return xSemaphoreCreateMutex();
+}
+
+static void http_operation_resource_delete_lock(void *lock, void *opaque)
+{
+    (void)opaque;
+    vSemaphoreDelete((SemaphoreHandle_t)lock);
+}
+
+static const esp32_mquickjs_http_operation_resource_ops_t
+    s_http_operation_resource_ops = {
+        .allocate = http_operation_resource_allocate,
+        .release = http_operation_resource_release,
+        .create_lock = http_operation_resource_create_lock,
+        .delete_lock = http_operation_resource_delete_lock,
+    };
+
+static int http_client_resource_cleanup(void *client, void *opaque)
+{
+    (void)opaque;
+    return esp_http_client_cleanup((esp_http_client_handle_t)client);
+}
+
+static const esp32_mquickjs_http_client_resource_ops_t
+    s_http_client_resource_ops = {
+        .cleanup = http_client_resource_cleanup,
+    };
+
+static esp_err_t http_operation_cleanup_client(
+    esp32_mquickjs_http_operation_t *operation,
+    esp_http_client_handle_t client);
 
 typedef struct {
     esp32_mquickjs_http_response_t *response;
@@ -59,29 +110,36 @@ static void http_operation_unlock(esp32_mquickjs_http_operation_t *operation)
 
 esp32_mquickjs_http_operation_t *esp32_mquickjs_http_operation_create(void)
 {
-    esp32_mquickjs_http_operation_t *operation =
-        heap_caps_calloc(1, sizeof(*operation), MALLOC_CAP_8BIT);
+    esp32_mquickjs_http_operation_resources_t resources;
+    esp32_mquickjs_http_operation_t *operation;
 
-    if (operation == NULL) {
+    if (!esp32_mquickjs_http_operation_resources_init(
+            &resources, &s_http_operation_resource_ops,
+            sizeof(*operation))) {
         return NULL;
     }
-    operation->lock = xSemaphoreCreateMutex();
-    if (operation->lock == NULL) {
-        heap_caps_free(operation);
-        return NULL;
-    }
+    operation = resources.operation;
+    operation->resources = resources;
+    operation->lock = resources.lock;
     return operation;
 }
 
-void esp32_mquickjs_http_operation_destroy(esp32_mquickjs_http_operation_t *operation)
+bool esp32_mquickjs_http_operation_destroy(esp32_mquickjs_http_operation_t *operation)
 {
+    esp32_mquickjs_http_operation_resources_t resources;
+    esp_err_t err;
+
     if (operation == NULL) {
-        return;
+        return true;
     }
-    if (operation->lock != NULL) {
-        vSemaphoreDelete(operation->lock);
+    err = http_operation_cleanup_client(operation, operation->client);
+    if (err != ESP_OK) {
+        return false;
     }
-    heap_caps_free(operation);
+    resources = operation->resources;
+    esp32_mquickjs_http_operation_resources_deinit(
+        &resources, &s_http_operation_resource_ops);
+    return true;
 }
 
 bool esp32_mquickjs_http_operation_cancel(esp32_mquickjs_http_operation_t *operation)
@@ -123,29 +181,58 @@ static bool http_operation_attach_client(esp32_mquickjs_http_operation_t *operat
         return true;
     }
     http_operation_lock(operation);
+    operation->client = client;
     if (operation->cancel_requested) {
         attached = false;
-    } else {
-        operation->client = client;
     }
     http_operation_unlock(operation);
     return attached;
 }
 
-static void http_operation_cleanup_client(esp32_mquickjs_http_operation_t *operation,
-                                          esp_http_client_handle_t client)
+static esp_err_t http_operation_cleanup_client(
+    esp32_mquickjs_http_operation_t *operation,
+    esp_http_client_handle_t client)
 {
+    esp32_mquickjs_http_client_resources_t resources;
+    esp_err_t err;
+
     if (client == NULL) {
-        return;
+        return ESP_OK;
     }
-    if (operation != NULL) {
-        http_operation_lock(operation);
-        if (operation->client == client) {
-            operation->client = NULL;
-        }
+    if (operation == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    http_operation_lock(operation);
+    if (operation->client != client) {
         http_operation_unlock(operation);
+        return ESP_ERR_INVALID_STATE;
     }
-    esp_http_client_cleanup(client);
+    resources = (esp32_mquickjs_http_client_resources_t){
+        .client = operation->client,
+    };
+    err = esp32_mquickjs_http_client_resources_deinit(
+        &resources, &s_http_client_resource_ops);
+    operation->client = (esp_http_client_handle_t)resources.client;
+    http_operation_unlock(operation);
+    return err;
+}
+
+static void http_operation_record_client_cleanup(
+    esp32_mquickjs_http_operation_t *operation,
+    esp_http_client_handle_t client,
+    esp_err_t *out_err,
+    char *error_text,
+    size_t error_text_size)
+{
+    esp_err_t cleanup_err =
+        http_operation_cleanup_client(operation, client);
+
+    if (cleanup_err != ESP_OK) {
+        *out_err = cleanup_err;
+        snprintf(error_text, error_text_size,
+                 "esp_http_client_cleanup() failed: %s",
+                 esp_err_to_name(cleanup_err));
+    }
 }
 
 char *esp32_mquickjs_http_strdup(const char *value)
@@ -786,7 +873,8 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
     if (!http_operation_attach_client(operation, client)) {
         *out_err = ESP_ERR_INVALID_STATE;
         snprintf(error_text, error_text_size, "fetch cancelled");
-        http_operation_cleanup_client(operation, client);
+        http_operation_record_client_cleanup(
+            operation, client, out_err, error_text, error_text_size);
         esp32_mquickjs_http_free_response(response);
         return NULL;
     }
@@ -798,7 +886,8 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
             *out_err = ESP_FAIL;
             snprintf(error_text, error_text_size, "failed to set request header: %s",
                      request->headers[i].key);
-            http_operation_cleanup_client(operation, client);
+            http_operation_record_client_cleanup(
+                operation, client, out_err, error_text, error_text_size);
             esp32_mquickjs_http_free_response(response);
             return NULL;
         }
@@ -816,7 +905,8 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
                          error_text_size,
                          "failed to set default Content-Type for request body: %s",
                          esp_err_to_name(body_err));
-                http_operation_cleanup_client(operation, client);
+                http_operation_record_client_cleanup(
+                    operation, client, out_err, error_text, error_text_size);
                 esp32_mquickjs_http_free_response(response);
                 return NULL;
             }
@@ -832,7 +922,8 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
                      error_text_size,
                      "failed to set request body: %s",
                      esp_err_to_name(body_err));
-            http_operation_cleanup_client(operation, client);
+            http_operation_record_client_cleanup(
+                operation, client, out_err, error_text, error_text_size);
             esp32_mquickjs_http_free_response(response);
             return NULL;
         }
@@ -856,7 +947,8 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
     if (esp32_mquickjs_http_operation_is_cancelled(operation)) {
         *out_err = ESP_ERR_INVALID_STATE;
         snprintf(error_text, error_text_size, "fetch cancelled");
-        http_operation_cleanup_client(operation, client);
+        http_operation_record_client_cleanup(
+            operation, client, out_err, error_text, error_text_size);
         esp32_mquickjs_http_free_response(response);
         return NULL;
     }
@@ -871,14 +963,16 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
             snprintf(error_text, error_text_size, "failed to capture HTTP response: %s",
                      esp_err_to_name(capture.error));
         }
-        http_operation_cleanup_client(operation, client);
+        http_operation_record_client_cleanup(
+            operation, client, out_err, error_text, error_text_size);
         esp32_mquickjs_http_free_response(response);
         return NULL;
     }
     if (*out_err != ESP_OK) {
         snprintf(error_text, error_text_size, "esp_http_client_perform() failed: %s",
                  esp_err_to_name(*out_err));
-        http_operation_cleanup_client(operation, client);
+        http_operation_record_client_cleanup(
+            operation, client, out_err, error_text, error_text_size);
         esp32_mquickjs_http_free_response(response);
         return NULL;
     }
@@ -890,7 +984,8 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
     if (response->status_text == NULL) {
         *out_err = ESP_ERR_NO_MEM;
         snprintf(error_text, error_text_size, "out of memory while storing status text");
-        http_operation_cleanup_client(operation, client);
+        http_operation_record_client_cleanup(
+            operation, client, out_err, error_text, error_text_size);
         esp32_mquickjs_http_free_response(response);
         return NULL;
     }
@@ -900,7 +995,8 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
         if (response->url == NULL) {
             *out_err = ESP_ERR_NO_MEM;
             snprintf(error_text, error_text_size, "out of memory while storing response url");
-            http_operation_cleanup_client(operation, client);
+            http_operation_record_client_cleanup(
+                operation, client, out_err, error_text, error_text_size);
             esp32_mquickjs_http_free_response(response);
             return NULL;
         }
@@ -910,13 +1006,19 @@ esp32_mquickjs_http_response_t *esp32_mquickjs_http_perform_request(const esp32_
         if (response->url == NULL) {
             *out_err = ESP_ERR_NO_MEM;
             snprintf(error_text, error_text_size, "out of memory while storing response url");
-            http_operation_cleanup_client(operation, client);
+            http_operation_record_client_cleanup(
+                operation, client, out_err, error_text, error_text_size);
             esp32_mquickjs_http_free_response(response);
             return NULL;
         }
     }
 
-    http_operation_cleanup_client(operation, client);
+    http_operation_record_client_cleanup(
+        operation, client, out_err, error_text, error_text_size);
+    if (*out_err != ESP_OK) {
+        esp32_mquickjs_http_free_response(response);
+        return NULL;
+    }
     return response;
 }
 
@@ -998,17 +1100,14 @@ static int http_parse_timeout(JSContext *ctx,
                               JSValue value,
                               uint32_t *out_timeout_ms)
 {
-    int timeout_ms = 0;
-
     if (JS_IsUndefined(value) || JS_IsNull(value)) {
         *out_timeout_ms = ESP32_MQUICKJS_HTTP_DEFAULT_TIMEOUT_MS;
         return 0;
     }
-    if (JS_ToInt32(ctx, &timeout_ms, value) != 0 || timeout_ms < 0) {
+    if (!esp32_mquickjs_value_to_bounded_u32(
+            ctx, value, 0, INT32_MAX, out_timeout_ms)) {
         return -1;
     }
-
-    *out_timeout_ms = (uint32_t)timeout_ms;
     return 0;
 }
 
@@ -1035,14 +1134,8 @@ static int http_parse_headers(JSContext *ctx,
                               esp32_mquickjs_http_header_t **out_headers,
                               size_t *out_header_count)
 {
-    JSGCRef global_ref;
-    JSGCRef object_ref;
-    JSGCRef keys_ref;
     JSGCRef keys_array_ref;
     JSGCRef length_ref;
-    JSValue *global_obj;
-    JSValue *object_ctor;
-    JSValue *keys_fn;
     JSValue *keys_array;
     JSValue *length_value;
     esp32_mquickjs_http_header_t *headers = NULL;
@@ -1063,35 +1156,18 @@ static int http_parse_headers(JSContext *ctx,
         }
     }
 
-    global_obj = JS_PushGCRef(ctx, &global_ref);
-    object_ctor = JS_PushGCRef(ctx, &object_ref);
-    keys_fn = JS_PushGCRef(ctx, &keys_ref);
     keys_array = JS_PushGCRef(ctx, &keys_array_ref);
     length_value = JS_PushGCRef(ctx, &length_ref);
 
-    *global_obj = JS_GetGlobalObject(ctx);
-    *object_ctor = JS_UNDEFINED;
-    *keys_fn = JS_UNDEFINED;
     *keys_array = JS_UNDEFINED;
     *length_value = JS_UNDEFINED;
 
-    if (JS_IsException(*global_obj)) {
+    if (JS_GetClassID(ctx, *headers_value) != JS_CLASS_OBJECT) {
+        JS_ThrowTypeError(
+            ctx, "fetch(url, options) expects options.headers to be a plain object");
         goto done;
     }
-
-    *object_ctor = JS_GetPropertyStr(ctx, *global_obj, "Object");
-    if (JS_IsException(*object_ctor) || JS_IsUndefined(*object_ctor) || JS_IsNull(*object_ctor)) {
-        JS_ThrowTypeError(ctx, "fetch(url, options) expects options.headers to be an object");
-        goto done;
-    }
-
-    *keys_fn = JS_GetPropertyStr(ctx, *object_ctor, "keys");
-    if (JS_IsException(*keys_fn) || !JS_IsFunction(ctx, *keys_fn)) {
-        JS_ThrowInternalError(ctx, "Object.keys() is not available");
-        goto done;
-    }
-
-    *keys_array = esp32_mquickjs_http_call_function(ctx, *keys_fn, *object_ctor, 1, headers_value);
+    *keys_array = esp32_mquickjs_own_property_keys(ctx, *headers_value);
     if (JS_IsException(*keys_array)) {
         goto done;
     }
@@ -1188,9 +1264,6 @@ done:
     esp32_mquickjs_http_free_headers(headers, (size_t)header_count);
     JS_PopGCRef(ctx, &length_ref);
     JS_PopGCRef(ctx, &keys_array_ref);
-    JS_PopGCRef(ctx, &keys_ref);
-    JS_PopGCRef(ctx, &object_ref);
-    JS_PopGCRef(ctx, &global_ref);
     return result;
 }
 

@@ -620,7 +620,7 @@ void esp32qjs_runtime_default_config(esp32qjs_runtime_config_t *config)
 #ifdef CONFIG_ESP32QJS_JS_HEAP_PREFER_PSRAM
     config->prefer_psram = true;
 #endif
-#ifdef CONFIG_ESP32_MQUICKJS_FEATURE_FS
+#if CONFIG_ESP32_MQUICKJS_FEATURE_FS
     config->mount_littlefs = true;
 #endif
     config->require_littlefs = false;

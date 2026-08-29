@@ -4,6 +4,7 @@
 
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_options.h"
 
 #include <inttypes.h>
 #include <math.h>
@@ -18,6 +19,14 @@ typedef enum {
     WIFI_FUTURE_CONNECT,
     WIFI_FUTURE_DISCONNECT,
 } wifi_future_kind_t;
+
+static const char *wifi_future_operation_name(wifi_future_kind_t kind)
+{
+    return kind == WIFI_FUTURE_SCAN
+               ? "wifi.scan"
+               : kind == WIFI_FUTURE_CONNECT ? "wifi.connect"
+                                             : "wifi.disconnect";
+}
 
 struct esp32_mquickjs_future_driver_state {
     wifi_future_kind_t kind;
@@ -51,75 +60,13 @@ static bool wifi_string_equals(JSContext *ctx, JSValue value,
            strcmp(text, expected) == 0;
 }
 
-static bool wifi_key_allowed(const char *key,
-                             const char *const *allowed,
-                             size_t allowed_count)
-{
-    size_t index;
-
-    for (index = 0; index < allowed_count; ++index) {
-        if (strcmp(key, allowed[index]) == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static bool wifi_validate_option_keys(JSContext *ctx, JSValue options,
                                       const char *api_name,
                                       const char *const *allowed,
                                       size_t allowed_count)
 {
-    JSGCRef global_ref, object_ref, keys_fn_ref, keys_ref, key_ref;
-    JSValue *global = JS_PushGCRef(ctx, &global_ref);
-    JSValue *object = JS_PushGCRef(ctx, &object_ref);
-    JSValue *keys_fn = JS_PushGCRef(ctx, &keys_fn_ref);
-    JSValue *keys = JS_PushGCRef(ctx, &keys_ref);
-    JSValue *key = JS_PushGCRef(ctx, &key_ref);
-    JSValue args[1] = {options};
-    uint32_t length = 0;
-    uint32_t index;
-    bool valid = false;
-
-    *global = JS_GetGlobalObject(ctx);
-    *object = JS_IsException(*global)
-                  ? JS_EXCEPTION
-                  : JS_GetPropertyStr(ctx, *global, "Object");
-    *keys_fn = JS_IsException(*object)
-                   ? JS_EXCEPTION
-                   : JS_GetPropertyStr(ctx, *object, "keys");
-    *keys = JS_IsException(*keys_fn)
-                ? JS_EXCEPTION
-                : esp32_mquickjs_call(
-                      ctx, esp32_mquickjs_get_active_runtime(), *keys_fn,
-                      *object, 1, args);
-    *key = JS_IsException(*keys)
-               ? JS_EXCEPTION
-               : JS_GetPropertyStr(ctx, *keys, "length");
-    if (JS_IsException(*key) || JS_ToUint32(ctx, &length, *key) != 0) {
-        goto done;
-    }
-    for (index = 0; index < length; ++index) {
-        JSCStringBuf buffer;
-        const char *name;
-
-        *key = JS_GetPropertyUint32(ctx, *keys, index);
-        name = JS_IsException(*key) ? NULL : JS_ToCString(ctx, *key, &buffer);
-        if (name == NULL || !wifi_key_allowed(name, allowed, allowed_count)) {
-            JS_ThrowTypeError(ctx, "%s received unknown option '%s'",
-                              api_name, name != NULL ? name : "<invalid>");
-            goto done;
-        }
-    }
-    valid = true;
-
-done:
-    JS_PopGCRef(ctx, &key_ref);
-    JS_PopGCRef(ctx, &keys_ref);
-    JS_PopGCRef(ctx, &keys_fn_ref);
-    JS_PopGCRef(ctx, &object_ref);
-    JS_PopGCRef(ctx, &global_ref);
-    return valid;
+    return esp32_mquickjs_validate_plain_options(
+        ctx, options, api_name, allowed, allowed_count);
 }
 
 static bool wifi_to_integer(JSContext *ctx, JSValue value,
@@ -603,7 +550,9 @@ static bool wifi_future_start(JSContext *ctx,
     if (state->kind == WIFI_FUTURE_SCAN) {
         if (wifi->scan_in_progress || wifi->scan_future_registered) {
             esp32_mquickjs_wifi_unlock();
-            JS_ThrowInternalError(ctx, "wifi.scan() is already in progress");
+            esp32_mquickjs_wifi_throw_operation_error(
+                ctx, "WIFI_SCAN_BUSY", "wifi.scan", ESP_ERR_INVALID_STATE,
+                -1, UINT32_MAX);
             return false;
         }
         wifi->scan_generation++;
@@ -614,8 +563,10 @@ static bool wifi_future_start(JSContext *ctx,
     } else {
         if (wifi->connect_future_registered) {
             esp32_mquickjs_wifi_unlock();
-            JS_ThrowInternalError(
-                ctx, "a Wi-Fi connection operation is already in progress");
+            esp32_mquickjs_wifi_throw_operation_error(
+                ctx, "WIFI_OPERATION_BUSY",
+                wifi_future_operation_name(state->kind),
+                ESP_ERR_INVALID_STATE, -1, UINT32_MAX);
             return false;
         }
         wifi->connect_generation++;
@@ -654,8 +605,9 @@ static bool wifi_future_start(JSContext *ctx,
         err = esp32_mquickjs_wifi_start_disconnect(&disconnect_pending);
         if (err != ESP_OK) {
             esp32_mquickjs_wifi_clear_connect_future();
-            JS_ThrowInternalError(ctx, "wifi.disconnect() failed: %s",
-                                  esp_err_to_name(err));
+            esp32_mquickjs_wifi_throw_operation_error(
+                ctx, "WIFI_DISCONNECT_FAILED", "wifi.disconnect", err,
+                -1, UINT32_MAX);
             return false;
         }
         if (!disconnect_pending) {
@@ -711,14 +663,18 @@ static JSValue wifi_future_finish(JSContext *ctx,
                                   esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL || state->cancel_requested) {
-        return JS_ThrowInternalError(ctx, "Wi-Fi operation cancelled");
+        return esp32_mquickjs_wifi_throw_operation_error(
+            ctx, "WIFI_CANCELLED",
+            state != NULL ? wifi_future_operation_name(state->kind)
+                          : "wifi",
+            ESP_ERR_INVALID_STATE, -1, UINT32_MAX);
     }
     if (state->kind == WIFI_FUTURE_SCAN) {
         esp32_mquickjs_wifi_clear_scan_future();
         if (state->scan_status != 0) {
-            return JS_ThrowInternalError(ctx,
-                                         "wifi.scan() failed with status=%" PRIu32,
-                                         state->scan_status);
+            return esp32_mquickjs_wifi_throw_operation_error(
+                ctx, "WIFI_SCAN_FAILED", "wifi.scan", ESP_FAIL, -1,
+                state->scan_status);
         }
         return esp32_mquickjs_wifi_make_scan_results_array(ctx);
     }
@@ -728,18 +684,21 @@ static JSValue wifi_future_finish(JSContext *ctx,
             ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_DISCONNECTED) {
             return esp32_mquickjs_wifi_make_status_object(ctx);
         }
-        return JS_ThrowInternalError(ctx, "wifi.disconnect() did not converge");
+        return esp32_mquickjs_wifi_throw_operation_error(
+            ctx, "WIFI_DISCONNECT_FAILED", "wifi.disconnect",
+            ESP_ERR_INVALID_STATE, state->connect_reason, UINT32_MAX);
     }
     if (state->connect_kind == ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_SUCCESS) {
         return esp32_mquickjs_wifi_make_status_object(ctx);
     }
     if (state->connect_kind == ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_TIMEOUT) {
-        return JS_ThrowInternalError(ctx, "wifi.connect() timed out");
+        return esp32_mquickjs_wifi_throw_operation_error(
+            ctx, "WIFI_CONNECT_TIMEOUT", "wifi.connect", ESP_ERR_TIMEOUT,
+            state->connect_reason, UINT32_MAX);
     }
-    return JS_ThrowInternalError(ctx,
-                                 "wifi.connect() failed (reason=%d:%s)",
-                                 (int)state->connect_reason,
-                                 esp32_mquickjs_wifi_reason_to_string(state->connect_reason));
+    return esp32_mquickjs_wifi_throw_operation_error(
+        ctx, "WIFI_CONNECT_FAILED", "wifi.connect", ESP_FAIL,
+        state->connect_reason, UINT32_MAX);
 }
 
 static esp32_mquickjs_cancel_result_t wifi_future_cancel(

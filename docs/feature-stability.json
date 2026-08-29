@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "areas": [
+    {
+      "features": ["fs", "nvs"],
+      "area": "`fs`, `nvs`",
+      "status": "Candidate",
+      "evidence": "ESP flash/VFS power-cut and required-workspace recovery beyond host atomic-replacement and vendored LittleFS image fault injection; encrypted-NVS hardware coverage"
+    },
+    {
+      "features": ["gpio", "ledc"],
+      "area": "`gpio`, `ledc`",
+      "status": "Candidate",
+      "evidence": "Board-backed lifecycle checks across active-high/active-low wiring and LEDC status transitions beyond completed GPIO ISR-removal retry retention and LEDC channel/timer stop, pause, and deconfigure retry retention"
+    },
+    {
+      "features": ["adc"],
+      "area": "`adc`",
+      "status": "Candidate",
+      "evidence": "Stable hardware lifecycle plus cross-target calibration and attenuation validation beyond completed host unit/calibration construction rollback and deletion-retry retention"
+    },
+    {
+      "features": ["dac"],
+      "area": "`dac`",
+      "status": "Hardware pending",
+      "evidence": "A supported ESP32/ESP32-S2 target is required; current C3/C5/S3 profiles disable it"
+    },
+    {
+      "features": ["i2c", "spi", "uart", "rmt"],
+      "area": "`i2c`, `spi`, `uart`, `rmt`",
+      "status": "Candidate",
+      "evidence": "External loopback/peripheral fixtures and cancellation/close stress beyond completed host I2C lease/native-bus construction rollback and delete-retry retention, SPI queue, ownership, bounds, timeout, allocation fault injection, rearmable progress-timer ownership, and device/bus teardown-retry retention, RMT symbol-buffer allocation plus channel/encoder/callback rollback and teardown-retry retention, and UART watcher-lock/driver construction plus driver-delete retry retention"
+    },
+    {
+      "features": ["i2s", "camera"],
+      "area": "`i2s`, `camera`",
+      "status": "Candidate",
+      "evidence": "Long-duration DMA, frame lease, close/reopen, and mixed media/TLS pressure beyond completed I2S TX/RX channel construction, directional start/stop/delete retry retention, timeout-timer allocation rollback, and Camera driver-deinit failure retention with explicit close retry"
+    },
+    {
+      "features": ["bitmap"],
+      "area": "`bitmap` and JS display layer",
+      "status": "Candidate",
+      "evidence": "More board/display combinations and repeated source/presentation lifecycle testing"
+    },
+    {
+      "features": ["net", "wifi"],
+      "area": "`net`, `wifi`, DNS",
+      "status": "Candidate",
+      "evidence": "Interface replacement, reconnect, and non-Wi-Fi ESP-NETIF coverage beyond completed Wi-Fi lock/event-group/queue allocation rollback and later init-stage cleanup"
+    },
+    {
+      "features": ["espnow"],
+      "area": "`espNow`",
+      "status": "Candidate",
+      "evidence": "ESP32-C3 and broader peer-matrix qualification beyond completed encrypted S3/C5 E2E"
+    },
+    {
+      "features": ["ble"],
+      "area": "`ble`",
+      "status": "Candidate",
+      "evidence": "Multiple-connection, ESP32-C3, peer-loss, and extended coexistence qualification beyond completed S3/Pi and S3/C5 E2E, host scan/notification queue-saturation ownership coverage, and NimBLE host stop/deinit exact-suffix retry retention"
+    },
+    {
+      "features": ["tls", "socket", "http_client", "http_server", "websocket_client"],
+      "area": "`tls`, `socket`, `http`, `httpServer`, `websocketClient`",
+      "status": "Candidate",
+      "evidence": "Long-duration mixed connection/failure pressure on PSRAM and no-PSRAM profiles beyond completed HTTP operation storage/mutex and client-cleanup retry retention, HTTP Server native stop/close retry retention, shared socket/UART Future-timer create/start rollback, and WebSocket callback-queue ownership plus stop/unregister/destroy exact-suffix retry retention"
+    },
+    {
+      "features": ["usb_serial", "rpc"],
+      "area": "`usbSerial`, `rpc`",
+      "status": "Candidate",
+      "evidence": "Physical re-enumeration, streamed-transfer, and runtime-restart soak beyond completed Agent/Host disconnect ownership, USB Serial pending-send stop/destroy/new-generation host tests, and rearmable TX-stall timer ownership"
+    },
+    {
+      "features": ["runtime_logs"],
+      "area": "`runtimeLogs`",
+      "status": "Candidate",
+      "evidence": "Overflow, restart, and sustained producer qualification"
+    }
+  ]
+}
