@@ -185,6 +185,8 @@ struct esp32_mquickjs_future_driver_state {
     bool transferred;
     bool cancelled;
     _Atomic bool completed;
+    _Atomic bool recovery_pending;
+    _Atomic bool recovery_worker_submitted;
 };
 
 static const uint8_t s_broadcast_address[ESPNOW_ADDRESS_BYTES] = {
@@ -2295,6 +2297,8 @@ static bool espnow_send_capture(
     state->generation = session->generation;
     state->send_timeout_ms = session->send_timeout_ms;
     atomic_init(&state->completed, false);
+    atomic_init(&state->recovery_pending, false);
+    atomic_init(&state->recovery_worker_submitted, false);
     if (peer != NULL) {
         state->peer_index = peer_ref->peer_index;
         state->peer_generation = peer_ref->peer_generation;
@@ -2485,20 +2489,28 @@ static esp_err_t espnow_restore_native_session(espnow_session_t *session)
     return err;
 }
 
-static esp_err_t espnow_recover_after_timeout(
+static esp_err_t espnow_begin_timeout_recovery(
     espnow_session_t *session,
     esp32_mquickjs_future_driver_state_t *state)
 {
     esp_err_t err = ESP_OK;
-    uint32_t waits = 0;
 
     if (session == NULL || state == NULL ||
         session->generation != state->generation) {
         return ESP_ERR_INVALID_STATE;
     }
+    if (atomic_load_explicit(&state->recovery_pending,
+                             memory_order_acquire)) {
+        return state->err;
+    }
     if (!esp32_mquickjs_wireless_tx_timeout(&session->tx_state) ||
         !esp32_mquickjs_wireless_tx_begin_recovery(&session->tx_state))
         return ESP_ERR_INVALID_STATE;
+    state->timed_out = true;
+    atomic_store_explicit(&state->recovery_pending, true,
+                          memory_order_release);
+    atomic_store_explicit(&session->active_send, NULL,
+                          memory_order_release);
     if (session->receive_callback_registered) {
         err = esp_now_unregister_recv_cb();
         session->receive_callback_registered = false;
@@ -2511,12 +2523,27 @@ static esp_err_t espnow_recover_after_timeout(
             err = send_err;
         }
     }
+    state->err = err;
+    return err;
+}
+
+static void espnow_send_recovery_worker(void *opaque)
+{
+    esp32_mquickjs_future_driver_state_t *state = opaque;
+    espnow_session_t *session = &s_espnow_session;
+    esp_err_t err;
+
+    if (state == NULL) {
+        return;
+    }
     while (atomic_load_explicit(&session->callbacks_active,
-                                memory_order_acquire) != 0 &&
-           waits++ < 1000U) {
+                                memory_order_acquire) != 0) {
         vTaskDelay(1);
     }
-    if (session->now_initialized) {
+    err = state->err;
+    if (session->generation != state->generation) {
+        err = ESP_ERR_INVALID_STATE;
+    } else if (session->now_initialized) {
         esp_err_t deinit_err = esp_now_deinit();
 
         session->now_initialized = false;
@@ -2530,7 +2557,7 @@ static esp_err_t espnow_recover_after_timeout(
     }
     atomic_store_explicit(&session->active_send, NULL,
                           memory_order_release);
-    if (err == ESP_OK) {
+    if (err == ESP_OK && session->generation == state->generation) {
         while (esp_timer_get_time() < s_espnow_reopen_not_before_us) {
             vTaskDelay(1);
         }
@@ -2548,13 +2575,43 @@ static esp_err_t espnow_recover_after_timeout(
         session->lifecycle = ESPNOW_LIFECYCLE_FAILED;
     }
     atomic_store_explicit(&state->completed, true, memory_order_release);
+    atomic_store_explicit(&state->recovery_pending, false,
+                          memory_order_release);
     (void)esp32_mquickjs_future_wake(state->runtime, state->token);
-    return err;
+}
+
+static bool espnow_schedule_send_recovery(
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    bool expected = false;
+
+    if (state == NULL || !atomic_load_explicit(
+            &state->recovery_pending, memory_order_acquire)) {
+        return false;
+    }
+    if (!atomic_compare_exchange_strong_explicit(
+            &state->recovery_worker_submitted, &expected, true,
+            memory_order_acq_rel, memory_order_acquire)) {
+        return expected;
+    }
+    if (esp32_mquickjs_future_submit_worker(
+            state->runtime, state->token, espnow_send_recovery_worker,
+            state)) {
+        return true;
+    }
+    atomic_store_explicit(&state->recovery_worker_submitted, false,
+                          memory_order_release);
+    return false;
 }
 
 static esp32_mquickjs_future_poll_t espnow_send_poll(
     esp32_mquickjs_future_driver_state_t *state)
 {
+    if (state != NULL && atomic_load_explicit(
+            &state->recovery_pending, memory_order_acquire)) {
+        (void)espnow_schedule_send_recovery(state);
+        return ESP32_MQUICKJS_FUTURE_PENDING;
+    }
     return state != NULL && atomic_load_explicit(
                                 &state->completed, memory_order_acquire)
                ? ESP32_MQUICKJS_FUTURE_READY
@@ -2656,11 +2713,17 @@ static JSValue espnow_send_on_timeout(
             state != NULL ? state->address : NULL,
             s_espnow_session.channel);
     }
-    (void)espnow_recover_after_timeout(&s_espnow_session, state);
+    if (espnow_begin_timeout_recovery(&s_espnow_session, state) != ESP_OK &&
+        !atomic_load_explicit(&state->recovery_pending,
+                              memory_order_acquire)) {
+        return espnow_throw_error(
+            ctx, "ESPNOW_RECOVERY_FAILED", ESP_ERR_INVALID_STATE,
+            state->address, s_espnow_session.channel);
+    }
+    (void)espnow_schedule_send_recovery(state);
     return espnow_throw_error(
-        ctx, state->recovery_failed ? "ESPNOW_RECOVERY_FAILED"
-                                    : "ESPNOW_SEND_TIMEOUT",
-        state->err, state->address, s_espnow_session.channel);
+        ctx, "ESPNOW_RECOVERY_PENDING", ESP_ERR_TIMEOUT,
+        state->address, s_espnow_session.channel);
 }
 
 static esp32_mquickjs_resource_key_t espnow_send_resource_key(

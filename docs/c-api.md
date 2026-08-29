@@ -1923,9 +1923,11 @@ Mesh behavior, provisioning, or a product message schema.
 
 Use `channel: "current"` when Wi-Fi is connected. The framework rejects channel
 conflicts and does not disconnect Wi-Fi, change an AP channel, or perform
-hidden off-channel sends. A send callback timeout rebuilds ESP-NOW and restores
-the PMK and peers before releasing the transmit lane; failed recovery leaves
-the session unavailable until close and reopen.
+hidden off-channel sends. A send callback timeout reports
+`ESPNOW_RECOVERY_PENDING` while its native Future state and transmit lane remain
+retained. A worker waits for callbacks to become quiescent, then rebuilds
+ESP-NOW and restores the PMK and peers before releasing either; failed recovery
+leaves the session unavailable until close and reopen.
 
 ## `ble` Module
 

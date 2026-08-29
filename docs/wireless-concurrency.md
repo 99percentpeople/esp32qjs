@@ -43,6 +43,12 @@ the worker and the session remains closing. The caller receives
 reuse callback-visible storage. Runtime teardown and finalizer fallback use the
 same two-phase path.
 
+An ESP-NOW send timeout follows the same callback-quiescence rule. The timeout
+path unregisters both callbacks, marks recovery pending, and returns
+`ESPNOW_RECOVERY_PENDING` to JavaScript while a Future-owned worker waits for
+the active callback count to reach zero. Only then may it deinitialize and
+restore ESP-NOW, mark the native driver complete, and release the send state.
+
 ## Review rules
 
 - Do not replace atomics or critical sections with `volatile`.

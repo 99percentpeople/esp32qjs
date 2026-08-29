@@ -69,8 +69,10 @@ try {
 ```
 
 Closing a session invalidates every peer handle. A transmit callback timeout
-rebuilds the native ESP-NOW session before the FIFO lane is released; recovery
-failure leaves the session unavailable until it is closed and reopened.
+reports `ESPNOW_RECOVERY_PENDING` while the native Future state and FIFO lane
+remain retained. A worker waits for callbacks to become quiescent and rebuilds
+the native ESP-NOW session before releasing either; recovery failure leaves the
+session unavailable until it is closed and reopened.
 Closing an enabled power-save session restores the native defaults before
 ESP-NOW is deinitialized, so a later session never inherits hidden radio state.
 

@@ -94,6 +94,39 @@ class EspNowArchitectureTests(unittest.TestCase):
         self.assertIn("ESPNOW_CLEANUP_PENDING", source)
         self.assertIn(".on_timeout = espnow_close_on_timeout", source)
 
+    def test_send_timeout_recovery_retains_future_until_callbacks_are_quiescent(self):
+        source = (
+            MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
+        ).read_text(encoding="utf-8")
+        begin_start = source.index("static esp_err_t espnow_begin_timeout_recovery")
+        worker_start = source.index("static void espnow_send_recovery_worker")
+        schedule_start = source.index("static bool espnow_schedule_send_recovery")
+        poll_start = source.index("static esp32_mquickjs_future_poll_t espnow_send_poll")
+        begin = source[begin_start:worker_start]
+        worker = source[worker_start:schedule_start]
+        schedule = source[schedule_start:poll_start]
+        poll = source[
+            poll_start : source.index("static JSValue espnow_send_finish", poll_start)
+        ]
+
+        self.assertIn("esp_now_unregister_recv_cb", begin)
+        self.assertIn("esp_now_unregister_send_cb", begin)
+        self.assertNotIn("state->completed", begin)
+        self.assertNotRegex(begin + worker, r"waits\s*\+\+\s*<")
+        self.assertIn("callbacks_active", worker)
+        self.assertLess(worker.index("callbacks_active"), worker.index("esp_now_deinit"))
+        self.assertLess(
+            worker.index("espnow_restore_native_session"),
+            worker.index("&state->completed"),
+        )
+        self.assertLess(
+            worker.index("&state->completed"),
+            worker.index("&state->recovery_pending"),
+        )
+        self.assertIn("esp32_mquickjs_future_submit_worker", schedule)
+        self.assertIn("recovery_pending", poll)
+        self.assertIn("ESPNOW_RECOVERY_PENDING", source)
+
     def test_session_close_disposes_native_event_queue_without_waiting_for_gc(self):
         source = (
             MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
@@ -263,7 +296,7 @@ class EspNowArchitectureTests(unittest.TestCase):
         ]
         restore = source[
             source.index("static esp_err_t espnow_restore_native_session") :
-            source.index("static esp_err_t espnow_recover_after_timeout")
+            source.index("static esp_err_t espnow_begin_timeout_recovery")
         ]
 
         self.assertIn(
