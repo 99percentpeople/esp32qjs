@@ -55,6 +55,18 @@ class MediaArchitectureTests(SourceContractTestCase):
             "offset_e = cam_verify_jpeg_eoi(dma_buffer->buf,", patch
         )
 
+    def test_s3_build_guards_upstream_camera_probe_when_no_sensor_is_enabled(self):
+        patch = (ROOT / "scripts/patch_esp32_camera_2_1_7.cmake").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("driver/esp_camera.c", patch)
+        self.assertIn("ESP32QJS zero-sensor build guard", patch)
+        self.assertIn("#if CONFIG_OV2640_SUPPORT ||", patch)
+        self.assertIn(
+            "#endif /* ESP32QJS zero-sensor build guard */", patch
+        )
+
     def test_i2s_isr_callbacks_only_wake_the_future_driver(self):
         source = (MQUICKJS / "src/modules/i2s/esp32_mquickjs_i2s.c").read_text(
             encoding="utf-8"
