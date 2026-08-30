@@ -189,7 +189,7 @@ JS_TEST_MODULES = (
                 reset_after=True,
             ),
         ),
-        required_features=("espnow",),
+        required_features=("espNow",),
     ),
     JsTestModule(
         "wifi_csi",
@@ -308,7 +308,7 @@ JS_TEST_MODULES = (
                 record_details=True,
             ),
         ),
-        required_features=("wifiCsi", "wifi", "espnow"),
+        required_features=("wifiCsi", "wifi", "espNow"),
     ),
     JsTestModule(
         "ble",

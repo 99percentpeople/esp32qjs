@@ -331,6 +331,12 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertIn("session.receiveBatch", tls)
         self.assertIn("espNow.open", espnow)
         self.assertIn("WIFI_CSI_RADIO_CONFLICT", espnow)
+        self.assertIn(
+            "wifi.status().radio.clients.espNow, 0", espnow
+        )
+        self.assertIn(
+            'channel: espnowChannel,\n      conflict: "fail"', espnow
+        )
 
     def test_radio_policy_has_explicit_csi_promiscuous_and_channel_owners(self):
         header = (MQUICKJS / "internal/esp32_mquickjs_wifi_radio.h").read_text(

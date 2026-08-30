@@ -248,7 +248,7 @@ class RemoteConfigTests(unittest.TestCase):
                 ("csi-hardware", "network"),
             ),
             "wifi_csi_espnow": (
-                ("wifiCsi", "wifi", "espnow"),
+                ("wifiCsi", "wifi", "espNow"),
                 ("csi-hardware",),
             ),
         }
@@ -260,6 +260,24 @@ class RemoteConfigTests(unittest.TestCase):
                 self.assertEqual(len(module.cases), 1)
                 self.assertEqual(module.cases[0].required_capabilities, capabilities)
                 self.assertTrue(module.cases[0].record_details)
+
+    def test_espnow_modules_use_the_public_runtime_feature_key(self):
+        runtime_features = {
+            "fs": True,
+            "wifiCsi": True,
+            "wifi": True,
+            "espNow": True,
+        }
+
+        for module_name in ("espnow", "wifi_csi_espnow"):
+            with self.subTest(module=module_name):
+                module = REMOTE.resolve_js_modules([module_name])[0]
+                self.assertIn("espNow", module.required_features)
+                enabled, note = REMOTE.resolve_js_modules_for_runtime(
+                    (module,), runtime_features, True
+                )
+                self.assertEqual(enabled, (module,))
+                self.assertEqual(note, "")
 
     def test_csi_hardware_pass_keeps_bounded_structured_evidence(self):
         case = REMOTE.JsTestCase(

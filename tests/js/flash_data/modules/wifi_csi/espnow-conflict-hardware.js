@@ -6,6 +6,8 @@ test("wifi_csi/espnow-conflict-hardware", function () {
   var espnowSession = null;
   var csiSession = null;
   var conflictError = "";
+  var espnowChannel = 1;
+  var conflictingCsiChannel = 6;
   var during;
 
   test.equal(caps.supports.fixedChannel, true,
@@ -13,7 +15,7 @@ test("wifi_csi/espnow-conflict-hardware", function () {
   try {
     try { wifi.disconnect(); } catch (ignoredDisconnectError) {}
     espnowSession = espNow.open({
-      channel: 1,
+      channel: espnowChannel,
       receiveCapacity: 2,
       sendTimeoutMs: 250
     });
@@ -23,7 +25,7 @@ test("wifi_csi/espnow-conflict-hardware", function () {
     try {
       csiSession = wifiCsi.open({
         source: "associated",
-        channel: 6,
+        channel: conflictingCsiChannel,
         conflict: "fail",
         capture: capture,
         queue: { capacity: 2, overflow: "drop-newest" }
@@ -37,20 +39,22 @@ test("wifi_csi/espnow-conflict-hardware", function () {
       "a channel conflict must not publish a partial CSI session");
     test.equal(espnowSession.status().open, true,
       "a rejected CSI open must leave ESP-NOW running");
-    test.equal(wifi.status().radio.channel, 1,
+    test.equal(wifi.status().radio.channel, espnowChannel,
       "a rejected CSI open must not move the ESP-NOW channel");
     espnowSession.close();
     espnowSession = null;
+    test.equal(wifi.status().radio.clients.espNow, 0,
+      "ESP-NOW close must release its radio lease before returning");
 
     csiSession = wifiCsi.open({
       source: "associated",
-      channel: 6,
+      channel: espnowChannel,
       conflict: "fail",
       capture: capture,
       queue: { capacity: 2, overflow: "drop-newest" }
     });
-    test.equal(csiSession.status().effective.channel, 6,
-      "CSI may claim the requested channel after ESP-NOW releases it");
+    test.equal(csiSession.status().effective.channel, espnowChannel,
+      "CSI may claim the released channel after ESP-NOW closes");
   } finally {
     if (csiSession !== null) csiSession.close();
     if (espnowSession !== null) espnowSession.close();
@@ -64,8 +68,9 @@ test("wifi_csi/espnow-conflict-hardware", function () {
 
   return {
     target: caps.target,
-    espnowChannel: 1,
-    csiChannel: 6,
+    espnowChannel: espnowChannel,
+    conflictingCsiChannel: conflictingCsiChannel,
+    releasedCsiChannel: espnowChannel,
     conflict: "WIFI_CSI_RADIO_CONFLICT"
   };
 });
