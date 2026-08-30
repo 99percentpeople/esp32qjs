@@ -340,8 +340,9 @@ must configure ESP-IDF encrypted NVS and their device key lifecycle explicitly.
 `fs.open()` returns a `Stream`. `Response.body`, `Request.body`, and
 `Response.stream(...)` also use the same stream interface. A `ByteView` is a
 read-only native byte view; `toArray()` makes an explicit JavaScript copy. A
-`ByteSpanSource` is a retained, one-shot producer of native spans. Its
-`close()` method is idempotent and releases producer-owned resources. Owned
+`ByteSpanSource` is a retained, one-shot producer of native spans. Its read-only
+`byteLength` is the total number of bytes the producer will yield; `close()` is
+idempotent and releases producer-owned resources. Owned
 `ByteView` values also have an idempotent `close()`; call it after the last
 consumer or `toArray()` conversion to release native storage deterministically.
 Opening a `ByteSpanSource` acquires a read lease until the consumer finishes.
@@ -2240,9 +2241,11 @@ an application schema.
 - `rpc.bytes(value)`
   Copy byte data into an owning `ByteView` suitable for a CBOR byte string.
 - `rpc.fileSource(path)` / `rpc.sourceInfo(source)`
-  Create a one-shot file-backed `ByteSpanSource` for any readable regular file
+  Create a one-shot file-backed `RPCFileSource` for any readable regular file
   within the RPC stream limit, and inspect its `{ size, crc32 }` metadata.
-  Locally created sources report a null CRC until transferred.
+  Locally created sources report a null CRC until transferred. `sourceInfo()`
+  accepts only an RPC file source; use the generic `source.byteLength` property
+  for Bitmap, camera, CSI, codec-output, and other `ByteSpanSource` producers.
 - `rpc.adoptFile(source, path)`
   Atomically rename an unused inbound temporary stream to an
   application-selected destination. It does not impose a workspace policy.

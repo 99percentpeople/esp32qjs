@@ -14,7 +14,7 @@ test("wifi_csi/batch-transport-hardware", function () {
   var stream = null;
   var path = "wifi-csi-batch.bin";
   var rpcPath = "wifi-csi-rpc.bin";
-  var sourceInfo;
+  var sourceBytes;
   var written;
   var usbWritten;
   var rpcWritten;
@@ -36,12 +36,12 @@ test("wifi_csi/batch-transport-hardware", function () {
     test.ok(batch.info(0).layout.byteLength > 0,
       "batch metadata should describe a non-empty payload");
     source = batch.source({ format: "esp32qjs-csi/1" });
-    sourceInfo = rpc.sourceInfo(source);
-    test.ok(sourceInfo.size > batch.info(0).layout.byteLength,
+    sourceBytes = source.byteLength;
+    test.ok(sourceBytes > batch.info(0).layout.byteLength,
       "the batch protocol should include header and normalized metadata");
     stream = fs.open(path, "w");
     written = stream.write(source);
-    test.equal(written, sourceInfo.size,
+    test.equal(written, sourceBytes,
       "file transport should consume the complete scatter/gather source");
     stream.close();
     stream = null;
@@ -57,7 +57,7 @@ test("wifi_csi/batch-transport-hardware", function () {
     usbSource = null;
     serial.close();
     serial = null;
-    test.equal(usbWritten, sourceInfo.size,
+    test.equal(usbWritten, sourceBytes,
       "USB Serial should consume the complete CSI batch source");
 
     codec = rpc.createCodec({
@@ -77,7 +77,7 @@ test("wifi_csi/batch-transport-hardware", function () {
     rpcOutputSource = null;
     rpcInputSource.close();
     rpcInputSource = null;
-    test.ok(rpcWritten > sourceInfo.size,
+    test.ok(rpcWritten > sourceBytes,
       "RPC framing should preserve the CSI bytes plus protocol overhead");
     test.equal(fs.stat(rpcPath).size, rpcWritten,
       "the streamed RPC envelope should be persisted completely");

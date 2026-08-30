@@ -46,7 +46,7 @@ test("wifi_csi/associated-hardware", function () {
       "retained samples should expose the complete pool payload");
     test.equal(copy.byteLength, frame.info.layout.byteLength,
       "owned copies should preserve the complete payload");
-    test.ok(rpc.sourceInfo(source).size === frame.info.layout.byteLength,
+    test.ok(source.byteLength === frame.info.layout.byteLength,
       "frame sources should expose their transport length");
     frame.close();
     frame = null;

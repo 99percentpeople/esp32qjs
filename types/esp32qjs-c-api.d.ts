@@ -90,6 +90,8 @@ namespace ESP32QJS {
    */
   interface ByteSpanSource {
     readonly __byteSpanSourceBrand: never;
+    /** Total bytes the one-shot producer will yield. */
+    readonly byteLength: number;
     /** Close the source and release its producer-owned resources. Idempotent. */
     close(): boolean;
   }
@@ -3604,6 +3606,11 @@ namespace ESP32QJS {
     crc32: string | null;
   }
 
+  /** File-backed span source created or received by the RPC stream layer. */
+  interface RPCFileSource extends ByteSpanSource {
+    readonly __rpcFileSourceBrand: never;
+  }
+
   interface RPCStatus {
     protocol: "esp32qjs.rpc/1";
     activeCodecs: number;
@@ -3642,9 +3649,9 @@ namespace ESP32QJS {
     readonly SEGMENT_PAYLOAD_BYTES: 7680;
     createCodec(options: RPCCodecOptions): RPCCodec;
     bytes(value: ByteSource): ByteView;
-    fileSource(path: string): ByteSpanSource;
-    sourceInfo(source: ByteSpanSource): RPCSourceInfo;
-    adoptFile(source: ByteSpanSource, path: string): boolean;
+    fileSource(path: string): RPCFileSource;
+    sourceInfo(source: RPCFileSource): RPCSourceInfo;
+    adoptFile(source: RPCFileSource, path: string): boolean;
     status(): RPCStatus;
   }
 }

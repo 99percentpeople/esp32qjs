@@ -22,6 +22,8 @@ test("wifi_csi/soak-hardware", function () {
   var minimumInternalLargest;
   var minimumDmaLargest;
   var minimumPsramLargest;
+  var batchFrames = caps.limits.maxBatchFrames < 16
+    ? caps.limits.maxBatchFrames : 16;
 
   test.equal(caps.supports.promiscuous, true,
     "long soak requires the promiscuous Build Context gate");
@@ -47,7 +49,7 @@ test("wifi_csi/soak-hardware", function () {
     startMs = sys.millis();
     nextSampleMs = startMs + 10000;
     while (sys.millis() - startMs < durationMs) {
-      batch = session.receiveBatch(16, 1000);
+      batch = session.receiveBatch(batchFrames, 1000);
       if (batch !== null) {
         frames += batch.frameCount;
         batches += 1;

@@ -14,6 +14,8 @@ test("wifi_csi/tls-coexistence-hardware", function () {
   var frames = 0;
   var tlsConnections = 0;
   var i;
+  var batchFrames = caps.limits.maxBatchFrames < 16
+    ? caps.limits.maxBatchFrames : 16;
 
   wifiStatus = wifi.status();
   if (!wifiStatus.connected) {
@@ -49,7 +51,7 @@ test("wifi_csi/tls-coexistence-hardware", function () {
         client.close();
         client = null;
       }
-      batch = session.receiveBatch(16, 2000);
+      batch = session.receiveBatch(batchFrames, 2000);
       if (batch !== null) {
         frames += batch.frameCount;
         batch.close();

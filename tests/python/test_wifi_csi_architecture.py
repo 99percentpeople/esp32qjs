@@ -93,6 +93,24 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertIn("resources_destroying = true", destroy)
         self.assertIn("esp32_mquickjs_wifi_csi_resources_deinit", destroy)
 
+    def test_receive_batch_releases_temporary_gc_roots_in_lifo_order(self):
+        source = (MODULE / "esp32_mquickjs_wifi_csi.c").read_text(
+            encoding="utf-8"
+        )
+        receive_batch = source[
+            source.index("JSValue js_wifi_csi_session_receive_batch") :
+            source.index("bool esp32_mquickjs_init_wifi_csi_runtime")
+        ]
+        success = receive_batch[
+            receive_batch.index("atomic_fetch_add_explicit(") :
+            receive_batch.index("fail_batch:")
+        ]
+
+        self.assertLess(
+            success.index("JS_PopGCRef(ctx, &object_ref)"),
+            success.index("JS_PopGCRef(ctx, &first_ref)"),
+        )
+
     def test_finalizers_only_release_leases_or_schedule_cleanup(self):
         source = (MODULE / "esp32_mquickjs_wifi_csi.c").read_text(
             encoding="utf-8"
@@ -168,6 +186,37 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertIn('MAGIC = b"E32QCSI1"', parser)
         self.assertIn('struct.unpack_from("<8sHHIII"', parser)
 
+    def test_generic_span_length_contract_is_used_by_csi_hardware_tests(self):
+        declarations = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+        byte_span_source = declarations[
+            declarations.index("interface ByteSpanSource {") :
+            declarations.index("interface BitmapSpanSource", declarations.index(
+                "interface ByteSpanSource {"
+            ))
+        ]
+        directory = ROOT / "tests/js/flash_data/modules/wifi_csi"
+        associated = (directory / "associated-hardware.js").read_text(
+            encoding="utf-8"
+        )
+        batch = (directory / "batch-transport-hardware.js").read_text(
+            encoding="utf-8"
+        )
+        throughput = (directory / "throughput-hardware.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("readonly byteLength: number", byte_span_source)
+        self.assertIn("interface RPCFileSource extends ByteSpanSource", declarations)
+        self.assertIn("sourceInfo(source: RPCFileSource)", declarations)
+        self.assertIn("source.byteLength", associated)
+        self.assertIn("source.byteLength", batch)
+        self.assertIn("source.byteLength", throughput)
+        self.assertNotIn("rpc.sourceInfo(source)", associated)
+        self.assertNotIn("rpc.sourceInfo(source)", batch)
+        self.assertNotIn("rpc.sourceInfo(source)", throughput)
+
     def test_hardware_batch_transport_covers_file_usb_and_streamed_rpc(self):
         hardware_test = (
             ROOT
@@ -202,6 +251,18 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertIn("batchTransportBytesPerSecond", hardware_test)
         self.assertIn("dropRatio", hardware_test)
         self.assertIn("sys.status.memory", hardware_test)
+
+    def test_hardware_batch_receives_respect_the_build_context_limit(self):
+        directory = ROOT / "tests/js/flash_data/modules/wifi_csi"
+        for name in (
+            "throughput-hardware.js",
+            "soak-hardware.js",
+            "tls-coexistence-hardware.js",
+        ):
+            source = (directory / name).read_text(encoding="utf-8")
+            self.assertIn("caps.limits.maxBatchFrames", source)
+            self.assertIn("session.receiveBatch(batchFrames", source)
+            self.assertNotIn("session.receiveBatch(16", source)
 
     def test_hardware_soak_tracks_memory_floor_without_retaining_batches(self):
         hardware_test = (

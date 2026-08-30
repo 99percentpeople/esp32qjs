@@ -17,6 +17,8 @@ test("wifi_csi/throughput-hardware", function () {
   var transportBytes = 0;
   var drops;
   var durationMs = 10000;
+  var batchFrames = caps.limits.maxBatchFrames < 16
+    ? caps.limits.maxBatchFrames : 16;
 
   test.equal(caps.supports.promiscuous, true,
     "throughput qualification requires the promiscuous Build Context gate");
@@ -38,10 +40,10 @@ test("wifi_csi/throughput-hardware", function () {
     status = session.status();
     startMs = sys.millis();
     while (sys.millis() - startMs < durationMs) {
-      batch = session.receiveBatch(16, 1000);
+      batch = session.receiveBatch(batchFrames, 1000);
       if (batch !== null) {
         source = batch.source({ format: "esp32qjs-csi/1" });
-        transportBytes += rpc.sourceInfo(source).size;
+        transportBytes += source.byteLength;
         frames += batch.frameCount;
         batches += 1;
         source.close();

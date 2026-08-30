@@ -3132,8 +3132,9 @@ JSValue js_wifi_csi_session_receive_batch(JSContext *ctx,
     atomic_fetch_add_explicit(
         &session->resources.counters.delivered_batches, 1U,
         memory_order_relaxed);
+    JSValue return_value = JS_PopGCRef(ctx, &object_ref);
     JS_PopGCRef(ctx, &first_ref);
-    return JS_PopGCRef(ctx, &object_ref);
+    return return_value;
 
 fail_batch:
     wifi_csi_batch_release_owner(batch);
