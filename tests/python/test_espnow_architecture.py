@@ -325,20 +325,39 @@ class EspNowArchitectureTests(unittest.TestCase):
         ):
             self.assertIn(token, wireless)
 
-    def test_peer_rate_capability_is_not_advertised_without_a_public_api(self):
+    def test_peer_rate_configuration_is_public_and_restored(self):
         source = (
             MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
         ).read_text(encoding="utf-8")
         types = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
             encoding="utf-8"
         )
+        c_api = (ROOT / "docs/c-api.md").read_text(encoding="utf-8")
+        wireless = (ROOT / "docs/ai/wireless.md").read_text(encoding="utf-8")
 
         capabilities = source[
             source.index("JSValue js_espnow_capabilities") :
             source.index("JSValue js_espnow_open")
         ]
-        self.assertIn('"peerRateConfig",\n                                         JS_FALSE', capabilities)
-        self.assertIn("readonly peerRateConfig: false", types)
+        restore = source[
+            source.index("static esp_err_t espnow_restore_native_session") :
+            source.index("static esp_err_t espnow_begin_timeout_recovery")
+        ]
+        update = source[
+            source.index("case ESPNOW_OPERATION_UPDATE_PEER:") :
+            source.index("case ESPNOW_OPERATION_CLOSE_PEER:")
+        ]
+
+        self.assertIn('"peerRateConfig",\n                                         JS_TRUE', capabilities)
+        self.assertIn("readonly peerRateConfig: true", types)
+        self.assertIn("rateConfig?: EspNowPeerRateConfig", types)
+        self.assertIn("rateConfig: EspNowPeerRateConfig | null", types)
+        self.assertIn('"rateConfig"', source)
+        self.assertIn("esp_now_set_peer_rate_config", source)
+        self.assertIn("espnow_apply_peer_rate_config(peer)", restore)
+        self.assertIn("espnow_apply_peer_rate_config(peer)", update)
+        self.assertIn("peerRateConfig` is `true`", c_api)
+        self.assertIn("peerRateConfig` is `true`", wireless)
 
     def test_peer_slots_are_generation_checked_and_keys_are_scrubbed(self):
         source = (

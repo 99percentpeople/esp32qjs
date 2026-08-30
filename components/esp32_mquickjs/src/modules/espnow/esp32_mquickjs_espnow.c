@@ -75,6 +75,16 @@ typedef struct {
 } espnow_peer_ref_t;
 
 typedef struct {
+    bool configured;
+    wifi_phy_mode_t phy_mode;
+    wifi_phy_rate_t phy_rate;
+    uint8_t mcs;
+    bool short_guard_interval;
+    bool ersu;
+    bool dcm;
+} espnow_peer_rate_config_t;
+
+typedef struct {
     bool allocated;
     bool reserved;
     uint32_t generation;
@@ -82,6 +92,7 @@ typedef struct {
     uint8_t channel;
     bool encrypted;
     uint8_t lmk[ESP_NOW_KEY_LEN];
+    espnow_peer_rate_config_t rate_config;
 } espnow_peer_slot_t;
 
 typedef enum {
@@ -158,6 +169,7 @@ struct esp32_mquickjs_future_driver_state {
     bool encrypted;
     bool has_lmk;
     uint8_t lmk[ESP_NOW_KEY_LEN];
+    espnow_peer_rate_config_t peer_rate_config;
     uint8_t *payload;
     size_t payload_length;
     uint32_t max_payload_bytes;
@@ -384,21 +396,122 @@ static espnow_peer_slot_t *espnow_peer_from_value(
     return peer;
 }
 
+static bool espnow_phy_rate_for_mcs(uint32_t mcs,
+                                    bool short_guard_interval,
+                                    wifi_phy_rate_t *out_rate)
+{
+    static const wifi_phy_rate_t long_guard_rates[] = {
+        WIFI_PHY_RATE_MCS0_LGI, WIFI_PHY_RATE_MCS1_LGI,
+        WIFI_PHY_RATE_MCS2_LGI, WIFI_PHY_RATE_MCS3_LGI,
+        WIFI_PHY_RATE_MCS4_LGI, WIFI_PHY_RATE_MCS5_LGI,
+        WIFI_PHY_RATE_MCS6_LGI, WIFI_PHY_RATE_MCS7_LGI,
+#if CONFIG_SOC_WIFI_HE_SUPPORT
+        WIFI_PHY_RATE_MCS8_LGI, WIFI_PHY_RATE_MCS9_LGI,
+#endif
+    };
+    static const wifi_phy_rate_t short_guard_rates[] = {
+        WIFI_PHY_RATE_MCS0_SGI, WIFI_PHY_RATE_MCS1_SGI,
+        WIFI_PHY_RATE_MCS2_SGI, WIFI_PHY_RATE_MCS3_SGI,
+        WIFI_PHY_RATE_MCS4_SGI, WIFI_PHY_RATE_MCS5_SGI,
+        WIFI_PHY_RATE_MCS6_SGI, WIFI_PHY_RATE_MCS7_SGI,
+#if CONFIG_SOC_WIFI_HE_SUPPORT
+        WIFI_PHY_RATE_MCS8_SGI, WIFI_PHY_RATE_MCS9_SGI,
+#endif
+    };
+    const wifi_phy_rate_t *rates = short_guard_interval
+                                       ? short_guard_rates
+                                       : long_guard_rates;
+    size_t count = sizeof(long_guard_rates) / sizeof(long_guard_rates[0]);
+
+    if (out_rate == NULL || mcs >= count) {
+        return false;
+    }
+    *out_rate = rates[mcs];
+    return true;
+}
+
+static const char *espnow_phy_mode_name(wifi_phy_mode_t phy_mode)
+{
+    switch (phy_mode) {
+    case WIFI_PHY_MODE_HT20:
+        return "ht20";
+    case WIFI_PHY_MODE_HT40:
+        return "ht40";
+#if CONFIG_SOC_WIFI_HE_SUPPORT
+    case WIFI_PHY_MODE_HE20:
+        return "he20";
+#endif
+    default:
+        return "unknown";
+    }
+}
+
+static esp_err_t espnow_apply_peer_rate_config(
+    const espnow_peer_slot_t *peer)
+{
+    esp_now_rate_config_t native_config;
+
+    if (peer == NULL || !peer->rate_config.configured) {
+        return ESP_OK;
+    }
+    memset(&native_config, 0, sizeof(native_config));
+    native_config.phymode = peer->rate_config.phy_mode;
+    native_config.rate = peer->rate_config.phy_rate;
+    native_config.ersu = peer->rate_config.ersu;
+    native_config.dcm = peer->rate_config.dcm;
+    return esp_now_set_peer_rate_config(peer->address, &native_config);
+}
+
+static JSValue espnow_peer_rate_config_to_js(
+    JSContext *ctx, const espnow_peer_rate_config_t *config)
+{
+    JSGCRef result_ref;
+    JSValue *result = JS_PushGCRef(ctx, &result_ref);
+
+    if (config == NULL || !config->configured) {
+        *result = JS_NULL;
+        return JS_PopGCRef(ctx, &result_ref);
+    }
+    *result = JS_NewObject(ctx);
+    if (JS_IsException(*result) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "phyMode",
+            JS_NewString(ctx, espnow_phy_mode_name(config->phy_mode))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "mcs", JS_NewUint32(ctx, config->mcs)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "guardInterval",
+            JS_NewString(ctx, config->short_guard_interval
+                                  ? "short" : "long")) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "ersu", JS_NewBool(config->ersu)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "dcm", JS_NewBool(config->dcm))) {
+        JS_PopGCRef(ctx, &result_ref);
+        return JS_EXCEPTION;
+    }
+    return JS_PopGCRef(ctx, &result_ref);
+}
+
 static JSValue espnow_peer_status_to_js(JSContext *ctx,
                                         const espnow_peer_slot_t *peer)
 {
     char address[18];
-    JSGCRef result_ref;
+    JSGCRef result_ref, rate_config_ref;
     JSValue *result = JS_PushGCRef(ctx, &result_ref);
+    JSValue *rate_config = JS_PushGCRef(ctx, &rate_config_ref);
 
     if (peer == NULL) {
+        JS_PopGCRef(ctx, &rate_config_ref);
         JS_PopGCRef(ctx, &result_ref);
         return JS_ThrowReferenceError(ctx,
                                       "ESPNOW_STALE_PEER: peer is closed");
     }
     espnow_format_address(peer->address, address);
     *result = JS_NewObject(ctx);
+    *rate_config = espnow_peer_rate_config_to_js(ctx, &peer->rate_config);
     if (JS_IsException(*result) ||
+        JS_IsException(*rate_config) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "open", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "address",
                                          JS_NewString(ctx, address)) ||
@@ -408,10 +521,14 @@ static JSValue espnow_peer_status_to_js(JSContext *ctx,
                 ? JS_NewString(ctx, "current")
                 : JS_NewUint32(ctx, peer->channel)) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "encrypted",
-                                         JS_NewBool(peer->encrypted))) {
+                                         JS_NewBool(peer->encrypted)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "rateConfig",
+                                         *rate_config)) {
+        JS_PopGCRef(ctx, &rate_config_ref);
         JS_PopGCRef(ctx, &result_ref);
         return JS_EXCEPTION;
     }
+    JS_PopGCRef(ctx, &rate_config_ref);
     return JS_PopGCRef(ctx, &result_ref);
 }
 
@@ -1547,6 +1664,130 @@ static bool espnow_retain_owner(
     return true;
 }
 
+static bool espnow_parse_peer_rate_config(
+    JSContext *ctx, JSValue value,
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    static const char *const allowed[] = {
+        "phyMode", "mcs", "guardInterval", "ersu", "dcm",
+    };
+    JSGCRef property_ref;
+    JSValue *property = JS_PushGCRef(ctx, &property_ref);
+    espnow_peer_rate_config_t config = {0};
+    uint32_t mcs;
+    bool result = false;
+
+    if (state == NULL || !espnow_is_object(ctx, value) ||
+        !espnow_validate_option_keys(ctx, value,
+                                     "EspNowSession.addPeer({ rateConfig })",
+                                     allowed, 5U)) {
+        if (!JS_HasException(ctx)) {
+            JS_ThrowTypeError(
+                ctx, "ESPNOW_INVALID_RATE_CONFIG: rateConfig must be an object");
+        }
+        goto done;
+    }
+
+    *property = JS_GetPropertyStr(ctx, value, "phyMode");
+    if (JS_IsException(*property)) {
+        goto done;
+    }
+    if (espnow_string_equals(ctx, *property, "ht20")) {
+        config.phy_mode = WIFI_PHY_MODE_HT20;
+    } else if (espnow_string_equals(ctx, *property, "ht40")) {
+        config.phy_mode = WIFI_PHY_MODE_HT40;
+#if CONFIG_SOC_WIFI_HE_SUPPORT
+    } else if (espnow_string_equals(ctx, *property, "he20")) {
+        config.phy_mode = WIFI_PHY_MODE_HE20;
+#endif
+    } else {
+        JS_ThrowTypeError(
+            ctx,
+            "ESPNOW_INVALID_RATE_CONFIG: phyMode must be ht20, ht40%s",
+#if CONFIG_SOC_WIFI_HE_SUPPORT
+            ", or he20"
+#else
+            ""
+#endif
+        );
+        goto done;
+    }
+
+    *property = JS_GetPropertyStr(ctx, value, "mcs");
+    if (JS_IsException(*property) || !espnow_to_u32(ctx, *property, &mcs) ||
+        mcs > (config.phy_mode == WIFI_PHY_MODE_HE20 ? 9U : 7U) ||
+        !espnow_phy_rate_for_mcs(mcs, false, &config.phy_rate)) {
+        if (!JS_HasException(ctx)) {
+            JS_ThrowTypeError(
+                ctx,
+                "ESPNOW_INVALID_RATE_CONFIG: mcs must be 0..7 for HT or 0..9 for HE");
+        }
+        goto done;
+    }
+    config.mcs = (uint8_t)mcs;
+
+    *property = JS_GetPropertyStr(ctx, value, "guardInterval");
+    if (JS_IsException(*property)) {
+        goto done;
+    }
+    if (espnow_string_equals(ctx, *property, "long")) {
+        config.short_guard_interval = false;
+    } else if (espnow_string_equals(ctx, *property, "short")) {
+        config.short_guard_interval = true;
+        if (!espnow_phy_rate_for_mcs(mcs, true, &config.phy_rate)) {
+            JS_ThrowTypeError(ctx,
+                              "ESPNOW_INVALID_RATE_CONFIG: unsupported MCS");
+            goto done;
+        }
+    } else {
+        JS_ThrowTypeError(
+            ctx,
+            "ESPNOW_INVALID_RATE_CONFIG: guardInterval must be long or short");
+        goto done;
+    }
+
+    *property = JS_GetPropertyStr(ctx, value, "ersu");
+    if (JS_IsException(*property)) {
+        goto done;
+    }
+    if (!JS_IsUndefined(*property)) {
+        if (*property != JS_TRUE && *property != JS_FALSE) {
+            JS_ThrowTypeError(
+                ctx, "ESPNOW_INVALID_RATE_CONFIG: ersu must be a boolean");
+            goto done;
+        }
+        config.ersu = *property == JS_TRUE;
+    }
+
+    *property = JS_GetPropertyStr(ctx, value, "dcm");
+    if (JS_IsException(*property)) {
+        goto done;
+    }
+    if (!JS_IsUndefined(*property)) {
+        if (*property != JS_TRUE && *property != JS_FALSE) {
+            JS_ThrowTypeError(
+                ctx, "ESPNOW_INVALID_RATE_CONFIG: dcm must be a boolean");
+            goto done;
+        }
+        config.dcm = *property == JS_TRUE;
+    }
+    if (config.phy_mode != WIFI_PHY_MODE_HE20 &&
+        (config.ersu || config.dcm)) {
+        JS_ThrowTypeError(
+            ctx,
+            "ESPNOW_INVALID_RATE_CONFIG: ersu and dcm require HE20");
+        goto done;
+    }
+
+    config.configured = true;
+    state->peer_rate_config = config;
+    result = true;
+
+done:
+    JS_PopGCRef(ctx, &property_ref);
+    return result;
+}
+
 static bool espnow_parse_peer_options(
     JSContext *ctx,
     JSValue options,
@@ -1555,7 +1796,7 @@ static bool espnow_parse_peer_options(
     esp32_mquickjs_future_driver_state_t *state)
 {
     static const char *const add_allowed[] = {
-        "address", "channel", "encrypted", "lmk",
+        "address", "channel", "encrypted", "lmk", "rateConfig",
     };
     static const char *const update_allowed[] = {
         "channel", "encrypted", "lmk",
@@ -1570,7 +1811,7 @@ static bool espnow_parse_peer_options(
             ctx, options, updating ? "EspNowPeer.update()"
                                    : "EspNowSession.addPeer()",
             updating ? update_allowed : add_allowed,
-            updating ? 3U : 4U)) {
+            updating ? 3U : 5U)) {
         if (!JS_HasException(ctx)) {
             JS_ThrowTypeError(ctx, "ESP-NOW peer options must be an object");
         }
@@ -1666,6 +1907,14 @@ static bool espnow_parse_peer_options(
         espnow_throw_error(ctx, "ESPNOW_INVALID_KEY", ESP_ERR_INVALID_ARG,
                            state->address, s_espnow_session.channel);
         goto done;
+    }
+    if (!updating) {
+        *property = JS_GetPropertyStr(ctx, options, "rateConfig");
+        if (JS_IsException(*property) ||
+            (!JS_IsUndefined(*property) &&
+             !espnow_parse_peer_rate_config(ctx, *property, state))) {
+            goto done;
+        }
     }
     result = true;
 
@@ -1959,15 +2208,23 @@ static bool espnow_control_start(
             memcpy(peer->address, state->address, ESPNOW_ADDRESS_BYTES);
             peer->channel = state->peer_channel;
             peer->encrypted = state->encrypted;
+            peer->rate_config = state->peer_rate_config;
             if (state->encrypted) {
                 memcpy(peer->lmk, state->lmk, ESP_NOW_KEY_LEN);
             }
-            peer->allocated = true;
-            peer->reserved = false;
-            state->peer_reserved = false;
-            session->peer_count++;
-            if (peer->encrypted) {
-                session->encrypted_peer_count++;
+            state->err = espnow_apply_peer_rate_config(peer);
+            if (state->err != ESP_OK) {
+                (void)esp_now_del_peer(peer->address);
+                espnow_clear_peer(peer);
+                state->peer_reserved = false;
+            } else {
+                peer->allocated = true;
+                peer->reserved = false;
+                state->peer_reserved = false;
+                session->peer_count++;
+                if (peer->encrypted) {
+                    session->encrypted_peer_count++;
+                }
             }
         }
         break;
@@ -1982,29 +2239,54 @@ static bool espnow_control_start(
                                session->channel);
             return false;
         }
-        memcpy(peer_info.peer_addr, state->address, ESPNOW_ADDRESS_BYTES);
-        peer_info.channel = state->peer_channel;
-        peer_info.ifidx = WIFI_IF_STA;
-        peer_info.encrypt = state->encrypted;
-        if (state->encrypted) {
-            memcpy(peer_info.lmk, state->lmk, ESP_NOW_KEY_LEN);
-        }
-        state->err = esp_now_mod_peer(&peer_info);
-        if (state->err == ESP_OK) {
-            if (peer->encrypted != state->encrypted) {
-                if (state->encrypted) {
-                    session->encrypted_peer_count++;
-                } else if (session->encrypted_peer_count > 0) {
-                    session->encrypted_peer_count--;
+        {
+            esp_now_peer_info_t previous_peer_info = {0};
+
+            memcpy(previous_peer_info.peer_addr, peer->address,
+                   ESPNOW_ADDRESS_BYTES);
+            previous_peer_info.channel = peer->channel;
+            previous_peer_info.ifidx = WIFI_IF_STA;
+            previous_peer_info.encrypt = peer->encrypted;
+            if (peer->encrypted) {
+                memcpy(previous_peer_info.lmk, peer->lmk, ESP_NOW_KEY_LEN);
+            }
+            memcpy(peer_info.peer_addr, state->address,
+                   ESPNOW_ADDRESS_BYTES);
+            peer_info.channel = state->peer_channel;
+            peer_info.ifidx = WIFI_IF_STA;
+            peer_info.encrypt = state->encrypted;
+            if (state->encrypted) {
+                memcpy(peer_info.lmk, state->lmk, ESP_NOW_KEY_LEN);
+            }
+            state->err = esp_now_mod_peer(&peer_info);
+            if (state->err == ESP_OK) {
+                state->err = espnow_apply_peer_rate_config(peer);
+                if (state->err == ESP_OK) {
+                    if (peer->encrypted != state->encrypted) {
+                        if (state->encrypted) {
+                            session->encrypted_peer_count++;
+                        } else if (session->encrypted_peer_count > 0) {
+                            session->encrypted_peer_count--;
+                        }
+                    }
+                    esp32_mquickjs_wireless_secure_zero(
+                        peer->lmk, sizeof(peer->lmk));
+                    peer->channel = state->peer_channel;
+                    peer->encrypted = state->encrypted;
+                    if (state->encrypted) {
+                        memcpy(peer->lmk, state->lmk, ESP_NOW_KEY_LEN);
+                    }
+                } else {
+                    esp_err_t update_err = state->err;
+
+                    if (esp_now_mod_peer(&previous_peer_info) == ESP_OK) {
+                        (void)espnow_apply_peer_rate_config(peer);
+                    }
+                    state->err = update_err;
                 }
             }
-            esp32_mquickjs_wireless_secure_zero(peer->lmk,
-                                                 sizeof(peer->lmk));
-            peer->channel = state->peer_channel;
-            peer->encrypted = state->encrypted;
-            if (state->encrypted) {
-                memcpy(peer->lmk, state->lmk, ESP_NOW_KEY_LEN);
-            }
+            esp32_mquickjs_wireless_secure_zero(
+                previous_peer_info.lmk, sizeof(previous_peer_info.lmk));
         }
         break;
     case ESPNOW_OPERATION_CLOSE_PEER:
@@ -2529,6 +2811,10 @@ static esp_err_t espnow_restore_native_session(espnow_session_t *session)
             memcpy(peer_info.lmk, peer->lmk, ESP_NOW_KEY_LEN);
         }
         err = esp_now_add_peer(&peer_info);
+        if (err != ESP_OK) {
+            return err;
+        }
+        err = espnow_apply_peer_rate_config(peer);
         if (err != ESP_OK) {
             return err;
         }
@@ -3332,7 +3618,7 @@ JSValue js_espnow_capabilities(JSContext *ctx, JSValue *this_val,
                                          JS_FALSE) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "powerSave", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "peerRateConfig",
-                                         JS_FALSE)) {
+                                         JS_TRUE)) {
         JS_PopGCRef(ctx, &result_ref);
         return JS_EXCEPTION;
     }

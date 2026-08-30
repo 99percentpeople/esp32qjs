@@ -52,8 +52,11 @@ application acknowledgements, retries, deduplication, fragmentation, routing,
 Mesh behavior, provisioning, or a product message schema.
 
 - `espNow.capabilities()` reports compile-time peer and payload limits.
-  `peerRateConfig` is currently `false`; no native peer-rate control is exposed
-  until automatic-rate restoration can survive peer update and timeout rebuild.
+  `peerRateConfig` is `true`; `session.addPeer()` optionally accepts explicit
+  `{ phyMode, mcs, guardInterval, ersu?, dcm? }` rate control. HT accepts MCS
+  0..7; HE20 is target-gated and accepts MCS 0..9. ERSU/DCM are HE20-only. The
+  immutable peer rate is retained by `peer.update()` and timeout rebuild, then
+  cleared by peer removal or session close.
 - `espNow.open(options?)` creates the only session in the current runtime.
 - `session.receive(timeoutMs?)` consumes a bounded receive queue; each event
   includes source/destination addresses, channel, RSSI, timestamp, sequence,

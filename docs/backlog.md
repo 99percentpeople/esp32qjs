@@ -66,8 +66,9 @@ discovery from the S3 and Raspberry Pi 5, encrypted bidirectional S3/C5
 ESP-NOW, RX-pool sequence-gap accounting, BLE/ESP-NOW coexistence, and both
 initialization orders. Remaining work is:
 
-- Add public per-peer rate configuration only with automatic-rate restoration
-  across peer update, removal, close, and timeout-driven native rebuild.
+- Qualify the public per-peer rate configuration across the remaining C3/C5
+  hardware matrix. The native contract already restores explicit rates across
+  peer update and timeout-driven rebuild; removal and close clear peer state.
 - Treat ESP32-C3 hardware coverage, multiple BLE connections, and broader peer
   matrices as later qualification. Do not require a 24-hour soak for the
   current development milestone.

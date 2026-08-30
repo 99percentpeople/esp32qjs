@@ -1989,9 +1989,12 @@ application acknowledgements, retries, deduplication, fragmentation, routing,
 Mesh behavior, provisioning, or a product message schema.
 
 - `espNow.capabilities()` returns v1/target/ESP-IDF identity, the configured
-  peer, encrypted-peer, and payload limits. `peerRateConfig` is `false` until a
-  public rate contract can restore automatic rate selection across peer update
-  and timeout recovery.
+  peer, encrypted-peer, and payload limits. `peerRateConfig` is `true` and
+  `session.addPeer()` accepts an optional explicit `{ phyMode, mcs,
+  guardInterval, ersu?, dcm? }` rate configuration. HT accepts MCS 0..7; HE20
+  is target-gated and accepts MCS 0..9. ERSU/DCM are HE20-only. The selected
+  rate is immutable on the peer handle and is automatically restored after
+  `peer.update()` and timeout-driven native rebuild; remove/close clears it.
 - `espNow.open(options?)` opens the only session in the runtime through a native
   Future. Options are `interface: "station"`, `channel: "current" | 1..14`,
   `maxPayloadBytes`, `receiveCapacity`, `sendTimeoutMs`, an optional 16-byte

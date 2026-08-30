@@ -2906,7 +2906,7 @@ namespace ESP32QJS {
     readonly stationInterface: true;
     readonly softApInterface: false;
     readonly powerSave: boolean;
-    readonly peerRateConfig: false;
+    readonly peerRateConfig: true;
   }
 
   type EspNowPowerSaveOptions =
@@ -2960,8 +2960,23 @@ namespace ESP32QJS {
     };
   }
 
+  interface EspNowPeerRateConfig {
+    phyMode: "ht20" | "ht40" | "he20";
+    mcs: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+    guardInterval: "long" | "short";
+    ersu?: boolean;
+    dcm?: boolean;
+  }
+
   interface EspNowPeerOptions {
     address: EspNowAddress;
+    channel?: EspNowChannel;
+    encrypted?: boolean;
+    lmk?: ByteSource;
+    rateConfig?: EspNowPeerRateConfig;
+  }
+
+  interface EspNowPeerUpdateOptions {
     channel?: EspNowChannel;
     encrypted?: boolean;
     lmk?: ByteSource;
@@ -2972,6 +2987,7 @@ namespace ESP32QJS {
     address: EspNowAddress;
     channel: number | "current";
     encrypted: boolean;
+    rateConfig: EspNowPeerRateConfig | null;
   }
 
   interface EspNowReceiveEvent {
@@ -3034,7 +3050,7 @@ namespace ESP32QJS {
     private constructor();
     status(): EspNowPeerStatus;
     send(data: ByteSource, options?: EspNowSendOptions): EspNowSendResult;
-    update(options: Omit<EspNowPeerOptions, "address">): EspNowPeerStatus;
+    update(options: EspNowPeerUpdateOptions): EspNowPeerStatus;
     remove(): boolean;
   }
 

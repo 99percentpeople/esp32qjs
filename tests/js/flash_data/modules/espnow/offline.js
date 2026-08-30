@@ -20,6 +20,8 @@ test("espnow/offline", function () {
     "ESP-NOW v1 should reject the soft-AP interface");
   test.ok(capabilities.maxPayloadBytes >= 250,
     "ESP-NOW should support v1 payloads");
+  test.equal(capabilities.peerRateConfig, true,
+    "ESP-NOW should expose explicit per-peer PHY rate control");
 
   invalidOpen = Future.call(espNow.open, espNow, [{ unknown: true }]);
   test.equal(invalidOpen.status(), "rejected",
@@ -68,20 +70,32 @@ test("espnow/offline", function () {
 
     peer = session.addPeer({
       address: "02:00:00:00:00:01",
-      channel: "current"
+      channel: "current",
+      rateConfig: {
+        phyMode: "ht20",
+        mcs: 0,
+        guardInterval: "long"
+      }
     });
     peerStatus = peer.status();
     test.equal(peerStatus.address, "02:00:00:00:00:01",
       "peer addresses should be normalized");
     test.equal(peerStatus.encrypted, false,
       "unencrypted peers should be explicit in status");
+    test.equal(peerStatus.rateConfig.phyMode, "ht20",
+      "peer status should preserve the requested PHY mode");
+    test.equal(peerStatus.rateConfig.mcs, 0,
+      "peer status should preserve the requested MCS");
     lookup = session.peer("02:00:00:00:00:01");
     test.ok(lookup && lookup.status().open,
       "peer lookup should return a generation-checked handle");
     test.equal(session.peers().length, 1,
       "peer snapshots should include the application peer");
-    test.equal(peer.update({ channel: "current" }).channel, "current",
+    peerStatus = peer.update({ channel: "current" });
+    test.equal(peerStatus.channel, "current",
       "peer update should use the native Future driver");
+    test.equal(peerStatus.rateConfig.phyMode, "ht20",
+      "peer update should retain explicit rate configuration");
     test.equal(peer.remove(), true, "peer remove should remove the native peer");
     try {
       peer.status();
