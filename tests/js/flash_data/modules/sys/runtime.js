@@ -303,7 +303,7 @@ test("sys/runtime", function () {
   expectFeature("wifi", hasObject("wifi"));
   test.equal(typeof features.tls, "boolean",
     "sys.info.features.tls should report the build capability");
-  expectFeature("http", hasObject("http") && typeof globalThis.fetch === "function");
+  expectFeature("http", hasObject("http") && typeof globalThis.http.fetch === "function");
   expectFeature("httpServer", hasObject("http") && typeof globalThis.http.server === "function");
   expectFeature("runtimeLogs", hasObject("runtimeLogs"));
   test.equal(hasObject("http"), features.http || features.httpServer,

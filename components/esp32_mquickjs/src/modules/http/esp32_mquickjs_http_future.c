@@ -387,11 +387,9 @@ bool esp32_mquickjs_init_http_future_runtime(JSContext *ctx,
 {
     JSGCRef global_ref;
     JSGCRef http_ref;
-    JSGCRef fetch_ref;
     JSGCRef module_fetch_ref;
     JSValue *global;
     JSValue *http;
-    JSValue *fetch;
     JSValue *module_fetch;
     bool result = false;
 
@@ -401,30 +399,23 @@ bool esp32_mquickjs_init_http_future_runtime(JSContext *ctx,
     }
     global = JS_PushGCRef(ctx, &global_ref);
     http = JS_PushGCRef(ctx, &http_ref);
-    fetch = JS_PushGCRef(ctx, &fetch_ref);
     module_fetch = JS_PushGCRef(ctx, &module_fetch_ref);
     *global = JS_GetGlobalObject(ctx);
     *http = JS_GetPropertyStr(ctx, *global, "http");
-    *fetch = JS_GetPropertyStr(ctx, *global, "fetch");
     *module_fetch = JS_IsException(*http)
                         ? JS_EXCEPTION
                         : JS_GetPropertyStr(ctx, *http, "fetch");
     if (!JS_IsException(*global) && !JS_IsException(*http) &&
-        !JS_IsException(*fetch) && !JS_IsException(*module_fetch) &&
-        esp32_mquickjs_future_register_driver(ctx,
-                                              runtime,
-                                              *fetch,
-                                              &s_http_future_driver) &&
+        !JS_IsException(*module_fetch) &&
         esp32_mquickjs_future_register_driver(ctx,
                                               runtime,
                                               *module_fetch,
                                               &s_http_future_driver)) {
         result = true;
-    } else if (!JS_IsException(*fetch) && !JS_IsException(*module_fetch)) {
+    } else if (!JS_IsException(*module_fetch)) {
         JS_ThrowInternalError(ctx, "failed to register HTTP Future drivers");
     }
     JS_PopGCRef(ctx, &module_fetch_ref);
-    JS_PopGCRef(ctx, &fetch_ref);
     JS_PopGCRef(ctx, &http_ref);
     JS_PopGCRef(ctx, &global_ref);
     return result;
