@@ -11,7 +11,8 @@ test("wifi_csi/saturation-hardware", function () {
   var stats;
   var releasedStats;
   var dropsBefore;
-  var scanAttempts;
+  var fillScanAttempts = 0;
+  var dropScanAttempts = 0;
   var trafficClient = null;
   var trafficResponse = null;
   var trafficRequestText =
@@ -37,25 +38,25 @@ test("wifi_csi/saturation-hardware", function () {
     });
     status = session.status();
 
-    for (i = 0; i < status.effective.poolCapacity; i += 1) {
-      probe = session.receive(0);
-      scanAttempts = 0;
-      while (probe === null && scanAttempts < 4) {
-        wifi.scan({
-          channel: status.effective.channel,
-          showHidden: true,
-          passive: false,
-          dwellMs: 250,
-          timeoutMs: 3000
-        });
-        probe = session.receive(1000);
-        scanAttempts += 1;
+    while (frames.length < status.effective.poolCapacity &&
+           fillScanAttempts < status.effective.poolCapacity * 12) {
+      wifi.scan({
+        channel: status.effective.channel,
+        showHidden: true,
+        passive: false,
+        dwellMs: 250,
+        timeoutMs: 3000
+      });
+      fillScanAttempts += 1;
+      probe = session.receive(1000);
+      while (probe !== null &&
+             frames.length < status.effective.poolCapacity) {
+        frames.push(probe);
+        probe = session.receive(0);
       }
-      test.ok(probe !== null,
-        "active same-channel scans should fill every configured CSI pool slot");
-      frames.push(probe);
-      probe = null;
     }
+    test.equal(frames.length, status.effective.poolCapacity,
+      "active same-channel scans should fill every configured CSI pool slot");
 
     stats = session.stats();
     test.equal(stats.leasedFrames, status.effective.poolCapacity,
@@ -80,6 +81,18 @@ test("wifi_csi/saturation-hardware", function () {
     trafficClient.close();
     trafficClient = null;
     stats = session.stats();
+    while (stats.droppedPoolFull <= dropsBefore &&
+           dropScanAttempts < status.effective.poolCapacity * 12) {
+      wifi.scan({
+        channel: status.effective.channel,
+        showHidden: true,
+        passive: false,
+        dwellMs: 250,
+        timeoutMs: 3000
+      });
+      stats = session.stats();
+      dropScanAttempts += 1;
+    }
     probe = session.receive(0);
     test.equal(probe, null,
       "callbacks cannot enqueue another frame while every slot is retained");
@@ -114,6 +127,8 @@ test("wifi_csi/saturation-hardware", function () {
     accepted: stats.accepted,
     droppedPoolFull: stats.droppedPoolFull,
     droppedQueueFull: stats.droppedQueueFull,
+    fillScanAttempts: fillScanAttempts,
+    dropScanAttempts: dropScanAttempts,
     releasedSlots: releasedStats.freePoolSlots
   };
 });

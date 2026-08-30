@@ -244,7 +244,8 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertIn("trafficClient.send(", hardware_test)
         self.assertIn("trafficClient.recv(", hardware_test)
         self.assertIn("trafficRequestText.charCodeAt", hardware_test)
-        self.assertIn("frame = session.receive(1000)", hardware_test)
+        self.assertIn("trafficResponseBytes", hardware_test)
+        self.assertIn("frame = session.receive(8000)", hardware_test)
 
     def test_hardware_saturation_holds_and_releases_the_complete_pool(self):
         hardware_test = (
@@ -263,6 +264,19 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertIn("session.stop()", hardware_test)
         self.assertIn("trafficClient.send(", hardware_test)
         self.assertIn("trafficRequestText.charCodeAt", hardware_test)
+        self.assertIn(
+            "frames.length < status.effective.poolCapacity", hardware_test
+        )
+        self.assertIn(
+            "fillScanAttempts < status.effective.poolCapacity * 12", hardware_test
+        )
+        self.assertIn(
+            "dropScanAttempts < status.effective.poolCapacity * 12", hardware_test
+        )
+        self.assertLess(
+            hardware_test.index("dropsBefore = stats.droppedPoolFull"),
+            hardware_test.rindex("wifi.scan({"),
+        )
 
     def test_short_promiscuous_hardware_cases_generate_ap_channel_traffic(self):
         directory = ROOT / "tests/js/flash_data/modules/wifi_csi"
@@ -312,6 +326,21 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertIn("minimumDmaLargest", hardware_test)
         self.assertIn("batch.close()", hardware_test)
         self.assertIn("stats.leasedFrames", hardware_test)
+
+    def test_associated_hardware_uses_explicit_router_traffic(self):
+        associated = (
+            ROOT
+            / "tests/js/flash_data/modules/wifi_csi/associated-hardware.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("preTrafficFrames", associated)
+        self.assertIn("trafficResponseBytes", associated)
+        self.assertIn("while ((frame = session.receive(0)) !== null)", associated)
+        self.assertNotIn("if (frame === null)", associated)
+        self.assertLess(
+            associated.index("trafficClient.send"),
+            associated.index("frame = session.receive(8000)"),
+        )
 
     def test_hardware_coexistence_covers_ble_tls_and_espnow_policy(self):
         directory = ROOT / "tests/js/flash_data/modules/wifi_csi"

@@ -14,6 +14,11 @@ test("wifi_csi/associated-hardware", function () {
   var trafficRequestText =
     "GET / HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n\r\n";
   var trafficRequest = [];
+  var preTrafficFrames = 0;
+  var trafficResponseBytes = 0;
+  var frameBytes = 0;
+  var frameSourceMac = "";
+  var frameRssi = 0;
   var requestIndex;
   var status;
   var stats;
@@ -38,32 +43,40 @@ test("wifi_csi/associated-hardware", function () {
     try {
       sys.time.sync({ servers: ["pool.ntp.org"], timeoutMs: 5000 });
     } catch (ignoredTimeError) {}
-    frame = session.receive(1000);
-    if (frame === null) {
-      trafficClient = socket.openTCP({ localPort: 0 });
-      test.ok(trafficClient.connect("example.com", 80, { timeoutMs: 10000 }),
-        "associated CSI traffic probe should connect");
-      for (requestIndex = 0; requestIndex < trafficRequestText.length;
-           requestIndex += 1) {
-        trafficRequest.push(trafficRequestText.charCodeAt(requestIndex));
-      }
-      test.ok(trafficClient.send(trafficRequest, 5000) > 0,
-        "associated CSI traffic probe should send a request");
-      trafficResponse = trafficClient.recv(512, 5000);
-      test.ok(trafficResponse !== null,
-        "associated CSI traffic probe should receive response bytes");
-      trafficResponse.close();
-      trafficResponse = null;
-      trafficClient.close();
-      trafficClient = null;
-      frame = session.receive(8000);
+    while ((frame = session.receive(0)) !== null) {
+      preTrafficFrames += 1;
+      frame.close();
+      frame = null;
     }
+    trafficClient = socket.openTCP({ localPort: 0 });
+    test.ok(trafficClient.connect("example.com", 80, { timeoutMs: 10000 }),
+      "associated CSI traffic probe should connect");
+    for (requestIndex = 0; requestIndex < trafficRequestText.length;
+         requestIndex += 1) {
+      trafficRequest.push(trafficRequestText.charCodeAt(requestIndex));
+    }
+    test.ok(trafficClient.send(trafficRequest, 5000) > 0,
+      "associated CSI traffic probe should send a request");
+    trafficResponse = trafficClient.recv(512, 5000);
+    test.ok(trafficResponse !== null,
+      "associated CSI traffic probe should receive response bytes");
+    trafficResponseBytes = trafficResponse.byteLength;
+    test.ok(trafficResponseBytes > 0,
+      "associated CSI traffic probe should receive non-empty response bytes");
+    trafficResponse.close();
+    trafficResponse = null;
+    trafficClient.close();
+    trafficClient = null;
+    frame = session.receive(8000);
     test.ok(frame !== null,
-      "associated traffic should produce a CSI frame");
+      "explicit router traffic should produce a CSI frame");
     test.ok(frame.info.layout.byteLength > 0,
       "captured CSI should contain IQ bytes");
     test.equal(frame.info.layout.componentOrder, "imaginary-real",
       "raw component order should be explicit");
+    frameBytes = frame.info.layout.byteLength;
+    frameSourceMac = frame.info.sourceMac;
+    frameRssi = frame.info.rssi;
     samples = frame.samples();
     copy = frame.copySamples();
     source = frame.source();
@@ -93,5 +106,13 @@ test("wifi_csi/associated-hardware", function () {
   test.equal(wifi.status().radio.clients.wifiCsi, 0,
     "associated close should release the CSI radio lease");
 
-  return { target: caps.target, schema: caps.configSchema };
+  return {
+    target: caps.target,
+    schema: caps.configSchema,
+    preTrafficFrames: preTrafficFrames,
+    trafficResponseBytes: trafficResponseBytes,
+    frameBytes: frameBytes,
+    frameSourceMac: frameSourceMac,
+    frameRssi: frameRssi
+  };
 });
