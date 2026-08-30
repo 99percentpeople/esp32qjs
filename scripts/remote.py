@@ -59,6 +59,7 @@ JS_TEST_PASS_PREFIX = "__TEST_PASS__:"
 JS_TEST_SKIP_PREFIX = "__TEST_SKIP__:"
 JS_TEST_FAIL_PREFIX = "__TEST_FAIL__:"
 JS_TEST_FORBIDDEN_OUTPUT_MARKER = "__ESP32QJS_HANDLED_FUTURE_REJECTION__"
+JS_TEST_DETAILS_MAX_BYTES = 4096
 JS_REPL_BANNER_MARKER = "Run help() for usage."
 MONITOR_READY_MARKER = "--- Quit:"
 ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])")
@@ -77,6 +78,7 @@ class JsTestCase:
     timeout_seconds: float = 15.0
     reset_before: bool = False
     reset_after: bool = False
+    record_details: bool = False
 
 
 @dataclass(frozen=True)
@@ -199,6 +201,7 @@ JS_TEST_MODULES = (
                 timeout_seconds=45.0,
                 reset_before=True,
                 reset_after=True,
+                record_details=True,
             ),
             JsTestCase(
                 "modules/wifi_csi/promiscuous-hardware.js",
@@ -206,6 +209,7 @@ JS_TEST_MODULES = (
                 timeout_seconds=30.0,
                 reset_before=True,
                 reset_after=True,
+                record_details=True,
             ),
             JsTestCase(
                 "modules/wifi_csi/batch-transport-hardware.js",
@@ -213,9 +217,98 @@ JS_TEST_MODULES = (
                 timeout_seconds=45.0,
                 reset_before=True,
                 reset_after=True,
+                record_details=True,
+            ),
+            JsTestCase(
+                "modules/wifi_csi/saturation-hardware.js",
+                required_capabilities=("csi-hardware",),
+                timeout_seconds=150.0,
+                reset_before=True,
+                reset_after=True,
+                record_details=True,
+            ),
+            JsTestCase(
+                "modules/wifi_csi/throughput-hardware.js",
+                required_capabilities=("csi-hardware",),
+                timeout_seconds=60.0,
+                reset_before=True,
+                reset_after=True,
+                record_details=True,
+            ),
+            JsTestCase(
+                "modules/wifi_csi/soak-hardware.js",
+                required_capabilities=("csi-hardware", "csi-soak"),
+                timeout_seconds=720.0,
+                reset_before=True,
+                reset_after=True,
+                record_details=True,
+            ),
+            JsTestCase(
+                "modules/wifi_csi/lifecycle-hardware.js",
+                required_capabilities=("csi-hardware",),
+                timeout_seconds=180.0,
+                reset_before=True,
+                reset_after=True,
+                record_details=True,
             ),
         ),
-        required_features=("wifiCsi", "wifi", "fs", "rpc"),
+        required_features=("wifiCsi", "wifi", "fs", "rpc", "usbSerial"),
+    ),
+    JsTestModule(
+        "wifi_csi_camera",
+        (
+            JsTestCase(
+                "modules/wifi_csi/camera-coexistence-hardware.js",
+                required_capabilities=("csi-hardware", "media-hardware"),
+                timeout_seconds=150.0,
+                reset_before=True,
+                reset_after=True,
+                record_details=True,
+            ),
+        ),
+        required_features=("wifiCsi", "wifi", "camera", "bitmap"),
+    ),
+    JsTestModule(
+        "wifi_csi_ble",
+        (
+            JsTestCase(
+                "modules/wifi_csi/ble-coexistence-hardware.js",
+                required_capabilities=("csi-hardware",),
+                timeout_seconds=90.0,
+                reset_before=True,
+                reset_after=True,
+                record_details=True,
+            ),
+        ),
+        required_features=("wifiCsi", "wifi", "ble"),
+    ),
+    JsTestModule(
+        "wifi_csi_tls",
+        (
+            JsTestCase(
+                "modules/wifi_csi/tls-coexistence-hardware.js",
+                required_capabilities=("csi-hardware", "network"),
+                timeout_seconds=150.0,
+                reset_before=True,
+                reset_after=True,
+                record_details=True,
+            ),
+        ),
+        required_features=("wifiCsi", "wifi", "socket", "tls"),
+    ),
+    JsTestModule(
+        "wifi_csi_espnow",
+        (
+            JsTestCase(
+                "modules/wifi_csi/espnow-conflict-hardware.js",
+                required_capabilities=("csi-hardware",),
+                timeout_seconds=60.0,
+                reset_before=True,
+                reset_after=True,
+                record_details=True,
+            ),
+        ),
+        required_features=("wifiCsi", "wifi", "espnow"),
     ),
     JsTestModule(
         "ble",
@@ -268,6 +361,7 @@ JS_TEST_CAPABILITY_FLAGS = {
     "media-hardware": "--media-hardware",
     "wireless-hardware": "--wireless-hardware",
     "csi-hardware": "--csi-hardware",
+    "csi-soak": "--csi-soak",
 }
 
 
@@ -344,6 +438,7 @@ class JsCaseResult:
     case_name: str
     status: str
     error: str = ""
+    details: object | None = None
 
 
 @dataclass(frozen=True)
@@ -1585,12 +1680,32 @@ def resolve_js_test_capabilities(args: argparse.Namespace) -> set[str]:
         capabilities.add("wireless-hardware")
     if args.csi_hardware:
         capabilities.add("csi-hardware")
+    if args.csi_soak:
+        capabilities.add("csi-soak")
     return capabilities
 
 
 def describe_case_capabilities(capabilities: tuple[str, ...]) -> str:
     """Render required JS test capabilities as user-facing CLI flags."""
     return ", ".join(JS_TEST_CAPABILITY_FLAGS.get(capability, capability) for capability in capabilities)
+
+
+def format_js_case_details(details: object) -> str:
+    """Render one deterministic bounded evidence object for hardware-lab logs."""
+    encoded = json.dumps(
+        details,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    encoded_bytes = encoded.encode("utf-8")
+    if len(encoded_bytes) <= JS_TEST_DETAILS_MAX_BYTES:
+        return encoded
+    return json.dumps(
+        {"bytes": len(encoded_bytes), "truncated": True},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 def parse_ctest_summary(output: str) -> tuple[int, int] | None:
@@ -2270,8 +2385,18 @@ def run_js_test_case(session: MonitorSession, case: JsTestCase) -> JsCaseResult:
         return JsCaseResult(case=case, case_name=case.path, status="failed", error=message)
 
     case_name = payload.get("name", case.path)
-    print(f"PASS {case_name}", flush=True)
-    return JsCaseResult(case=case, case_name=case_name, status="passed")
+    details = payload.get("details")
+    details_suffix = (
+        f" details={format_js_case_details(details)}"
+        if case.record_details else ""
+    )
+    print(f"PASS {case_name}{details_suffix}", flush=True)
+    return JsCaseResult(
+        case=case,
+        case_name=case_name,
+        status="passed",
+        details=details,
+    )
 
 
 def run_js_tests(config: ProjectConfig,
@@ -2471,12 +2596,16 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
             raise SystemExit("`--wireless-hardware` requires JS scope.")
         if args.csi_hardware:
             raise SystemExit("`--csi-hardware` requires JS scope.")
+        if args.csi_soak:
+            raise SystemExit("`--csi-soak` requires JS scope.")
         if args.no_flash_firmware:
             raise SystemExit("`--no-flash-firmware` requires JS scope.")
         if args.no_flash_fs:
             raise SystemExit("`--no-flash-fs` requires JS scope.")
 
     if "js" in scopes:
+        if args.csi_soak and not args.csi_hardware:
+            raise SystemExit("`--csi-soak` also requires `--csi-hardware`.")
         run_js_syntax_check(config.build_context_flash_data_dir)
 
     stage_errors: list[str] = []
@@ -2749,6 +2878,11 @@ def parse_args(
         "--csi-hardware",
         action="store_true",
         help="Enable Wi-Fi CSI RF capture and batch-transport hardware cases.",
+    )
+    test.add_argument(
+        "--csi-soak",
+        action="store_true",
+        help="Enable the additional 1-10 minute Wi-Fi CSI memory soak; also pass --csi-hardware.",
     )
     test.add_argument(
         "--no-flash-firmware",

@@ -2026,11 +2026,12 @@ static wifi_csi_batch_ref_t *wifi_csi_batch_from_value(
 JSValue js_wifi_csi_capabilities(JSContext *ctx, JSValue *this_val,
                                  int argc, JSValue *argv)
 {
-    static const char *const sources_associated[] = {"associated"};
 #ifdef CONFIG_ESP32_MQUICKJS_WIFI_CSI_ALLOW_PROMISCUOUS
     static const char *const sources_promiscuous[] = {
         "associated", "promiscuous",
     };
+#else
+    static const char *const sources_associated[] = {"associated"};
 #endif
     static const char *const phy_legacy[] = {"legacy", "ht"};
     static const char *const phy_he[] = {

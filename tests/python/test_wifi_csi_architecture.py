@@ -168,6 +168,72 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertIn('MAGIC = b"E32QCSI1"', parser)
         self.assertIn('struct.unpack_from("<8sHHIII"', parser)
 
+    def test_hardware_batch_transport_covers_file_usb_and_streamed_rpc(self):
+        hardware_test = (
+            ROOT
+            / "tests/js/flash_data/modules/wifi_csi/batch-transport-hardware.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("stream.write(source)", hardware_test)
+        self.assertIn('usbSerial.open({ mode: "binary"', hardware_test)
+        self.assertIn("serial.send(usbSource)", hardware_test)
+        self.assertIn("codec.encode(1, 1, 0, { data: rpcInputSource })", hardware_test)
+        self.assertIn("rpcOutputSource instanceof _ByteSpanSource", hardware_test)
+
+    def test_hardware_saturation_holds_and_releases_the_complete_pool(self):
+        hardware_test = (
+            ROOT
+            / "tests/js/flash_data/modules/wifi_csi/saturation-hardware.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("stats.leasedFrames", hardware_test)
+        self.assertIn("stats.freePoolSlots", hardware_test)
+        self.assertIn("stats.droppedPoolFull", hardware_test)
+        self.assertIn("frames[i].close()", hardware_test)
+
+    def test_hardware_throughput_records_rates_drops_bytes_and_memory(self):
+        hardware_test = (
+            ROOT
+            / "tests/js/flash_data/modules/wifi_csi/throughput-hardware.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("callbackRateHz", hardware_test)
+        self.assertIn("acceptedRateHz", hardware_test)
+        self.assertIn("batchTransportBytesPerSecond", hardware_test)
+        self.assertIn("dropRatio", hardware_test)
+        self.assertIn("sys.status.memory", hardware_test)
+
+    def test_hardware_soak_tracks_memory_floor_without_retaining_batches(self):
+        hardware_test = (
+            ROOT
+            / "tests/js/flash_data/modules/wifi_csi/soak-hardware.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("csiSoakDurationMs", hardware_test)
+        self.assertIn("minimumInternalLargest", hardware_test)
+        self.assertIn("minimumDmaLargest", hardware_test)
+        self.assertIn("batch.close()", hardware_test)
+        self.assertIn("stats.leasedFrames", hardware_test)
+
+    def test_hardware_coexistence_covers_ble_tls_and_espnow_policy(self):
+        directory = ROOT / "tests/js/flash_data/modules/wifi_csi"
+        ble = (directory / "ble-coexistence-hardware.js").read_text(
+            encoding="utf-8"
+        )
+        tls = (directory / "tls-coexistence-hardware.js").read_text(
+            encoding="utf-8"
+        )
+        espnow = (directory / "espnow-conflict-hardware.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("adapter.scan", ble)
+        self.assertIn("session.receive", ble)
+        self.assertIn('socket.openTCP({ tls: true })', tls)
+        self.assertIn("session.receiveBatch", tls)
+        self.assertIn("espNow.open", espnow)
+        self.assertIn("WIFI_CSI_RADIO_CONFLICT", espnow)
+
     def test_radio_policy_has_explicit_csi_promiscuous_and_channel_owners(self):
         header = (MQUICKJS / "internal/esp32_mquickjs_wifi_radio.h").read_text(
             encoding="utf-8"
@@ -185,6 +251,18 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertIn("promiscuous_client", radio)
         self.assertIn("esp_wifi_sta_get_ap_info", radio)
         self.assertIn("esp_wifi_get_config(WIFI_IF_AP", radio)
+
+    def test_hardware_lab_explicitly_enables_csi_qualification(self):
+        workflow = (ROOT / ".github/workflows/hardware-lab.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("--csi-hardware", workflow)
+        self.assertIn("--csi-soak", workflow)
+        self.assertIn("scripts/hardware_lab_evidence.py", workflow)
+        self.assertIn("CSI_ROUTER_LABEL", workflow)
+        self.assertIn("CSI_PEER_LABEL", workflow)
+        self.assertIn("CSI_CHANNEL_BAND", workflow)
 
 
 if __name__ == "__main__":

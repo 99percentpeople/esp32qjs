@@ -4,7 +4,10 @@ import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -176,12 +179,116 @@ class RemoteConfigTests(unittest.TestCase):
             REMOTE.resolve_js_test_capabilities(args),
             {"csi-hardware"},
         )
-        self.assertEqual(len(hardware_cases), 3)
+        self.assertEqual(len(hardware_cases), 7)
         self.assertTrue(all(case.path.endswith("-hardware.js")
                             for case in hardware_cases))
+        self.assertTrue(all(case.record_details for case in hardware_cases))
         self.assertEqual(
             REMOTE.JS_TEST_CAPABILITY_FLAGS["csi-hardware"],
             "--csi-hardware",
+        )
+
+    def test_csi_long_soak_requires_a_second_explicit_capability(self):
+        args, _, _ = REMOTE.parse_args(
+            ["test", "--scope", "js", "--module", "wifi_csi",
+             "--csi-hardware", "--csi-soak"]
+        )
+        module = REMOTE.resolve_js_modules(["wifi_csi"])[0]
+        soak = [case for case in module.cases if "csi-soak" in case.required_capabilities]
+
+        self.assertEqual(
+            REMOTE.resolve_js_test_capabilities(args),
+            {"csi-hardware", "csi-soak"},
+        )
+        self.assertEqual(len(soak), 1)
+        self.assertEqual(
+            soak[0].required_capabilities,
+            ("csi-hardware", "csi-soak"),
+        )
+        self.assertTrue(soak[0].record_details)
+        self.assertEqual(
+            REMOTE.JS_TEST_CAPABILITY_FLAGS["csi-soak"],
+            "--csi-soak",
+        )
+
+    def test_camera_csi_coexistence_requires_both_hardware_capabilities(self):
+        args, _, _ = REMOTE.parse_args(
+            ["test", "--scope", "js", "--module", "wifi_csi_camera",
+             "--csi-hardware", "--media-hardware"]
+        )
+        module = REMOTE.resolve_js_modules(["wifi_csi_camera"])[0]
+
+        self.assertEqual(
+            REMOTE.resolve_js_test_capabilities(args),
+            {"csi-hardware", "media-hardware"},
+        )
+        self.assertEqual(len(module.cases), 1)
+        self.assertEqual(
+            module.cases[0].required_capabilities,
+            ("csi-hardware", "media-hardware"),
+        )
+        self.assertTrue(module.cases[0].record_details)
+
+    def test_csi_coexistence_modules_require_their_real_dependencies(self):
+        expected = {
+            "wifi_csi_ble": (
+                ("wifiCsi", "wifi", "ble"),
+                ("csi-hardware",),
+            ),
+            "wifi_csi_tls": (
+                ("wifiCsi", "wifi", "socket", "tls"),
+                ("csi-hardware", "network"),
+            ),
+            "wifi_csi_espnow": (
+                ("wifiCsi", "wifi", "espnow"),
+                ("csi-hardware",),
+            ),
+        }
+
+        for module_name, (features, capabilities) in expected.items():
+            with self.subTest(module=module_name):
+                module = REMOTE.resolve_js_modules([module_name])[0]
+                self.assertEqual(module.required_features, features)
+                self.assertEqual(len(module.cases), 1)
+                self.assertEqual(module.cases[0].required_capabilities, capabilities)
+                self.assertTrue(module.cases[0].record_details)
+
+    def test_csi_hardware_pass_keeps_bounded_structured_evidence(self):
+        case = REMOTE.JsTestCase(
+            "modules/wifi_csi/lifecycle-hardware.js",
+            record_details=True,
+        )
+        session = SimpleNamespace(process=SimpleNamespace(poll=lambda: None))
+        output = StringIO()
+        payload = (
+            b'__TEST_PASS__:{"name":"wifi_csi/lifecycle-hardware",'
+            b'"details":{"cycles":500,"internalFreeDelta":-128}}\n'
+        )
+
+        with (
+            patch.object(REMOTE, "send_js_command"),
+            patch.object(REMOTE, "read_monitor_chunk", return_value=payload),
+            patch.object(REMOTE.time, "monotonic", side_effect=(0.0, 0.0, 0.0, 0.3)),
+            redirect_stdout(output),
+        ):
+            result = REMOTE.run_js_test_case(session, case)
+
+        self.assertEqual(
+            result.details,
+            {"cycles": 500, "internalFreeDelta": -128},
+        )
+        self.assertIn(
+            'details={"cycles":500,"internalFreeDelta":-128}',
+            output.getvalue(),
+        )
+        bounded = REMOTE.format_js_case_details({"payload": "x" * 5000})
+        self.assertLessEqual(
+            len(bounded.encode("utf-8")),
+            REMOTE.JS_TEST_DETAILS_MAX_BYTES,
+        )
+        self.assertEqual(
+            json.loads(bounded),
+            {"bytes": 5014, "truncated": True},
         )
 
     def test_js_test_build_creates_a_real_context_and_selected_tree(self):
