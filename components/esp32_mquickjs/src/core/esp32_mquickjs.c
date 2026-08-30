@@ -1430,10 +1430,10 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
         JS_FreeContext(ctx);
         esp32_mquickjs_memory_release_generation();
     }
+    esp32_mquickjs_deinit_event_queue_runtime(runtime);
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
     esp32_mquickjs_deinit_fs_runtime(runtime);
 #endif
-    esp32_mquickjs_deinit_event_queue_runtime(runtime);
     heap_caps_free(runtime->startup_bytecode);
     runtime->startup_bytecode = NULL;
     esp32_mquickjs_deinit_future_runtime(runtime);

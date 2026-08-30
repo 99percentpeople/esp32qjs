@@ -1651,6 +1651,26 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         )
         self.assertNotIn("event_queue_destroy_if_disposed", event_queue)
 
+    def test_event_queue_close_callbacks_run_before_filesystem_runtime_teardown(self):
+        core = (MQUICKJS / "src/core/esp32_mquickjs.c").read_text(
+            encoding="utf-8"
+        )
+        filesystem = (
+            MQUICKJS / "src/modules/fs/esp32_mquickjs_fs.c"
+        ).read_text(encoding="utf-8")
+        destroy_start = core.index("static bool esp32_mquickjs_destroy_internal(")
+        destroy_end = core.index("\nbool esp32_mquickjs_destroy(", destroy_start)
+        destroy = core[destroy_start:destroy_end]
+        callback_start = filesystem.index("static void fs_change_queue_closed(")
+        callback_end = filesystem.index("\n}\n", callback_start) + 3
+        callback = filesystem[callback_start:callback_end]
+
+        self.assertIn("xSemaphoreTake(state->lock, portMAX_DELAY)", callback)
+        self.assertLess(
+            destroy.index("esp32_mquickjs_deinit_event_queue_runtime(runtime)"),
+            destroy.index("esp32_mquickjs_deinit_fs_runtime(runtime)"),
+        )
+
     def test_event_queue_exposes_queue_local_stats(self):
         event_queue = (
             MQUICKJS / "src/core/esp32_mquickjs_event_queue.c"
