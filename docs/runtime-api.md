@@ -111,7 +111,7 @@ cannot conceal a turn that never returns.
 Native waits are split according to
 `CONFIG_ESP32_MQUICKJS_COOPERATIVE_WAIT_SLICE_MS` (250 ms by default). Between
 slices the runtime feeds its task watchdog and observes stop requests. This
-covers `sleep()`/`delay()`, deferred activity waits, synchronous Wi-Fi waits,
+covers `sleep()`, deferred activity waits, synchronous Wi-Fi waits,
 SPI queue waits, and synchronous HTTP requests. Intentional native wait time is
 excluded from the ordinary JavaScript evaluation budget, while an explicit
 `sys.withTimeout()` wall-clock deadline remains active across those waits. An in-flight SPI transaction

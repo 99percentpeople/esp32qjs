@@ -67,14 +67,12 @@ namespace ESP32QJS {
   type ByteSource = ArrayLike<number> | ByteView;
 
   /**
-   * Native byte view with a read-only JavaScript surface.
+   * Native byte view containing a stable, immutable owned snapshot.
    *
-   * The view keeps its native owner alive while synchronous transports consume
-   * it. Some producers reuse their backing storage on later exports, so keep a
-   * view only for immediate synchronous use unless the producer documents a
-   * snapshot. Use `toArray()` for inspection, compatibility code, or when a
-   * stable JavaScript copy is required. Call `close()` after the last consumer
-   * or conversion so owned native storage is released deterministically.
+   * Backing bytes do not change while the view is open. Transports retain an
+   * in-flight read lease. `close()` is idempotent and requests deterministic
+   * early release; an active transport lease delays the native free without
+   * making `close()` fail.
    */
   interface ByteView {
     readonly length: number;
@@ -201,15 +199,8 @@ namespace ESP32QJS {
     byteOrder?: DisplayByteOrder;
   }
 
-  interface BitmapReadRectChunksOptions
-    extends BitmapReadRectOptions {
+  interface BitmapReadRectChunksOptions extends BitmapReadRectOptions {
     chunkBytes?: number;
-    /**
-     * Let direct full-row exports reuse the internal chunk array and ByteView
-     * wrappers. Use only for immediate synchronous writes; reused chunks are not
-     * snapshots.
-     */
-    reuse?: boolean;
   }
 
   interface DisplaySpanSourceOptions extends BitmapReadRectOptions {
@@ -361,7 +352,7 @@ namespace ESP32QJS {
   }
 
   /**
-   * HTTP request object shared by `fetch(...)` and `http.server(...)`.
+   * HTTP request object shared by `http.fetch(...)` and `http.server(...)`.
    *
    * @example
    * ```js
@@ -396,7 +387,7 @@ namespace ESP32QJS {
   }
 
   /**
-   * HTTP response object shared by `fetch(...)` and `http.server(...)`.
+   * HTTP response object shared by `http.fetch(...)` and `http.server(...)`.
    *
    * @example
    * ```js
@@ -1338,11 +1329,17 @@ namespace ESP32QJS {
     capacity: number;
   }
 
+  interface SysOrphanResourceStatus {
+    pending: number;
+    capacity: number;
+  }
+
   interface SysRuntimeResourcesStatus {
     timers: SysTimerResourceStatus;
     futures: SysFutureResourceStatus;
     eventQueues: SysEventQueueResourceStatus;
     asyncPollers: SysAsyncPollerResourceStatus;
+    orphans: SysOrphanResourceStatus;
   }
 
   interface SysRuntimeFilesystemStatus {
@@ -2325,32 +2322,42 @@ namespace ESP32QJS {
     droppedFrames: number;
   }
 
+  interface USBSerialCapabilities {
+    readonly apiVersion: "v1";
+    readonly target: string;
+    readonly idfVersion: string;
+    readonly supported: true;
+    readonly maxFrameBytes: number;
+    readonly modes: readonly ["text", "binary"];
+  }
+
   interface USBSerialTextHandle extends EventQueue<string> {
+    receive(timeoutMs?: number): string | null;
+    stats(): EventQueueStats;
     send(text: string): number;
     status(): USBSerialStatus;
+    close(): boolean;
   }
 
   interface USBSerialBinaryHandle extends EventQueue<ByteView> {
+    receive(timeoutMs?: number): ByteView | null;
+    stats(): EventQueueStats;
     send(data: ByteSource | ByteSpanSource): number;
     status(): USBSerialStatus;
+    close(): boolean;
   }
 
   /** Headless USB Serial/JTAG NDJSON transport; mutually exclusive with the REPL. */
   interface USBSerialModule {
-    readonly MAX_FRAME_BYTES: number;
+    capabilities(): USBSerialCapabilities;
     open(options?: USBSerialTextOptions): USBSerialTextHandle;
     open(options: USBSerialBinaryOptions): USBSerialBinaryHandle;
-    close(): boolean;
-    send(data: string | ByteSource | ByteSpanSource): number;
-    status(): USBSerialStatus;
   }
 
   interface WebSocketClientOpenOptions {
     url: string;
     authorization?: string;
     subprotocol?: string;
-    autoReconnect?: boolean;
-    reconnectMs?: number;
     networkTimeoutMs?: number;
     sendTimeoutMs?: number;
     pingIntervalSec?: number;
@@ -2371,7 +2378,6 @@ namespace ESP32QJS {
         timestampUs: number;
         code: number;
         message: string;
-        reconnecting: boolean;
       };
 
   interface WebSocketClientStatus {
@@ -2387,18 +2393,27 @@ namespace ESP32QJS {
     queueDroppedEvents: number;
   }
 
+  interface WebSocketClientCapabilities {
+    readonly apiVersion: "v1";
+    readonly target: string;
+    readonly idfVersion: string;
+    readonly supported: true;
+    readonly maxMessageBytes: number;
+    readonly nativeReconnect: false;
+  }
+
   interface WebSocketClientHandle extends EventQueue<WebSocketClientEvent> {
+    receive(timeoutMs?: number): WebSocketClientEvent | null;
+    stats(): EventQueueStats;
     send(data: string | ByteSource | ByteSpanSource): number;
     status(): WebSocketClientStatus;
+    close(): boolean;
   }
 
   /** Singleton outbound WebSocket text/binary client. */
   interface WebSocketClientModule {
-    readonly MAX_MESSAGE_BYTES: number;
+    capabilities(): WebSocketClientCapabilities;
     open(options: WebSocketClientOpenOptions): WebSocketClientHandle;
-    close(): boolean;
-    send(data: string | ByteSource | ByteSpanSource): number;
-    status(): WebSocketClientStatus;
   }
 
   interface NetIPv4Status {
@@ -2474,6 +2489,7 @@ namespace ESP32QJS {
     ssid: string;
     lastDisconnectReason: number;
     lastDisconnectReasonName: WiFiDisconnectReasonName;
+    droppedDriverEvents: number;
     radio: WiFiRadioStatus;
   }
 
@@ -2621,6 +2637,10 @@ namespace ESP32QJS {
   type EspNowChannel = "current" | number;
 
   interface EspNowCapabilities {
+    readonly apiVersion: "v1";
+    readonly target: string;
+    readonly idfVersion: string;
+    readonly supported: true;
     readonly maxPeers: number;
     readonly maxEncryptedPeers: number;
     readonly maxV1PayloadBytes: 250;
@@ -2666,6 +2686,7 @@ namespace ESP32QJS {
     encryptedPeerCount: number;
     pendingSends: number;
     txRecovering: boolean;
+    recoveryRequired: boolean;
     receivedPackets: number;
     receivedBytes: number;
     droppedPackets: number;
@@ -2757,7 +2778,7 @@ namespace ESP32QJS {
     status(): EspNowPeerStatus;
     send(data: ByteSource, options?: EspNowSendOptions): EspNowSendResult;
     update(options: Omit<EspNowPeerOptions, "address">): EspNowPeerStatus;
-    close(): boolean;
+    remove(): boolean;
   }
 
   class EspNowSession implements EventQueue<EspNowReceiveEvent> {
@@ -2771,6 +2792,7 @@ namespace ESP32QJS {
     broadcast(data: ByteSource,
               options?: EspNowSendOptions): EspNowSendResult;
     setPowerSave(options: EspNowPowerSaveOptions): boolean;
+    recover(): EspNowStatus;
     close(): boolean;
   }
 
@@ -2795,6 +2817,10 @@ namespace ESP32QJS {
   }
 
   interface BLECapabilities {
+    readonly apiVersion: "v1";
+    readonly target: string;
+    readonly idfVersion: string;
+    readonly supported: true;
     readonly classic: false;
     readonly central: boolean;
     readonly peripheral: boolean;
@@ -2979,7 +3005,6 @@ namespace ESP32QJS {
   interface BLEConnectOptions {
     timeoutMs?: number;
     preferredMtu?: number;
-    autoPair?: boolean;
   }
 
   interface BLEConnectionSecurityStatus {
@@ -3032,6 +3057,37 @@ namespace ESP32QJS {
     timeoutMs?: number;
   }
 
+  interface BLEServiceRecord {
+    readonly uuid: string;
+    readonly startHandle: number;
+    readonly endHandle: number;
+    readonly characteristicStart: number;
+    readonly characteristicCount: number;
+  }
+
+  interface BLECharacteristicRecord {
+    readonly uuid: string;
+    readonly declarationHandle: number;
+    readonly valueHandle: number;
+    readonly properties: BLEGattProperty[];
+    readonly serviceIndex: number;
+    readonly descriptorStart: number;
+    readonly descriptorCount: number;
+  }
+
+  interface BLEDescriptorRecord {
+    readonly uuid: string;
+    readonly handle: number;
+    readonly characteristicIndex: number;
+  }
+
+  interface BLEGattDiscovery {
+    readonly generation: number;
+    readonly services: BLEServiceRecord[];
+    readonly characteristics: BLECharacteristicRecord[];
+    readonly descriptors: BLEDescriptorRecord[];
+  }
+
   class BLEConnection implements EventQueue<BLEConnectionEvent> {
     private constructor();
     receive(timeoutMs?: number): BLEConnectionEvent | null;
@@ -3041,36 +3097,13 @@ namespace ESP32QJS {
     respondPairing(requestId: number, response: boolean | number): boolean;
     exchangeMtu(mtu?: number, timeoutMs?: number): number;
     readRssi(timeoutMs?: number): number;
-    discover(options?: BLEDiscoverOptions): BLEService[];
+    discover(options?: BLEDiscoverOptions): BLEGattDiscovery;
+    readHandle(handle: number, options?: BLEGattReadOptions): ByteView;
+    writeHandle(handle: number, data: ByteSource,
+                options?: BLEGattWriteOptions): number;
+    subscribeHandle(valueHandle: number, cccdHandle: number,
+                    options?: BLESubscribeOptions): BLENotificationStream;
     close(): boolean;
-  }
-
-  class BLEService {
-    private constructor();
-    readonly uuid: string;
-    readonly startHandle: number;
-    readonly endHandle: number;
-    characteristics(): BLECharacteristic[];
-  }
-
-  class BLECharacteristic {
-    private constructor();
-    readonly uuid: string;
-    readonly declarationHandle: number;
-    readonly valueHandle: number;
-    readonly properties: BLEGattProperty[];
-    descriptors(): BLEDescriptor[];
-    read(options?: BLEGattReadOptions): ByteView;
-    write(data: ByteSource, options?: BLEGattWriteOptions): number;
-    subscribe(options?: BLESubscribeOptions): BLENotificationStream;
-  }
-
-  class BLEDescriptor {
-    private constructor();
-    readonly uuid: string;
-    readonly handle: number;
-    read(options?: BLEGattReadOptions): ByteView;
-    write(data: ByteSource, options?: BLEGattWriteOptions): number;
   }
 
   interface BLEValueEvent {
@@ -3193,7 +3226,7 @@ namespace ESP32QJS {
   }
 
   /**
-   * Fetch options accepted by `fetch(...)` and `http.fetch(...)`.
+   * Fetch options accepted by `http.fetch(...)`.
    */
   interface FetchOptions extends RequestInit {
     timeoutMs?: number;
@@ -3257,7 +3290,7 @@ namespace ESP32QJS {
    *
    * @example
    * ```js
-   * var response = fetch("https://example.com");
+   * var response = http.fetch("https://example.com");
    * print(response.status, response.text().length);
    * ```
    *
@@ -3378,6 +3411,12 @@ namespace ESP32QJS {
   const I2SChannel: typeof ESP32QJS.I2SChannel;
   const Camera: typeof ESP32QJS.Camera;
   const CameraFrame: typeof ESP32QJS.CameraFrame;
+  const USBSerialHandle: {
+    readonly prototype: ESP32QJS.USBSerialTextHandle | ESP32QJS.USBSerialBinaryHandle;
+  };
+  const WebSocketClientHandle: {
+    readonly prototype: ESP32QJS.WebSocketClientHandle;
+  };
   const I2CBus: { readonly prototype: ESP32QJS.I2CBus };
   const I2CDevice: { readonly prototype: ESP32QJS.I2CDevice };
   const SPIBus: { readonly prototype: ESP32QJS.SPIBus };
@@ -3388,9 +3427,6 @@ namespace ESP32QJS {
   const BLEScanner: { readonly prototype: ESP32QJS.BLEScanner };
   const BLEAdvertiser: { readonly prototype: ESP32QJS.BLEAdvertiser };
   const BLEConnection: { readonly prototype: ESP32QJS.BLEConnection };
-  const BLEService: { readonly prototype: ESP32QJS.BLEService };
-  const BLECharacteristic: { readonly prototype: ESP32QJS.BLECharacteristic };
-  const BLEDescriptor: { readonly prototype: ESP32QJS.BLEDescriptor };
   const BLENotificationStream: { readonly prototype: ESP32QJS.BLENotificationStream };
   const BLEGattServer: { readonly prototype: ESP32QJS.BLEGattServer };
   const BLELocalCharacteristic: { readonly prototype: ESP32QJS.BLELocalCharacteristic };
@@ -3440,23 +3476,6 @@ namespace ESP32QJS {
 
   /** Block the runtime for the given number of milliseconds. */
   function sleep(ms: number): number;
-
-  /** Alias of `sleep(...)`. */
-  function delay(ms: number): number;
-
-  /**
-   * Global HTTP fetch helper.
-   *
-   * @example
-   * ```js
-   * var response = fetch("https://example.com");
-   * print(response.status, response.text().length);
-   * ```
-   */
-  function fetch(
-    input: ESP32QJS.FetchInput,
-    options?: ESP32QJS.FetchOptions,
-  ): ESP32QJS.Response;
 
   function setTimeout(fn: () => void, ms: number): ESP32QJS.TimerHandle;
   function clearTimeout(handle: ESP32QJS.TimerHandle): void;

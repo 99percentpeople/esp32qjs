@@ -19,14 +19,13 @@ test("websocket/network", function () {
   try {
     client = websocketClient.open({
       url: cfg.websocketUrl,
-      autoReconnect: false,
       networkTimeoutMs: 10000,
       pingIntervalSec: 5,
       maxMessageBytes: 4096
     });
     event = client.receive(20000);
     test.equal(event.type, "open", "WebSocket client should emit open");
-    test.ok(websocketClient.status().connected,
+    test.ok(client.status().connected,
       "WebSocket client should connect");
 
     client.send(payload);
@@ -38,7 +37,6 @@ test("websocket/network", function () {
     test.ok(!client.close(), "WebSocket handle close should be idempotent");
   } finally {
     if (client) client.close();
-    websocketClient.close();
     wifi.disconnect();
   }
 

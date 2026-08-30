@@ -90,6 +90,12 @@ static void net_unlock(void)
     }
 }
 
+static bool net_try_lock(void)
+{
+    return s_net.lock != NULL &&
+           xSemaphoreTake(s_net.lock, 0) == pdTRUE;
+}
+
 static void net_copy_text(char *target, size_t target_size, const char *source)
 {
     if (target == NULL || target_size == 0) {
@@ -426,14 +432,17 @@ static void net_ip_event_handler(void *arg, esp_event_base_t base,
     default:
         return;
     }
-    net_lock();
+    if (!net_try_lock()) {
+        return;
+    }
     s_net.generation++;
     if (s_net.generation == 0U) {
         s_net.generation++;
     }
     event.generation = s_net.generation;
     for (source = s_net.sources; source != NULL; source = source->next) {
-        (void)esp32_mquickjs_event_queue_send(source->queue, &event);
+        (void)esp32_mquickjs_event_queue_try_send_from_callback(
+            source->queue, &event);
     }
     net_unlock();
 }
@@ -561,7 +570,7 @@ JSValue js_net_watch(JSContext *ctx, JSValue *this_val, int argc,
     queue_object = JS_PushGCRef(ctx, &queue_ref);
     *queue_object = esp32_mquickjs_event_queue_new(
         ctx, runtime, sizeof(event), NET_EVENT_QUEUE_LEN,
-        ESP32_MQUICKJS_EVENT_QUEUE_DROP_OLDEST, net_event_to_js, NULL,
+        ESP32_MQUICKJS_EVENT_QUEUE_DROP_NEWEST, net_event_to_js, NULL,
         net_watch_closed, source);
     if (JS_IsException(*queue_object)) {
         heap_caps_free(source);

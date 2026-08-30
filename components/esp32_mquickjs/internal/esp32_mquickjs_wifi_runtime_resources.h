@@ -24,13 +24,15 @@ typedef struct {
     void *event_group;
     void *scan_queue;
     void *connect_queue;
+    void *driver_event_queue;
 } esp32_mquickjs_wifi_runtime_resources_t;
 
 bool esp32_mquickjs_wifi_runtime_resources_init(
     esp32_mquickjs_wifi_runtime_resources_t *resources,
     const esp32_mquickjs_wifi_runtime_resource_ops_t *ops,
     size_t scan_queue_length, size_t scan_event_size,
-    size_t connect_queue_length, size_t connect_event_size);
+    size_t connect_queue_length, size_t connect_event_size,
+    size_t driver_event_queue_length, size_t driver_event_size);
 
 void esp32_mquickjs_wifi_runtime_resources_deinit(
     esp32_mquickjs_wifi_runtime_resources_t *resources,

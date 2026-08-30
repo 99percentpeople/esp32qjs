@@ -112,12 +112,12 @@ test("timers/runtime", function () {
   Future.call(function () {
     fireAndForgetRan = true;
   });
-  delay(20);
+  sleep(20);
   test.ok(fireAndForgetRan,
     "unretained Future should start and settle at a later scheduler safe point");
 
   completedHandle = Future.call(function () { return 7; });
-  delay(20);
+  sleep(20);
   test.equal(completedHandle.status(), "fulfilled",
     "completed Future handle should retain terminal status after releasing its scheduler slot");
   test.equal(completedHandle.wait(0), 7,
@@ -312,7 +312,7 @@ test("timers/runtime", function () {
   test.ok(!idleJobRan,
     "top-level idle jobs must not run from a nested Future wait");
 
-  test.equal(delay(5100), 5100, "long native delay should cooperate with the task watchdog");
+  test.equal(sleep(5100), 5100, "long native sleep should cooperate with the task watchdog");
 
   return { invoked: invoked, intervalTicks: intervalTicks };
 });

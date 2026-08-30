@@ -249,6 +249,8 @@ test("sys/runtime", function () {
     "Future resource counts should be bounded");
   test.ok(resources.asyncPollers.capacity >= resources.asyncPollers.registered,
     "async poller resource counts should be bounded");
+  test.ok(resources.orphans.capacity >= resources.orphans.pending,
+    "orphan reaper resource counts should be bounded");
   test.equal(runtimeInfo.control.restartRuntime, true, "managed runtime restart should be available");
   test.equal(runtimeInfo.control.reboot, true, "managed reboot should be available");
   test.ok(runtimeInfo.control.restartTimeoutMs > 0, "restart timeout should be configured");

@@ -5,6 +5,7 @@
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
 
 #include <stdint.h>
+#include <stdatomic.h>
 
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_wifi_radio.h"
@@ -39,6 +40,7 @@ typedef struct {
     EventGroupHandle_t event_group;
     QueueHandle_t scan_queue;
     QueueHandle_t connect_queue;
+    QueueHandle_t driver_event_queue;
     SemaphoreHandle_t lock;
     esp_netif_t *sta_netif;
     esp_event_handler_instance_t wifi_start_event_instance;
@@ -52,6 +54,8 @@ typedef struct {
     esp_timer_handle_t connect_timeout_timer;
     esp32_mquickjs_wifi_radio_lease_t radio_lease;
     esp32_mquickjs_wifi_status_t status;
+    _Atomic uint32_t callbacks_active;
+    _Atomic uint32_t dropped_driver_events;
 } esp32_mquickjs_wifi_state_t;
 
 enum {

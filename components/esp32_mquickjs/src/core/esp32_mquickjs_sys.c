@@ -1453,16 +1453,19 @@ JSValue js_sys_runtime_status_resources(JSContext *ctx,
     JSGCRef futures_ref;
     JSGCRef event_queues_ref;
     JSGCRef async_pollers_ref;
+    JSGCRef orphans_ref;
     JSValue *resources = JS_PushGCRef(ctx, &resources_ref);
     JSValue *timers = JS_PushGCRef(ctx, &timers_ref);
     JSValue *futures = JS_PushGCRef(ctx, &futures_ref);
     JSValue *event_queues = JS_PushGCRef(ctx, &event_queues_ref);
     JSValue *async_pollers = JS_PushGCRef(ctx, &async_pollers_ref);
+    JSValue *orphans = JS_PushGCRef(ctx, &orphans_ref);
 
     (void)this_val;
     (void)argc;
     (void)argv;
     if (!esp32_mquickjs_get_resource_status(runtime, &status)) {
+        JS_PopGCRef(ctx, &orphans_ref);
         JS_PopGCRef(ctx, &async_pollers_ref);
         JS_PopGCRef(ctx, &event_queues_ref);
         JS_PopGCRef(ctx, &futures_ref);
@@ -1475,6 +1478,7 @@ JSValue js_sys_runtime_status_resources(JSContext *ctx,
     *futures = JS_NewObject(ctx);
     *event_queues = JS_NewObject(ctx);
     *async_pollers = JS_NewObject(ctx);
+    *orphans = JS_NewObject(ctx);
     if (JS_IsException(*resources) ||
         !esp32_mquickjs_set_property_ref(ctx, timers, "active",
                                          JS_NewUint32(ctx, status.timers_active)) ||
@@ -1507,12 +1511,24 @@ JSValue js_sys_runtime_status_resources(JSContext *ctx,
             async_pollers,
             "capacity",
             JS_NewUint32(ctx, status.async_pollers_capacity)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx,
+            orphans,
+            "pending",
+            JS_NewUint32(ctx, status.orphans_pending)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx,
+            orphans,
+            "capacity",
+            JS_NewUint32(ctx, status.orphans_capacity)) ||
         !sys_set_resource_object(ctx, resources, "timers", timers) ||
         !sys_set_resource_object(ctx, resources, "futures", futures) ||
         !sys_set_resource_object(ctx, resources, "eventQueues", event_queues) ||
-        !sys_set_resource_object(ctx, resources, "asyncPollers", async_pollers)) {
+        !sys_set_resource_object(ctx, resources, "asyncPollers", async_pollers) ||
+        !sys_set_resource_object(ctx, resources, "orphans", orphans)) {
         goto fail;
     }
+    JS_PopGCRef(ctx, &orphans_ref);
     JS_PopGCRef(ctx, &async_pollers_ref);
     JS_PopGCRef(ctx, &event_queues_ref);
     JS_PopGCRef(ctx, &futures_ref);
@@ -1520,6 +1536,7 @@ JSValue js_sys_runtime_status_resources(JSContext *ctx,
     return JS_PopGCRef(ctx, &resources_ref);
 
 fail:
+    JS_PopGCRef(ctx, &orphans_ref);
     JS_PopGCRef(ctx, &async_pollers_ref);
     JS_PopGCRef(ctx, &event_queues_ref);
     JS_PopGCRef(ctx, &futures_ref);

@@ -44,6 +44,17 @@ bool esp32_mquickjs_event_queue_enqueue(
     uint32_t *dropped_count);
 
 /**
+ * Perform one non-blocking task-callback enqueue attempt. Callback producers
+ * always use DROP_NEWEST: they never retry or evict an owned queue element,
+ * and ownership of a rejected event stays with the producer.
+ */
+bool esp32_mquickjs_event_queue_enqueue_from_callback(
+    void *destination,
+    const void *event,
+    esp32_mquickjs_event_queue_enqueue_send_fn try_send,
+    uint32_t *dropped_count);
+
+/**
  * Perform one ISR-safe enqueue attempt. ISR producers always use DROP_NEW:
  * no queue element is removed and ownership of a rejected event stays with
  * the producer. The helper records exactly one drop for a full queue.

@@ -28,9 +28,12 @@ class EspNowArchitectureTests(unittest.TestCase):
         callback_end = source.index("static void espnow_send_callback")
         callback = source[callback_start:callback_end]
 
-        self.assertIn("esp32_mquickjs_wireless_pool_acquire", callback)
+        self.assertIn("esp32_mquickjs_native_pool_acquire", callback)
         self.assertIn("ESP32_MQUICKJS_EVENT_QUEUE_DROP_NEWEST", source)
-        self.assertIn("esp32_mquickjs_event_queue_send", callback)
+        self.assertIn(
+            "esp32_mquickjs_event_queue_try_send_from_callback", callback
+        )
+        self.assertNotIn("esp32_mquickjs_event_queue_send(", callback)
         self.assertIn("session->generation", callback)
         self.assertNotIn("JS_Call(", callback)
         self.assertNotIn("JS_New", callback)
@@ -45,7 +48,7 @@ class EspNowArchitectureTests(unittest.TestCase):
         callback = source[callback_start:callback_end]
 
         sequence = callback.index("&session->sequence")
-        pool_acquire = callback.index("esp32_mquickjs_wireless_pool_acquire")
+        pool_acquire = callback.index("esp32_mquickjs_native_pool_acquire")
         self.assertLess(
             sequence,
             pool_acquire,
@@ -58,7 +61,7 @@ class EspNowArchitectureTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("espnow_receive_event_drop", source)
-        self.assertIn("esp32_mquickjs_wireless_pool_release", source)
+        self.assertIn("esp32_mquickjs_native_pool_release", source)
         self.assertIn("esp32_mquickjs_new_owned_byte_view", source)
         self.assertIn("esp_now_unregister_recv_cb", source)
         self.assertLess(
@@ -115,10 +118,8 @@ class EspNowArchitectureTests(unittest.TestCase):
         self.assertNotRegex(begin + worker, r"waits\s*\+\+\s*<")
         self.assertIn("callbacks_active", worker)
         self.assertLess(worker.index("callbacks_active"), worker.index("esp_now_deinit"))
-        self.assertLess(
-            worker.index("espnow_restore_native_session"),
-            worker.index("&state->completed"),
-        )
+        self.assertNotIn("espnow_restore_native_session", worker)
+        self.assertIn("ESPNOW_LIFECYCLE_FAILED", worker)
         self.assertLess(
             worker.index("&state->completed"),
             worker.index("&state->recovery_pending"),
@@ -368,18 +369,18 @@ class EspNowArchitectureTests(unittest.TestCase):
         self.assertNotIn("JS_New", callback)
         self.assertNotIn("heap_caps_malloc", callback)
 
-    def test_send_timeout_rebuilds_session_before_releasing_lane(self):
+    def test_send_timeout_requires_explicit_recover_before_reopening_lane(self):
         source = (
             MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
         ).read_text(encoding="utf-8")
 
+        timeout_start = source.index("static void espnow_send_recovery_worker")
+        timeout_end = source.index("static bool espnow_schedule_send_recovery")
+        timeout_worker = source[timeout_start:timeout_end]
         recovery_start = source.index("static esp_err_t espnow_restore_native_session")
-        recovery_end = source.index("static JSValue espnow_status_to_js", recovery_start)
+        recovery_end = source.index("static bool espnow_recover_start", recovery_start)
         recovery = source[recovery_start:recovery_end]
         for token in (
-            "esp_now_unregister_recv_cb",
-            "esp_now_unregister_send_cb",
-            "esp_now_deinit",
             "esp_now_init",
             "esp_now_register_recv_cb",
             "esp_now_register_send_cb",
@@ -387,11 +388,13 @@ class EspNowArchitectureTests(unittest.TestCase):
             "esp_now_add_peer",
         ):
             self.assertIn(token, recovery)
+        self.assertNotIn("espnow_restore_native_session", timeout_worker)
         self.assertIn("espnow_restore_native_session(session)", recovery)
         self.assertIn("espnow_note_native_deinit", recovery)
         self.assertIn("s_espnow_reopen_not_before_us", recovery)
-        self.assertIn("esp32_mquickjs_wireless_tx_begin_recovery", recovery)
+        self.assertIn("esp32_mquickjs_wireless_tx_retry_recovery", source)
         self.assertIn("esp32_mquickjs_wireless_tx_finish_recovery", recovery)
+        self.assertIn('"recover"', source)
 
     def test_every_espnow_control_operation_has_a_future_driver(self):
         source = (
@@ -402,7 +405,7 @@ class EspNowArchitectureTests(unittest.TestCase):
             "s_espnow_open_driver",
             "s_espnow_peer_add_driver",
             "s_espnow_peer_update_driver",
-            "s_espnow_peer_close_driver",
+            "s_espnow_peer_remove_driver",
             "s_espnow_send_driver",
             "s_espnow_power_save_driver",
             "s_espnow_session_close_driver",

@@ -6,12 +6,14 @@
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_event_queue.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_options.h"
 #include "esp32_mquickjs_timer_resource.h"
 #include "esp32_mquickjs_usb_serial_future_lifecycle.h"
 #include "utils/esp32_mquickjs_byte_source.h"
 #include "utils/esp32_mquickjs_line_framer.h"
 
 #include <stdio.h>
+#include <stdatomic.h>
 #include <string.h>
 
 #include "driver/usb_serial_jtag.h"
@@ -35,11 +37,16 @@ typedef struct {
 } esp32_mquickjs_usb_serial_event_t;
 
 typedef struct {
+    uint32_t generation;
+} esp32_mquickjs_usb_serial_ref_t;
+
+typedef struct {
     bool initialized;
     bool opened;
     bool polling;
     bool release_buffer;
     bool binary;
+    uint32_t generation;
     esp32_mquickjs_runtime_t *runtime;
     esp32_mquickjs_event_queue_t *event_queue;
     char *line_buffer;
@@ -56,6 +63,8 @@ typedef struct {
 } esp32_mquickjs_usb_serial_emit_context_t;
 
 static esp32_mquickjs_usb_serial_state_t s_usb_serial_state;
+static _Atomic uint32_t s_usb_serial_next_generation = 1;
+static esp32_mquickjs_usb_serial_ref_t s_usb_serial_closed_ref;
 
 /*
  * The USB Serial/JTAG VFS console and interrupt-driven driver are physical
@@ -454,18 +463,155 @@ void esp32_mquickjs_deinit_usb_serial_runtime(JSContext *ctx)
     memset(&s_usb_serial_state, 0, sizeof(s_usb_serial_state));
 }
 
+static uint32_t usb_serial_next_generation(void)
+{
+    uint32_t generation = atomic_fetch_add_explicit(
+        &s_usb_serial_next_generation, 1, memory_order_relaxed);
+
+    if (generation == 0) {
+        generation = atomic_fetch_add_explicit(
+            &s_usb_serial_next_generation, 1, memory_order_relaxed);
+    }
+    return generation;
+}
+
+static esp32_mquickjs_usb_serial_ref_t *usb_serial_ref_from_value(
+    JSContext *ctx, JSValue value, bool require_open)
+{
+    esp32_mquickjs_usb_serial_ref_t *ref;
+
+    if (JS_GetClassID(ctx, value) != JS_CLASS_USB_SERIAL_HANDLE ||
+        (ref = JS_GetOpaque(ctx, value)) == NULL ||
+        ref == &s_usb_serial_closed_ref) {
+        JS_ThrowTypeError(ctx, "expected a USBSerialHandle");
+        return NULL;
+    }
+    if (require_open &&
+        (!s_usb_serial_state.opened ||
+         ref->generation != s_usb_serial_state.generation)) {
+        JS_ThrowReferenceError(ctx, "USB_SERIAL_STALE_HANDLE: handle is closed");
+        return NULL;
+    }
+    return ref;
+}
+
+JSValue js_usb_serial_handle_constructor(JSContext *ctx, JSValue *this_val,
+                                         int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_ThrowTypeError(ctx,
+                             "USBSerialHandle cannot be constructed directly");
+}
+
+void js_usb_serial_handle_finalizer(JSContext *ctx, void *opaque)
+{
+    esp32_mquickjs_usb_serial_ref_t *ref = opaque;
+
+    (void)ctx;
+    if (ref != NULL && ref != &s_usb_serial_closed_ref) {
+        if (s_usb_serial_state.opened &&
+            ref->generation == s_usb_serial_state.generation) {
+            esp32_mquickjs_event_queue_request_close(
+                s_usb_serial_state.event_queue);
+        }
+        heap_caps_free(ref);
+    }
+}
+
+JSValue js_usb_serial_receive(JSContext *ctx, JSValue *this_val,
+                              int argc, JSValue *argv)
+{
+    JSGCRef receiver_ref, method_ref;
+    JSValue *receiver = JS_PushGCRef(ctx, &receiver_ref);
+    JSValue *method = JS_PushGCRef(ctx, &method_ref);
+    JSValue result;
+
+    if (this_val == NULL ||
+        usb_serial_ref_from_value(ctx, *this_val, true) == NULL) {
+        JS_PopGCRef(ctx, &method_ref);
+        JS_PopGCRef(ctx, &receiver_ref);
+        return JS_EXCEPTION;
+    }
+    *receiver = *this_val;
+    *method = JS_GetPropertyStr(ctx, *receiver, "receive");
+    result = JS_IsException(*method)
+                 ? JS_EXCEPTION
+                 : esp32_mquickjs_future_call_and_wait(
+                       ctx, esp32_mquickjs_get_active_runtime(), *method,
+                       *receiver, argc, argv);
+    JS_PopGCRef(ctx, &method_ref);
+    JS_PopGCRef(ctx, &receiver_ref);
+    return result;
+}
+
+JSValue js_usb_serial_stats(JSContext *ctx, JSValue *this_val,
+                            int argc, JSValue *argv)
+{
+    if (this_val == NULL ||
+        usb_serial_ref_from_value(ctx, *this_val, true) == NULL) {
+        return JS_EXCEPTION;
+    }
+    return js_event_queue_stats(ctx, this_val, argc, argv);
+}
+
+JSValue js_usb_serial_capabilities(JSContext *ctx, JSValue *this_val,
+                                   int argc, JSValue *argv)
+{
+    JSGCRef result_ref, modes_ref;
+    JSValue *result = JS_PushGCRef(ctx, &result_ref);
+    JSValue *modes = JS_PushGCRef(ctx, &modes_ref);
+
+    (void)this_val;
+    (void)argv;
+    if (argc != 0) {
+        JS_PopGCRef(ctx, &modes_ref);
+        JS_PopGCRef(ctx, &result_ref);
+        return JS_ThrowTypeError(ctx,
+                                 "usbSerial.capabilities() expects no arguments");
+    }
+    *result = JS_NewObject(ctx);
+    *modes = JS_NewArray(ctx, 2);
+    if (!JS_IsException(*modes)) {
+        (void)JS_SetPropertyUint32(ctx, *modes, 0,
+                                   JS_NewString(ctx, "text"));
+        (void)JS_SetPropertyUint32(ctx, *modes, 1,
+                                   JS_NewString(ctx, "binary"));
+    }
+    if (JS_IsException(*result) || JS_IsException(*modes) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "apiVersion",
+                                         JS_NewString(ctx, "v1")) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "target",
+                                         JS_NewString(ctx, CONFIG_IDF_TARGET)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "idfVersion",
+                                         JS_NewString(ctx, IDF_VER)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "supported", JS_TRUE) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "maxFrameBytes",
+            JS_NewUint32(ctx,
+                         CONFIG_ESP32_MQUICKJS_USB_SERIAL_MAX_FRAME_BYTES)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "modes", *modes)) {
+        *result = JS_EXCEPTION;
+    }
+    JS_PopGCRef(ctx, &modes_ref);
+    return JS_PopGCRef(ctx, &result_ref);
+}
+
 JSValue js_usb_serial_open(JSContext *ctx,
                            JSValue *this_val,
                            int argc,
                            JSValue *argv)
 {
     JSValue options = JS_UNDEFINED;
+    static const char *const allowed[] = {
+        "mode", "maxFrameBytes", "chunkBytes",
+    };
     JSGCRef queue_ref;
-    JSGCRef send_ref;
-    JSGCRef status_ref;
+    JSGCRef handle_ref;
     JSValue *queue_object;
-    JSValue *send;
-    JSValue *status;
+    JSValue *handle;
+    esp32_mquickjs_usb_serial_ref_t *ref = NULL;
     size_t max_frame_bytes;
     bool binary;
 
@@ -481,6 +627,12 @@ JSValue js_usb_serial_open(JSContext *ctx,
     }
     if (argc == 1) {
         options = argv[0];
+    }
+    if (!JS_IsUndefined(options) &&
+        !esp32_mquickjs_validate_plain_options(
+            ctx, options, "usbSerial.open()", allowed,
+            sizeof(allowed) / sizeof(allowed[0]))) {
+        return JS_EXCEPTION;
     }
     if (!usb_serial_parse_binary_mode(ctx, options, &binary)) {
         return JS_ThrowTypeError(ctx,
@@ -510,8 +662,7 @@ JSValue js_usb_serial_open(JSContext *ctx,
                                     s_usb_serial_state.line_buffer,
                                     max_frame_bytes);
     queue_object = JS_PushGCRef(ctx, &queue_ref);
-    send = JS_PushGCRef(ctx, &send_ref);
-    status = JS_PushGCRef(ctx, &status_ref);
+    handle = JS_PushGCRef(ctx, &handle_ref);
     *queue_object = esp32_mquickjs_event_queue_new(
         ctx,
         s_usb_serial_state.runtime,
@@ -522,23 +673,34 @@ JSValue js_usb_serial_open(JSContext *ctx,
         usb_serial_drop_event,
         usb_serial_close_source,
         NULL);
-    *send = JS_GetPropertyStr(ctx, *this_val, "send");
-    *status = JS_GetPropertyStr(ctx, *this_val, "status");
-    if (JS_IsException(*queue_object) ||
-        JS_IsException(*send) || JS_IsException(*status) ||
-        JS_IsException(JS_SetPropertyStr(ctx, *queue_object, "send", *send)) ||
-        JS_IsException(JS_SetPropertyStr(ctx, *queue_object, "status", *status))) {
+    *handle = JS_NewObjectClassUser(ctx, JS_CLASS_USB_SERIAL_HANDLE);
+    if (!JS_IsException(*handle)) {
+        ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
+        if (ref == NULL) {
+            JS_ThrowOutOfMemory(ctx);
+            *handle = JS_EXCEPTION;
+        } else {
+            ref->generation = usb_serial_next_generation();
+            JS_SetOpaque(ctx, *handle, ref);
+        }
+    }
+    if (JS_IsException(*queue_object) || JS_IsException(*handle) ||
+        !esp32_mquickjs_set_property_ref(ctx, handle, "_eventQueue",
+                                         *queue_object)) {
+        if (ref != NULL) {
+            JS_SetOpaque(ctx, *handle, NULL);
+            heap_caps_free(ref);
+        }
         usb_serial_release_line_buffer();
-        JS_PopGCRef(ctx, &status_ref);
-        JS_PopGCRef(ctx, &send_ref);
+        JS_PopGCRef(ctx, &handle_ref);
         JS_PopGCRef(ctx, &queue_ref);
         return JS_EXCEPTION;
     }
     s_usb_serial_state.event_queue = JS_GetOpaque(ctx, *queue_object);
+    s_usb_serial_state.generation = ref->generation;
     s_usb_serial_state.opened = true;
-    JS_PopGCRef(ctx, &status_ref);
-    JS_PopGCRef(ctx, &send_ref);
-    return JS_PopGCRef(ctx, &queue_ref);
+    JS_PopGCRef(ctx, &queue_ref);
+    return JS_PopGCRef(ctx, &handle_ref);
 }
 
 JSValue js_usb_serial_close(JSContext *ctx,
@@ -546,12 +708,24 @@ JSValue js_usb_serial_close(JSContext *ctx,
                             int argc,
                             JSValue *argv)
 {
-    bool was_open = s_usb_serial_state.opened;
+    esp32_mquickjs_usb_serial_ref_t *ref;
+    bool was_open;
 
-    (void)this_val;
-    (void)argc;
+    if (this_val == NULL || argc != 0 ||
+        JS_GetClassID(ctx, *this_val) != JS_CLASS_USB_SERIAL_HANDLE) {
+        return JS_ThrowTypeError(ctx,
+                                 "USBSerialHandle.close() expects no arguments");
+    }
     (void)argv;
-    usb_serial_close_internal();
+    ref = JS_GetOpaque(ctx, *this_val);
+    if (ref == NULL || ref == &s_usb_serial_closed_ref) {
+        return JS_FALSE;
+    }
+    was_open = s_usb_serial_state.opened &&
+               ref->generation == s_usb_serial_state.generation;
+    if (was_open) usb_serial_close_internal();
+    JS_SetOpaque(ctx, *this_val, &s_usb_serial_closed_ref);
+    heap_caps_free(ref);
     return JS_NewBool(was_open);
 }
 
@@ -565,8 +739,9 @@ JSValue js_usb_serial_send(JSContext *ctx,
     const char *text;
     size_t text_len = 0;
 
-    (void)this_val;
-    if (!s_usb_serial_state.opened || argc < 1) {
+    if (this_val == NULL ||
+        usb_serial_ref_from_value(ctx, *this_val, true) == NULL || argc != 1) {
+        if (JS_HasException(ctx)) return JS_EXCEPTION;
         return JS_ThrowTypeError(ctx, "usbSerial.send(data) expects an open transport and data");
     }
     if (s_usb_serial_state.sending) {
@@ -716,6 +891,7 @@ struct esp32_mquickjs_future_driver_state {
     size_t offset;
     size_t logical_length;
     size_t bytes_sent;
+    uint32_t generation;
     uint64_t progress_deadline_us;
     uint64_t progress_timer_delay_us;
     esp32_mquickjs_timer_resource_t progress_timer;
@@ -824,9 +1000,11 @@ static bool usb_serial_future_prepare(
     esp32_mquickjs_future_driver_state_t *state;
     JSValue error = JS_UNDEFINED;
 
-    (void)this_ref;
     if (out_state == NULL || argc != 1 ||
-        !s_usb_serial_state.initialized || !s_usb_serial_state.opened) {
+        !s_usb_serial_state.initialized || !s_usb_serial_state.opened ||
+        this_ref == NULL ||
+        usb_serial_ref_from_value(ctx, this_ref->val, true) == NULL) {
+        if (JS_HasException(ctx)) return false;
         JS_ThrowTypeError(
             ctx,
             "usbSerial.send(data) expects an open transport and one data argument");
@@ -844,6 +1022,7 @@ static bool usb_serial_future_prepare(
         return false;
     }
     state->ctx = ctx;
+    state->generation = s_usb_serial_state.generation;
     state->result = USB_SERIAL_WRITE_OK;
     esp32_mquickjs_byte_span_clear(&state->span);
 
@@ -988,7 +1167,9 @@ static bool usb_serial_future_start(
             "usbSerial.send() failed because another send is active");
         return false;
     }
-    if (!s_usb_serial_state.opened || !usb_serial_jtag_is_connected()) {
+    if (!s_usb_serial_state.opened ||
+        state->generation != s_usb_serial_state.generation ||
+        !usb_serial_jtag_is_connected()) {
         JS_ThrowReferenceError(
             ctx,
             "usbSerial.send() failed because USB Serial/JTAG is not connected");
@@ -1215,29 +1396,38 @@ static bool usb_serial_register_future_driver(
     esp32_mquickjs_runtime_t *runtime)
 {
     JSGCRef global_ref;
-    JSGCRef module_ref;
+    JSGCRef handle_ref;
     JSGCRef send_ref;
+    JSGCRef receive_ref;
     JSValue *global = JS_PushGCRef(ctx, &global_ref);
-    JSValue *module = JS_PushGCRef(ctx, &module_ref);
+    JSValue *handle = JS_PushGCRef(ctx, &handle_ref);
     JSValue *send = JS_PushGCRef(ctx, &send_ref);
+    JSValue *receive = JS_PushGCRef(ctx, &receive_ref);
     bool registered;
 
     *global = JS_GetGlobalObject(ctx);
-    *module = JS_IsException(*global)
+    *handle = JS_IsException(*global)
                   ? JS_EXCEPTION
-                  : JS_GetPropertyStr(ctx, *global, "usbSerial");
-    *send = JS_IsException(*module)
+                  : JS_NewObjectClassUser(ctx, JS_CLASS_USB_SERIAL_HANDLE);
+    *send = JS_IsException(*handle)
                 ? JS_EXCEPTION
-                : JS_GetPropertyStr(ctx, *module, "send");
+                : JS_GetPropertyStr(ctx, *handle, "send");
+    *receive = JS_IsException(*handle)
+                   ? JS_EXCEPTION
+                   : JS_GetPropertyStr(ctx, *handle, "receive");
     registered = !JS_IsException(*send) &&
                  esp32_mquickjs_future_register_driver(
-                     ctx, runtime, *send, &s_usb_serial_send_driver);
+                     ctx, runtime, *send, &s_usb_serial_send_driver) &&
+                 !JS_IsException(*receive) &&
+                 esp32_mquickjs_event_queue_register_receive_alias(
+                     ctx, runtime, *receive);
     if (!registered && !JS_HasException(ctx)) {
         JS_ThrowInternalError(
             ctx, "failed to register USB Serial Future driver");
     }
+    JS_PopGCRef(ctx, &receive_ref);
     JS_PopGCRef(ctx, &send_ref);
-    JS_PopGCRef(ctx, &module_ref);
+    JS_PopGCRef(ctx, &handle_ref);
     JS_PopGCRef(ctx, &global_ref);
     return registered;
 }
@@ -1250,8 +1440,12 @@ JSValue js_usb_serial_status(JSContext *ctx,
     JSGCRef status_ref;
     JSValue *status;
 
-    (void)this_val;
-    (void)argc;
+    if (this_val == NULL || argc != 0 ||
+        usb_serial_ref_from_value(ctx, *this_val, true) == NULL) {
+        if (JS_HasException(ctx)) return JS_EXCEPTION;
+        return JS_ThrowTypeError(
+            ctx, "USBSerialHandle.status() expects no arguments");
+    }
     (void)argv;
     status = JS_PushGCRef(ctx, &status_ref);
     *status = JS_NewObject(ctx);
@@ -1279,17 +1473,6 @@ JSValue js_usb_serial_status(JSContext *ctx,
         return JS_EXCEPTION;
     }
     return JS_PopGCRef(ctx, &status_ref);
-}
-
-JSValue js_usb_serial_get_max_frame_bytes(JSContext *ctx,
-                                           JSValue *this_val,
-                                           int argc,
-                                           JSValue *argv)
-{
-    (void)this_val;
-    (void)argc;
-    (void)argv;
-    return JS_NewInt32(ctx, CONFIG_ESP32_MQUICKJS_USB_SERIAL_MAX_FRAME_BYTES);
 }
 
 #endif

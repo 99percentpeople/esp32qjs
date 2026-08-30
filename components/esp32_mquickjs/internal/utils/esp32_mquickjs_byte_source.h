@@ -82,19 +82,9 @@ JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx,
                                             const esp32_mquickjs_byte_span_source_object_ops_t *ops,
                                             void *opaque);
 
-JSValue esp32_mquickjs_new_byte_view(JSContext *ctx,
-                                     JSValue owner,
-                                     const uint8_t *data,
-                                     size_t length);
-
 JSValue esp32_mquickjs_new_owned_byte_view(JSContext *ctx,
                                            uint8_t *data,
                                            size_t length);
-
-bool esp32_mquickjs_update_byte_view(JSContext *ctx,
-                                     JSValue value,
-                                     const uint8_t *data,
-                                     size_t length);
 
 bool esp32_mquickjs_byte_view_is_open(JSContext *ctx, JSValue value);
 

@@ -16,8 +16,6 @@ This document covers the APIs exported directly by the firmware runtime.
   a JavaScript heap allocation would exhaust its configured heap. The framework
   does not schedule additional collections from Future completion, native
   allocation pressure, or scheduler polling.
-- `fetch(input, options?)`
-  Run an HTTP request through a hidden native Future and return a `Response`.
 - `load(path)`
   Evaluate a script from the immutable volume currently stored in global `fs`.
   The initial volume is rooted at `/littlefs`; applications can install another
@@ -26,7 +24,7 @@ This document covers the APIs exported directly by the firmware runtime.
   Evaluate a bundled framework script below `/littlefs/_sys`, regardless of
   the active application root. Nested `load(...)` calls made while evaluating the
   framework module also remain on the system partition.
-- `sleep(ms)` / `delay(ms)`
+- `sleep(ms)`
   Wait for `ms` milliseconds while the Future scheduler, timers, deadlines,
   watchdog, and stop requests continue to advance.
 
@@ -48,7 +46,7 @@ wifi.connect("your-ssid", {
   timeoutMs: 10000
 });
 sys.time.sync({ servers: ["pool.ntp.org"], timeoutMs: 10000 });
-print(fetch("https://example.com").status);
+print(http.fetch("https://example.com").status);
 load("demo/display_perf.js");
 print(Future.call(function () { return 123; }).wait(1000));
 ```
@@ -149,7 +147,7 @@ Examples:
 
 ```js
 var scan = Future.call(wifi.scan, wifi, []);
-var request = Future.call(fetch, globalThis, ["https://example.com"]);
+var request = Future.call(http.fetch, http, ["https://example.com"]);
 var values = Future.all([scan, request]).wait(10000);
 print(values[0].length, values[1].status);
 ```
@@ -479,7 +477,7 @@ var request = new Request("https://example.com", {
   body: JSON.stringify({ hello: "world" }),
 });
 
-var response = fetch(request);
+var response = http.fetch(request);
 print(response.status, response.ok);
 print(response.text().length);
 
@@ -1017,7 +1015,7 @@ try {
   frame = cam.capture(5000);
   if (frame !== null) {
     source = frame.source({ chunkBytes: 8192 });
-    var response = fetch("https://example.com/frame", {
+    var response = http.fetch("https://example.com/frame", {
       method: "POST",
       headers: { "content-type": "image/jpeg" },
       body: source,
@@ -1039,8 +1037,9 @@ applications. It is compiled only when `sys.info.features.usbSerial` is
 true and is mutually exclusive with `CONFIG_ESP32QJS_ENABLE_REPL`, because both
 consume the same USB input stream.
 
-- `usbSerial.MAX_FRAME_BYTES`
-  Compile-time upper bound for one text frame or received binary chunk.
+- `usbSerial.capabilities()`
+  Return the target, ESP-IDF version, supported text/binary modes, and the
+  compile-time `maxFrameBytes` limit.
 - `usbSerial.open(options?)`
   Return a bounded EventQueue handle. `options.mode` is explicitly `"text"`
   (the default) or `"binary"`; text mode uses `options.maxFrameBytes`, while
@@ -1168,9 +1167,10 @@ Formats and layouts:
 - `clearDirty()`
 - `markDirty(x, y, width, height)`
 - `readRect(x, y, width, height, options?)`
-  Return a native byte view for the clamped rectangle.
+  Return a stable owned `ByteView` snapshot for the clamped rectangle.
 - `readRectChunks(x, y, width, height, options?)`
-  Return an array of native byte views split by `options.chunkBytes` or the buffer's `chunkBytes`. Passing `options.reuse: true` lets direct full-row exports reuse an internal chunk array and ByteView wrappers, which avoids per-frame wrapper allocation in display flush loops.
+  Return an array of stable owned `ByteView` snapshots split by
+  `options.chunkBytes` or the buffer's `chunkBytes`.
 - `createSpanSource(options?)`
   Return a retained native `BitmapSpanSource` bound to the buffer. Pass it to `SPIDevice.writeSource(source, options?)` to flush without allocating JS chunk arrays or ByteView wrappers in the loop.
 - `createCommandBuffer(options?)`
@@ -1269,10 +1269,10 @@ Export options:
   `"be"` for high byte first or `"le"` for low byte first. This affects `rgb565` exports.
 - `chunkBytes`
   Positive preferred chunk size for `readRectChunks(...)` and `createSpanSource(...)`.
-- `reuse`
-  Boolean hint for `readRectChunks(...)`. When true and the rectangle can be exported as direct full rows, the returned chunk array and ByteView wrappers may be reused by the same `Bitmap` on later calls. Use this only for immediate synchronous writes; do not keep old reused chunk arrays as snapshots.
-
-Native byte views expose `length`, `byteLength`, and `toArray()`. They can be passed directly to `spi`, `i2c`, and `uart` writes without converting to a JavaScript array.
+Native byte views expose `length`, `byteLength`, and `toArray()`. Every
+`ByteView` owns a stable immutable snapshot until it is closed or collected.
+They can be passed directly to `spi`, `i2c`, and `uart` writes without
+converting to a JavaScript array.
 For high-frequency SPI display flushes, prefer `Bitmap.createSpanSource(...)` with `SPIDevice.writeSource(...)`. `readRect(...)` and `readRectChunks(...)` remain useful for inspection, diagnostics, compatibility, and I2C chunk writes. Transport modules consume generic byte sources or span sources and do not inspect Bitmap objects.
 
 Example:
@@ -1821,7 +1821,9 @@ interface readiness, and later Ethernet/PPP state belong exclusively to
 - `wifi.DEFAULT_TIMEOUT_MS`
   Default station connect timeout in milliseconds.
 - `wifi.status()`
-  Return `{ initialized, started, connected, scanning, ssid, lastDisconnectReason, lastDisconnectReasonName, radio }`.
+  Return `{ initialized, started, connected, scanning, ssid, lastDisconnectReason, lastDisconnectReasonName, droppedDriverEvents, radio }`.
+  `droppedDriverEvents` counts bounded internal Wi-Fi event publications that
+  could not be queued without blocking.
   `started` is the boot-scoped physical-radio state rather than the station
   helper's event history. `radio` contains `{ generation, initialized,
   starting, started, mode, channel, channelGeneration, maxTxPowerDbm,
@@ -1889,9 +1891,10 @@ clocks and are not affected by SNTP adjustments.
 application acknowledgements, retries, deduplication, fragmentation, routing,
 Mesh behavior, provisioning, or a product message schema.
 
-- `espNow.capabilities()` returns the configured peer, encrypted-peer, and
-  payload limits. `peerRateConfig` is `false` until a public rate contract can
-  restore automatic rate selection across peer update and timeout recovery.
+- `espNow.capabilities()` returns v1/target/ESP-IDF identity, the configured
+  peer, encrypted-peer, and payload limits. `peerRateConfig` is `false` until a
+  public rate contract can restore automatic rate selection across peer update
+  and timeout recovery.
 - `espNow.open(options?)` opens the only session in the runtime through a native
   Future. Options are `interface: "station"`, `channel: "current" | 1..14`,
   `maxPayloadBytes`, `receiveCapacity`, `sendTimeoutMs`, an optional 16-byte
@@ -1900,7 +1903,7 @@ Mesh behavior, provisioning, or a product message schema.
   DROP_NEWEST receive EventQueue. Each event contains normalized source and
   destination addresses, RSSI, channel, sequence, timestamp, broadcast flag,
   and an owned `ByteView`; close that view after use.
-- `session.addPeer(options)`, `peer.update(options)`, and `peer.close()` are
+- `session.addPeer(options)`, `peer.update(options)`, and `peer.remove()` are
   native Future operations. Encrypted peers require both an explicit session
   PMK and a 16-byte LMK. Keys never appear in status, snapshots, or errors.
 - `session.peer(address)` returns a generation-checked handle or `null`, while
@@ -1912,22 +1915,27 @@ Mesh behavior, provisioning, or a product message schema.
   `{ enabled: false }` restores the ESP-IDF always-awake/default interval
   settings. Closing an enabled session also restores those defaults before
   native deinitialization.
+- `session.recover()` explicitly rebuilds a faulted native session after send
+  timeout cleanup has reached callback quiescence. Product policy decides
+  whether and when to call it; no message is resent implicitly.
 - `session.close()` closes receive delivery, unregisters callbacks, deinitializes
   ESP-NOW, releases the shared radio lease, clears keys, and invalidates peers.
 
 `EspNowSession` is the generation-checked session handle returned by `open()`;
 `EspNowPeer` is the generation-checked peer handle returned by `addPeer()` or
 `peer()`. Their callable surface is `receive()`, `stats()`, `status()`,
-`addPeer()`, `peer()`, `peers()`, `broadcast()`, `setPowerSave()`, `close()`,
-`send()`, and `update()` as described above.
+`addPeer()`, `peer()`, `peers()`, `broadcast()`, `setPowerSave()`, `recover()`,
+`close()`, `send()`, `update()`, and `remove()` as described above.
 
 Use `channel: "current"` when Wi-Fi is connected. The framework rejects channel
 conflicts and does not disconnect Wi-Fi, change an AP channel, or perform
 hidden off-channel sends. A send callback timeout reports
 `ESPNOW_RECOVERY_PENDING` while its native Future state and transmit lane remain
-retained. A worker waits for callbacks to become quiescent, then rebuilds
-ESP-NOW and restores the PMK and peers before releasing either; failed recovery
-leaves the session unavailable until close and reopen.
+retained. A worker waits for callbacks to become quiescent, deinitializes the
+native driver, and only then completes the Future with a timeout. The session
+remains faulted with `recoveryRequired: true` until JS policy calls
+`session.recover()`; explicit recovery rebuilds ESP-NOW and restores the PMK and
+peers without retransmitting the timed-out message.
 
 ## `ble` Module
 
@@ -1936,8 +1944,8 @@ broadcaster, GATT, and security surface when `sys.info.features.ble` is
 enabled. It does not parse advertising structures, define a product GATT
 profile, or implement provisioning policy.
 
-- `ble.capabilities()` reports the compiled roles, connection/MTU limits,
-  bonding, privacy, and advertising capabilities.
+- `ble.capabilities()` reports v1/target/ESP-IDF identity, compiled roles,
+  connection/MTU limits, bonding, privacy, and advertising capabilities.
 - `ble.open(options?)` opens the runtime singleton. It strictly validates roles,
   device name, own-address policy, preferred MTU, connection limit, security,
   and an optional static native-cached GATT Server definition.
@@ -1949,14 +1957,17 @@ profile, or implement provisioning policy.
 - `BLEAdapter.connect()` creates a central `BLEConnection`. `status()` reports
   link/security state and the per-connection GATT lane; `receive()` carries
   disconnect, MTU, security, and pairing-request control events.
-- `BLEConnection.discover()` creates generation-checked `BLEService`,
-  `BLECharacteristic`, and `BLEDescriptor` snapshots. Attribute reads, writes,
-  subscriptions, MTU exchange, pairing, and close are native Future operations
-  serialized per connection.
+- `BLEConnection.discover()` returns one flat value snapshot containing
+  `services`, `characteristics`, and `descriptors` records plus a discovery
+  generation. It does not allocate one native reference per attribute.
+  `readHandle()`, `writeHandle()`, and `subscribeHandle()` validate handles
+  against the current discovery. Attribute operations, MTU exchange, pairing,
+  and close are native Future operations serialized per connection.
 - `BLEConnection.pair()`, `respondPairing()`, `exchangeMtu()`, and `readRssi()`
-  expose explicit security, MTU, and signal operations. `BLEService.characteristics()`,
-  `BLECharacteristic.descriptors()`, and `BLECharacteristic.subscribe()` expose
-  the discovered GATT hierarchy and bounded value stream.
+  expose explicit security, MTU, and signal operations. A JavaScript Library
+  may wrap the flat records into service/characteristic/descriptor façade
+  objects; native firmware keeps only the connection and notification stream
+  resource handles.
 - `BLENotificationStream` owns a bounded notification/indication EventQueue.
   Each payload is an owned `ByteView`; close it after use. Closing the stream
   first disables its CCCD.
@@ -2178,12 +2189,15 @@ The current ESP-IDF WS/WSS transport is selected together with the TLS
 capability, so a WebSocket client build requires `sys.info.features.tls`.
 It uses a bounded `EventQueue` handle and does not invoke application callbacks.
 
+- `websocketClient.capabilities()` reports the target, ESP-IDF version,
+  compile-time message limit, and `nativeReconnect: false`.
 - `websocketClient.open(options)`
   Start a connection and return a handle. Required `options.url` uses `ws://`
   or `wss://`. Optional controls are `authorization`, `subprotocol`,
-  `autoReconnect`, `reconnectMs` (0..120000), `networkTimeoutMs`
-  (1000..120000), `sendTimeoutMs` (0..5000), `pingIntervalSec` (1..3600),
-  and `maxMessageBytes` (256 up to the firmware limit). WSS always verifies
+  `networkTimeoutMs` (1000..120000), `sendTimeoutMs` (0..5000),
+  `pingIntervalSec` (1..3600), and `maxMessageBytes` (256 up to the firmware
+  limit). Each native handle performs one connection attempt and never
+  reconnects itself. WSS always verifies
   the public CA chain, hostname, and certificate dates; there is no option to
   disable verification.
 - `handle.receive(timeoutMs?)`
@@ -2204,14 +2218,13 @@ It uses a bounded `EventQueue` handle and does not invoke application callbacks.
   event-unregister, or destroy failure retains the exact remaining native
   suffix and keeps `closing` true; another `close()` or runtime teardown retries
   it. The first close returns `true`; ordinary repeated closes return `false`.
-  A close/error event
-  reports `reconnecting: false` when `autoReconnect` is disabled.
+  Reconnect timing, endpoint fallback, credential refresh, and retry limits
+  belong to a JavaScript policy library.
 
 ```js
 var client = websocketClient.open({
   url: "wss://agent.example/ws",
-  authorization: "Bearer paired-device-token",
-  autoReconnect: true
+  authorization: "Bearer paired-device-token"
 });
 var event = client.receive(10000);
 if (event && event.type === "open") {
@@ -2229,7 +2242,7 @@ The namespace is present when the HTTP client or server feature is enabled.
 
 - `http.DEFAULT_TIMEOUT_MS` / `http.MAX_BODY_BYTES`
   HTTP-client limits when `sys.info.features.http` is enabled.
-- `fetch(input, options?)` / `http.fetch(input, options?)`
+- `http.fetch(input, options?)`
   Run one request through the native HTTP Future driver. Options include
   `method`, `headers`, UTF-8 string, `Stream`, `ByteView`, or `ByteSpanSource`
   `body`, `timeoutMs`, and `maxBodyBytes`. Before the HTTP worker starts,
@@ -2254,8 +2267,8 @@ in the socket section; it has no insecure or skip-verification option.
   `sys.info.features.httpServer` is enabled.
 
 ```js
-var left = Future.call(fetch, globalThis, ["https://example.com/a"]);
-var right = Future.call(fetch, globalThis, ["https://example.com/b"]);
+var left = Future.call(http.fetch, http, ["https://example.com/a"]);
+var right = Future.call(http.fetch, http, ["https://example.com/b"]);
 var responses = Future.all([left, right]).wait(10000);
 print(responses[0].status, responses[1].status);
 ```

@@ -32,6 +32,19 @@ static bool fake_event_queue_send_from_isr(void *destination,
     return true;
 }
 
+static bool fake_event_queue_try_send_from_callback(void *destination,
+                                                     const void *event)
+{
+    fake_event_queue_t *queue = destination;
+
+    queue->sends++;
+    if (queue->count >= 2) {
+        return false;
+    }
+    queue->events[queue->count++] = *(const fake_pooled_event_t *)event;
+    return true;
+}
+
 static void test_address_and_keys(void)
 {
     uint8_t address[6];
@@ -55,37 +68,37 @@ static void test_address_and_keys(void)
 
 static void test_pool(void)
 {
-    esp32_mquickjs_wireless_pool_t pool;
+    esp32_mquickjs_native_pool_t pool;
     uint16_t slots[64];
     uint16_t slot;
-    assert(!esp32_mquickjs_wireless_pool_init(&pool, 0));
-    assert(!esp32_mquickjs_wireless_pool_init(&pool, 65));
-    assert(esp32_mquickjs_wireless_pool_init(&pool, 64));
+    assert(!esp32_mquickjs_native_pool_init(&pool, 0));
+    assert(!esp32_mquickjs_native_pool_init(&pool, 65));
+    assert(esp32_mquickjs_native_pool_init(&pool, 64));
     for (uint16_t index = 0; index < 64; ++index) {
-        assert(esp32_mquickjs_wireless_pool_acquire(&pool, &slots[index]));
+        assert(esp32_mquickjs_native_pool_acquire(&pool, &slots[index]));
         assert(slots[index] == index);
     }
-    assert(!esp32_mquickjs_wireless_pool_acquire(&pool, &slot));
-    assert(esp32_mquickjs_wireless_pool_available(&pool) == 0);
-    assert(esp32_mquickjs_wireless_pool_release(&pool, 33));
-    assert(!esp32_mquickjs_wireless_pool_release(&pool, 33));
-    assert(esp32_mquickjs_wireless_pool_acquire(&pool, &slot));
+    assert(!esp32_mquickjs_native_pool_acquire(&pool, &slot));
+    assert(esp32_mquickjs_native_pool_available(&pool) == 0);
+    assert(esp32_mquickjs_native_pool_release(&pool, 33));
+    assert(!esp32_mquickjs_native_pool_release(&pool, 33));
+    assert(esp32_mquickjs_native_pool_acquire(&pool, &slot));
     assert(slot == 33);
 }
 
 static void test_pooled_isr_producer_releases_rejected_slots(void)
 {
-    esp32_mquickjs_wireless_pool_t pool;
+    esp32_mquickjs_native_pool_t pool;
     fake_event_queue_t queue = {0};
     uint32_t dropped = 0;
     uint32_t sequence;
     int task_woken = 0;
 
-    assert(esp32_mquickjs_wireless_pool_init(&pool, 4));
+    assert(esp32_mquickjs_native_pool_init(&pool, 4));
     for (sequence = 1; sequence <= 100; ++sequence) {
         fake_pooled_event_t event = {.sequence = sequence};
 
-        assert(esp32_mquickjs_wireless_pool_acquire(
+        assert(esp32_mquickjs_native_pool_acquire(
             &pool, &event.pool_index));
         if (!esp32_mquickjs_wireless_pooled_event_publish_from_isr(
                 &pool, event.pool_index, &queue, &event,
@@ -99,25 +112,58 @@ static void test_pooled_isr_producer_releases_rejected_slots(void)
     assert(queue.events[1].sequence == 2);
     assert(dropped == 98);
     assert(task_woken == 1);
-    assert(esp32_mquickjs_wireless_pool_available(&pool) == 2);
+    assert(esp32_mquickjs_native_pool_available(&pool) == 2);
 
-    assert(esp32_mquickjs_wireless_pool_release(
+    assert(esp32_mquickjs_native_pool_release(
         &pool, queue.events[0].pool_index));
-    assert(esp32_mquickjs_wireless_pool_release(
+    assert(esp32_mquickjs_native_pool_release(
         &pool, queue.events[1].pool_index));
-    assert(esp32_mquickjs_wireless_pool_available(&pool) == 4);
+    assert(esp32_mquickjs_native_pool_available(&pool) == 4);
 
     {
         uint16_t index;
         fake_pooled_event_t event = {0};
 
-        assert(esp32_mquickjs_wireless_pool_acquire(&pool, &index));
+        assert(esp32_mquickjs_native_pool_acquire(&pool, &index));
         event.pool_index = index;
         assert(!esp32_mquickjs_wireless_pooled_event_publish_from_isr(
             &pool, index, NULL, &event,
             fake_event_queue_send_from_isr, NULL));
-        assert(esp32_mquickjs_wireless_pool_available(&pool) == 4);
+        assert(esp32_mquickjs_native_pool_available(&pool) == 4);
     }
+}
+
+static void test_pooled_callback_producer_releases_rejected_slots(void)
+{
+    esp32_mquickjs_native_pool_t pool;
+    fake_event_queue_t queue = {0};
+    uint32_t dropped = 0;
+    uint32_t sequence;
+
+    assert(esp32_mquickjs_native_pool_init(&pool, 4));
+    for (sequence = 1; sequence <= 100; ++sequence) {
+        fake_pooled_event_t event = {.sequence = sequence};
+
+        assert(esp32_mquickjs_native_pool_acquire(
+            &pool, &event.pool_index));
+        if (!esp32_mquickjs_wireless_pooled_event_publish_from_callback(
+                &pool, event.pool_index, &queue, &event,
+                fake_event_queue_try_send_from_callback)) {
+            dropped++;
+        }
+    }
+    assert(queue.sends == 100);
+    assert(queue.count == 2);
+    assert(queue.events[0].sequence == 1);
+    assert(queue.events[1].sequence == 2);
+    assert(dropped == 98);
+    assert(esp32_mquickjs_native_pool_available(&pool) == 2);
+
+    assert(esp32_mquickjs_native_pool_release(
+        &pool, queue.events[0].pool_index));
+    assert(esp32_mquickjs_native_pool_release(
+        &pool, queue.events[1].pool_index));
+    assert(esp32_mquickjs_native_pool_available(&pool) == 4);
 }
 
 static void test_timeout_state(void)
@@ -133,6 +179,10 @@ static void test_timeout_state(void)
     assert(esp32_mquickjs_wireless_tx_begin_recovery(&state));
     assert(esp32_mquickjs_wireless_tx_finish_recovery(&state, false));
     assert(state == ESP32_MQUICKJS_WIRELESS_TX_FAILED);
+    assert(esp32_mquickjs_wireless_tx_retry_recovery(&state));
+    assert(!esp32_mquickjs_wireless_tx_retry_recovery(&state));
+    assert(esp32_mquickjs_wireless_tx_finish_recovery(&state, true));
+    assert(state == ESP32_MQUICKJS_WIRELESS_TX_READY);
 }
 
 static void test_native_operation_completion_lifecycle(void)
@@ -204,6 +254,7 @@ int main(void)
     test_address_and_keys();
     test_pool();
     test_pooled_isr_producer_releases_rejected_slots();
+    test_pooled_callback_producer_releases_rejected_slots();
     test_timeout_state();
     test_native_operation_completion_lifecycle();
     test_close_release_gate_requires_full_quiescence();

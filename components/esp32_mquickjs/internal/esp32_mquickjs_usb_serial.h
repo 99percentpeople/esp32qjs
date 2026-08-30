@@ -9,12 +9,17 @@ bool esp32_mquickjs_init_usb_serial_runtime(JSContext *ctx,
 void esp32_mquickjs_deinit_usb_serial_runtime(JSContext *ctx);
 
 JSValue js_usb_serial_open(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_usb_serial_capabilities(JSContext *ctx, JSValue *this_val, int argc,
+                                   JSValue *argv);
+JSValue js_usb_serial_handle_constructor(JSContext *ctx, JSValue *this_val,
+                                         int argc, JSValue *argv);
+void js_usb_serial_handle_finalizer(JSContext *ctx, void *opaque);
+JSValue js_usb_serial_receive(JSContext *ctx, JSValue *this_val, int argc,
+                              JSValue *argv);
+JSValue js_usb_serial_stats(JSContext *ctx, JSValue *this_val, int argc,
+                            JSValue *argv);
 JSValue js_usb_serial_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_usb_serial_send(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_usb_serial_status(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
-JSValue js_usb_serial_get_max_frame_bytes(JSContext *ctx,
-                                           JSValue *this_val,
-                                           int argc,
-                                           JSValue *argv);
 
 #endif

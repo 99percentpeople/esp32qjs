@@ -8,6 +8,7 @@ typedef int (*esp32_mquickjs_websocket_client_resource_fn)(
 typedef struct {
     esp32_mquickjs_websocket_client_resource_fn stop;
     esp32_mquickjs_websocket_client_resource_fn unregister_events;
+    esp32_mquickjs_websocket_client_resource_fn quiesce;
     esp32_mquickjs_websocket_client_resource_fn destroy;
     void *opaque;
 } esp32_mquickjs_websocket_client_resource_ops_t;

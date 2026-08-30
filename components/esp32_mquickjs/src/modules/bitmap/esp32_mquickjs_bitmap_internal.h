@@ -44,9 +44,7 @@ struct esp32_mquickjs_bitmap {
     bool write_lease;
     size_t byte_length;
     uint8_t *data;
-    uint8_t *chunk;
     size_t chunk_size;
-    size_t chunk_capacity;
     uint32_t foreground;
     uint32_t background;
     int dirty_x0;

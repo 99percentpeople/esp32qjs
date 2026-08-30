@@ -27,6 +27,7 @@ typedef uint32_t esp32_mquickjs_poll_result_t;
 typedef bool (*esp32_mquickjs_async_poller_t)(JSContext *ctx,
                                               esp32_mquickjs_runtime_t *runtime,
                                               void *opaque);
+typedef bool (*esp32_mquickjs_reap_fn)(void *opaque);
 typedef bool (*esp32_mquickjs_cooperate_fn)(void *opaque);
 
 typedef enum {
@@ -143,6 +144,8 @@ typedef struct {
     uint32_t event_queues_dropped;
     uint32_t async_pollers_registered;
     uint32_t async_pollers_capacity;
+    uint32_t orphans_pending;
+    uint32_t orphans_capacity;
 } esp32_mquickjs_resource_status_t;
 
 typedef struct {
@@ -289,6 +292,15 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
 bool esp32_mquickjs_register_async_poller(esp32_mquickjs_runtime_t *runtime,
                                           esp32_mquickjs_async_poller_t poller,
                                           void *opaque);
+
+/* Runtime-task-only fallback cleanup. Reapers must not call JavaScript. */
+bool esp32_mquickjs_register_reaper(esp32_mquickjs_runtime_t *runtime,
+                                    esp32_mquickjs_reap_fn reap,
+                                    void *opaque);
+
+bool esp32_mquickjs_unregister_reaper(esp32_mquickjs_runtime_t *runtime,
+                                      esp32_mquickjs_reap_fn reap,
+                                      void *opaque);
 
 void esp32_mquickjs_attach_current_task(esp32_mquickjs_runtime_t *runtime);
 void esp32_mquickjs_detach_current_task(esp32_mquickjs_runtime_t *runtime);

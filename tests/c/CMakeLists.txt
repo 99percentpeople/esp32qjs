@@ -64,6 +64,28 @@ add_executable(test_peripheral_lease
 target_include_directories(test_peripheral_lease PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_peripheral_lease COMMAND test_peripheral_lease)
 
+add_executable(test_native_pool
+    test_native_pool.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_native_pool.c
+)
+target_include_directories(test_native_pool PRIVATE ../../components/esp32_mquickjs/internal)
+add_test(NAME test_native_pool COMMAND test_native_pool)
+
+add_executable(test_native_lease
+    test_native_lease.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_native_pool.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_native_lease.c
+)
+target_include_directories(test_native_lease PRIVATE ../../components/esp32_mquickjs/internal)
+add_test(NAME test_native_lease COMMAND test_native_lease)
+
+add_executable(test_reaper
+    test_reaper.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_reaper.c
+)
+target_include_directories(test_reaper PRIVATE ../../components/esp32_mquickjs/internal)
+add_test(NAME test_reaper COMMAND test_reaper)
+
 add_executable(test_line_framer
     test_line_framer.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_line_framer.c
@@ -272,6 +294,7 @@ add_test(NAME test_dma_transfer COMMAND test_dma_transfer)
 
 add_executable(test_wireless_core
     test_wireless_core.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_native_pool.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_wireless_core.c
 )
 target_include_directories(test_wireless_core PRIVATE ../../components/esp32_mquickjs/internal)

@@ -38,6 +38,13 @@ int esp32_mquickjs_websocket_client_resources_deinit(
         }
         resources->events_registered = false;
     }
+    if (ops->quiesce == NULL) {
+        return WEBSOCKET_CLIENT_RESOURCES_INVALID;
+    }
+    result = ops->quiesce(resources->client, ops->opaque);
+    if (result != 0) {
+        return result;
+    }
     if (ops->destroy == NULL) {
         return WEBSOCKET_CLIENT_RESOURCES_INVALID;
     }

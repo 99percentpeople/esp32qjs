@@ -1,6 +1,8 @@
 #ifndef ESP32_MQUICKJS_WIRELESS_CORE_H
 #define ESP32_MQUICKJS_WIRELESS_CORE_H
 
+#include "esp32_mquickjs_native_pool.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -11,12 +13,6 @@ extern "C" {
 #endif
 
 #define ESP32_MQUICKJS_WIRELESS_ADDRESS_BYTES 6U
-#define ESP32_MQUICKJS_WIRELESS_POOL_MAX_CAPACITY 64U
-
-typedef struct {
-    _Atomic uint32_t free_bits[2];
-    uint8_t capacity;
-} esp32_mquickjs_wireless_pool_t;
 
 typedef enum {
     ESP32_MQUICKJS_WIRELESS_TX_READY = 0,
@@ -43,6 +39,8 @@ typedef struct {
 
 typedef bool (*esp32_mquickjs_wireless_event_send_from_isr_fn)(
     void *destination, const void *event, int *task_woken);
+typedef bool (*esp32_mquickjs_wireless_event_try_send_from_callback_fn)(
+    void *destination, const void *event);
 
 bool esp32_mquickjs_wireless_parse_address(
     const char *text,
@@ -55,21 +53,19 @@ bool esp32_mquickjs_wireless_key_length_valid(size_t length,
                                                size_t required_length);
 void esp32_mquickjs_wireless_secure_zero(void *data, size_t length);
 
-bool esp32_mquickjs_wireless_pool_init(
-    esp32_mquickjs_wireless_pool_t *pool, uint32_t capacity);
-bool esp32_mquickjs_wireless_pool_acquire(
-    esp32_mquickjs_wireless_pool_t *pool, uint16_t *out_index);
-bool esp32_mquickjs_wireless_pool_release(
-    esp32_mquickjs_wireless_pool_t *pool, uint16_t index);
-uint32_t esp32_mquickjs_wireless_pool_available(
-    const esp32_mquickjs_wireless_pool_t *pool);
 bool esp32_mquickjs_wireless_pooled_event_publish_from_isr(
-    esp32_mquickjs_wireless_pool_t *pool,
+    esp32_mquickjs_native_pool_t *pool,
     uint16_t pool_index,
     void *destination,
     const void *event,
     esp32_mquickjs_wireless_event_send_from_isr_fn send,
     int *task_woken);
+bool esp32_mquickjs_wireless_pooled_event_publish_from_callback(
+    esp32_mquickjs_native_pool_t *pool,
+    uint16_t pool_index,
+    void *destination,
+    const void *event,
+    esp32_mquickjs_wireless_event_try_send_from_callback_fn try_send);
 
 bool esp32_mquickjs_wireless_tx_timeout(
     esp32_mquickjs_wireless_tx_state_t *state);
@@ -77,6 +73,8 @@ bool esp32_mquickjs_wireless_tx_begin_recovery(
     esp32_mquickjs_wireless_tx_state_t *state);
 bool esp32_mquickjs_wireless_tx_finish_recovery(
     esp32_mquickjs_wireless_tx_state_t *state, bool success);
+bool esp32_mquickjs_wireless_tx_retry_recovery(
+    esp32_mquickjs_wireless_tx_state_t *state);
 
 void esp32_mquickjs_wireless_native_operation_init(
     esp32_mquickjs_wireless_native_operation_t *operation);

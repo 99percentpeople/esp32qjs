@@ -266,7 +266,9 @@ void app_main(void)
 }
 ```
 
-See [Native runtime integration](docs/runtime-api.md) for lifecycle ownership.
+See [Native runtime integration](docs/runtime-api.md) for embedding ownership
+and [Native lifecycle contracts](docs/native-lifecycle-contracts.md) for the
+callback, finalizer, lease, EventQueue, and orphan-reaper invariants.
 
 ## Repository layout
 

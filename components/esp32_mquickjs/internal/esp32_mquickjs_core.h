@@ -26,6 +26,12 @@ JSValue esp32_mquickjs_throw_native_error(JSContext *ctx,
 
 esp32_mquickjs_runtime_t *esp32_mquickjs_get_active_runtime(void);
 
+bool esp32_mquickjs_register_reserved_reaper(
+    esp32_mquickjs_runtime_t *runtime,
+    size_t reserved_slot,
+    esp32_mquickjs_reap_fn reap,
+    void *opaque);
+
 JSValue esp32_mquickjs_load_from_active_fs(JSContext *ctx,
                                            esp32_mquickjs_runtime_t *runtime,
                                            const char *script_path);

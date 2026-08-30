@@ -1,16 +1,20 @@
 test("websocket/offline", function () {
-  var status = websocketClient.status();
+  var capabilities = websocketClient.capabilities();
   var invalidUrl = "";
   var invalidHeader = "";
-  var sendError = "";
   var wifiError = "";
+  var reconnectOptionError = "";
 
-  test.ok(websocketClient.MAX_MESSAGE_BYTES >= 256,
+  test.ok(capabilities.maxMessageBytes >= 256,
     "WebSocket message limit should be exposed");
-  test.ok(!status.open && !status.connected,
-    "WebSocket client should start closed");
-  test.equal(status.closing, false,
-    "WebSocket client should not start in cleanup");
+  test.equal(capabilities.nativeReconnect, false,
+    "native WebSocket reconnect should be disabled");
+  test.equal(typeof websocketClient.send, "undefined",
+    "module should not duplicate handle send");
+  test.equal(typeof websocketClient.status, "undefined",
+    "module should not duplicate handle status");
+  test.equal(typeof websocketClient.close, "undefined",
+    "module should not duplicate handle close");
 
   try {
     websocketClient.open({ url: "http://example.com" });
@@ -33,18 +37,20 @@ test("websocket/offline", function () {
     "authorization should reject line injection");
 
   try {
-    websocketClient.send("not connected");
-  } catch (disconnectedError) {
-    sendError = String(disconnectedError && disconnectedError.message
-      ? disconnectedError.message : disconnectedError);
+    websocketClient.open({
+      url: "ws://127.0.0.1:1",
+      autoReconnect: true
+    });
+  } catch (optionError) {
+    reconnectOptionError = String(optionError && optionError.message
+      ? optionError.message : optionError);
   }
-  test.ok(sendError.indexOf("not connected") >= 0,
-    "send should reject a disconnected client");
+  test.ok(reconnectOptionError.indexOf("unknown option") >= 0,
+    "native WebSocket open should reject JavaScript reconnect policy options");
 
   try {
     websocketClient.open({
       url: "ws://127.0.0.1:1",
-      autoReconnect: false,
       networkTimeoutMs: 1000,
       maxMessageBytes: 1024
     });
@@ -54,9 +60,5 @@ test("websocket/offline", function () {
   }
   test.ok(wifiError.indexOf("Wi-Fi must be connected") >= 0,
     "open should reject use before the TCP/IP stack is ready");
-  test.ok(!websocketClient.close(), "close should be idempotent while closed");
-  test.ok(!websocketClient.status().open,
-    "WebSocket client should report closed after close");
-
-  return { maxMessageBytes: websocketClient.MAX_MESSAGE_BYTES };
+  return { maxMessageBytes: capabilities.maxMessageBytes };
 });

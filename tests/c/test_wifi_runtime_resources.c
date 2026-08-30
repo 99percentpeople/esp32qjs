@@ -6,8 +6,8 @@
 typedef struct {
     size_t create_calls;
     size_t fail_at;
-    void *created[4];
-    void *deleted[4];
+    void *created[5];
+    void *deleted[5];
     size_t deleted_count;
 } fixture_t;
 
@@ -70,19 +70,20 @@ static void test_each_creation_failure_rolls_back(void)
 {
     size_t fail_at;
 
-    for (fail_at = 1; fail_at <= 4; ++fail_at) {
+    for (fail_at = 1; fail_at <= 5; ++fail_at) {
         fixture_t fixture = {.fail_at = fail_at};
         esp32_mquickjs_wifi_runtime_resources_t resources = {0};
         esp32_mquickjs_wifi_runtime_resource_ops_t ops = fixture_ops(&fixture);
 
         assert(!esp32_mquickjs_wifi_runtime_resources_init(
-            &resources, &ops, 1, 8, 1, 12));
+            &resources, &ops, 1, 8, 1, 12, 8, 16));
         assert(fixture.create_calls == fail_at);
         assert_reverse_delete(&fixture, fail_at - 1U);
         assert(resources.lock == NULL);
         assert(resources.event_group == NULL);
         assert(resources.scan_queue == NULL);
         assert(resources.connect_queue == NULL);
+        assert(resources.driver_event_queue == NULL);
     }
 }
 
@@ -93,14 +94,14 @@ static void test_success_deinit_is_reverse_and_idempotent(void)
     esp32_mquickjs_wifi_runtime_resource_ops_t ops = fixture_ops(&fixture);
 
     assert(esp32_mquickjs_wifi_runtime_resources_init(
-        &resources, &ops, 1, 8, 1, 12));
-    assert(fixture.create_calls == 4);
+        &resources, &ops, 1, 8, 1, 12, 8, 16));
+    assert(fixture.create_calls == 5);
     assert(fixture.deleted_count == 0);
 
     esp32_mquickjs_wifi_runtime_resources_deinit(&resources, &ops);
-    assert_reverse_delete(&fixture, 4);
+    assert_reverse_delete(&fixture, 5);
     esp32_mquickjs_wifi_runtime_resources_deinit(&resources, &ops);
-    assert(fixture.deleted_count == 4);
+    assert(fixture.deleted_count == 5);
 }
 
 static void test_invalid_queue_sizes_create_nothing(void)
@@ -110,13 +111,17 @@ static void test_invalid_queue_sizes_create_nothing(void)
     esp32_mquickjs_wifi_runtime_resource_ops_t ops = fixture_ops(&fixture);
 
     assert(!esp32_mquickjs_wifi_runtime_resources_init(
-        &resources, &ops, 0, 8, 1, 12));
+        &resources, &ops, 0, 8, 1, 12, 8, 16));
     assert(!esp32_mquickjs_wifi_runtime_resources_init(
-        &resources, &ops, 1, 0, 1, 12));
+        &resources, &ops, 1, 0, 1, 12, 8, 16));
     assert(!esp32_mquickjs_wifi_runtime_resources_init(
-        &resources, &ops, 1, 8, 0, 12));
+        &resources, &ops, 1, 8, 0, 12, 8, 16));
     assert(!esp32_mquickjs_wifi_runtime_resources_init(
-        &resources, &ops, 1, 8, 1, 0));
+        &resources, &ops, 1, 8, 1, 0, 8, 16));
+    assert(!esp32_mquickjs_wifi_runtime_resources_init(
+        &resources, &ops, 1, 8, 1, 12, 0, 16));
+    assert(!esp32_mquickjs_wifi_runtime_resources_init(
+        &resources, &ops, 1, 8, 1, 12, 8, 0));
     assert(fixture.create_calls == 0);
 }
 

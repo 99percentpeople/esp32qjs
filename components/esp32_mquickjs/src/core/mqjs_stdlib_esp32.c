@@ -37,15 +37,14 @@
 #define JS_CLASS_BLE_SCANNER (JS_CLASS_USER + 32)
 #define JS_CLASS_BLE_ADVERTISER (JS_CLASS_USER + 33)
 #define JS_CLASS_BLE_CONNECTION (JS_CLASS_USER + 34)
-#define JS_CLASS_BLE_SERVICE (JS_CLASS_USER + 35)
-#define JS_CLASS_BLE_CHARACTERISTIC (JS_CLASS_USER + 36)
-#define JS_CLASS_BLE_DESCRIPTOR (JS_CLASS_USER + 37)
-#define JS_CLASS_BLE_NOTIFICATION_STREAM (JS_CLASS_USER + 38)
-#define JS_CLASS_BLE_GATT_SERVER (JS_CLASS_USER + 39)
-#define JS_CLASS_BLE_LOCAL_CHARACTERISTIC (JS_CLASS_USER + 40)
-#define JS_CLASS_ESPNOW_SESSION (JS_CLASS_USER + 41)
-#define JS_CLASS_ESPNOW_PEER (JS_CLASS_USER + 42)
-#define JS_CLASS_COUNT (JS_CLASS_USER + 43)
+#define JS_CLASS_BLE_NOTIFICATION_STREAM (JS_CLASS_USER + 35)
+#define JS_CLASS_BLE_GATT_SERVER (JS_CLASS_USER + 36)
+#define JS_CLASS_BLE_LOCAL_CHARACTERISTIC (JS_CLASS_USER + 37)
+#define JS_CLASS_ESPNOW_SESSION (JS_CLASS_USER + 38)
+#define JS_CLASS_ESPNOW_PEER (JS_CLASS_USER + 39)
+#define JS_CLASS_USB_SERIAL_HANDLE (JS_CLASS_USER + 40)
+#define JS_CLASS_WEBSOCKET_CLIENT_HANDLE (JS_CLASS_USER + 41)
+#define JS_CLASS_COUNT (JS_CLASS_USER + 42)
 
 #define js_global_object js_global_object_base
 #define js_c_function_decl js_c_function_decl_base
@@ -835,6 +834,7 @@ static const JSPropDef js_espnow_session_proto[] = {
     JS_CFUNC_DEF("peers", 0, js_espnow_session_peers),
     JS_CFUNC_DEF("broadcast", 2, js_espnow_session_broadcast),
     JS_CFUNC_DEF("setPowerSave", 1, js_espnow_session_set_power_save),
+    JS_CFUNC_DEF("recover", 0, js_espnow_session_recover),
     JS_CFUNC_DEF("close", 0, js_espnow_session_close),
     JS_PROP_END,
 };
@@ -848,7 +848,7 @@ static const JSPropDef js_espnow_peer_proto[] = {
     JS_CFUNC_DEF("status", 0, js_espnow_peer_status),
     JS_CFUNC_DEF("send", 2, js_espnow_peer_send),
     JS_CFUNC_DEF("update", 1, js_espnow_peer_update),
-    JS_CFUNC_DEF("close", 0, js_espnow_peer_close),
+    JS_CFUNC_DEF("remove", 0, js_espnow_peer_remove),
     JS_PROP_END,
 };
 
@@ -924,6 +924,10 @@ static const JSPropDef js_ble_connection_proto[] = {
     JS_CFUNC_DEF("exchangeMtu", 2, js_ble_connection_exchange_mtu),
     JS_CFUNC_DEF("readRssi", 1, js_ble_connection_read_rssi),
     JS_CFUNC_DEF("discover", 1, js_ble_connection_discover),
+    JS_CFUNC_DEF("readHandle", 2, js_ble_connection_read_handle),
+    JS_CFUNC_DEF("writeHandle", 3, js_ble_connection_write_handle),
+    JS_CFUNC_DEF("subscribeHandle", 3,
+                 js_ble_connection_subscribe_handle),
     JS_CFUNC_DEF("close", 0, js_ble_connection_close),
     JS_PROP_END,
 };
@@ -932,41 +936,6 @@ static const JSClassDef js_ble_connection_class =
     JS_CLASS_DEF("BLEConnection", 0, js_ble_connection_constructor,
                  JS_CLASS_BLE_CONNECTION, NULL, js_ble_connection_proto, NULL,
                  js_ble_connection_finalizer);
-
-static const JSPropDef js_ble_service_proto[] = {
-    JS_CFUNC_DEF("characteristics", 0, js_ble_service_characteristics),
-    JS_PROP_END,
-};
-
-static const JSClassDef js_ble_service_class =
-    JS_CLASS_DEF("BLEService", 0, js_ble_service_constructor,
-                 JS_CLASS_BLE_SERVICE, NULL, js_ble_service_proto, NULL,
-                 js_ble_service_finalizer);
-
-static const JSPropDef js_ble_characteristic_proto[] = {
-    JS_CFUNC_DEF("descriptors", 0, js_ble_characteristic_descriptors),
-    JS_CFUNC_DEF("read", 1, js_ble_characteristic_read),
-    JS_CFUNC_DEF("write", 2, js_ble_characteristic_write),
-    JS_CFUNC_DEF("subscribe", 1, js_ble_characteristic_subscribe),
-    JS_PROP_END,
-};
-
-static const JSClassDef js_ble_characteristic_class =
-    JS_CLASS_DEF("BLECharacteristic", 0, js_ble_characteristic_constructor,
-                 JS_CLASS_BLE_CHARACTERISTIC, NULL,
-                 js_ble_characteristic_proto, NULL,
-                 js_ble_characteristic_finalizer);
-
-static const JSPropDef js_ble_descriptor_proto[] = {
-    JS_CFUNC_DEF("read", 1, js_ble_descriptor_read),
-    JS_CFUNC_DEF("write", 2, js_ble_descriptor_write),
-    JS_PROP_END,
-};
-
-static const JSClassDef js_ble_descriptor_class =
-    JS_CLASS_DEF("BLEDescriptor", 0, js_ble_descriptor_constructor,
-                 JS_CLASS_BLE_DESCRIPTOR, NULL, js_ble_descriptor_proto, NULL,
-                 js_ble_descriptor_finalizer);
 
 static const JSPropDef js_ble_notification_proto[] = {
     JS_CFUNC_DEF("receive", 1, js_ble_notification_receive),
@@ -1079,12 +1048,24 @@ static const JSClassDef js_camera_obj =
 #endif
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
-static const JSPropDef js_usb_serial[] = {
-    JS_CGETSET_DEF("MAX_FRAME_BYTES", js_usb_serial_get_max_frame_bytes, NULL),
-    JS_CFUNC_DEF("open", 1, js_usb_serial_open),
-    JS_CFUNC_DEF("close", 0, js_usb_serial_close),
+static const JSPropDef js_usb_serial_handle_proto[] = {
+    JS_CFUNC_DEF("receive", 1, js_usb_serial_receive),
+    JS_CFUNC_DEF("stats", 0, js_usb_serial_stats),
     JS_CFUNC_DEF("send", 1, js_usb_serial_send),
     JS_CFUNC_DEF("status", 0, js_usb_serial_status),
+    JS_CFUNC_DEF("close", 0, js_usb_serial_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_usb_serial_handle_class =
+    JS_CLASS_DEF("USBSerialHandle", 0, js_usb_serial_handle_constructor,
+                 JS_CLASS_USB_SERIAL_HANDLE, NULL,
+                 js_usb_serial_handle_proto, NULL,
+                 js_usb_serial_handle_finalizer);
+
+static const JSPropDef js_usb_serial[] = {
+    JS_CFUNC_DEF("capabilities", 0, js_usb_serial_capabilities),
+    JS_CFUNC_DEF("open", 1, js_usb_serial_open),
     JS_PROP_END,
 };
 
@@ -1192,12 +1173,25 @@ static const JSClassDef js_socket_obj =
 #endif
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
-static const JSPropDef js_websocket_client[] = {
-    JS_CGETSET_DEF("MAX_MESSAGE_BYTES", js_websocket_get_max_message_bytes, NULL),
-    JS_CFUNC_DEF("open", 1, js_websocket_open),
-    JS_CFUNC_DEF("close", 0, js_websocket_close),
+static const JSPropDef js_websocket_handle_proto[] = {
+    JS_CFUNC_DEF("receive", 1, js_websocket_receive),
+    JS_CFUNC_DEF("stats", 0, js_websocket_stats),
     JS_CFUNC_DEF("send", 1, js_websocket_send),
     JS_CFUNC_DEF("status", 0, js_websocket_status),
+    JS_CFUNC_DEF("close", 0, js_websocket_close),
+    JS_PROP_END,
+};
+
+static const JSClassDef js_websocket_handle_class =
+    JS_CLASS_DEF("WebSocketClientHandle", 0,
+                 js_websocket_handle_constructor,
+                 JS_CLASS_WEBSOCKET_CLIENT_HANDLE, NULL,
+                 js_websocket_handle_proto, NULL,
+                 js_websocket_handle_finalizer);
+
+static const JSPropDef js_websocket_client[] = {
+    JS_CFUNC_DEF("capabilities", 0, js_websocket_capabilities),
+    JS_CFUNC_DEF("open", 1, js_websocket_open),
     JS_PROP_END,
 };
 
@@ -1339,9 +1333,6 @@ static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("BLEScanner", &js_ble_scanner_class),
     JS_PROP_CLASS_DEF("BLEAdvertiser", &js_ble_advertiser_class),
     JS_PROP_CLASS_DEF("BLEConnection", &js_ble_connection_class),
-    JS_PROP_CLASS_DEF("BLEService", &js_ble_service_class),
-    JS_PROP_CLASS_DEF("BLECharacteristic", &js_ble_characteristic_class),
-    JS_PROP_CLASS_DEF("BLEDescriptor", &js_ble_descriptor_class),
     JS_PROP_CLASS_DEF("BLENotificationStream", &js_ble_notification_class),
     JS_PROP_CLASS_DEF("BLEGattServer", &js_ble_gatt_server_class),
     JS_PROP_CLASS_DEF("BLELocalCharacteristic", &js_ble_local_characteristic_class),
@@ -1363,12 +1354,14 @@ static const JSPropDef js_global_object_extra[] = {
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
     JS_PROP_CLASS_DEF("usbSerial", &js_usb_serial_obj),
+    JS_PROP_CLASS_DEF("USBSerialHandle", &js_usb_serial_handle_class),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
     JS_PROP_CLASS_DEF("socket", &js_socket_obj),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
     JS_PROP_CLASS_DEF("websocketClient", &js_websocket_client_obj),
+    JS_PROP_CLASS_DEF("WebSocketClientHandle", &js_websocket_handle_class),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP || CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER
     JS_PROP_CLASS_DEF("http", &js_http_obj),
@@ -1387,12 +1380,8 @@ static const JSPropDef js_global_object_extra[] = {
 #endif
     JS_CFUNC_DEF("help", 0, js_help),
     JS_CFUNC_DEF("sleep", 1, js_sleep),
-    JS_CFUNC_DEF("delay", 1, js_sleep),
     JS_CFUNC_DEF("setInterval", 2, js_setInterval),
     JS_CFUNC_DEF("clearInterval", 1, js_clearTimeout),
-#if CONFIG_ESP32_MQUICKJS_FEATURE_HTTP
-    JS_CFUNC_DEF("fetch", 2, js_http_fetch),
-#endif
     JS_PROP_END,
 };
 

@@ -11,7 +11,7 @@ test("core/eval", function () {
   test.equal(fs.ROOT, "/littlefs", "filesystem root");
   gc();
   help();
-  delay(2);
+  sleep(2);
 
   return { value: value, scriptsDir: fs.ROOT };
 });

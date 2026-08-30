@@ -8,6 +8,8 @@
 #include "esp32_mquickjs_event_queue_drain.h"
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_net.h"
+#include "esp32_mquickjs_native_pool.h"
+#include "esp32_mquickjs_options.h"
 #include "esp32_mquickjs_websocket_client_resources.h"
 #include "utils/esp32_mquickjs_byte_source.h"
 #include "utils/esp32_mquickjs_tls_error.h"
@@ -28,7 +30,6 @@
 #define WEBSOCKET_AUTHORIZATION_MAX_LEN 512U
 #define WEBSOCKET_SUBPROTOCOL_MAX_LEN 128U
 #define WEBSOCKET_ERROR_TEXT_LEN 160U
-#define WEBSOCKET_DEFAULT_RECONNECT_MS 5000
 #define WEBSOCKET_DEFAULT_NETWORK_TIMEOUT_MS 10000
 #define WEBSOCKET_DEFAULT_SEND_TIMEOUT_MS 1000
 #define WEBSOCKET_DEFAULT_PING_INTERVAL_SEC 10
@@ -37,6 +38,7 @@
 #define WEBSOCKET_OPCODE_CLOSE 0x8
 #define WEBSOCKET_OPCODE_PING 0x9
 #define WEBSOCKET_OPCODE_PONG 0xA
+#define WEBSOCKET_INVALID_SLOT UINT16_MAX
 
 typedef enum {
     WEBSOCKET_CALLBACK_OPEN = 1,
@@ -57,13 +59,17 @@ typedef struct {
     uint32_t generation;
     char *data;
     size_t data_len;
+    uint16_t slot_index;
     uint32_t sequence;
     int64_t timestamp_us;
     int32_t code;
     bool binary;
-    bool reconnecting;
     char message[WEBSOCKET_ERROR_TEXT_LEN];
 } esp32_mquickjs_websocket_callback_event_t;
+
+typedef struct {
+    uint32_t generation;
+} esp32_mquickjs_websocket_ref_t;
 
 typedef struct {
     bool initialized;
@@ -77,7 +83,12 @@ typedef struct {
     bool events_registered;
     size_t max_message_bytes;
     uint32_t send_timeout_ms;
+    esp32_mquickjs_native_pool_t receive_free;
+    uint8_t *receive_payloads;
+    size_t receive_stride;
+    uint16_t receive_capacity;
     char *fragment;
+    uint16_t fragment_slot_index;
     size_t fragment_len;
     size_t fragment_expected;
     bool fragment_binary;
@@ -88,15 +99,16 @@ typedef struct {
     _Atomic uint32_t dropped_events;
     _Atomic uint32_t oversized_messages;
     _Atomic uint32_t event_sequence;
+    _Atomic uint32_t callbacks_active;
     _Atomic bool close_worker_completed;
     _Atomic int close_worker_result;
-    bool auto_reconnect;
     bool sending;
     bool close_pending;
     bool close_worker_submitted;
 } esp32_mquickjs_websocket_state_t;
 
 static esp32_mquickjs_websocket_state_t s_websocket_state;
+static esp32_mquickjs_websocket_ref_t s_websocket_closed_ref;
 
 static const char *TAG = "esp32qjs_websocket";
 
@@ -125,8 +137,10 @@ static void websocket_reset_state(void)
     atomic_init(&s_websocket_state.dropped_events, 0);
     atomic_init(&s_websocket_state.oversized_messages, 0);
     atomic_init(&s_websocket_state.event_sequence, 0);
+    atomic_init(&s_websocket_state.callbacks_active, 0);
     atomic_init(&s_websocket_state.close_worker_completed, false);
     atomic_init(&s_websocket_state.close_worker_result, ESP_OK);
+    s_websocket_state.fragment_slot_index = WEBSOCKET_INVALID_SLOT;
 }
 
 static bool websocket_callback_begin(uint32_t *generation)
@@ -185,13 +199,27 @@ static bool websocket_callback_set_connected(uint32_t generation,
     return false;
 }
 
+static void websocket_release_receive_slot(uint16_t slot_index)
+{
+    if (slot_index != WEBSOCKET_INVALID_SLOT &&
+        slot_index < s_websocket_state.receive_capacity) {
+        (void)esp32_mquickjs_native_pool_release(
+            &s_websocket_state.receive_free, slot_index);
+    }
+}
+
 static void websocket_free_callback_event(
     esp32_mquickjs_websocket_callback_event_t *event)
 {
     if (event == NULL) {
         return;
     }
-    heap_caps_free(event->data);
+    if (event->slot_index != WEBSOCKET_INVALID_SLOT) {
+        websocket_release_receive_slot(event->slot_index);
+        event->slot_index = WEBSOCKET_INVALID_SLOT;
+    } else {
+        heap_caps_free(event->data);
+    }
     event->data = NULL;
 }
 
@@ -207,10 +235,51 @@ static void websocket_drain_queue(void)
     }
 }
 
+static bool websocket_allocate_receive_pool(
+    JSContext *ctx,
+    size_t max_message_bytes)
+{
+    size_t capacity = CONFIG_ESP32_MQUICKJS_WEBSOCKET_EVENT_QUEUE_LEN;
+    size_t stride = max_message_bytes + 1U;
+
+    if (capacity == 0U || capacity > UINT16_MAX ||
+        stride == 0U || capacity > SIZE_MAX / stride) {
+        JS_ThrowRangeError(ctx, "invalid WebSocket receive pool size");
+        return false;
+    }
+    s_websocket_state.receive_payloads =
+        esp32_mquickjs_memory_payload_alloc(
+            capacity * stride, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+    if (s_websocket_state.receive_payloads == NULL ||
+        !esp32_mquickjs_native_pool_init(
+            &s_websocket_state.receive_free, (uint32_t)capacity)) {
+        heap_caps_free(s_websocket_state.receive_payloads);
+        s_websocket_state.receive_payloads = NULL;
+        JS_ThrowOutOfMemory(ctx);
+        return false;
+    }
+    s_websocket_state.receive_capacity = (uint16_t)capacity;
+    s_websocket_state.receive_stride = stride;
+    s_websocket_state.fragment_slot_index = WEBSOCKET_INVALID_SLOT;
+    return true;
+}
+
+static void websocket_free_receive_pool(void)
+{
+    heap_caps_free(s_websocket_state.receive_payloads);
+    s_websocket_state.receive_payloads = NULL;
+    s_websocket_state.receive_stride = 0;
+    s_websocket_state.receive_capacity = 0;
+    memset(&s_websocket_state.receive_free, 0,
+           sizeof(s_websocket_state.receive_free));
+}
+
 static void websocket_reset_fragment(void)
 {
-    heap_caps_free(s_websocket_state.fragment);
+    websocket_release_receive_slot(
+        s_websocket_state.fragment_slot_index);
     s_websocket_state.fragment = NULL;
+    s_websocket_state.fragment_slot_index = WEBSOCKET_INVALID_SLOT;
     s_websocket_state.fragment_len = 0;
     s_websocket_state.fragment_expected = 0;
     s_websocket_state.fragment_binary = false;
@@ -239,9 +308,9 @@ static void websocket_enqueue(esp32_mquickjs_websocket_callback_event_t *event,
                           memory_order_relaxed) +
                       1U;
     event->timestamp_us = esp_timer_get_time();
-    if (!esp32_mquickjs_event_queue_enqueue(
-            s_websocket_state.queue, event, NULL, false,
-            websocket_queue_send, NULL, NULL, NULL, &dropped)) {
+    if (!esp32_mquickjs_event_queue_enqueue_from_callback(
+            s_websocket_state.queue, event, websocket_queue_send,
+            &dropped)) {
         atomic_fetch_add_explicit(&s_websocket_state.dropped_events, dropped,
                                   memory_order_relaxed);
         websocket_free_callback_event(event);
@@ -258,8 +327,7 @@ static void websocket_enqueue_simple(esp32_mquickjs_websocket_callback_kind_t ki
     esp32_mquickjs_websocket_callback_event_t event = {
         .kind = kind,
         .code = code,
-        .reconnecting = s_websocket_state.auto_reconnect &&
-                        websocket_generation_is_active(generation),
+        .slot_index = WEBSOCKET_INVALID_SLOT,
     };
 
     if (message != NULL) {
@@ -330,18 +398,20 @@ static void websocket_handle_data(const esp_websocket_event_data_t *data,
                     generation);
             }
         } else {
-            size_t allocation_size =
-                payload_len + (s_websocket_state.fragment_binary ? 0U : 1U);
+            uint16_t slot_index;
 
-            s_websocket_state.fragment =
-                esp32_mquickjs_memory_payload_alloc(
-                    allocation_size > 0 ? allocation_size : 1U,
-                    ESP32_MQUICKJS_MEMORY_EXTERNAL);
-            if (s_websocket_state.fragment == NULL) {
+            if (!esp32_mquickjs_native_pool_acquire(
+                    &s_websocket_state.receive_free, &slot_index)) {
                 s_websocket_state.fragment_dropping = true;
                 websocket_enqueue_error(
-                    "out of memory while receiving WebSocket message", 0,
+                    "WebSocket receive pool is exhausted", 0,
                     generation);
+            } else {
+                s_websocket_state.fragment_slot_index = slot_index;
+                s_websocket_state.fragment =
+                    (char *)(s_websocket_state.receive_payloads +
+                             ((size_t)slot_index *
+                              s_websocket_state.receive_stride));
             }
         }
     }
@@ -372,12 +442,14 @@ static void websocket_handle_data(const esp_websocket_event_data_t *data,
             .data = s_websocket_state.fragment,
             .data_len = payload_len,
             .binary = s_websocket_state.fragment_binary,
+            .slot_index = s_websocket_state.fragment_slot_index,
         };
 
         if (!event.binary) {
             event.data[event.data_len] = '\0';
         }
         s_websocket_state.fragment = NULL;
+        s_websocket_state.fragment_slot_index = WEBSOCKET_INVALID_SLOT;
         s_websocket_state.fragment_len = 0;
         s_websocket_state.fragment_expected = 0;
         websocket_enqueue(&event, generation);
@@ -396,8 +468,10 @@ static void websocket_event_handler(void *handler_args,
 
     (void)handler_args;
     (void)base;
+    atomic_fetch_add_explicit(&s_websocket_state.callbacks_active, 1,
+                              memory_order_acq_rel);
     if (!websocket_callback_begin(&generation)) {
-        return;
+        goto done;
     }
 
     switch (event_id) {
@@ -437,6 +511,10 @@ static void websocket_event_handler(void *handler_args,
     default:
         break;
     }
+
+done:
+    atomic_fetch_sub_explicit(&s_websocket_state.callbacks_active, 1,
+                              memory_order_release);
 }
 
 static int websocket_client_resource_stop(void *client, void *opaque)
@@ -456,6 +534,17 @@ static int websocket_client_resource_unregister_events(
         websocket_event_handler);
 }
 
+static int websocket_client_resource_quiesce(void *client, void *opaque)
+{
+    (void)client;
+    (void)opaque;
+    while (atomic_load_explicit(&s_websocket_state.callbacks_active,
+                                memory_order_acquire) != 0U) {
+        vTaskDelay(1);
+    }
+    return ESP_OK;
+}
+
 static int websocket_client_resource_destroy(void *client, void *opaque)
 {
     (void)opaque;
@@ -468,6 +557,7 @@ static const esp32_mquickjs_websocket_client_resource_ops_t
         .stop = websocket_client_resource_stop,
         .unregister_events =
             websocket_client_resource_unregister_events,
+        .quiesce = websocket_client_resource_quiesce,
         .destroy = websocket_client_resource_destroy,
     };
 
@@ -500,7 +590,7 @@ static void websocket_finish_close_source(void)
     s_websocket_state.events_registered = false;
     websocket_reset_fragment();
     websocket_drain_queue();
-    s_websocket_state.auto_reconnect = false;
+    websocket_free_receive_pool();
     s_websocket_state.close_pending = false;
     s_websocket_state.close_worker_submitted = false;
     atomic_store_explicit(&s_websocket_state.close_worker_completed, false,
@@ -704,9 +794,7 @@ static bool websocket_make_event_object(
         (!esp32_mquickjs_set_property_ref(ctx, object, "code",
                                           JS_NewInt32(ctx, event->code)) ||
          !esp32_mquickjs_set_property_ref(ctx, object, "message",
-                                          JS_NewString(ctx, event->message)) ||
-         !esp32_mquickjs_set_property_ref(ctx, object, "reconnecting",
-                                          JS_NewBool(event->reconnecting)))) {
+                                          JS_NewString(ctx, event->message)))) {
         JS_PopGCRef(ctx, &data_ref);
         JS_PopGCRef(ctx, &object_ref);
         return false;
@@ -739,6 +827,40 @@ static void websocket_drop_event(void *data, void *opaque)
     websocket_free_callback_event(data);
 }
 
+static bool websocket_materialize_callback_event(
+    esp32_mquickjs_websocket_callback_event_t *event)
+{
+    char *owned;
+    size_t allocation_size;
+
+    if (event == NULL || event->kind != WEBSOCKET_CALLBACK_MESSAGE) {
+        return event != NULL;
+    }
+    if (event->slot_index == WEBSOCKET_INVALID_SLOT ||
+        event->slot_index >= s_websocket_state.receive_capacity ||
+        event->data == NULL ||
+        event->data_len > s_websocket_state.max_message_bytes) {
+        return false;
+    }
+    allocation_size = event->data_len + (event->binary ? 0U : 1U);
+    owned = esp32_mquickjs_memory_payload_alloc(
+        allocation_size > 0U ? allocation_size : 1U,
+        ESP32_MQUICKJS_MEMORY_EXTERNAL);
+    if (owned == NULL) {
+        return false;
+    }
+    if (event->data_len > 0U) {
+        memcpy(owned, event->data, event->data_len);
+    }
+    if (!event->binary) {
+        owned[event->data_len] = '\0';
+    }
+    websocket_release_receive_slot(event->slot_index);
+    event->slot_index = WEBSOCKET_INVALID_SLOT;
+    event->data = owned;
+    return true;
+}
+
 static bool websocket_poller(JSContext *ctx,
                              esp32_mquickjs_runtime_t *runtime,
                              void *opaque)
@@ -758,6 +880,12 @@ static bool websocket_poller(JSContext *ctx,
         if (event.generation != s_websocket_state.generation ||
             s_websocket_state.event_queue == NULL) {
             websocket_free_callback_event(&event);
+            continue;
+        }
+        if (!websocket_materialize_callback_event(&event)) {
+            websocket_free_callback_event(&event);
+            atomic_fetch_add_explicit(&s_websocket_state.dropped_events, 1,
+                                      memory_order_relaxed);
             continue;
         }
         handled = true;
@@ -794,27 +922,6 @@ static bool websocket_get_int_option(JSContext *ctx,
         return false;
     }
     *out_value = raw_value;
-    return true;
-}
-
-static bool websocket_get_bool_option(JSContext *ctx,
-                                      JSValue options,
-                                      const char *name,
-                                      bool default_value,
-                                      bool *out_value)
-{
-    JSValue value = JS_GetPropertyStr(ctx, options, name);
-    int raw_value;
-
-    if (JS_IsUndefined(value)) {
-        *out_value = default_value;
-        return true;
-    }
-    if (JS_ToInt32(ctx, &raw_value, value) != 0 ||
-        (raw_value != 0 && raw_value != 1)) {
-        return false;
-    }
-    *out_value = raw_value != 0;
     return true;
 }
 
@@ -872,11 +979,139 @@ bool esp32_mquickjs_deinit_websocket_runtime(JSContext *ctx)
     return true;
 }
 
+static esp32_mquickjs_websocket_ref_t *websocket_ref_from_value(
+    JSContext *ctx, JSValue value, bool require_active)
+{
+    esp32_mquickjs_websocket_ref_t *ref;
+    esp32_mquickjs_websocket_lifecycle_t lifecycle;
+
+    if (JS_GetClassID(ctx, value) != JS_CLASS_WEBSOCKET_CLIENT_HANDLE ||
+        (ref = JS_GetOpaque(ctx, value)) == NULL ||
+        ref == &s_websocket_closed_ref) {
+        JS_ThrowTypeError(ctx, "expected a WebSocketClientHandle");
+        return NULL;
+    }
+    lifecycle = atomic_load_explicit(&s_websocket_state.lifecycle,
+                                     memory_order_acquire);
+    if (require_active &&
+        (ref->generation != s_websocket_state.generation ||
+         !websocket_lifecycle_is_active(lifecycle))) {
+        JS_ThrowReferenceError(
+            ctx, "WEBSOCKET_STALE_HANDLE: client handle is closed");
+        return NULL;
+    }
+    return ref;
+}
+
+JSValue js_websocket_handle_constructor(JSContext *ctx, JSValue *this_val,
+                                        int argc, JSValue *argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_ThrowTypeError(
+        ctx, "WebSocketClientHandle cannot be constructed directly");
+}
+
+void js_websocket_handle_finalizer(JSContext *ctx, void *opaque)
+{
+    esp32_mquickjs_websocket_ref_t *ref = opaque;
+
+    (void)ctx;
+    if (ref != NULL && ref != &s_websocket_closed_ref) {
+        if (ref->generation == s_websocket_state.generation &&
+            websocket_lifecycle_is_active(atomic_load_explicit(
+                &s_websocket_state.lifecycle, memory_order_acquire))) {
+            esp32_mquickjs_event_queue_request_close(
+                s_websocket_state.event_queue);
+        }
+        heap_caps_free(ref);
+    }
+}
+
+JSValue js_websocket_receive(JSContext *ctx, JSValue *this_val,
+                             int argc, JSValue *argv)
+{
+    JSGCRef receiver_ref, method_ref;
+    JSValue *receiver = JS_PushGCRef(ctx, &receiver_ref);
+    JSValue *method = JS_PushGCRef(ctx, &method_ref);
+    JSValue result;
+
+    if (this_val == NULL ||
+        websocket_ref_from_value(ctx, *this_val, true) == NULL) {
+        JS_PopGCRef(ctx, &method_ref);
+        JS_PopGCRef(ctx, &receiver_ref);
+        return JS_EXCEPTION;
+    }
+    *receiver = *this_val;
+    *method = JS_GetPropertyStr(ctx, *receiver, "receive");
+    result = JS_IsException(*method)
+                 ? JS_EXCEPTION
+                 : esp32_mquickjs_future_call_and_wait(
+                       ctx, esp32_mquickjs_get_active_runtime(), *method,
+                       *receiver, argc, argv);
+    JS_PopGCRef(ctx, &method_ref);
+    JS_PopGCRef(ctx, &receiver_ref);
+    return result;
+}
+
+JSValue js_websocket_stats(JSContext *ctx, JSValue *this_val,
+                           int argc, JSValue *argv)
+{
+    if (this_val == NULL ||
+        websocket_ref_from_value(ctx, *this_val, true) == NULL) {
+        return JS_EXCEPTION;
+    }
+    return js_event_queue_stats(ctx, this_val, argc, argv);
+}
+
+JSValue js_websocket_capabilities(JSContext *ctx, JSValue *this_val,
+                                  int argc, JSValue *argv)
+{
+    JSGCRef result_ref;
+    JSValue *result = JS_PushGCRef(ctx, &result_ref);
+
+    (void)this_val;
+    (void)argv;
+    if (argc != 0) {
+        JS_PopGCRef(ctx, &result_ref);
+        return JS_ThrowTypeError(
+            ctx, "websocketClient.capabilities() expects no arguments");
+    }
+    *result = JS_NewObject(ctx);
+    if (JS_IsException(*result) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "apiVersion",
+                                         JS_NewString(ctx, "v1")) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "target",
+                                         JS_NewString(ctx, CONFIG_IDF_TARGET)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "idfVersion",
+                                         JS_NewString(ctx, IDF_VER)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "supported", JS_TRUE) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "maxMessageBytes",
+            JS_NewUint32(ctx,
+                         CONFIG_ESP32_MQUICKJS_WEBSOCKET_MAX_MESSAGE_BYTES)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "nativeReconnect",
+                                         JS_FALSE)) {
+        *result = JS_EXCEPTION;
+    }
+    return JS_PopGCRef(ctx, &result_ref);
+}
+
 JSValue js_websocket_open(JSContext *ctx,
                           JSValue *this_val,
                           int argc,
                           JSValue *argv)
 {
+    static const char *const allowed[] = {
+        "url",
+        "authorization",
+        "subprotocol",
+        "networkTimeoutMs",
+        "sendTimeoutMs",
+        "pingIntervalSec",
+        "maxMessageBytes",
+    };
     JSCStringBuf url_buf;
     JSCStringBuf authorization_buf;
     JSCStringBuf subprotocol_buf;
@@ -892,8 +1127,6 @@ JSValue js_websocket_open(JSContext *ctx,
     size_t authorization_len = 0;
     size_t subprotocol_len = 0;
     char *headers = NULL;
-    bool auto_reconnect;
-    int reconnect_ms;
     int network_timeout_ms;
     int send_timeout_ms;
     int ping_interval_sec;
@@ -901,11 +1134,10 @@ JSValue js_websocket_open(JSContext *ctx,
     esp_websocket_client_config_t config = {0};
     esp_websocket_client_handle_t client;
     JSGCRef queue_ref;
-    JSGCRef send_ref;
-    JSGCRef status_ref;
+    JSGCRef handle_ref;
     JSValue *queue_object;
-    JSValue *send;
-    JSValue *status;
+    JSValue *handle;
+    esp32_mquickjs_websocket_ref_t *ref = NULL;
     esp_err_t err;
 
     if (!s_websocket_state.initialized) {
@@ -921,6 +1153,11 @@ JSValue js_websocket_open(JSContext *ctx,
     if (argc != 1 || JS_GetClassID(ctx, argv[0]) < 0) {
         return JS_ThrowTypeError(ctx,
                                  "websocketClient.open(options) expects one options object");
+    }
+    if (!esp32_mquickjs_validate_plain_options(
+            ctx, argv[0], "websocketClient.open()", allowed,
+            sizeof(allowed) / sizeof(allowed[0]))) {
+        return JS_EXCEPTION;
     }
 
     url_value = JS_GetPropertyStr(ctx, argv[0], "url");
@@ -995,12 +1232,7 @@ JSValue js_websocket_open(JSContext *ctx,
         subprotocol_copy[subprotocol_len] = '\0';
     }
 
-    if (!websocket_get_bool_option(ctx, argv[0], "autoReconnect", true,
-                                   &auto_reconnect) ||
-        !websocket_get_int_option(ctx, argv[0], "reconnectMs",
-                                  WEBSOCKET_DEFAULT_RECONNECT_MS, 0, 120000,
-                                  &reconnect_ms) ||
-        !websocket_get_int_option(ctx, argv[0], "networkTimeoutMs",
+    if (!websocket_get_int_option(ctx, argv[0], "networkTimeoutMs",
                                   WEBSOCKET_DEFAULT_NETWORK_TIMEOUT_MS, 1000, 120000,
                                   &network_timeout_ms) ||
         !websocket_get_int_option(ctx, argv[0], "sendTimeoutMs",
@@ -1031,9 +1263,8 @@ JSValue js_websocket_open(JSContext *ctx,
     config.headers = headers;
     config.subprotocol = subprotocol_copy;
     config.user_context = &s_websocket_state;
-    config.disable_auto_reconnect = !auto_reconnect || reconnect_ms == 0;
-    config.enable_close_reconnect = auto_reconnect && reconnect_ms > 0;
-    config.reconnect_timeout_ms = reconnect_ms;
+    config.disable_auto_reconnect = true;
+    config.enable_close_reconnect = false;
     config.network_timeout_ms = network_timeout_ms;
     config.ping_interval_sec = (size_t)ping_interval_sec;
     config.task_stack = CONFIG_ESP32_MQUICKJS_WEBSOCKET_TASK_STACK_SIZE;
@@ -1043,11 +1274,20 @@ JSValue js_websocket_open(JSContext *ctx,
         config.crt_bundle_attach = esp32_mquickjs_tls_crt_bundle_attach;
     }
 
+    if (!websocket_allocate_receive_pool(
+            ctx, (size_t)max_message_bytes)) {
+        heap_caps_free(subprotocol_copy);
+        heap_caps_free(headers);
+        heap_caps_free(url_copy);
+        return JS_EXCEPTION;
+    }
+
     client = esp_websocket_client_init(&config);
     heap_caps_free(subprotocol_copy);
     heap_caps_free(headers);
     heap_caps_free(url_copy);
     if (client == NULL) {
+        websocket_free_receive_pool();
         return JS_ThrowInternalError(ctx, "failed to initialize WebSocket client");
     }
 
@@ -1058,11 +1298,8 @@ JSValue js_websocket_open(JSContext *ctx,
     s_websocket_state.client = client;
     s_websocket_state.max_message_bytes = (size_t)max_message_bytes;
     s_websocket_state.send_timeout_ms = (uint32_t)send_timeout_ms;
-    s_websocket_state.auto_reconnect =
-        auto_reconnect && reconnect_ms > 0;
     queue_object = JS_PushGCRef(ctx, &queue_ref);
-    send = JS_PushGCRef(ctx, &send_ref);
-    status = JS_PushGCRef(ctx, &status_ref);
+    handle = JS_PushGCRef(ctx, &handle_ref);
     *queue_object = esp32_mquickjs_event_queue_new(
         ctx,
         s_websocket_state.runtime,
@@ -1073,15 +1310,26 @@ JSValue js_websocket_open(JSContext *ctx,
         websocket_drop_event,
         websocket_close_source,
         NULL);
-    *send = JS_GetPropertyStr(ctx, *this_val, "send");
-    *status = JS_GetPropertyStr(ctx, *this_val, "status");
-    if (JS_IsException(*queue_object) ||
-        JS_IsException(*send) || JS_IsException(*status) ||
-        JS_IsException(JS_SetPropertyStr(ctx, *queue_object, "send", *send)) ||
-        JS_IsException(JS_SetPropertyStr(ctx, *queue_object, "status", *status))) {
+    *handle = JS_NewObjectClassUser(ctx, JS_CLASS_WEBSOCKET_CLIENT_HANDLE);
+    if (!JS_IsException(*handle)) {
+        ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
+        if (ref == NULL) {
+            JS_ThrowOutOfMemory(ctx);
+            *handle = JS_EXCEPTION;
+        } else {
+            ref->generation = s_websocket_state.generation;
+            JS_SetOpaque(ctx, *handle, ref);
+        }
+    }
+    if (JS_IsException(*queue_object) || JS_IsException(*handle) ||
+        !esp32_mquickjs_set_property_ref(ctx, handle, "_eventQueue",
+                                         *queue_object)) {
+        if (ref != NULL) {
+            JS_SetOpaque(ctx, *handle, NULL);
+            heap_caps_free(ref);
+        }
         websocket_close_source(NULL);
-        JS_PopGCRef(ctx, &status_ref);
-        JS_PopGCRef(ctx, &send_ref);
+        JS_PopGCRef(ctx, &handle_ref);
         JS_PopGCRef(ctx, &queue_ref);
         return JS_EXCEPTION;
     }
@@ -1104,16 +1352,16 @@ JSValue js_websocket_open(JSContext *ctx,
     }
     if (err != ESP_OK) {
         websocket_close_internal();
-        JS_PopGCRef(ctx, &status_ref);
-        JS_PopGCRef(ctx, &send_ref);
+        JS_SetOpaque(ctx, *handle, NULL);
+        heap_caps_free(ref);
+        JS_PopGCRef(ctx, &handle_ref);
         JS_PopGCRef(ctx, &queue_ref);
         return JS_ThrowInternalError(ctx,
                                      "failed to start WebSocket client: %s",
                                      esp_err_to_name(err));
     }
-    JS_PopGCRef(ctx, &status_ref);
-    JS_PopGCRef(ctx, &send_ref);
-    return JS_PopGCRef(ctx, &queue_ref);
+    JS_PopGCRef(ctx, &queue_ref);
+    return JS_PopGCRef(ctx, &handle_ref);
 }
 
 JSValue js_websocket_close(JSContext *ctx,
@@ -1121,17 +1369,26 @@ JSValue js_websocket_close(JSContext *ctx,
                            int argc,
                            JSValue *argv)
 {
+    esp32_mquickjs_websocket_ref_t *ref;
     esp32_mquickjs_websocket_lifecycle_t lifecycle;
     bool was_open;
 
-    (void)this_val;
-    (void)argc;
+    if (this_val == NULL || argc != 0 ||
+        JS_GetClassID(ctx, *this_val) != JS_CLASS_WEBSOCKET_CLIENT_HANDLE) {
+        return JS_ThrowTypeError(
+            ctx, "WebSocketClientHandle.close() expects no arguments");
+    }
     (void)argv;
+    ref = JS_GetOpaque(ctx, *this_val);
+    if (ref == NULL || ref == &s_websocket_closed_ref) return JS_FALSE;
     (void)websocket_poll_close();
     lifecycle = atomic_load_explicit(&s_websocket_state.lifecycle,
                                      memory_order_acquire);
-    was_open = websocket_lifecycle_is_active(lifecycle);
-    websocket_close_internal();
+    was_open = ref->generation == s_websocket_state.generation &&
+               websocket_lifecycle_is_active(lifecycle);
+    if (was_open) websocket_close_internal();
+    JS_SetOpaque(ctx, *this_val, &s_websocket_closed_ref);
+    heap_caps_free(ref);
     return JS_NewBool(was_open);
 }
 
@@ -1300,8 +1557,9 @@ JSValue js_websocket_send(JSContext *ctx,
     bool binary = false;
     int sent;
 
-    (void)this_val;
-    if (argc != 1) {
+    if (this_val == NULL ||
+        websocket_ref_from_value(ctx, *this_val, true) == NULL || argc != 1) {
+        if (JS_HasException(ctx)) return JS_EXCEPTION;
         return JS_ThrowTypeError(
             ctx, "websocketClient.send(data) expects one data argument");
     }
@@ -1373,8 +1631,9 @@ static bool websocket_send_future_prepare(
 {
     esp32_mquickjs_future_driver_state_t *state;
 
-    (void)this_ref;
-    if (out_state == NULL || argc != 1) {
+    if (out_state == NULL || argc != 1 || this_ref == NULL ||
+        websocket_ref_from_value(ctx, this_ref->val, true) == NULL) {
+        if (JS_HasException(ctx)) return false;
         JS_ThrowTypeError(
             ctx, "websocketClient.send(data) expects one data argument");
         return false;
@@ -1537,29 +1796,39 @@ static bool websocket_register_future_driver(
     esp32_mquickjs_runtime_t *runtime)
 {
     JSGCRef global_ref;
-    JSGCRef module_ref;
+    JSGCRef handle_ref;
     JSGCRef send_ref;
+    JSGCRef receive_ref;
     JSValue *global = JS_PushGCRef(ctx, &global_ref);
-    JSValue *module = JS_PushGCRef(ctx, &module_ref);
+    JSValue *handle = JS_PushGCRef(ctx, &handle_ref);
     JSValue *send = JS_PushGCRef(ctx, &send_ref);
+    JSValue *receive = JS_PushGCRef(ctx, &receive_ref);
     bool registered;
 
     *global = JS_GetGlobalObject(ctx);
-    *module = JS_IsException(*global)
+    *handle = JS_IsException(*global)
                   ? JS_EXCEPTION
-                  : JS_GetPropertyStr(ctx, *global, "websocketClient");
-    *send = JS_IsException(*module)
+                  : JS_NewObjectClassUser(
+                        ctx, JS_CLASS_WEBSOCKET_CLIENT_HANDLE);
+    *send = JS_IsException(*handle)
                 ? JS_EXCEPTION
-                : JS_GetPropertyStr(ctx, *module, "send");
+                : JS_GetPropertyStr(ctx, *handle, "send");
+    *receive = JS_IsException(*handle)
+                   ? JS_EXCEPTION
+                   : JS_GetPropertyStr(ctx, *handle, "receive");
     registered = !JS_IsException(*send) &&
                  esp32_mquickjs_future_register_driver(
-                     ctx, runtime, *send, &s_websocket_send_driver);
+                     ctx, runtime, *send, &s_websocket_send_driver) &&
+                 !JS_IsException(*receive) &&
+                 esp32_mquickjs_event_queue_register_receive_alias(
+                     ctx, runtime, *receive);
     if (!registered && !JS_HasException(ctx)) {
         JS_ThrowInternalError(
             ctx, "failed to register WebSocket Future driver");
     }
+    JS_PopGCRef(ctx, &receive_ref);
     JS_PopGCRef(ctx, &send_ref);
-    JS_PopGCRef(ctx, &module_ref);
+    JS_PopGCRef(ctx, &handle_ref);
     JS_PopGCRef(ctx, &global_ref);
     return registered;
 }
@@ -1573,8 +1842,12 @@ JSValue js_websocket_status(JSContext *ctx,
     JSValue *status;
     esp32_mquickjs_websocket_lifecycle_t lifecycle;
 
-    (void)this_val;
-    (void)argc;
+    if (this_val == NULL || argc != 0 ||
+        websocket_ref_from_value(ctx, *this_val, true) == NULL) {
+        if (JS_HasException(ctx)) return JS_EXCEPTION;
+        return JS_ThrowTypeError(
+            ctx, "WebSocketClientHandle.status() expects no arguments");
+    }
     (void)argv;
     (void)websocket_poll_close();
     lifecycle = atomic_load_explicit(&s_websocket_state.lifecycle,
@@ -1620,17 +1893,6 @@ JSValue js_websocket_status(JSContext *ctx,
         return JS_EXCEPTION;
     }
     return JS_PopGCRef(ctx, &status_ref);
-}
-
-JSValue js_websocket_get_max_message_bytes(JSContext *ctx,
-                                            JSValue *this_val,
-                                            int argc,
-                                            JSValue *argv)
-{
-    (void)this_val;
-    (void)argc;
-    (void)argv;
-    return JS_NewInt32(ctx, CONFIG_ESP32_MQUICKJS_WEBSOCKET_MAX_MESSAGE_BYTES);
 }
 
 #endif

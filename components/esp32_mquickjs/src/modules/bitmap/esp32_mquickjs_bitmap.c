@@ -4,6 +4,7 @@
 #if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
 
 #include "utils/esp32_mquickjs_byte_source.h"
+#include "esp32_mquickjs_options.h"
 
 #include <limits.h>
 #include <stdbool.h>
@@ -12,9 +13,6 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
-#define BITMAP_STAGED_VIEW_KEY "__esp32qjsBitmapStagedView"
-#define BITMAP_STAGED_CHUNKS_KEY "__esp32qjsBitmapStagedChunks"
-
 typedef struct {
     esp32_mquickjs_bitmap_t *buffer;
     esp32_mquickjs_bitmap_rect_t rect;
@@ -331,32 +329,12 @@ static uint8_t *alloc_export_bytes(size_t length)
         length, ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL);
 }
 
-static uint8_t *ensure_export_chunk(esp32_mquickjs_bitmap_t *buffer, size_t length)
-{
-    size_t capacity = length == 0 ? 1U : length;
-    uint8_t *chunk;
-
-    if (buffer->chunk != NULL && buffer->chunk_capacity >= capacity) {
-        return buffer->chunk;
-    }
-
-    chunk = alloc_export_bytes(capacity);
-    if (chunk == NULL) {
-        return NULL;
-    }
-    heap_caps_free(buffer->chunk);
-    buffer->chunk = chunk;
-    buffer->chunk_capacity = capacity;
-    return buffer->chunk;
-}
-
 void bitmap_free(esp32_mquickjs_bitmap_t *buffer)
 {
     if (buffer == NULL) {
         return;
     }
     heap_caps_free(buffer->data);
-    heap_caps_free(buffer->chunk);
     heap_caps_free(buffer);
 }
 
@@ -830,9 +808,10 @@ static bool rect_clamp(const esp32_mquickjs_bitmap_t *buffer,
 static bool read_rect_options(JSContext *ctx,
                               JSValue options,
                               bool *out_little_endian,
-                              uint32_t *out_chunk_bytes,
-                              bool *out_reuse)
+                              uint32_t *out_chunk_bytes)
 {
+    static const char *const rect_keys[] = {"byteOrder"};
+    static const char *const chunk_keys[] = {"byteOrder", "chunkBytes"};
     JSGCRef options_ref;
     JSGCRef property_ref;
     JSValue *rooted_options;
@@ -843,14 +822,16 @@ static bool read_rect_options(JSContext *ctx,
     if (out_chunk_bytes != NULL) {
         *out_chunk_bytes = 0;
     }
-    if (out_reuse != NULL) {
-        *out_reuse = false;
-    }
     if (JS_IsUndefined(options) || JS_IsNull(options)) {
         return true;
     }
-    if (JS_GetClassID(ctx, options) < 0) {
-        JS_ThrowTypeError(ctx, "readRect options must be an object");
+    if (!esp32_mquickjs_validate_plain_options(
+            ctx,
+            options,
+            out_chunk_bytes == NULL ? "Bitmap.readRect()" :
+                                      "Bitmap.readRectChunks()",
+            out_chunk_bytes == NULL ? rect_keys : chunk_keys,
+            out_chunk_bytes == NULL ? 1U : 2U)) {
         return false;
     }
 
@@ -890,24 +871,6 @@ static bool read_rect_options(JSContext *ctx,
             JS_ThrowTypeError(ctx, "readRectChunks option 'chunkBytes' expects a positive integer");
             ok = false;
             goto done;
-        }
-    }
-
-    if (out_reuse != NULL) {
-        int reuse = 0;
-
-        *property = JS_GetPropertyStr(ctx, *rooted_options, "reuse");
-        if (JS_IsException(*property)) {
-            ok = false;
-            goto done;
-        }
-        if (!JS_IsUndefined(*property) && !JS_IsNull(*property)) {
-            if (JS_ToInt32(ctx, &reuse, *property) != 0) {
-                JS_ThrowTypeError(ctx, "readRectChunks option 'reuse' expects a boolean");
-                ok = false;
-                goto done;
-            }
-            *out_reuse = reuse != 0;
         }
     }
 
@@ -1530,73 +1493,7 @@ static uint8_t *read_rect_alloc(const esp32_mquickjs_bitmap_t *buffer,
     return out;
 }
 
-static JSValue make_staged_rect_byte_view(JSContext *ctx,
-                                          JSValue owner,
-                                          esp32_mquickjs_bitmap_t *buffer,
-                                          int x,
-                                          int y,
-                                          int width,
-                                          int height,
-                                          bool little_endian)
-{
-    uint8_t *data;
-    const uint8_t *direct_data;
-    size_t length = 0;
-    JSGCRef staged_ref;
-    JSGCRef owner_ref;
-    JSValue *staged_view;
-    JSValue *rooted_owner;
-
-    if (rect_clamp(buffer, &x, &y, &width, &height)) {
-        if (direct_read_rect_data(buffer, x, y, width, height, little_endian, &direct_data, &length)) {
-            return esp32_mquickjs_new_byte_view(ctx, owner, direct_data, length);
-        }
-        length = read_rect_length(buffer, width, height);
-    }
-
-    data = ensure_export_chunk(buffer, length);
-    if (data == NULL) {
-        return JS_ThrowOutOfMemory(ctx);
-    }
-    if (length > 0) {
-        read_rect_fill(buffer, x, y, width, height, little_endian, data);
-    }
-
-    staged_view = JS_PushGCRef(ctx, &staged_ref);
-    rooted_owner = JS_PushGCRef(ctx, &owner_ref);
-    *staged_view = JS_UNDEFINED;
-    *rooted_owner = owner;
-    *staged_view = JS_GetPropertyStr(ctx, *rooted_owner, BITMAP_STAGED_VIEW_KEY);
-    if (JS_IsException(*staged_view)) {
-        goto fail;
-    }
-    if (esp32_mquickjs_byte_view_is_open(ctx, *staged_view)) {
-        if (!esp32_mquickjs_update_byte_view(ctx, *staged_view, data, length)) {
-            goto fail;
-        }
-        JS_PopGCRef(ctx, &owner_ref);
-        return JS_PopGCRef(ctx, &staged_ref);
-    }
-
-    *staged_view = esp32_mquickjs_new_byte_view(ctx, *rooted_owner, data, length);
-    if (JS_IsException(*staged_view) ||
-        JS_IsException(JS_SetPropertyStr(ctx,
-                                         *rooted_owner,
-                                         BITMAP_STAGED_VIEW_KEY,
-                                         *staged_view))) {
-        goto fail;
-    }
-    JS_PopGCRef(ctx, &owner_ref);
-    return JS_PopGCRef(ctx, &staged_ref);
-
-fail:
-    JS_PopGCRef(ctx, &owner_ref);
-    JS_PopGCRef(ctx, &staged_ref);
-    return JS_EXCEPTION;
-}
-
 static JSValue make_rect_byte_view(JSContext *ctx,
-                                   JSValue owner,
                                    const esp32_mquickjs_bitmap_t *buffer,
                                    int x,
                                    int y,
@@ -1628,7 +1525,14 @@ static JSValue make_rect_byte_view(JSContext *ctx,
                               little_endian,
                               &direct_data,
                               &length)) {
-        return esp32_mquickjs_new_byte_view(ctx, owner, direct_data, length);
+        data = alloc_export_bytes(length == 0 ? 1U : length);
+        if (data == NULL) {
+            return JS_ThrowOutOfMemory(ctx);
+        }
+        if (length > 0) {
+            memcpy(data, direct_data, length);
+        }
+        return esp32_mquickjs_new_owned_byte_view(ctx, data, length);
     }
 
     data = read_rect_alloc(buffer, clamped_x, clamped_y, clamped_width, clamped_height, little_endian, &length);
@@ -1636,136 +1540,6 @@ static JSValue make_rect_byte_view(JSContext *ctx,
         return JS_ThrowOutOfMemory(ctx);
     }
     return esp32_mquickjs_new_owned_byte_view(ctx, data, length);
-}
-
-static bool js_array_length(JSContext *ctx, JSValue value, uint32_t *out_length)
-{
-    JSGCRef length_ref;
-    JSValue *length_value;
-    bool ok;
-
-    if (out_length == NULL || JS_GetClassID(ctx, value) != JS_CLASS_ARRAY) {
-        return false;
-    }
-
-    length_value = JS_PushGCRef(ctx, &length_ref);
-    *length_value = JS_GetPropertyStr(ctx, value, "length");
-    ok = !JS_IsException(*length_value) && value_to_u32(ctx, *length_value, out_length);
-    JS_PopGCRef(ctx, &length_ref);
-    return ok;
-}
-
-static bool rect_chunks_are_direct(const esp32_mquickjs_bitmap_t *buffer,
-                                   int x,
-                                   int y,
-                                   int width,
-                                   int height,
-                                   bool little_endian)
-{
-    const uint8_t *data;
-    size_t length;
-
-    return direct_read_rect_data(buffer, x, y, width, height, little_endian, &data, &length);
-}
-
-static JSValue make_reused_direct_rect_chunks(JSContext *ctx,
-                                              JSValue *owner,
-                                              const esp32_mquickjs_bitmap_t *buffer,
-                                              int x,
-                                              int y,
-                                              int width,
-                                              int height,
-                                              bool little_endian,
-                                              int rows_per_chunk,
-                                              uint32_t chunk_count)
-{
-    JSGCRef array_ref;
-    JSValue *array;
-    uint32_t existing_length = 0;
-    bool reuse_existing = false;
-    bool must_cache_array = false;
-    int end_y;
-    uint32_t index = 0;
-
-    if (!rect_chunks_are_direct(buffer, x, y, width, height, little_endian)) {
-        return JS_UNDEFINED;
-    }
-
-    array = JS_PushGCRef(ctx, &array_ref);
-    *array = JS_GetPropertyStr(ctx, *owner, BITMAP_STAGED_CHUNKS_KEY);
-    if (JS_IsException(*array)) {
-        JS_PopGCRef(ctx, &array_ref);
-        return JS_EXCEPTION;
-    }
-    reuse_existing = js_array_length(ctx, *array, &existing_length) && existing_length == chunk_count;
-    if (!reuse_existing) {
-        *array = JS_NewArray(ctx, 0);
-        must_cache_array = true;
-        if (JS_IsException(*array)) {
-            JS_PopGCRef(ctx, &array_ref);
-            return JS_EXCEPTION;
-        }
-    }
-
-    end_y = y + height;
-    while (y < end_y) {
-        int rows = rows_per_chunk;
-        const uint8_t *direct_data;
-        size_t length = 0;
-        JSGCRef chunk_ref;
-        JSValue *chunk;
-
-        if (rows > end_y - y) {
-            rows = end_y - y;
-        }
-        if (!direct_read_rect_data(buffer, x, y, width, rows, little_endian, &direct_data, &length)) {
-            JS_PopGCRef(ctx, &array_ref);
-            return JS_UNDEFINED;
-        }
-
-        if (reuse_existing) {
-            JSGCRef item_ref;
-            JSValue *item = JS_PushGCRef(ctx, &item_ref);
-
-            *item = JS_GetPropertyUint32(ctx, *array, index);
-            if (JS_IsException(*item)) {
-                JS_PopGCRef(ctx, &item_ref);
-                JS_PopGCRef(ctx, &array_ref);
-                return JS_EXCEPTION;
-            }
-            if (esp32_mquickjs_byte_view_is_open(ctx, *item)) {
-                if (!esp32_mquickjs_update_byte_view(ctx, *item, direct_data, length)) {
-                    JS_PopGCRef(ctx, &item_ref);
-                    JS_PopGCRef(ctx, &array_ref);
-                    return JS_EXCEPTION;
-                }
-                JS_PopGCRef(ctx, &item_ref);
-                y += rows;
-                index++;
-                continue;
-            }
-            JS_PopGCRef(ctx, &item_ref);
-        }
-
-        chunk = JS_PushGCRef(ctx, &chunk_ref);
-        *chunk = esp32_mquickjs_new_byte_view(ctx, *owner, direct_data, length);
-        if (JS_IsException(*chunk) ||
-            JS_IsException(JS_SetPropertyUint32(ctx, *array, index, *chunk))) {
-            JS_PopGCRef(ctx, &chunk_ref);
-            JS_PopGCRef(ctx, &array_ref);
-            return JS_EXCEPTION;
-        }
-        JS_PopGCRef(ctx, &chunk_ref);
-        y += rows;
-        index++;
-    }
-
-    if (must_cache_array &&
-        JS_IsException(JS_SetPropertyStr(ctx, *owner, BITMAP_STAGED_CHUNKS_KEY, *array))) {
-        JS_PopGCRef(ctx, &array_ref);
-        return JS_EXCEPTION;
-    }
-    return JS_PopGCRef(ctx, &array_ref);
 }
 
 JSValue js_bitmap_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -2027,9 +1801,7 @@ JSValue js_bitmap_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
             return JS_EXCEPTION;
         }
         heap_caps_free(buffer->data);
-        heap_caps_free(buffer->chunk);
         buffer->data = NULL;
-        buffer->chunk = NULL;
         buffer->closed = 1;
     }
     return JS_TRUE;
@@ -2238,10 +2010,12 @@ JSValue js_bitmap_read_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue
     if (!rect_from_args(ctx, argc, argv, &x, &y, &width, &height, "Bitmap.readRect()")) {
         return JS_EXCEPTION;
     }
-    if (!read_rect_options(ctx, argc >= 5 ? argv[4] : JS_UNDEFINED, &little_endian, NULL, NULL)) {
+    if (!read_rect_options(ctx, argc >= 5 ? argv[4] : JS_UNDEFINED,
+                           &little_endian, NULL)) {
         return JS_EXCEPTION;
     }
-    return make_staged_rect_byte_view(ctx, *this_val, buffer, x, y, width, height, little_endian);
+    return make_rect_byte_view(ctx, buffer, x, y, width, height,
+                               little_endian);
 }
 
 JSValue js_bitmap_read_rect_chunks(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -2252,12 +2026,10 @@ JSValue js_bitmap_read_rect_chunks(JSContext *ctx, JSValue *this_val, int argc, 
     int32_t width;
     int32_t height;
     bool little_endian = false;
-    bool reuse = false;
     uint32_t chunk_bytes = 0;
     size_t row_bytes;
     int rows_per_chunk;
     int end_y;
-    uint32_t chunk_count;
     uint32_t index = 0;
     JSGCRef array_ref;
     JSValue *array;
@@ -2269,7 +2041,8 @@ JSValue js_bitmap_read_rect_chunks(JSContext *ctx, JSValue *this_val, int argc, 
     if (!rect_from_args(ctx, argc, argv, &x, &y, &width, &height, "Bitmap.readRectChunks()")) {
         return JS_EXCEPTION;
     }
-    if (!read_rect_options(ctx, argc >= 5 ? argv[4] : JS_UNDEFINED, &little_endian, &chunk_bytes, &reuse)) {
+    if (!read_rect_options(ctx, argc >= 5 ? argv[4] : JS_UNDEFINED,
+                           &little_endian, &chunk_bytes)) {
         return JS_EXCEPTION;
     }
     {
@@ -2303,27 +2076,6 @@ JSValue js_bitmap_read_rect_chunks(JSContext *ctx, JSValue *this_val, int argc, 
             rows_per_chunk = 8;
         }
     }
-    chunk_count = (uint32_t)((height + rows_per_chunk - 1) / rows_per_chunk);
-
-    if (reuse) {
-        JSValue reused = make_reused_direct_rect_chunks(ctx,
-                                                       this_val,
-                                                       buffer,
-                                                       x,
-                                                       y,
-                                                       width,
-                                                       height,
-                                                       little_endian,
-                                                       rows_per_chunk,
-                                                       chunk_count);
-        if (JS_IsException(reused)) {
-            return JS_EXCEPTION;
-        }
-        if (!JS_IsUndefined(reused)) {
-            return reused;
-        }
-    }
-
     array = JS_PushGCRef(ctx, &array_ref);
     *array = JS_NewArray(ctx, 0);
     if (JS_IsException(*array)) {
@@ -2341,7 +2093,8 @@ JSValue js_bitmap_read_rect_chunks(JSContext *ctx, JSValue *this_val, int argc, 
             rows = end_y - y;
         }
         chunk = JS_PushGCRef(ctx, &chunk_ref);
-        *chunk = make_rect_byte_view(ctx, *this_val, buffer, x, y, width, rows, little_endian);
+        *chunk = make_rect_byte_view(ctx, buffer, x, y, width, rows,
+                                     little_endian);
         if (JS_IsException(*chunk) ||
             JS_IsException(JS_SetPropertyUint32(ctx, *array, index++, *chunk))) {
             JS_PopGCRef(ctx, &chunk_ref);

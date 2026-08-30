@@ -29,6 +29,8 @@ JSValue js_espnow_session_broadcast(JSContext *ctx, JSValue *this_val,
                                     int argc, JSValue *argv);
 JSValue js_espnow_session_set_power_save(JSContext *ctx, JSValue *this_val,
                                          int argc, JSValue *argv);
+JSValue js_espnow_session_recover(JSContext *ctx, JSValue *this_val,
+                                  int argc, JSValue *argv);
 JSValue js_espnow_session_close(JSContext *ctx, JSValue *this_val,
                                 int argc, JSValue *argv);
 
@@ -41,8 +43,8 @@ JSValue js_espnow_peer_send(JSContext *ctx, JSValue *this_val,
                             int argc, JSValue *argv);
 JSValue js_espnow_peer_update(JSContext *ctx, JSValue *this_val,
                               int argc, JSValue *argv);
-JSValue js_espnow_peer_close(JSContext *ctx, JSValue *this_val,
-                             int argc, JSValue *argv);
+JSValue js_espnow_peer_remove(JSContext *ctx, JSValue *this_val,
+                              int argc, JSValue *argv);
 
 JSValue js_espnow_capabilities(JSContext *ctx, JSValue *this_val,
                                int argc, JSValue *argv);

@@ -25,6 +25,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAILED_BIT BIT1
@@ -32,13 +33,33 @@
 #define WIFI_SCAN_EVENT_QUEUE_LEN 1
 #define WIFI_SCAN_MAX_RESULTS 32
 #define WIFI_CONNECT_EVENT_QUEUE_LEN 1
+#define WIFI_DRIVER_EVENT_QUEUE_LEN 8
 #define WIFI_SCAN_BSSID_STR_LEN 18
 #define WIFI_START_TIMEOUT_MS 5000
 
 static const char *TAG = "esp32qjs_wifi";
 
 static esp32_mquickjs_wifi_state_t s_wifi_state;
+static esp32_mquickjs_runtime_t *s_wifi_runtime;
 static void wifi_stop_connect_timeout_timer(void);
+
+typedef enum {
+    WIFI_DRIVER_EVENT_STARTED = 1,
+    WIFI_DRIVER_EVENT_DISCONNECTED,
+    WIFI_DRIVER_EVENT_SCAN_DONE,
+    WIFI_DRIVER_EVENT_GOT_IP,
+    WIFI_DRIVER_EVENT_CONNECT_TIMEOUT,
+} esp32_mquickjs_wifi_driver_event_kind_t;
+
+typedef struct {
+    esp32_mquickjs_wifi_driver_event_kind_t kind;
+    int32_t reason;
+    uint32_t status;
+} esp32_mquickjs_wifi_driver_event_t;
+
+static bool wifi_driver_event_poller(JSContext *ctx,
+                                     esp32_mquickjs_runtime_t *runtime,
+                                     void *opaque);
 
 static void *wifi_create_lock(void *opaque)
 {
@@ -175,30 +196,33 @@ static void wifi_queue_connect_event(uint32_t generation,
     }
 }
 
+static bool wifi_publish_driver_event_from_callback(
+    const esp32_mquickjs_wifi_driver_event_t *event)
+{
+    if (event == NULL || s_wifi_state.driver_event_queue == NULL ||
+        xQueueSend(s_wifi_state.driver_event_queue, event, 0) != pdTRUE) {
+        atomic_fetch_add_explicit(&s_wifi_state.dropped_driver_events, 1,
+                                  memory_order_relaxed);
+        return false;
+    }
+    if (s_wifi_runtime != NULL) {
+        esp32_mquickjs_notify_activity(s_wifi_runtime);
+    }
+    return true;
+}
+
 static void wifi_connect_timeout_cb(void *arg)
 {
-    uint32_t generation = 0;
-    bool should_timeout = false;
+    const esp32_mquickjs_wifi_driver_event_t event = {
+        .kind = WIFI_DRIVER_EVENT_CONNECT_TIMEOUT,
+    };
 
     (void)arg;
-
-    wifi_lock();
-    if (s_wifi_state.connect_future_registered && s_wifi_state.connect_in_progress) {
-        generation = s_wifi_state.connect_generation;
-        s_wifi_state.connect_in_progress = false;
-        s_wifi_state.ignore_disconnect_once = true;
-        s_wifi_state.status.connected = false;
-        should_timeout = true;
-    }
-    wifi_unlock();
-
-    if (!should_timeout) {
-        return;
-    }
-
-    xEventGroupClearBits(s_wifi_state.event_group, WIFI_CONNECTED_BIT | WIFI_FAILED_BIT);
-    esp_wifi_disconnect();
-    wifi_queue_connect_event(generation, ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_TIMEOUT, 0);
+    atomic_fetch_add_explicit(&s_wifi_state.callbacks_active, 1,
+                              memory_order_acq_rel);
+    (void)wifi_publish_driver_event_from_callback(&event);
+    atomic_fetch_sub_explicit(&s_wifi_state.callbacks_active, 1,
+                              memory_order_release);
 }
 
 static void wifi_set_scanning_locked(bool scanning)
@@ -217,30 +241,61 @@ static void wifi_event_handler(void *arg,
                                int32_t event_id,
                                void *event_data)
 {
-    (void)arg;
+    esp32_mquickjs_wifi_driver_event_t driver_event = {0};
 
+    (void)arg;
+    atomic_fetch_add_explicit(&s_wifi_state.callbacks_active, 1,
+                              memory_order_acq_rel);
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        driver_event.kind = WIFI_DRIVER_EVENT_STARTED;
+    } else if (event_base == WIFI_EVENT &&
+               event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *event = event_data;
+        driver_event.kind = WIFI_DRIVER_EVENT_DISCONNECTED;
+        driver_event.reason =
+            event != NULL ? (int32_t)event->reason : 0;
+    } else if (event_base == WIFI_EVENT &&
+               event_id == WIFI_EVENT_SCAN_DONE) {
+        wifi_event_sta_scan_done_t *event = event_data;
+        driver_event.kind = WIFI_DRIVER_EVENT_SCAN_DONE;
+        driver_event.status = event != NULL ? event->status : 1U;
+    } else if (event_base == IP_EVENT &&
+               event_id == IP_EVENT_STA_GOT_IP) {
+        driver_event.kind = WIFI_DRIVER_EVENT_GOT_IP;
+    }
+    if (driver_event.kind != 0) {
+        (void)wifi_publish_driver_event_from_callback(&driver_event);
+    }
+    atomic_fetch_sub_explicit(&s_wifi_state.callbacks_active, 1,
+                              memory_order_release);
+}
+
+static void wifi_process_driver_event(
+    const esp32_mquickjs_wifi_driver_event_t *driver_event)
+{
+    if (driver_event == NULL) {
+        return;
+    }
+    switch (driver_event->kind) {
+    case WIFI_DRIVER_EVENT_STARTED:
         wifi_lock();
         s_wifi_state.started = true;
         s_wifi_state.status.started = true;
         wifi_unlock();
-
         xEventGroupSetBits(s_wifi_state.event_group, WIFI_STARTED_BIT);
-        return;
-    }
+        break;
 
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        wifi_event_sta_disconnected_t *event = event_data;
+    case WIFI_DRIVER_EVENT_DISCONNECTED: {
         bool ignore_disconnect;
         bool should_queue_connect_failure = false;
-        bool intentional_disconnect = false;
+        bool intentional_disconnect;
         uint32_t connect_generation = 0;
-        int32_t reason = event != NULL ? (int32_t)event->reason : 0;
 
         wifi_lock();
         ignore_disconnect = s_wifi_state.ignore_disconnect_once;
         s_wifi_state.ignore_disconnect_once = false;
-        intentional_disconnect = s_wifi_state.connect_future_registered &&
+        intentional_disconnect =
+            s_wifi_state.connect_future_registered &&
             s_wifi_state.connection_future_operation ==
                 ESP32_MQUICKJS_WIFI_OPERATION_DISCONNECT;
         if (intentional_disconnect) {
@@ -249,72 +304,126 @@ static void wifi_event_handler(void *arg,
         s_wifi_state.status.connected = false;
         if (!ignore_disconnect) {
             s_wifi_state.connect_in_progress = false;
-            should_queue_connect_failure = s_wifi_state.connect_future_registered;
+            should_queue_connect_failure =
+                s_wifi_state.connect_future_registered;
             connect_generation = s_wifi_state.connect_generation;
         }
-        s_wifi_state.status.last_disconnect_reason = reason;
+        s_wifi_state.status.last_disconnect_reason = driver_event->reason;
         wifi_unlock();
 
         xEventGroupClearBits(s_wifi_state.event_group, WIFI_CONNECTED_BIT);
         if (!ignore_disconnect) {
             wifi_stop_connect_timeout_timer();
             if (!intentional_disconnect) {
-                xEventGroupSetBits(s_wifi_state.event_group, WIFI_FAILED_BIT);
+                xEventGroupSetBits(s_wifi_state.event_group,
+                                   WIFI_FAILED_BIT);
             }
             if (should_queue_connect_failure) {
-                wifi_queue_connect_event(connect_generation,
-                                         intentional_disconnect
-                                             ? ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_DISCONNECTED
-                                             : ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_FAILURE,
-                                         reason);
+                wifi_queue_connect_event(
+                    connect_generation,
+                    intentional_disconnect
+                        ? ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_DISCONNECTED
+                        : ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_FAILURE,
+                    driver_event->reason);
             }
         }
-        return;
+        break;
     }
 
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_SCAN_DONE) {
+    case WIFI_DRIVER_EVENT_SCAN_DONE: {
         esp32_mquickjs_wifi_scan_event_t scan_event = {0};
-        wifi_event_sta_scan_done_t *event = event_data;
-        bool should_queue_future = false;
-        esp32_mquickjs_future_token_t scan_token = {0};
+        bool should_queue_future;
+        esp32_mquickjs_future_token_t scan_token;
 
         wifi_lock();
         wifi_set_scanning_locked(false);
         scan_event.generation = s_wifi_state.scan_generation;
-        scan_event.status = event != NULL ? event->status : 1;
+        scan_event.status = driver_event->status;
         should_queue_future = s_wifi_state.scan_future_registered;
         scan_token = s_wifi_state.scan_future_token;
         wifi_unlock();
-
         if (should_queue_future && s_wifi_state.scan_queue != NULL) {
             xQueueOverwrite(s_wifi_state.scan_queue, &scan_event);
-            (void)esp32_mquickjs_future_wake(esp32_mquickjs_get_active_runtime(), scan_token);
-            esp32_mquickjs_notify_activity(esp32_mquickjs_get_active_runtime());
+            if (s_wifi_runtime != NULL) {
+                (void)esp32_mquickjs_future_wake(s_wifi_runtime,
+                                                 scan_token);
+                esp32_mquickjs_notify_activity(s_wifi_runtime);
+            }
         }
-        return;
+        break;
     }
 
-    if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        bool should_queue_connect_success = false;
-        uint32_t connect_generation = 0;
+    case WIFI_DRIVER_EVENT_GOT_IP: {
+        bool should_queue_connect_success;
+        uint32_t connect_generation;
 
         wifi_lock();
         s_wifi_state.status.connected = true;
         s_wifi_state.connect_in_progress = false;
-        should_queue_connect_success = s_wifi_state.connect_future_registered;
+        should_queue_connect_success =
+            s_wifi_state.connect_future_registered;
         connect_generation = s_wifi_state.connect_generation;
         s_wifi_state.status.last_disconnect_reason = 0;
         wifi_unlock();
-
         wifi_stop_connect_timeout_timer();
         xEventGroupClearBits(s_wifi_state.event_group, WIFI_FAILED_BIT);
         xEventGroupSetBits(s_wifi_state.event_group, WIFI_CONNECTED_BIT);
         if (should_queue_connect_success) {
-            wifi_queue_connect_event(connect_generation,
-                                     ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_SUCCESS,
-                                     0);
+            wifi_queue_connect_event(
+                connect_generation,
+                ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_SUCCESS, 0);
         }
+        break;
     }
+
+    case WIFI_DRIVER_EVENT_CONNECT_TIMEOUT: {
+        uint32_t generation = 0;
+        bool should_timeout = false;
+
+        wifi_lock();
+        if (s_wifi_state.connect_future_registered &&
+            s_wifi_state.connect_in_progress) {
+            generation = s_wifi_state.connect_generation;
+            s_wifi_state.connect_in_progress = false;
+            s_wifi_state.ignore_disconnect_once = true;
+            s_wifi_state.status.connected = false;
+            should_timeout = true;
+        }
+        wifi_unlock();
+        if (should_timeout) {
+            xEventGroupClearBits(
+                s_wifi_state.event_group,
+                WIFI_CONNECTED_BIT | WIFI_FAILED_BIT);
+            (void)esp_wifi_disconnect();
+            wifi_queue_connect_event(
+                generation,
+                ESP32_MQUICKJS_WIFI_CONNECT_EVENT_KIND_TIMEOUT, 0);
+        }
+        break;
+    }
+
+    default:
+        break;
+    }
+}
+
+static bool wifi_driver_event_poller(JSContext *ctx,
+                                     esp32_mquickjs_runtime_t *runtime,
+                                     void *opaque)
+{
+    esp32_mquickjs_wifi_driver_event_t event;
+    bool handled = false;
+
+    (void)ctx;
+    (void)runtime;
+    (void)opaque;
+    while (s_wifi_state.driver_event_queue != NULL &&
+           xQueueReceive(s_wifi_state.driver_event_queue, &event, 0) ==
+               pdTRUE) {
+        wifi_process_driver_event(&event);
+        handled = true;
+    }
+    return handled;
 }
 
 static void wifi_cleanup_failed_init(void)
@@ -352,6 +461,10 @@ static void wifi_cleanup_failed_init(void)
             s_wifi_state.wifi_start_event_instance);
         s_wifi_state.wifi_start_event_instance = NULL;
     }
+    while (atomic_load_explicit(&s_wifi_state.callbacks_active,
+                                memory_order_acquire) != 0U) {
+        vTaskDelay(1);
+    }
     esp32_mquickjs_wifi_radio_release(&s_wifi_state.radio_lease);
     if (s_wifi_state.sta_netif != NULL) {
         esp_netif_destroy_default_wifi(s_wifi_state.sta_netif);
@@ -362,6 +475,7 @@ static void wifi_cleanup_failed_init(void)
         .event_group = s_wifi_state.event_group,
         .scan_queue = s_wifi_state.scan_queue,
         .connect_queue = s_wifi_state.connect_queue,
+        .driver_event_queue = s_wifi_state.driver_event_queue,
     };
     esp32_mquickjs_wifi_runtime_resources_deinit(
         &resources, &s_wifi_runtime_resource_ops);
@@ -379,18 +493,23 @@ static esp_err_t wifi_init_once(void)
     }
 
     memset(&s_wifi_state, 0, sizeof(s_wifi_state));
+    atomic_init(&s_wifi_state.callbacks_active, 0);
+    atomic_init(&s_wifi_state.dropped_driver_events, 0);
     if (!esp32_mquickjs_wifi_runtime_resources_init(
             &resources, &s_wifi_runtime_resource_ops,
             WIFI_SCAN_EVENT_QUEUE_LEN,
             sizeof(esp32_mquickjs_wifi_scan_event_t),
             WIFI_CONNECT_EVENT_QUEUE_LEN,
-            sizeof(esp32_mquickjs_wifi_connect_event_t))) {
+            sizeof(esp32_mquickjs_wifi_connect_event_t),
+            WIFI_DRIVER_EVENT_QUEUE_LEN,
+            sizeof(esp32_mquickjs_wifi_driver_event_t))) {
         return ESP_ERR_NO_MEM;
     }
     s_wifi_state.lock = resources.lock;
     s_wifi_state.event_group = resources.event_group;
     s_wifi_state.scan_queue = resources.scan_queue;
     s_wifi_state.connect_queue = resources.connect_queue;
+    s_wifi_state.driver_event_queue = resources.driver_event_queue;
 
     err = esp32_mquickjs_net_ensure_initialized();
     if (err != ESP_OK) {
@@ -775,6 +894,12 @@ static JSValue wifi_make_status_object(JSContext *ctx)
                                      JS_NewInt32(ctx, status.last_disconnect_reason)) ||
         !esp32_mquickjs_set_property_ref(ctx, status_obj, "lastDisconnectReasonName",
                                      JS_NewString(ctx, wifi_reason_to_string(status.last_disconnect_reason))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, status_obj, "droppedDriverEvents",
+            JS_NewUint32(
+                ctx, atomic_load_explicit(
+                         &s_wifi_state.dropped_driver_events,
+                         memory_order_relaxed))) ||
         !esp32_mquickjs_set_property_ref(ctx, status_obj, "radio",
                                          *radio_obj)) {
         goto fail;
@@ -1139,7 +1264,19 @@ JSValue esp32_mquickjs_wifi_make_scan_results_array(JSContext *ctx)
 bool esp32_mquickjs_init_wifi_runtime(JSContext *ctx,
                                       esp32_mquickjs_runtime_t *runtime)
 {
-    return esp32_mquickjs_init_wifi_future_runtime(ctx, runtime);
+    s_wifi_runtime = runtime;
+    if (!esp32_mquickjs_init_wifi_future_runtime(ctx, runtime)) {
+        s_wifi_runtime = NULL;
+        return false;
+    }
+    if (!esp32_mquickjs_register_async_poller(
+            runtime, wifi_driver_event_poller, NULL)) {
+        JS_ThrowInternalError(ctx,
+                              "failed to register Wi-Fi driver event poller");
+        s_wifi_runtime = NULL;
+        return false;
+    }
+    return true;
 }
 
 void esp32_mquickjs_deinit_wifi_runtime(JSContext *ctx)
@@ -1173,6 +1310,7 @@ void esp32_mquickjs_deinit_wifi_runtime(JSContext *ctx)
     if (s_wifi_state.connect_queue != NULL) {
         xQueueReset(s_wifi_state.connect_queue);
     }
+    s_wifi_runtime = NULL;
 }
 
 JSValue js_wifi_get_default_timeout_ms(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

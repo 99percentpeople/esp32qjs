@@ -333,11 +333,17 @@ declare namespace ESP32QJS {
     capacity: number;
   }
 
+  interface SysOrphanResourceStatus {
+    pending: number;
+    capacity: number;
+  }
+
   interface SysRuntimeResourcesStatus {
     timers: SysTimerResourceStatus;
     futures: SysFutureResourceStatus;
     eventQueues: SysEventQueueResourceStatus;
     asyncPollers: SysAsyncPollerResourceStatus;
+    orphans: SysOrphanResourceStatus;
   }
 
   interface SysRuntimeFilesystemStatus {
@@ -469,6 +475,11 @@ declare namespace ESP32QJS {
   }
   }
 ```
+
+`resources.orphans` reports native resources whose JavaScript owner was
+finalized before teardown could complete. The runtime retries at a bounded safe
+point; `pending` never exceeds the fixed `capacity`, and a reaper never invokes
+JavaScript.
 
 `tls` is a build capability rather than a global JavaScript namespace. When it
 is false, HTTPS and secure TCP sockets are unavailable, the public CA bundle is

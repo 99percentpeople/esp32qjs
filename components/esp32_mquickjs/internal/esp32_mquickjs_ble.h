@@ -50,26 +50,11 @@ JSValue js_ble_connection_exchange_mtu(JSContext *, JSValue *, int,
                                        JSValue *);
 JSValue js_ble_connection_read_rssi(JSContext *, JSValue *, int, JSValue *);
 JSValue js_ble_connection_discover(JSContext *, JSValue *, int, JSValue *);
+JSValue js_ble_connection_read_handle(JSContext *, JSValue *, int, JSValue *);
+JSValue js_ble_connection_write_handle(JSContext *, JSValue *, int, JSValue *);
+JSValue js_ble_connection_subscribe_handle(JSContext *, JSValue *, int,
+                                           JSValue *);
 JSValue js_ble_connection_close(JSContext *, JSValue *, int, JSValue *);
-
-JSValue js_ble_service_constructor(JSContext *, JSValue *, int, JSValue *);
-void js_ble_service_finalizer(JSContext *, void *);
-JSValue js_ble_service_characteristics(JSContext *, JSValue *, int, JSValue *);
-
-JSValue js_ble_characteristic_constructor(JSContext *, JSValue *, int,
-                                          JSValue *);
-void js_ble_characteristic_finalizer(JSContext *, void *);
-JSValue js_ble_characteristic_descriptors(JSContext *, JSValue *, int,
-                                          JSValue *);
-JSValue js_ble_characteristic_read(JSContext *, JSValue *, int, JSValue *);
-JSValue js_ble_characteristic_write(JSContext *, JSValue *, int, JSValue *);
-JSValue js_ble_characteristic_subscribe(JSContext *, JSValue *, int,
-                                        JSValue *);
-
-JSValue js_ble_descriptor_constructor(JSContext *, JSValue *, int, JSValue *);
-void js_ble_descriptor_finalizer(JSContext *, void *);
-JSValue js_ble_descriptor_read(JSContext *, JSValue *, int, JSValue *);
-JSValue js_ble_descriptor_write(JSContext *, JSValue *, int, JSValue *);
 
 JSValue js_ble_notification_constructor(JSContext *, JSValue *, int,
                                         JSValue *);

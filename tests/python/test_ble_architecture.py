@@ -80,10 +80,15 @@ class BLEArchitectureTests(unittest.TestCase):
         self.assertIn("ESP32_MQUICKJS_EVENT_QUEUE_DROP_NEWEST", source)
         self.assertGreaterEqual(
             callback.count(
-                "esp32_mquickjs_wireless_pooled_event_publish_from_isr("
+                "esp32_mquickjs_wireless_pooled_event_publish_from_callback("
             ),
             2,
         )
+        self.assertIn(
+            "esp32_mquickjs_event_queue_try_send_from_callback(", callback
+        )
+        self.assertNotIn("esp32_mquickjs_event_queue_send_from_isr(", callback)
+        self.assertNotIn("esp32_mquickjs_future_wake_from_isr(", callback)
         self.assertNotIn("JS_Call(", callback)
         self.assertNotIn("JS_New", callback)
         self.assertNotIn("heap_caps_malloc", callback)
@@ -153,7 +158,27 @@ class BLEArchitectureTests(unittest.TestCase):
             source.index("void js_ble_adapter_finalizer") :
             source.index("JSValue js_ble_adapter_status")
         ]
-        self.assertIn("opaque != &s_ble_closed_adapter_ref", adapter_finalizer)
+        self.assertIn("ref != &s_ble_closed_adapter_ref", adapter_finalizer)
+
+    def test_resource_finalizers_only_request_safe_point_orphan_cleanup(self):
+        source = self.source()
+
+        for finalizer_name in (
+            "js_ble_adapter_finalizer",
+            "js_ble_scanner_finalizer",
+            "js_ble_advertiser_finalizer",
+            "js_ble_connection_finalizer",
+            "js_ble_notification_finalizer",
+        ):
+            start = source.index(f"void {finalizer_name}")
+            end = source.index("\nJSValue ", start)
+            finalizer = source[start:end]
+            self.assertIn("ble_request_orphan_close(", finalizer, finalizer_name)
+            self.assertNotIn("ble_gap_", finalizer, finalizer_name)
+            self.assertNotIn("ble_cleanup_native", finalizer, finalizer_name)
+            self.assertNotIn("vTaskDelay", finalizer, finalizer_name)
+        self.assertIn("static bool ble_orphan_close_poller(", source)
+        self.assertIn("static void ble_orphan_close_worker(", source)
 
     def test_reopen_waits_for_nimble_deinit_quiescence_without_blocking_start(self):
         source = self.source()
@@ -253,13 +278,35 @@ class BLEArchitectureTests(unittest.TestCase):
             self.assertIn("atomic_store_explicit(&state->completed, true", close)
             self.assertNotIn("ble_active_state_bind", close)
 
-    def test_connect_options_are_applied(self):
+    def test_connect_is_atomic_and_pairing_is_explicit(self):
         source = self.source()
 
-        self.assertIn('ble_get_bool(ctx, options, "autoPair"', source)
-        self.assertIn("state->auto_pair", source)
+        self.assertNotIn("autoPair", source)
+        self.assertNotIn("state->auto_pair", source)
+        self.assertIn("BLE_OP_PAIR", source)
+        self.assertIn("ble_gap_security_initiate", source)
         self.assertIn("ble_hs_id_infer_auto(1", source)
         self.assertIn("ble_hs_id_set_rnd", source)
+
+    def test_gatt_discovery_is_flat_and_operations_are_connection_owned(self):
+        source = self.source()
+        stdlib = (MQUICKJS / "src" / "core" / "mqjs_stdlib_esp32.c").read_text(
+            encoding="utf-8"
+        )
+        types = (ROOT / "types" / "esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+
+        for method in ("readHandle", "writeHandle", "subscribeHandle"):
+            self.assertIn(f'JS_CFUNC_DEF("{method}"', stdlib)
+            self.assertIn(method, types)
+        for native_class in ("BLEService", "BLECharacteristic", "BLEDescriptor"):
+            self.assertNotIn(f'JS_CLASS_DEF("{native_class}"', stdlib)
+            self.assertNotIn(f"class {native_class}", types)
+        self.assertIn('"characteristicStart"', source)
+        self.assertIn('"descriptorStart"', source)
+        self.assertIn('"characteristics"', source)
+        self.assertIn('"descriptors"', source)
 
     def test_connect_timeout_keeps_native_slot_until_callback_completion(self):
         source = self.source()
@@ -357,6 +404,10 @@ class BLEArchitectureTests(unittest.TestCase):
         self.assertIn("store_writes", callback)
         self.assertIn("os_mbuf_append", callback)
         self.assertIn("ble_server_event_pool_acquire", callback)
+        self.assertIn(
+            "esp32_mquickjs_event_queue_try_send_from_callback(", callback
+        )
+        self.assertNotIn("esp32_mquickjs_event_queue_send(", callback)
         self.assertNotIn("JS_Call(", callback)
         self.assertNotIn("JS_New", callback)
         self.assertNotIn("heap_caps_malloc", callback)

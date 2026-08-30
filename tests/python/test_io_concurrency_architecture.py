@@ -1150,10 +1150,65 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             )
         ]
 
-        self.assertIn("esp32_mquickjs_event_queue_enqueue(", enqueue)
+        self.assertIn("esp32_mquickjs_event_queue_enqueue_from_callback(", enqueue)
         self.assertNotIn("xQueueSend", enqueue)
         self.assertIn("websocket_free_callback_event(event)", enqueue)
         self.assertIn("dropped_events", enqueue)
+
+    def test_websocket_callback_uses_a_fixed_pool_and_quiesces_before_destroy(self):
+        websocket = (
+            MQUICKJS / "src/modules/websocket/esp32_mquickjs_websocket.c"
+        ).read_text(encoding="utf-8")
+        handler_start = websocket.index("static void websocket_handle_data(")
+        handler_end = websocket.index(
+            "\nstatic void websocket_event_handler(", handler_start
+        )
+        handler = websocket[handler_start:handler_end]
+        event_handler_start = handler_end + 1
+        event_handler_end = websocket.index(
+            "\nstatic int websocket_client_resource_stop(", event_handler_start
+        )
+        event_handler = websocket[event_handler_start:event_handler_end]
+        cleanup_start = websocket.index(
+            "static esp_err_t websocket_cleanup_client_resources("
+        )
+        cleanup_end = websocket.index(
+            "\nstatic void websocket_finish_close_source(", cleanup_start
+        )
+        cleanup = websocket[cleanup_start:cleanup_end]
+
+        self.assertIn("esp32_mquickjs_native_pool_acquire(", handler)
+        self.assertNotIn("memory_payload_alloc", handler)
+        self.assertNotIn("heap_caps_malloc", handler)
+        self.assertNotIn("heap_caps_calloc", handler)
+        self.assertNotIn("portMAX_DELAY", handler)
+        self.assertIn("callbacks_active", event_handler)
+        self.assertIn(".quiesce = websocket_client_resource_quiesce", websocket)
+        self.assertIn("websocket_cleanup_client_resources", cleanup)
+        self.assertNotIn("waits++ <", websocket)
+
+    def test_wifi_callbacks_only_publish_bounded_driver_events(self):
+        wifi = (
+            MQUICKJS / "src/modules/wifi/esp32_mquickjs_wifi.c"
+        ).read_text(encoding="utf-8")
+        handler_start = wifi.index("static void wifi_event_handler(")
+        handler_end = wifi.index(
+            "\nstatic void wifi_process_driver_event(", handler_start
+        )
+        handler = wifi[handler_start:handler_end]
+        timer_start = wifi.index("static void wifi_connect_timeout_cb(")
+        timer_end = wifi.index(
+            "\nstatic void wifi_set_scanning_locked(", timer_start
+        )
+        timer_callback = wifi[timer_start:timer_end]
+
+        for callback in (handler, timer_callback):
+            self.assertIn("wifi_publish_driver_event_from_callback(", callback)
+            self.assertNotIn("wifi_lock()", callback)
+            self.assertNotIn("portMAX_DELAY", callback)
+            self.assertNotIn("heap_caps_", callback)
+        self.assertIn("static bool wifi_driver_event_poller(", wifi)
+        self.assertIn("callbacks_active", wifi)
 
     def test_websocket_publishes_one_atomic_lifecycle_to_callbacks(self):
         websocket = (
@@ -1234,10 +1289,12 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             "                              memory_order_acquire",
             websocket,
         )
-        self.assertIn("JS_NewBool(event->reconnecting)", websocket)
-        self.assertIn(
-            ".reconnecting = s_websocket_state.auto_reconnect", websocket
-        )
+        self.assertNotIn("reconnecting", websocket)
+        self.assertIn("config.disable_auto_reconnect = true", websocket)
+        self.assertNotIn("autoReconnect", websocket)
+        self.assertNotIn("reconnectMs", websocket)
+        self.assertNotIn("bool auto_reconnect", websocket)
+        self.assertNotIn("s_websocket_state.auto_reconnect", websocket)
 
     def test_background_cleanup_uses_generic_workers_without_fake_future_wakes(self):
         header = (MQUICKJS / "internal/esp32_mquickjs_future.h").read_text(
@@ -1368,7 +1425,7 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("deadline_us <= submitted_us", timeout_math)
         self.assertIn("duration_ms > UINT32_MAX", timeout_math)
 
-    def test_event_queue_finalizer_drains_without_allocating(self):
+    def test_event_queue_finalizer_only_requests_reaper_cleanup(self):
         event_queue = (
             MQUICKJS / "src/core/esp32_mquickjs_event_queue.c"
         ).read_text(encoding="utf-8")
@@ -1385,6 +1442,11 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             "\nJSValue js_event_queue_receive(", finalizer_start
         )
         finalizer = event_queue[finalizer_start:finalizer_end]
+        reaper_start = event_queue.index("static bool event_queue_reap(")
+        reaper_end = event_queue.index(
+            "\nstatic void event_queue_request_reap(", reaper_start
+        )
+        reaper = event_queue[reaper_start:reaper_end]
         discard_start = event_queue.index(
             "size_t esp32_mquickjs_event_queue_discard_all("
         )
@@ -1401,9 +1463,15 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             "resources->drain_scratch = ops->allocate(event_size, opaque)",
             resources,
         )
-        self.assertIn("esp32_mquickjs_event_queue_discard_all(queue)", finalizer)
+        self.assertIn("event_queue_request_reap(queue, true)", finalizer)
+        self.assertIn("esp32_mquickjs_event_queue_drain(", reaper)
         self.assertIn("esp32_mquickjs_event_queue_drain(", discard)
         self.assertNotIn("heap_caps_malloc", finalizer)
+        self.assertNotIn("portMAX_DELAY", finalizer)
+        self.assertNotIn("xSemaphoreTake", finalizer)
+        self.assertNotIn("esp32_mquickjs_event_queue_close", finalizer)
+        self.assertNotIn("esp32_mquickjs_event_queue_discard_all", finalizer)
+        self.assertNotIn("portMAX_DELAY", reaper)
         self.assertNotIn("heap_caps_malloc", discard)
         self.assertIn("queue.allocations_allowed = false", c_test)
         self.assertIn("assert(queue.drop_calls == 2)", c_test)
@@ -1441,6 +1509,46 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         )
         self.assertNotIn("heap_caps_malloc", send)
         self.assertNotIn("heap_caps_free", send)
+
+    def test_event_queue_callback_send_is_nonblocking_drop_newest_only(self):
+        event_queue = (
+            MQUICKJS / "src/core/esp32_mquickjs_event_queue.c"
+        ).read_text(encoding="utf-8")
+        callback_start = event_queue.index(
+            "bool esp32_mquickjs_event_queue_try_send_from_callback("
+        )
+        callback_end = event_queue.index(
+            "\nbool esp32_mquickjs_event_queue_send_from_isr(", callback_start
+        )
+        callback_send = event_queue[callback_start:callback_end]
+
+        self.assertIn("ESP32_MQUICKJS_EVENT_QUEUE_DROP_NEWEST", callback_send)
+        self.assertIn("esp32_mquickjs_event_queue_enqueue_from_callback(", callback_send)
+        self.assertIn("event_queue_wake_receiver(queue)", callback_send)
+        self.assertNotIn("portMAX_DELAY", callback_send)
+        self.assertNotIn("xSemaphoreTake", callback_send)
+        self.assertNotIn("heap_caps_", callback_send)
+
+    def test_native_pool_and_lease_are_shared_core_infrastructure(self):
+        cmake = (MQUICKJS / "CMakeLists.txt").read_text(encoding="utf-8")
+        pool = (
+            MQUICKJS / "src/core/esp32_mquickjs_native_pool.c"
+        ).read_text(encoding="utf-8")
+        lease = (
+            MQUICKJS / "src/core/esp32_mquickjs_native_lease.c"
+        ).read_text(encoding="utf-8")
+        wireless = (
+            MQUICKJS / "internal/esp32_mquickjs_wireless_core.h"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("src/core/esp32_mquickjs_native_pool.c", cmake)
+        self.assertIn("src/core/esp32_mquickjs_native_lease.c", cmake)
+        self.assertIn("atomic_compare_exchange_weak_explicit", pool)
+        self.assertIn("esp32_mquickjs_native_pool_release", lease)
+        self.assertIn("close_requested", lease)
+        self.assertIn("returned", lease)
+        self.assertIn('#include "esp32_mquickjs_native_pool.h"', wireless)
+        self.assertNotIn("esp32_mquickjs_wireless_pool_t", wireless)
 
     def test_event_queue_explicit_dispose_detaches_js_and_defers_pending_receive(self):
         event_queue = (
@@ -1483,11 +1591,9 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             "\nJSValue js_event_queue_receive(", finalizer_start
         )
         finalizer = event_queue[finalizer_start:finalizer_end]
-        self.assertIn("queue->dispose_requested = true", finalizer)
-        self.assertIn(
-            "event_queue_take_destroy_ownership_locked(queue)", finalizer
-        )
-        self.assertIn("event_queue_destroy_native(queue)", finalizer)
+        self.assertIn("event_queue_request_reap(queue, true)", finalizer)
+        self.assertNotIn("event_queue_destroy_native(queue)", finalizer)
+        self.assertIn("queue->reaper_hold = true", event_queue)
         self.assertIn("state->native_queue_retained = true", event_queue)
         self.assertIn("esp32_mquickjs_event_queue_release(queue)", event_queue)
 
@@ -1516,8 +1622,8 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
                 "\nsize_t esp32_mquickjs_event_queue_discard_all(",
             ),
             (
-                "void js_event_queue_finalizer(",
-                "\nJSValue js_event_queue_receive(",
+                "static bool event_queue_reap(",
+                "\nstatic void event_queue_request_reap(",
             ),
         )
         for start_marker, end_marker in function_bounds:
@@ -2028,6 +2134,49 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("bitmap_acquire_read", bitmap)
         self.assertIn("bitmap_release_read", bitmap)
         self.assertNotIn("span_copy", usb_serial)
+
+    def test_runtime_has_a_fixed_capacity_bounded_orphan_reaper(self):
+        runtime = (MQUICKJS / "src/core/esp32_mquickjs.c").read_text(
+            encoding="utf-8"
+        )
+        public_header = (MQUICKJS / "include/esp32_mquickjs.h").read_text(
+            encoding="utf-8"
+        )
+        sys_module = (MQUICKJS / "src/core/esp32_mquickjs_sys.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("esp32_mquickjs_reaper_registry_t reapers", runtime)
+        self.assertIn("ESP32_MQUICKJS_REAPER_BATCH_LIMIT", runtime)
+        self.assertIn("esp32_mquickjs_register_reaper", public_header)
+        self.assertIn("esp32_mquickjs_unregister_reaper", public_header)
+        self.assertIn("status.orphans_pending", sys_module)
+        self.assertIn('"orphans"', sys_module)
+
+    def test_byte_view_is_an_owned_stable_snapshot_contract(self):
+        byte_source = (
+            MQUICKJS / "src/core/esp32_mquickjs_byte_source.c"
+        ).read_text(encoding="utf-8")
+        byte_source_header = (
+            MQUICKJS / "internal/utils/esp32_mquickjs_byte_source.h"
+        ).read_text(encoding="utf-8")
+        bitmap = (
+            MQUICKJS / "src/modules/bitmap/esp32_mquickjs_bitmap.c"
+        ).read_text(encoding="utf-8")
+        declarations = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn("esp32_mquickjs_new_byte_view", byte_source_header)
+        self.assertNotIn("esp32_mquickjs_update_byte_view", byte_source_header)
+        self.assertNotIn("esp32_mquickjs_update_byte_view", bitmap)
+        self.assertNotIn("BITMAP_STAGED_VIEW_KEY", bitmap)
+        self.assertNotIn("BITMAP_STAGED_CHUNKS_KEY", bitmap)
+        self.assertNotIn("reuse?: boolean", declarations)
+        self.assertIn("stable, immutable owned snapshot", declarations)
+        self.assertNotIn(
+            "ByteView.close() failed because the ByteView is busy", byte_source
+        )
 
     def test_io_modules_do_not_invoke_javascript_callbacks_directly(self):
         module_sources = (MQUICKJS / "src/modules").rglob("*.c")

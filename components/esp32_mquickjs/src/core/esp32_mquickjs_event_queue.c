@@ -4,6 +4,7 @@
 #include "esp32_mquickjs_event_queue_drain.h"
 #include "esp32_mquickjs_event_queue_resources.h"
 #include "esp32_mquickjs_options.h"
+#include "esp32_mquickjs_reaper.h"
 
 #include <stdatomic.h>
 #include <string.h>
@@ -30,6 +31,9 @@ struct esp32_mquickjs_event_queue {
     bool receiver_registered;
     bool dispose_requested;
     bool destroying;
+    bool reaper_registered;
+    bool reaper_hold;
+    bool orphaned;
     uint32_t native_retain_count;
     _Atomic bool closed;
     struct esp32_mquickjs_event_queue *next;
@@ -37,6 +41,8 @@ struct esp32_mquickjs_event_queue {
 
 typedef struct {
     esp32_mquickjs_event_queue_t *head;
+    esp32_mquickjs_event_queue_t *orphans;
+    bool reaper_registered;
 } esp32_mquickjs_event_queue_runtime_t;
 
 struct esp32_mquickjs_future_driver_state {
@@ -156,6 +162,20 @@ static void event_queue_unregister(esp32_mquickjs_event_queue_t *queue)
     }
 }
 
+static void event_queue_move_to_orphans(esp32_mquickjs_event_queue_t *queue)
+{
+    esp32_mquickjs_event_queue_runtime_t *state;
+
+    if (queue == NULL || queue->orphaned ||
+        (state = event_queue_runtime(queue->runtime)) == NULL) {
+        return;
+    }
+    event_queue_unregister(queue);
+    queue->next = state->orphans;
+    state->orphans = queue;
+    queue->orphaned = true;
+}
+
 static void event_queue_destroy_native(esp32_mquickjs_event_queue_t *queue)
 {
     if (queue == NULL) {
@@ -175,6 +195,151 @@ static bool event_queue_take_destroy_ownership_locked(
         return true;
     }
     return false;
+}
+
+static bool event_queue_drain_receive(void *source, void *event);
+static void event_queue_wake_receiver(esp32_mquickjs_event_queue_t *queue);
+
+static bool event_queue_reap(void *opaque)
+{
+    esp32_mquickjs_event_queue_t *queue = opaque;
+    esp32_mquickjs_event_queue_close_fn close;
+    void *close_opaque;
+    bool destroy = false;
+
+    if (queue == NULL || queue->resources.send_lock == NULL ||
+        xSemaphoreTake(
+            (SemaphoreHandle_t)queue->resources.send_lock,
+            pdMS_TO_TICKS(ESP32_MQUICKJS_REAPER_RETRY_MS)) != pdTRUE) {
+        return false;
+    }
+    portENTER_CRITICAL(&queue->lock);
+    close = queue->close;
+    close_opaque = queue->opaque;
+    queue->close = NULL;
+    portEXIT_CRITICAL(&queue->lock);
+    xSemaphoreGive((SemaphoreHandle_t)queue->resources.send_lock);
+
+    if (close != NULL) {
+        close(close_opaque);
+    }
+
+    if (queue->resources.events == NULL ||
+        queue->resources.drain_scratch == NULL ||
+        xSemaphoreTake(
+            (SemaphoreHandle_t)queue->resources.send_lock,
+            pdMS_TO_TICKS(ESP32_MQUICKJS_REAPER_RETRY_MS)) != pdTRUE) {
+        return false;
+    }
+    (void)esp32_mquickjs_event_queue_drain(
+        queue->resources.events, queue->resources.drain_scratch,
+        event_queue_drain_receive, queue->drop, queue->opaque);
+    xSemaphoreGive((SemaphoreHandle_t)queue->resources.send_lock);
+
+    portENTER_CRITICAL(&queue->lock);
+    queue->reaper_registered = false;
+    if (queue->reaper_hold) {
+        queue->reaper_hold = false;
+        queue->native_retain_count--;
+    }
+    destroy = event_queue_take_destroy_ownership_locked(queue);
+    portEXIT_CRITICAL(&queue->lock);
+    if (destroy) {
+        event_queue_destroy_native(queue);
+    }
+    return true;
+}
+
+static bool event_queue_runtime_reap(void *opaque)
+{
+    esp32_mquickjs_event_queue_runtime_t *state = opaque;
+    esp32_mquickjs_event_queue_t *queue;
+    esp32_mquickjs_event_queue_t *next;
+    esp32_mquickjs_event_queue_t **cursor;
+    size_t attempted = 0;
+    bool pending = false;
+
+    if (state == NULL) {
+        return true;
+    }
+    for (queue = state->head;
+         queue != NULL && attempted < ESP32_MQUICKJS_REAPER_BATCH_LIMIT;
+         queue = next) {
+        next = queue->next;
+        if (!queue->reaper_registered) {
+            continue;
+        }
+        attempted++;
+        (void)event_queue_reap(queue);
+    }
+
+    cursor = &state->orphans;
+    while (*cursor != NULL &&
+           attempted < ESP32_MQUICKJS_REAPER_BATCH_LIMIT) {
+        queue = *cursor;
+        next = queue->next;
+        attempted++;
+        if (event_queue_reap(queue)) {
+            *cursor = next;
+        } else {
+            cursor = &queue->next;
+        }
+    }
+
+    for (queue = state->head; queue != NULL; queue = queue->next) {
+        if (queue->reaper_registered) {
+            pending = true;
+            break;
+        }
+    }
+    if (state->orphans != NULL) {
+        pending = true;
+    }
+    if (!pending) {
+        state->reaper_registered = false;
+    }
+    return !pending;
+}
+
+static void event_queue_request_reap(esp32_mquickjs_event_queue_t *queue,
+                                     bool dispose)
+{
+    esp32_mquickjs_event_queue_runtime_t *state;
+    bool register_reaper = false;
+
+    if (queue == NULL ||
+        (state = event_queue_runtime(queue->runtime)) == NULL) {
+        return;
+    }
+    if (dispose) {
+        event_queue_move_to_orphans(queue);
+    }
+    atomic_store_explicit(&queue->closed, true, memory_order_release);
+    portENTER_CRITICAL(&queue->lock);
+    if (dispose) {
+        queue->dispose_requested = true;
+    }
+    if (!queue->reaper_registered && !queue->destroying) {
+        if (!queue->reaper_hold && queue->native_retain_count < UINT32_MAX) {
+            queue->native_retain_count++;
+            queue->reaper_hold = true;
+        }
+        if (queue->reaper_hold) {
+            queue->reaper_registered = true;
+        }
+    }
+    if (queue->reaper_registered && !state->reaper_registered) {
+        state->reaper_registered = true;
+        register_reaper = true;
+    }
+    portEXIT_CRITICAL(&queue->lock);
+
+    if (register_reaper && !esp32_mquickjs_register_reserved_reaper(
+            queue->runtime, ESP32_MQUICKJS_REAPER_RESERVED_EVENT_QUEUE,
+            event_queue_runtime_reap, state)) {
+        state->reaper_registered = false;
+    }
+    event_queue_wake_receiver(queue);
 }
 
 static bool event_queue_drain_receive(void *source, void *event)
@@ -326,6 +491,31 @@ bool esp32_mquickjs_event_queue_send(esp32_mquickjs_event_queue_t *queue,
     return true;
 }
 
+bool esp32_mquickjs_event_queue_try_send_from_callback(
+    esp32_mquickjs_event_queue_t *queue,
+    const void *event)
+{
+    uint32_t dropped = 0;
+
+    if (queue == NULL || event == NULL || queue->resources.events == NULL ||
+        queue->overflow != ESP32_MQUICKJS_EVENT_QUEUE_DROP_NEWEST ||
+        atomic_load_explicit(&queue->closed, memory_order_acquire)) {
+        return false;
+    }
+    if (!esp32_mquickjs_event_queue_enqueue_from_callback(
+            queue->resources.events, event, event_queue_enqueue_send,
+            &dropped)) {
+        if (dropped > 0) {
+            portENTER_CRITICAL(&queue->lock);
+            queue->dropped += dropped;
+            portEXIT_CRITICAL(&queue->lock);
+        }
+        return false;
+    }
+    event_queue_wake_receiver(queue);
+    return true;
+}
+
 bool esp32_mquickjs_event_queue_send_from_isr(esp32_mquickjs_event_queue_t *queue,
                                               const void *event,
                                               int *task_woken)
@@ -395,6 +585,12 @@ bool esp32_mquickjs_event_queue_close(esp32_mquickjs_event_queue_t *queue)
     }
     event_queue_wake_receiver(queue);
     return true;
+}
+
+void esp32_mquickjs_event_queue_request_close(
+    esp32_mquickjs_event_queue_t *queue)
+{
+    event_queue_request_reap(queue, false);
 }
 
 bool esp32_mquickjs_event_queue_dispose(JSContext *ctx, JSValue value)
@@ -716,10 +912,39 @@ bool esp32_mquickjs_init_event_queue_runtime(JSContext *ctx,
 void esp32_mquickjs_deinit_event_queue_runtime(esp32_mquickjs_runtime_t *runtime)
 {
     esp32_mquickjs_event_queue_runtime_t *state = event_queue_runtime(runtime);
+    esp32_mquickjs_event_queue_t *queue;
+    esp32_mquickjs_event_queue_t *next;
 
     if (state == NULL) {
         return;
     }
+    if (state->reaper_registered) {
+        (void)esp32_mquickjs_unregister_reaper(
+            runtime, event_queue_runtime_reap, state);
+        state->reaper_registered = false;
+    }
+    while ((queue = state->head) != NULL) {
+        state->head = queue->next;
+        queue->next = state->orphans;
+        state->orphans = queue;
+        queue->orphaned = true;
+        atomic_store_explicit(&queue->closed, true, memory_order_release);
+        portENTER_CRITICAL(&queue->lock);
+        queue->dispose_requested = true;
+        if (!queue->reaper_hold) {
+            queue->native_retain_count++;
+            queue->reaper_hold = true;
+        }
+        queue->reaper_registered = true;
+        portEXIT_CRITICAL(&queue->lock);
+    }
+    for (queue = state->orphans; queue != NULL; queue = next) {
+        next = queue->next;
+        while (!event_queue_reap(queue)) {
+            vTaskDelay(1);
+        }
+    }
+    state->orphans = NULL;
     heap_caps_free(state);
     runtime->event_queue_state = NULL;
 }
@@ -814,22 +1039,12 @@ JSValue js_event_queue_constructor(JSContext *ctx, JSValue *this_val, int argc, 
 void js_event_queue_finalizer(JSContext *ctx, void *opaque)
 {
     esp32_mquickjs_event_queue_t *queue = opaque;
-    bool destroy;
 
     (void)ctx;
     if (queue == NULL) {
         return;
     }
-    event_queue_unregister(queue);
-    (void)esp32_mquickjs_event_queue_close(queue);
-    (void)esp32_mquickjs_event_queue_discard_all(queue);
-    portENTER_CRITICAL(&queue->lock);
-    queue->dispose_requested = true;
-    destroy = event_queue_take_destroy_ownership_locked(queue);
-    portEXIT_CRITICAL(&queue->lock);
-    if (destroy) {
-        event_queue_destroy_native(queue);
-    }
+    event_queue_request_reap(queue, true);
 }
 
 JSValue js_event_queue_receive(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

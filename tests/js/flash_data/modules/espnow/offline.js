@@ -82,7 +82,7 @@ test("espnow/offline", function () {
       "peer snapshots should include the application peer");
     test.equal(peer.update({ channel: "current" }).channel, "current",
       "peer update should use the native Future driver");
-    test.equal(peer.close(), true, "peer close should remove the native peer");
+    test.equal(peer.remove(), true, "peer remove should remove the native peer");
     try {
       peer.status();
     } catch (peerError) {

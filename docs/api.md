@@ -16,6 +16,8 @@ The API is split into two parts:
   required before individual areas can be declared stable.
 - [docs/runtime-api.md](runtime-api.md)
   Native C lifecycle and integration API for custom firmware entry points.
+- [docs/native-lifecycle-contracts.md](native-lifecycle-contracts.md)
+  Shared callback, finalizer, lease, EventQueue, and reaper safety invariants.
 - [docs/backlog.md](backlog.md)
   Remaining production, recovery, security, extensibility, and verification
   work; completed API work is intentionally not repeated there.
@@ -26,4 +28,6 @@ Recommended reading order:
 2. `api-stability-plan.md` for current freeze policy and remaining validation.
 3. `js-api.md` for higher-level JS helpers layered on top of the built-ins.
 4. `runtime-api.md` for embedding and lifecycle integration.
-5. `backlog.md` for work that remains outside the current API implementation.
+5. `native-lifecycle-contracts.md` for callback, finalizer, lease, and reaper
+   safety invariants.
+6. `backlog.md` for work that remains outside the current API implementation.

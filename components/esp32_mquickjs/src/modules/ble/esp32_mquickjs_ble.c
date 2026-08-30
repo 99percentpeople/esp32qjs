@@ -166,14 +166,6 @@ typedef struct {
     uint32_t adapter_generation;
     uint16_t connection_index;
     uint32_t connection_generation;
-    uint32_t discovery_generation;
-    uint16_t index;
-} ble_attribute_ref_t;
-
-typedef struct {
-    uint32_t adapter_generation;
-    uint16_t connection_index;
-    uint32_t connection_generation;
     uint16_t subscription_index;
     uint32_t subscription_generation;
 } ble_subscription_ref_t;
@@ -219,7 +211,7 @@ typedef struct {
     esp32_mquickjs_event_queue_t *queue;
     JSGCRef queue_ref;
     bool queue_rooted;
-    esp32_mquickjs_wireless_pool_t free_slots;
+    esp32_mquickjs_native_pool_t free_slots;
     uint8_t *payloads;
     uint16_t *lengths;
     uint32_t capacity;
@@ -283,7 +275,7 @@ typedef struct {
     esp32_mquickjs_event_queue_t *queue;
     JSGCRef queue_ref;
     bool queue_rooted;
-    esp32_mquickjs_wireless_pool_t free_slots;
+    esp32_mquickjs_native_pool_t free_slots;
     uint8_t *payloads;
     uint32_t capacity;
     int64_t started_at_us;
@@ -334,7 +326,7 @@ typedef struct {
     esp32_mquickjs_event_queue_t *event_queue;
     JSGCRef event_queue_ref;
     bool event_queue_rooted;
-    esp32_mquickjs_wireless_pool_t free_slots;
+    esp32_mquickjs_native_pool_t free_slots;
     uint8_t *event_payloads;
     uint32_t event_capacity;
     _Atomic uint32_t sequence;
@@ -427,7 +419,6 @@ struct esp32_mquickjs_future_driver_state {
     bool include_descriptors;
     bool response;
     bool indication;
-    bool auto_pair;
     bool gatt_accounted;
     bool gatt_started;
     bool started;
@@ -476,6 +467,17 @@ static const uint8_t s_ble_server_lane_key;
 static _Atomic(esp32_mquickjs_future_driver_state_t *) s_ble_open_state;
 static _Atomic(esp32_mquickjs_future_driver_state_t *) s_ble_server_notify_state;
 
+typedef struct {
+    _Atomic bool requested;
+    _Atomic bool worker_submitted;
+    _Atomic bool worker_completed;
+    _Atomic int worker_result;
+    uint32_t generation;
+    int64_t retry_not_before_us;
+} ble_orphan_close_state_t;
+
+static ble_orphan_close_state_t s_ble_orphan_close;
+
 static const char *TAG = "esp32qjs_ble";
 
 static int ble_gap_event_callback(struct ble_gap_event *event, void *arg);
@@ -494,12 +496,18 @@ static void ble_future_state_storage_free(
     esp32_mquickjs_future_driver_state_t *state);
 static JSValue ble_bool_finish(
     JSContext *ctx, esp32_mquickjs_future_driver_state_t *state);
+static JSValue ble_properties_to_js(JSContext *ctx, uint32_t properties);
 static esp32_mquickjs_resource_key_t ble_gap_resource_key(
     const esp32_mquickjs_future_driver_state_t *state);
 static esp32_mquickjs_resource_key_t ble_gatt_resource_key(
     const esp32_mquickjs_future_driver_state_t *state);
 static esp32_mquickjs_resource_key_t ble_adapter_resource_key(
     const esp32_mquickjs_future_driver_state_t *state);
+static void ble_reset_orphan_close(void);
+static void ble_request_orphan_close(uint32_t generation);
+static bool ble_orphan_close_poller(JSContext *ctx,
+                                    esp32_mquickjs_runtime_t *runtime,
+                                    void *opaque);
 
 static void ble_note_native_deinit(void)
 {
@@ -762,8 +770,8 @@ static int ble_gatt_server_access(uint16_t conn_handle, uint16_t attr_handle,
         server_event.offset = ctxt->offset;
         server_event.length = length;
         server_event.pool_index = pool_index;
-        if (!esp32_mquickjs_event_queue_send(server->event_queue,
-                                             &server_event)) {
+        if (!esp32_mquickjs_event_queue_try_send_from_callback(
+                server->event_queue, &server_event)) {
             ble_server_event_pool_release(server, pool_index);
             atomic_fetch_add_explicit(&server->dropped, 1,
                                       memory_order_relaxed);
@@ -806,8 +814,8 @@ static void ble_publish_server_subscription(const struct ble_gap_event *event)
             server_event.characteristic_index = index;
             server_event.notify = event->subscribe.cur_notify;
             server_event.indicate = event->subscribe.cur_indicate;
-            if (!esp32_mquickjs_event_queue_send(server->event_queue,
-                                                 &server_event))
+            if (!esp32_mquickjs_event_queue_try_send_from_callback(
+                    server->event_queue, &server_event))
                 atomic_fetch_add_explicit(&server->dropped, 1,
                                           memory_order_relaxed);
             return;
@@ -1163,21 +1171,20 @@ fail:
 static int ble_scan_pool_acquire(ble_scanner_t *scanner, uint16_t *slot)
 {
     return scanner != NULL &&
-           esp32_mquickjs_wireless_pool_acquire(&scanner->free_slots, slot);
+           esp32_mquickjs_native_pool_acquire(&scanner->free_slots, slot);
 }
 
-static bool ble_event_queue_send_from_isr(void *destination,
-                                          const void *event,
-                                          int *task_woken)
+static bool ble_event_queue_try_send_from_callback(void *destination,
+                                                   const void *event)
 {
-    return esp32_mquickjs_event_queue_send_from_isr(destination, event,
-                                                     task_woken);
+    return esp32_mquickjs_event_queue_try_send_from_callback(destination,
+                                                              event);
 }
 
 static void ble_scan_pool_release(ble_scanner_t *scanner, uint16_t slot)
 {
     if (scanner != NULL && slot < scanner->capacity)
-        (void)esp32_mquickjs_wireless_pool_release(&scanner->free_slots, slot);
+        (void)esp32_mquickjs_native_pool_release(&scanner->free_slots, slot);
 }
 
 static void ble_scan_event_drop(void *event, void *opaque)
@@ -1429,7 +1436,7 @@ static void ble_notification_pool_release(ble_subscription_t *subscription,
                                           uint16_t index)
 {
     if (subscription != NULL && index < subscription->capacity)
-        (void)esp32_mquickjs_wireless_pool_release(
+        (void)esp32_mquickjs_native_pool_release(
             &subscription->free_slots, index);
 }
 
@@ -1563,7 +1570,6 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
     esp32_mquickjs_future_driver_state_t *state = NULL;
     ble_connection_slot_t *slot;
     uint16_t connection_index;
-    int task_woken = 0;
 
     if (event == NULL || (s_ble.lifecycle != BLE_LIFECYCLE_ACTIVE &&
                           s_ble.lifecycle != BLE_LIFECYCLE_OPENING &&
@@ -1593,10 +1599,10 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
                 scan_event.pool_index = pool_index;
                 memcpy(s_ble.scanner.payloads + pool_index * BLE_HS_ADV_MAX_SZ,
                        event->disc.data, event->disc.length_data);
-                if (!esp32_mquickjs_wireless_pooled_event_publish_from_isr(
+                if (!esp32_mquickjs_wireless_pooled_event_publish_from_callback(
                         &s_ble.scanner.free_slots, pool_index,
                         s_ble.scanner.queue, &scan_event,
-                        ble_event_queue_send_from_isr, &task_woken)) {
+                        ble_event_queue_try_send_from_callback)) {
                     atomic_fetch_add_explicit(&s_ble.scanner.dropped, 1,
                                               memory_order_relaxed);
                 } else {
@@ -1659,7 +1665,6 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
         }
         if (event->connect.status == 0) {
             struct ble_gap_conn_desc descriptor;
-            int pairing_rc = 0;
             slot->allocated = true;
             slot->reserved = false;
             slot->open = true;
@@ -1684,8 +1689,8 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
                 s_ble.advertiser.stop_reason = BLE_STOP_CONNECTED;
                 atomic_fetch_add_explicit(&s_ble.advertiser.incoming, 1,
                                           memory_order_relaxed);
-                if (!esp32_mquickjs_event_queue_send_from_isr(
-                        s_ble.advertiser.queue, &incoming, &task_woken)) {
+                if (!esp32_mquickjs_event_queue_try_send_from_callback(
+                        s_ble.advertiser.queue, &incoming)) {
                     atomic_fetch_add_explicit(&s_ble.advertiser.dropped, 1,
                                               memory_order_relaxed);
                     slot->release_on_disconnect = true;
@@ -1693,24 +1698,16 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
                                             BLE_ERR_REM_USER_CONN_TERM);
                 }
             }
-            if (state != NULL && state->operation == BLE_OP_CONNECT &&
-                state->auto_pair) {
-                pairing_rc = ble_gap_security_initiate(slot->conn_handle);
-                if (pairing_rc != 0) state->host_code = pairing_rc;
-            }
         } else {
             slot->reserved = false;
             slot->allocated = false;
         }
         if (state != NULL && state->operation == BLE_OP_CONNECT) {
             if (event->connect.status != 0) state->host_code = event->connect.status;
-            if (event->connect.status != 0 || !state->auto_pair ||
-                state->host_code != 0) {
-                atomic_store_explicit(&state->completed, true,
-                                      memory_order_release);
-                (void)esp32_mquickjs_future_wake_from_isr(
-                    state->runtime, state->token, &task_woken);
-            }
+            atomic_store_explicit(&state->completed, true,
+                                  memory_order_release);
+            (void)esp32_mquickjs_future_wake(
+                state->runtime, state->token);
         }
         if (callback_slot != NULL) {
             (void)esp32_mquickjs_wireless_native_operation_complete(
@@ -1743,8 +1740,8 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
                 };
                 atomic_store_explicit(&slot->terminal_pending, true,
                                       memory_order_release);
-                if (!esp32_mquickjs_event_queue_send_from_isr(
-                        slot->queue, &control, &task_woken)) {
+                if (!esp32_mquickjs_event_queue_try_send_from_callback(
+                        slot->queue, &control)) {
                     atomic_fetch_add_explicit(
                         &s_ble.dropped_connection_events, 1,
                         memory_order_relaxed);
@@ -1756,15 +1753,15 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
                         ? 0 : BLE_HS_ENOTCONN;
                 atomic_store_explicit(&state->completed, true,
                                       memory_order_release);
-                (void)esp32_mquickjs_future_wake_from_isr(
-                    state->runtime, state->token, &task_woken);
+                (void)esp32_mquickjs_future_wake(
+                    state->runtime, state->token);
             }
             if (gatt_state != NULL && gatt_state != state) {
                 gatt_state->host_code = BLE_HS_ENOTCONN;
                 atomic_store_explicit(&gatt_state->completed, true,
                                       memory_order_release);
-                (void)esp32_mquickjs_future_wake_from_isr(
-                    gatt_state->runtime, gatt_state->token, &task_woken);
+                (void)esp32_mquickjs_future_wake(
+                    gatt_state->runtime, gatt_state->token);
             }
             ble_future_state_drop(gatt_state);
         }
@@ -1782,8 +1779,8 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
                 .mtu = event->mtu.value,
             };
             slot->mtu = event->mtu.value;
-            if (!esp32_mquickjs_event_queue_send_from_isr(
-                    slot->queue, &control, &task_woken)) {
+            if (!esp32_mquickjs_event_queue_try_send_from_callback(
+                    slot->queue, &control)) {
                 atomic_fetch_add_explicit(&s_ble.dropped_connection_events, 1,
                                           memory_order_relaxed);
             }
@@ -1807,16 +1804,14 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
                 slot->security = descriptor.sec_state;
                 taskEXIT_CRITICAL(&s_ble.lock);
             }
-            (void)esp32_mquickjs_event_queue_send_from_isr(
-                slot->queue, &control, &task_woken);
+            (void)esp32_mquickjs_event_queue_try_send_from_callback(
+                slot->queue, &control);
         }
-        if (state != NULL && (state->operation == BLE_OP_PAIR ||
-                              (state->operation == BLE_OP_CONNECT &&
-                               state->auto_pair))) {
+        if (state != NULL && state->operation == BLE_OP_PAIR) {
             state->host_code = event->enc_change.status;
             atomic_store_explicit(&state->completed, true, memory_order_release);
-            (void)esp32_mquickjs_future_wake_from_isr(state->runtime,
-                                                       state->token, &task_woken);
+            (void)esp32_mquickjs_future_wake(state->runtime,
+                                              state->token);
         }
         break;
     case BLE_GAP_EVENT_PASSKEY_ACTION:
@@ -1840,8 +1835,8 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
             slot->pairing_action = control.pairing_action;
             slot->pairing_passkey = control.passkey;
             slot->pairing_expires_at_us = control.expires_at_us;
-            if (!esp32_mquickjs_event_queue_send_from_isr(
-                    slot->queue, &control, &task_woken)) {
+            if (!esp32_mquickjs_event_queue_try_send_from_callback(
+                    slot->queue, &control)) {
                 struct ble_sm_io reject = {.action = event->passkey.params.action};
                 if (reject.action == BLE_SM_IOACT_NUMCMP) reject.numcmp_accept = 0;
                 (void)ble_sm_inject_io(slot->conn_handle, &reject);
@@ -1863,7 +1858,7 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
                     subscription->value_handle != event->notify_rx.attr_handle)
                     continue;
                 if (length > CONFIG_ESP32_MQUICKJS_BLE_MAX_ATTRIBUTE_BYTES ||
-                    !esp32_mquickjs_wireless_pool_acquire(
+                    !esp32_mquickjs_native_pool_acquire(
                         &subscription->free_slots, &pool_index)) {
                     atomic_fetch_add_explicit(&subscription->dropped, 1,
                                               memory_order_relaxed);
@@ -1888,10 +1883,10 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
                     .length = length,
                     .pool_index = pool_index,
                 };
-                if (!esp32_mquickjs_wireless_pooled_event_publish_from_isr(
+                if (!esp32_mquickjs_wireless_pooled_event_publish_from_callback(
                         &subscription->free_slots, pool_index,
                         subscription->queue, &value_event,
-                        ble_event_queue_send_from_isr, &task_woken)) {
+                        ble_event_queue_try_send_from_callback)) {
                     atomic_fetch_add_explicit(&subscription->dropped, 1,
                                               memory_order_relaxed);
                 } else {
@@ -1921,8 +1916,8 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
                                       memory_order_release);
                 atomic_store_explicit(&notify_state->completed, true,
                                       memory_order_release);
-                (void)esp32_mquickjs_future_wake_from_isr(
-                    notify_state->runtime, notify_state->token, &task_woken);
+                (void)esp32_mquickjs_future_wake(
+                    notify_state->runtime, notify_state->token);
             }
         }
         ble_future_state_drop(notify_state);
@@ -2428,14 +2423,14 @@ static int ble_server_event_pool_acquire(ble_gatt_server_t *server,
                                          uint16_t *index)
 {
     return server != NULL &&
-           esp32_mquickjs_wireless_pool_acquire(&server->free_slots, index);
+           esp32_mquickjs_native_pool_acquire(&server->free_slots, index);
 }
 
 static void ble_server_event_pool_release(ble_gatt_server_t *server,
                                           uint16_t index)
 {
     if (server != NULL && index < server->event_capacity)
-        (void)esp32_mquickjs_wireless_pool_release(&server->free_slots, index);
+        (void)esp32_mquickjs_native_pool_release(&server->free_slots, index);
 }
 
 static void ble_server_event_drop(void *event, void *opaque)
@@ -2724,7 +2719,7 @@ static bool ble_parse_gatt_server(JSContext *ctx, JSValue definition,
     server->event_payloads = heap_caps_calloc(
         server->event_capacity, CONFIG_ESP32_MQUICKJS_BLE_MAX_ATTRIBUTE_BYTES,
         MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
-    if (!esp32_mquickjs_wireless_pool_init(&server->free_slots,
+    if (!esp32_mquickjs_native_pool_init(&server->free_slots,
                                             server->event_capacity) ||
         server->event_payloads == NULL) {
         JS_ThrowOutOfMemory(ctx);
@@ -2931,6 +2926,7 @@ static bool ble_open_capture(
     state->timeout_ms = BLE_DEFAULT_TIMEOUT_MS;
     atomic_init(&state->completed, false);
     generation = ble_next_generation(&s_ble_next_generation);
+    ble_reset_orphan_close();
     memset(&s_ble, 0, sizeof(s_ble));
     s_ble.lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
     s_ble.lifecycle = BLE_LIFECYCLE_OPENING;
@@ -3226,7 +3222,7 @@ static bool ble_scan_capture(
     atomic_init(&scanner->malformed, 0);
     scanner->payloads = heap_caps_calloc(capacity, BLE_HS_ADV_MAX_SZ,
                                          MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
-    if (!esp32_mquickjs_wireless_pool_init(&scanner->free_slots, capacity) ||
+    if (!esp32_mquickjs_native_pool_init(&scanner->free_slots, capacity) ||
         scanner->payloads == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto fail_scanner;
@@ -3813,7 +3809,7 @@ static bool ble_connect_capture(
     JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv,
     esp32_mquickjs_future_driver_state_t **out_state)
 {
-    static const char *const allowed[] = {"timeoutMs", "preferredMtu", "autoPair"};
+    static const char *const allowed[] = {"timeoutMs", "preferredMtu"};
     esp32_mquickjs_future_driver_state_t *state;
     ble_adapter_t *adapter;
     ble_connection_slot_t *slot;
@@ -3840,7 +3836,7 @@ static bool ble_connect_capture(
     if (!JS_IsUndefined(options) &&
         (!ble_is_object(ctx, options) ||
          !ble_validate_option_keys(ctx, options, "BLEAdapter.connect()",
-                                   allowed, 3))) {
+                                   allowed, 2))) {
         JS_PopGCRef(ctx, &property_ref);
         if (!JS_HasException(ctx))
             JS_ThrowTypeError(ctx, "connect options must be an object");
@@ -3869,9 +3865,7 @@ static bool ble_connect_capture(
     atomic_init(&state->completed, false);
     if (!ble_parse_address(ctx, argv[0].val, &state->peer)) goto fail;
     if (!JS_IsUndefined(options)) {
-        if (!ble_parse_timeout_option(ctx, options, "connect", &state->timeout_ms) ||
-            !ble_get_bool(ctx, options, "autoPair", false,
-                          &state->auto_pair))
+        if (!ble_parse_timeout_option(ctx, options, "connect", &state->timeout_ms))
             goto fail;
         *property = JS_GetPropertyStr(ctx, options, "preferredMtu");
         if (JS_IsException(*property)) goto fail;
@@ -4727,74 +4721,205 @@ static bool ble_discover_start(
     return true;
 }
 
-static JSValue ble_new_service_handle(JSContext *ctx,
-                                      uint16_t connection_index,
-                                      uint16_t service_index)
+static int ble_service_index_for_characteristic(
+    const ble_connection_slot_t *slot, uint16_t characteristic_index)
 {
-    ble_connection_slot_t *slot = &s_ble.connections[connection_index];
-    ble_remote_service_t *service = &slot->services[service_index];
-    ble_attribute_ref_t *ref;
+    uint16_t index;
+
+    for (index = 0; index < slot->service_count; ++index) {
+        const ble_remote_service_t *service = &slot->services[index];
+
+        if (characteristic_index >= service->first_characteristic &&
+            characteristic_index <
+                service->first_characteristic + service->characteristic_count) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+static int ble_characteristic_index_for_descriptor(
+    const ble_connection_slot_t *slot, uint16_t descriptor_index)
+{
+    uint16_t index;
+
+    for (index = 0; index < slot->characteristic_count; ++index) {
+        const ble_remote_characteristic_t *characteristic =
+            &slot->characteristics[index];
+
+        if (descriptor_index >= characteristic->first_descriptor &&
+            descriptor_index < characteristic->first_descriptor +
+                                   characteristic->descriptor_count) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+static JSValue ble_discovery_service_record(JSContext *ctx,
+                                            ble_connection_slot_t *slot,
+                                            uint16_t index)
+{
+    ble_remote_service_t *service = &slot->services[index];
     char uuid[BLE_UUID_TEXT_MAX];
     JSGCRef object_ref;
     JSValue *object = JS_PushGCRef(ctx, &object_ref);
-    *object = JS_NewObjectClassUser(ctx, JS_CLASS_BLE_SERVICE);
-    if (JS_IsException(*object)) goto fail;
-    ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
-    if (ref == NULL) {
-        JS_ThrowOutOfMemory(ctx);
-        goto fail;
-    }
-    ref->adapter_generation = s_ble.generation;
-    ref->connection_index = connection_index;
-    ref->connection_generation = slot->generation;
-    ref->discovery_generation = slot->discovery_generation;
-    ref->index = service_index;
-    JS_SetOpaque(ctx, *object, ref);
+
+    *object = JS_NewObject(ctx);
     ble_uuid_to_text(&service->uuid, uuid);
-    if (!esp32_mquickjs_set_property_ref(ctx, object, "uuid",
+    if (JS_IsException(*object) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "uuid",
                                          JS_NewString(ctx, uuid)) ||
-        !esp32_mquickjs_set_property_ref(ctx, object, "startHandle",
-                                         JS_NewUint32(ctx, service->start_handle)) ||
-        !esp32_mquickjs_set_property_ref(ctx, object, "endHandle",
-                                         JS_NewUint32(ctx, service->end_handle))) {
-        JS_SetOpaque(ctx, *object, NULL);
-        heap_caps_free(ref);
-        goto fail;
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "startHandle",
+            JS_NewUint32(ctx, service->start_handle)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "endHandle", JS_NewUint32(ctx, service->end_handle)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "characteristicStart",
+            JS_NewUint32(ctx, service->first_characteristic)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "characteristicCount",
+            JS_NewUint32(ctx, service->characteristic_count))) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_EXCEPTION;
     }
     return JS_PopGCRef(ctx, &object_ref);
-fail:
-    JS_PopGCRef(ctx, &object_ref);
-    return JS_EXCEPTION;
+}
+
+static JSValue ble_discovery_characteristic_record(
+    JSContext *ctx, ble_connection_slot_t *slot, uint16_t index)
+{
+    ble_remote_characteristic_t *characteristic =
+        &slot->characteristics[index];
+    char uuid[BLE_UUID_TEXT_MAX];
+    int service_index = ble_service_index_for_characteristic(slot, index);
+    JSGCRef object_ref, properties_ref;
+    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    JSValue *properties = JS_PushGCRef(ctx, &properties_ref);
+
+    *object = JS_NewObject(ctx);
+    *properties = ble_properties_to_js(ctx, characteristic->properties);
+    ble_uuid_to_text(&characteristic->uuid, uuid);
+    if (JS_IsException(*object) || JS_IsException(*properties) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "uuid",
+                                         JS_NewString(ctx, uuid)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "declarationHandle",
+            JS_NewUint32(ctx, characteristic->declaration_handle)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "valueHandle",
+            JS_NewUint32(ctx, characteristic->value_handle)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "properties",
+                                         *properties) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "serviceIndex", JS_NewInt32(ctx, service_index)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "descriptorStart",
+            JS_NewUint32(ctx, characteristic->first_descriptor)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "descriptorCount",
+            JS_NewUint32(ctx, characteristic->descriptor_count))) {
+        JS_PopGCRef(ctx, &properties_ref);
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_EXCEPTION;
+    }
+    JS_PopGCRef(ctx, &properties_ref);
+    return JS_PopGCRef(ctx, &object_ref);
+}
+
+static JSValue ble_discovery_descriptor_record(JSContext *ctx,
+                                               ble_connection_slot_t *slot,
+                                               uint16_t index)
+{
+    ble_remote_descriptor_t *descriptor = &slot->descriptors[index];
+    char uuid[BLE_UUID_TEXT_MAX];
+    int characteristic_index =
+        ble_characteristic_index_for_descriptor(slot, index);
+    JSGCRef object_ref;
+    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+
+    *object = JS_NewObject(ctx);
+    ble_uuid_to_text(&descriptor->uuid, uuid);
+    if (JS_IsException(*object) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "uuid",
+                                         JS_NewString(ctx, uuid)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "handle", JS_NewUint32(ctx, descriptor->handle)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "characteristicIndex",
+            JS_NewInt32(ctx, characteristic_index))) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_EXCEPTION;
+    }
+    return JS_PopGCRef(ctx, &object_ref);
 }
 
 static JSValue ble_discover_finish(
     JSContext *ctx, esp32_mquickjs_future_driver_state_t *state)
 {
     ble_connection_slot_t *slot = &s_ble.connections[state->connection_index];
-    JSGCRef array_ref, item_ref;
-    JSValue *array = JS_PushGCRef(ctx, &array_ref);
+    JSGCRef result_ref, services_ref, characteristics_ref, descriptors_ref,
+        item_ref;
+    JSValue *result = JS_PushGCRef(ctx, &result_ref);
+    JSValue *services = JS_PushGCRef(ctx, &services_ref);
+    JSValue *characteristics = JS_PushGCRef(ctx, &characteristics_ref);
+    JSValue *descriptors = JS_PushGCRef(ctx, &descriptors_ref);
     JSValue *item = JS_PushGCRef(ctx, &item_ref);
     uint16_t index;
     if (state->host_code != 0) {
         JS_PopGCRef(ctx, &item_ref);
-        JS_PopGCRef(ctx, &array_ref);
+        JS_PopGCRef(ctx, &descriptors_ref);
+        JS_PopGCRef(ctx, &characteristics_ref);
+        JS_PopGCRef(ctx, &services_ref);
+        JS_PopGCRef(ctx, &result_ref);
         return ble_throw_error(ctx,
             state->host_code == BLE_HS_ENOMEM ? "BLE_SERVER_LIMIT"
                                                : "BLE_GATT_ERROR",
             state->host_code, -1, state->connection_index, -1);
     }
-    *array = JS_NewArray(ctx, slot->service_count);
-    for (index = 0; !JS_IsException(*array) && index < slot->service_count;
-         ++index) {
-        *item = ble_new_service_handle(ctx, state->connection_index, index);
+    *result = JS_NewObject(ctx);
+    *services = JS_NewArray(ctx, slot->service_count);
+    *characteristics = JS_NewArray(ctx, slot->characteristic_count);
+    *descriptors = JS_NewArray(ctx, slot->descriptor_count);
+    for (index = 0; !JS_IsException(*services) &&
+                    index < slot->service_count; ++index) {
+        *item = ble_discovery_service_record(ctx, slot, index);
         if (JS_IsException(*item) ||
-            JS_IsException(JS_SetPropertyUint32(ctx, *array, index, *item))) {
-            *array = JS_EXCEPTION;
-            break;
-        }
+            JS_IsException(JS_SetPropertyUint32(ctx, *services, index, *item)))
+            *services = JS_EXCEPTION;
+    }
+    for (index = 0; !JS_IsException(*characteristics) &&
+                    index < slot->characteristic_count; ++index) {
+        *item = ble_discovery_characteristic_record(ctx, slot, index);
+        if (JS_IsException(*item) || JS_IsException(JS_SetPropertyUint32(
+                ctx, *characteristics, index, *item)))
+            *characteristics = JS_EXCEPTION;
+    }
+    for (index = 0; !JS_IsException(*descriptors) &&
+                    index < slot->descriptor_count; ++index) {
+        *item = ble_discovery_descriptor_record(ctx, slot, index);
+        if (JS_IsException(*item) || JS_IsException(JS_SetPropertyUint32(
+                ctx, *descriptors, index, *item)))
+            *descriptors = JS_EXCEPTION;
+    }
+    if (JS_IsException(*result) || JS_IsException(*services) ||
+        JS_IsException(*characteristics) || JS_IsException(*descriptors) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "generation",
+            JS_NewUint32(ctx, slot->discovery_generation)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "services", *services) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "characteristics",
+                                         *characteristics) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "descriptors",
+                                         *descriptors)) {
+        *result = JS_EXCEPTION;
     }
     JS_PopGCRef(ctx, &item_ref);
-    return JS_PopGCRef(ctx, &array_ref);
+    JS_PopGCRef(ctx, &descriptors_ref);
+    JS_PopGCRef(ctx, &characteristics_ref);
+    JS_PopGCRef(ctx, &services_ref);
+    return JS_PopGCRef(ctx, &result_ref);
 }
 
 static const esp32_mquickjs_future_driver_t s_ble_discover_driver = {
@@ -4809,41 +4934,105 @@ static const esp32_mquickjs_future_driver_t s_ble_discover_driver = {
     .resource_key = ble_gatt_resource_key,
 };
 
-static ble_connection_slot_t *ble_attribute_from_value(
-    JSContext *ctx, JSValue value, int expected_class,
-    ble_attribute_ref_t **out_ref, bool throw_if_stale)
+static bool ble_remote_attribute_exists(const ble_connection_slot_t *slot,
+                                        uint16_t handle,
+                                        uint16_t *out_index)
 {
-    ble_attribute_ref_t *ref;
-    ble_connection_slot_t *slot = NULL;
-    if (JS_GetClassID(ctx, value) != expected_class ||
-        (ref = JS_GetOpaque(ctx, value)) == NULL) {
-        JS_ThrowTypeError(ctx, "expected a BLE attribute handle");
-        return NULL;
+    uint16_t index;
+
+    if (handle == 0) return false;
+    for (index = 0; index < slot->characteristic_count; ++index) {
+        if (slot->characteristics[index].value_handle == handle) {
+            if (out_index != NULL) *out_index = index;
+            return true;
+        }
     }
-    if (ref->adapter_generation == s_ble.generation &&
-        ref->connection_index < s_ble.max_connections) {
-        slot = &s_ble.connections[ref->connection_index];
-        if (!slot->allocated || !slot->open ||
-            slot->generation != ref->connection_generation ||
-            slot->discovery_generation != ref->discovery_generation) slot = NULL;
+    for (index = 0; index < slot->descriptor_count; ++index) {
+        if (slot->descriptors[index].handle == handle) {
+            if (out_index != NULL) *out_index = index;
+            return true;
+        }
     }
-    if (slot == NULL && throw_if_stale)
-        JS_ThrowReferenceError(ctx, "BLE_STALE_ATTRIBUTE: attribute is stale");
-    if (out_ref != NULL) *out_ref = ref;
-    return slot;
+    return false;
 }
 
-static uint16_t ble_attribute_handle(ble_connection_slot_t *slot,
-                                     ble_attribute_ref_t *ref,
-                                     int class_id)
+static bool ble_gatt_read_handle_capture(
+    JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
 {
-    if (class_id == JS_CLASS_BLE_CHARACTERISTIC &&
-        ref->index < slot->characteristic_count)
-        return slot->characteristics[ref->index].value_handle;
-    if (class_id == JS_CLASS_BLE_DESCRIPTOR &&
-        ref->index < slot->descriptor_count)
-        return slot->descriptors[ref->index].handle;
-    return 0;
+    static const char *const allowed[] = {"timeoutMs", "maxBytes"};
+    esp32_mquickjs_future_driver_state_t *state;
+    ble_connection_ref_t *ref = NULL;
+    ble_connection_slot_t *slot;
+    JSValue options = argc == 2 ? argv[1].val : JS_UNDEFINED;
+    JSGCRef property_ref;
+    JSValue *property = JS_PushGCRef(ctx, &property_ref);
+    uint32_t raw_handle = 0;
+    uint32_t raw;
+
+    if (out_state == NULL || argc < 1 || argc > 2 ||
+        (slot = ble_connection_from_value(ctx, this_ref->val, &ref, true)) ==
+            NULL ||
+        !ble_to_u32(ctx, argv[0].val, &raw_handle) || raw_handle > UINT16_MAX ||
+        !ble_remote_attribute_exists(slot, (uint16_t)raw_handle, NULL)) {
+        if (!JS_HasException(ctx))
+            ble_throw_error(ctx, "BLE_STALE_ATTRIBUTE", BLE_HS_EINVAL, -1,
+                            ref != NULL ? ref->index : -1,
+                            raw_handle <= UINT16_MAX ? (int)raw_handle : -1);
+        JS_PopGCRef(ctx, &property_ref);
+        return false;
+    }
+    if (!JS_IsUndefined(options) &&
+        (!ble_is_object(ctx, options) ||
+         !ble_validate_option_keys(ctx, options,
+                                   "BLEConnection.readHandle()", allowed, 2))) {
+        JS_PopGCRef(ctx, &property_ref);
+        return false;
+    }
+    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    if (state == NULL) {
+        JS_PopGCRef(ctx, &property_ref);
+        JS_ThrowOutOfMemory(ctx);
+        return false;
+    }
+    state->ctx = ctx;
+    state->operation = BLE_OP_GATT_READ;
+    state->adapter_generation = ref->adapter_generation;
+    state->connection_index = ref->index;
+    state->connection_generation = ref->generation;
+    state->attribute_handle = (uint16_t)raw_handle;
+    state->timeout_ms = BLE_DEFAULT_TIMEOUT_MS;
+    state->max_bytes = CONFIG_ESP32_MQUICKJS_BLE_MAX_ATTRIBUTE_BYTES;
+    atomic_init(&state->completed, false);
+    if (!JS_IsUndefined(options)) {
+        if (!ble_parse_timeout_option(ctx, options, "GATT read",
+                                      &state->timeout_ms))
+            goto fail;
+        *property = JS_GetPropertyStr(ctx, options, "maxBytes");
+        if (JS_IsException(*property)) goto fail;
+        if (!JS_IsUndefined(*property)) {
+            if (!ble_to_u32(ctx, *property, &raw) || raw == 0 ||
+                raw > CONFIG_ESP32_MQUICKJS_BLE_MAX_ATTRIBUTE_BYTES) {
+                JS_ThrowRangeError(ctx, "maxBytes exceeds the compiled limit");
+                goto fail;
+            }
+            state->max_bytes = raw;
+        }
+    }
+    state->payload = heap_caps_malloc(state->max_bytes, MALLOC_CAP_8BIT);
+    if (state->payload == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        goto fail;
+    }
+    ble_retain_owner(ctx, this_ref->val, state);
+    *out_state = state;
+    JS_PopGCRef(ctx, &property_ref);
+    return true;
+fail:
+    heap_caps_free(state->payload);
+    heap_caps_free(state);
+    JS_PopGCRef(ctx, &property_ref);
+    return false;
 }
 
 static int ble_gatt_attr_callback(uint16_t conn_handle,
@@ -4875,97 +5064,6 @@ static int ble_gatt_attr_callback(uint16_t conn_handle,
     (void)esp32_mquickjs_future_wake(state->runtime, state->token);
     ble_future_state_drop(state);
     return 0;
-}
-
-static bool ble_gatt_read_capture_common(
-    JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv,
-    esp32_mquickjs_future_driver_state_t **out_state, int class_id)
-{
-    static const char *const allowed[] = {"timeoutMs", "maxBytes"};
-    esp32_mquickjs_future_driver_state_t *state;
-    ble_attribute_ref_t *ref = NULL;
-    ble_connection_slot_t *slot;
-    JSValue options = argc == 1 ? argv[0].val : JS_UNDEFINED;
-    JSGCRef property_ref;
-    JSValue *property = JS_PushGCRef(ctx, &property_ref);
-    uint32_t raw;
-    if (out_state == NULL || argc > 1 ||
-        (slot = ble_attribute_from_value(ctx, this_ref->val, class_id,
-                                         &ref, true)) == NULL) {
-        JS_PopGCRef(ctx, &property_ref);
-        return false;
-    }
-    if (!JS_IsUndefined(options) &&
-        (!ble_is_object(ctx, options) ||
-         !ble_validate_option_keys(ctx, options, "BLE GATT read", allowed, 2))) {
-        JS_PopGCRef(ctx, &property_ref);
-        return false;
-    }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
-    if (state == NULL) {
-        JS_PopGCRef(ctx, &property_ref);
-        JS_ThrowOutOfMemory(ctx);
-        return false;
-    }
-    state->ctx = ctx;
-    state->operation = BLE_OP_GATT_READ;
-    state->adapter_generation = ref->adapter_generation;
-    state->connection_index = ref->connection_index;
-    state->connection_generation = ref->connection_generation;
-    state->attribute_index = ref->index;
-    state->attribute_handle = ble_attribute_handle(slot, ref, class_id);
-    state->timeout_ms = BLE_DEFAULT_TIMEOUT_MS;
-    state->max_bytes = CONFIG_ESP32_MQUICKJS_BLE_MAX_ATTRIBUTE_BYTES;
-    atomic_init(&state->completed, false);
-    if (state->attribute_handle == 0) {
-        ble_throw_error(ctx, "BLE_STALE_ATTRIBUTE", BLE_HS_EINVAL, -1,
-                        ref->connection_index, -1);
-        goto fail;
-    }
-    if (!JS_IsUndefined(options)) {
-        if (!ble_parse_timeout_option(ctx, options, "GATT read",
-                                      &state->timeout_ms)) goto fail;
-        *property = JS_GetPropertyStr(ctx, options, "maxBytes");
-        if (JS_IsException(*property)) goto fail;
-        if (!JS_IsUndefined(*property)) {
-            if (!ble_to_u32(ctx, *property, &raw) || raw == 0 ||
-                raw > CONFIG_ESP32_MQUICKJS_BLE_MAX_ATTRIBUTE_BYTES) {
-                JS_ThrowRangeError(ctx, "maxBytes exceeds the compiled limit");
-                goto fail;
-            }
-            state->max_bytes = raw;
-        }
-    }
-    state->payload = heap_caps_malloc(state->max_bytes, MALLOC_CAP_8BIT);
-    if (state->payload == NULL) {
-        JS_ThrowOutOfMemory(ctx);
-        goto fail;
-    }
-    ble_retain_owner(ctx, this_ref->val, state);
-    *out_state = state;
-    JS_PopGCRef(ctx, &property_ref);
-    return true;
-fail:
-    heap_caps_free(state->payload);
-    heap_caps_free(state);
-    JS_PopGCRef(ctx, &property_ref);
-    return false;
-}
-
-static bool ble_characteristic_read_capture(
-    JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv,
-    esp32_mquickjs_future_driver_state_t **out_state)
-{
-    return ble_gatt_read_capture_common(ctx, this_ref, argc, argv, out_state,
-                                       JS_CLASS_BLE_CHARACTERISTIC);
-}
-
-static bool ble_descriptor_read_capture(
-    JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv,
-    esp32_mquickjs_future_driver_state_t **out_state)
-{
-    return ble_gatt_read_capture_common(ctx, this_ref, argc, argv, out_state,
-                                       JS_CLASS_BLE_DESCRIPTOR);
 }
 
 static bool ble_gatt_read_start(
@@ -5011,24 +5109,36 @@ static JSValue ble_gatt_read_finish(
     return result;
 }
 
-static bool ble_gatt_write_capture_common(
+static bool ble_gatt_write_handle_capture(
     JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv,
-    esp32_mquickjs_future_driver_state_t **out_state, int class_id)
+    esp32_mquickjs_future_driver_state_t **out_state)
 {
     static const char *const allowed[] = {"response", "timeoutMs"};
     esp32_mquickjs_future_driver_state_t *state;
-    ble_attribute_ref_t *ref = NULL;
+    ble_connection_ref_t *ref = NULL;
     ble_connection_slot_t *slot;
     esp32_mquickjs_byte_source_t source;
     uint8_t *owned = NULL;
     JSValue error = JS_UNDEFINED;
-    JSValue options = argc == 2 ? argv[1].val : JS_UNDEFINED;
-    if (out_state == NULL || argc < 1 || argc > 2 ||
-        (slot = ble_attribute_from_value(ctx, this_ref->val, class_id,
-                                         &ref, true)) == NULL) return false;
+    JSValue options = argc == 3 ? argv[2].val : JS_UNDEFINED;
+    uint32_t raw_handle = 0;
+
+    if (out_state == NULL || argc < 2 || argc > 3 ||
+        (slot = ble_connection_from_value(ctx, this_ref->val, &ref, true)) ==
+            NULL ||
+        !ble_to_u32(ctx, argv[0].val, &raw_handle) || raw_handle > UINT16_MAX ||
+        !ble_remote_attribute_exists(slot, (uint16_t)raw_handle, NULL)) {
+        if (!JS_HasException(ctx))
+            ble_throw_error(ctx, "BLE_STALE_ATTRIBUTE", BLE_HS_EINVAL, -1,
+                            ref != NULL ? ref->index : -1,
+                            raw_handle <= UINT16_MAX ? (int)raw_handle : -1);
+        return false;
+    }
     if (!JS_IsUndefined(options) &&
         (!ble_is_object(ctx, options) ||
-         !ble_validate_option_keys(ctx, options, "BLE GATT write", allowed, 2)))
+         !ble_validate_option_keys(ctx, options,
+                                   "BLEConnection.writeHandle()", allowed,
+                                   2)))
         return false;
     state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
     if (state == NULL) {
@@ -5038,24 +5148,26 @@ static bool ble_gatt_write_capture_common(
     state->ctx = ctx;
     state->operation = BLE_OP_GATT_WRITE;
     state->adapter_generation = ref->adapter_generation;
-    state->connection_index = ref->connection_index;
-    state->connection_generation = ref->connection_generation;
-    state->attribute_index = ref->index;
-    state->attribute_handle = ble_attribute_handle(slot, ref, class_id);
+    state->connection_index = ref->index;
+    state->connection_generation = ref->generation;
+    state->attribute_handle = (uint16_t)raw_handle;
     state->timeout_ms = BLE_DEFAULT_TIMEOUT_MS;
     state->response = true;
     atomic_init(&state->completed, false);
     if (!JS_IsUndefined(options) &&
         (!ble_get_bool(ctx, options, "response", true, &state->response) ||
          !ble_parse_timeout_option(ctx, options, "GATT write",
-                                   &state->timeout_ms))) goto fail;
-    if (!esp32_mquickjs_get_byte_source(ctx, argv[0].val, "BLE GATT write",
-                                        &source, &owned, &error)) goto fail;
+                                   &state->timeout_ms)))
+        goto fail;
+    if (!esp32_mquickjs_get_byte_source(ctx, argv[1].val,
+                                        "BLEConnection.writeHandle()",
+                                        &source, &owned, &error))
+        goto fail;
     if (source.length > CONFIG_ESP32_MQUICKJS_BLE_MAX_ATTRIBUTE_BYTES) {
         esp32_mquickjs_release_byte_source(owned);
         owned = NULL;
-        ble_throw_error(ctx, "BLE_PAYLOAD_TOO_LARGE", BLE_HS_EMSGSIZE,
-                        -1, state->connection_index, state->attribute_handle);
+        ble_throw_error(ctx, "BLE_PAYLOAD_TOO_LARGE", BLE_HS_EMSGSIZE, -1,
+                        state->connection_index, state->attribute_handle);
         goto fail;
     }
     state->payload = heap_caps_malloc(source.length > 0 ? source.length : 1,
@@ -5067,7 +5179,8 @@ static bool ble_gatt_write_capture_common(
         goto fail;
     }
     state->payload_length = source.length;
-    if (source.length > 0) memcpy(state->payload, source.data, source.length);
+    if (source.length > 0)
+        memcpy(state->payload, source.data, source.length);
     esp32_mquickjs_release_byte_source(owned);
     owned = NULL;
     ble_retain_owner(ctx, this_ref->val, state);
@@ -5078,22 +5191,6 @@ fail:
     heap_caps_free(state->payload);
     heap_caps_free(state);
     return false;
-}
-
-static bool ble_characteristic_write_capture(
-    JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv,
-    esp32_mquickjs_future_driver_state_t **out_state)
-{
-    return ble_gatt_write_capture_common(ctx, this_ref, argc, argv, out_state,
-                                        JS_CLASS_BLE_CHARACTERISTIC);
-}
-
-static bool ble_descriptor_write_capture(
-    JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv,
-    esp32_mquickjs_future_driver_state_t **out_state)
-{
-    return ble_gatt_write_capture_common(ctx, this_ref, argc, argv, out_state,
-                                        JS_CLASS_BLE_DESCRIPTOR);
 }
 
 static bool ble_gatt_write_start(
@@ -5143,19 +5240,7 @@ static JSValue ble_gatt_write_finish(
 }
 
 static const esp32_mquickjs_future_driver_t s_ble_gatt_read_driver = {
-    .capture = ble_characteristic_read_capture,
-    .start = ble_gatt_read_start,
-    .poll = ble_future_poll,
-    .finish = ble_gatt_read_finish,
-    .cancel = ble_future_cancel,
-    .destroy = ble_future_state_release,
-    .timeout_ms = ble_future_timeout_ms,
-    .on_timeout = ble_future_on_timeout,
-    .resource_key = ble_gatt_resource_key,
-};
-
-static const esp32_mquickjs_future_driver_t s_ble_descriptor_read_driver = {
-    .capture = ble_descriptor_read_capture,
+    .capture = ble_gatt_read_handle_capture,
     .start = ble_gatt_read_start,
     .poll = ble_future_poll,
     .finish = ble_gatt_read_finish,
@@ -5167,19 +5252,7 @@ static const esp32_mquickjs_future_driver_t s_ble_descriptor_read_driver = {
 };
 
 static const esp32_mquickjs_future_driver_t s_ble_gatt_write_driver = {
-    .capture = ble_characteristic_write_capture,
-    .start = ble_gatt_write_start,
-    .poll = ble_future_poll,
-    .finish = ble_gatt_write_finish,
-    .cancel = ble_future_cancel,
-    .destroy = ble_future_state_release,
-    .timeout_ms = ble_future_timeout_ms,
-    .on_timeout = ble_future_on_timeout,
-    .resource_key = ble_gatt_resource_key,
-};
-
-static const esp32_mquickjs_future_driver_t s_ble_descriptor_write_driver = {
-    .capture = ble_descriptor_write_capture,
+    .capture = ble_gatt_write_handle_capture,
     .start = ble_gatt_write_start,
     .poll = ble_future_poll,
     .finish = ble_gatt_write_finish,
@@ -5209,32 +5282,51 @@ static bool ble_subscribe_capture(
 {
     static const char *const allowed[] = {"mode", "capacity", "timeoutMs"};
     esp32_mquickjs_future_driver_state_t *state;
-    ble_attribute_ref_t *ref = NULL;
+    ble_connection_ref_t *ref = NULL;
     ble_connection_slot_t *slot;
     ble_remote_characteristic_t *characteristic;
     ble_subscription_t *subscription = NULL;
-    JSValue options = argc == 1 ? argv[0].val : JS_UNDEFINED;
+    JSValue options = argc == 3 ? argv[2].val : JS_UNDEFINED;
     JSGCRef property_ref;
     JSValue *property = JS_PushGCRef(ctx, &property_ref);
     uint32_t capacity = CONFIG_ESP32_MQUICKJS_BLE_NOTIFICATION_QUEUE_LEN;
     uint32_t raw;
+    uint32_t raw_value_handle = 0;
+    uint32_t raw_cccd_handle = 0;
     uint16_t index;
+    uint16_t characteristic_index = UINT16_MAX;
     bool indication;
     JSValue queue;
 
-    if (out_state == NULL || argc > 1 ||
-        (slot = ble_attribute_from_value(ctx, this_ref->val,
-                                         JS_CLASS_BLE_CHARACTERISTIC,
-                                         &ref, true)) == NULL) {
+    if (out_state == NULL || argc < 2 || argc > 3 ||
+        (slot = ble_connection_from_value(ctx, this_ref->val, &ref, true)) ==
+            NULL ||
+        !ble_to_u32(ctx, argv[0].val, &raw_value_handle) ||
+        raw_value_handle == 0 || raw_value_handle > UINT16_MAX ||
+        !ble_to_u32(ctx, argv[1].val, &raw_cccd_handle) ||
+        raw_cccd_handle == 0 || raw_cccd_handle > UINT16_MAX) {
         JS_PopGCRef(ctx, &property_ref);
         return false;
     }
-    characteristic = ref->index < slot->characteristic_count
-                         ? &slot->characteristics[ref->index] : NULL;
+    for (index = 0; index < slot->characteristic_count; ++index) {
+        if (slot->characteristics[index].value_handle == raw_value_handle) {
+            characteristic_index = index;
+            break;
+        }
+    }
+    characteristic = characteristic_index < slot->characteristic_count
+                         ? &slot->characteristics[characteristic_index]
+                         : NULL;
     if (characteristic == NULL) {
         JS_PopGCRef(ctx, &property_ref);
         ble_throw_error(ctx, "BLE_STALE_ATTRIBUTE", BLE_HS_EINVAL, -1,
-                        ref->connection_index, -1);
+                        ref->index, (int)raw_value_handle);
+        return false;
+    }
+    if ((uint16_t)raw_cccd_handle != ble_find_cccd(slot, characteristic)) {
+        JS_PopGCRef(ctx, &property_ref);
+        ble_throw_error(ctx, "BLE_STALE_ATTRIBUTE", BLE_HS_EINVAL, -1,
+                        ref->index, (int)raw_cccd_handle);
         return false;
     }
     indication = (characteristic->properties & BLE_GATT_CHR_PROP_NOTIFY) == 0 &&
@@ -5243,7 +5335,7 @@ static bool ble_subscribe_capture(
                                        BLE_GATT_CHR_PROP_INDICATE)) == 0) {
         JS_PopGCRef(ctx, &property_ref);
         ble_throw_error(ctx, "BLE_NOT_SUPPORTED", BLE_HS_ENOTSUP, -1,
-                        ref->connection_index, characteristic->value_handle);
+                        ref->index, characteristic->value_handle);
         return false;
     }
     if (!JS_IsUndefined(options)) {
@@ -5265,7 +5357,7 @@ static bool ble_subscribe_capture(
         if ((!indication && !(characteristic->properties & BLE_GATT_CHR_PROP_NOTIFY)) ||
             (indication && !(characteristic->properties & BLE_GATT_CHR_PROP_INDICATE))) {
             ble_throw_error(ctx, "BLE_NOT_SUPPORTED", BLE_HS_ENOTSUP, -1,
-                            ref->connection_index, characteristic->value_handle);
+                            ref->index, characteristic->value_handle);
             goto fail_early;
         }
         *property = JS_GetPropertyStr(ctx, options, "capacity");
@@ -5286,7 +5378,7 @@ static bool ble_subscribe_capture(
     }
     if (subscription == NULL) {
         ble_throw_error(ctx, "BLE_QUEUE_FULL", BLE_HS_ENOMEM, -1,
-                        ref->connection_index, characteristic->value_handle);
+                        ref->index, characteristic->value_handle);
         goto fail_early;
     }
     state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
@@ -5297,11 +5389,11 @@ static bool ble_subscribe_capture(
     state->ctx = ctx;
     state->operation = BLE_OP_SUBSCRIBE;
     state->adapter_generation = ref->adapter_generation;
-    state->connection_index = ref->connection_index;
-    state->connection_generation = ref->connection_generation;
-    state->attribute_index = ref->index;
+    state->connection_index = ref->index;
+    state->connection_generation = ref->generation;
+    state->attribute_index = characteristic_index;
     state->attribute_handle = characteristic->value_handle;
-    state->cccd_handle = ble_find_cccd(slot, characteristic);
+    state->cccd_handle = (uint16_t)raw_cccd_handle;
     state->subscription_index = index;
     state->timeout_ms = BLE_DEFAULT_TIMEOUT_MS;
     state->indication = indication;
@@ -5332,7 +5424,7 @@ static bool ble_subscribe_capture(
     atomic_init(&subscription->sequence, 0);
     atomic_init(&subscription->received, 0);
     atomic_init(&subscription->dropped, 0);
-    if (!esp32_mquickjs_wireless_pool_init(&subscription->free_slots,
+    if (!esp32_mquickjs_native_pool_init(&subscription->free_slots,
                                             capacity) ||
         subscription->payloads == NULL ||
         subscription->lengths == NULL) {
@@ -5675,6 +5767,139 @@ static const esp32_mquickjs_future_driver_t s_ble_clear_bonds_driver = {
     .resource_key = ble_adapter_resource_key,
 };
 
+static void ble_reset_orphan_close(void)
+{
+    atomic_store_explicit(&s_ble_orphan_close.requested, false,
+                          memory_order_release);
+    atomic_store_explicit(&s_ble_orphan_close.worker_submitted, false,
+                          memory_order_release);
+    atomic_store_explicit(&s_ble_orphan_close.worker_completed, false,
+                          memory_order_release);
+    atomic_store_explicit(&s_ble_orphan_close.worker_result, 0,
+                          memory_order_release);
+    s_ble_orphan_close.generation = 0;
+    s_ble_orphan_close.retry_not_before_us = 0;
+}
+
+static void ble_request_orphan_close(uint32_t generation)
+{
+    ble_lifecycle_t lifecycle = atomic_load_explicit(
+        &s_ble.lifecycle, memory_order_acquire);
+
+    if (generation == 0U || generation != s_ble.generation ||
+        (lifecycle != BLE_LIFECYCLE_ACTIVE &&
+         lifecycle != BLE_LIFECYCLE_FAILED)) {
+        return;
+    }
+    s_ble_orphan_close.generation = generation;
+    atomic_store_explicit(&s_ble_orphan_close.requested, true,
+                          memory_order_release);
+    if (s_ble.runtime != NULL) {
+        esp32_mquickjs_notify_activity(s_ble.runtime);
+    }
+}
+
+static void ble_begin_orphan_close(void)
+{
+    uint16_t index;
+
+    s_ble.lifecycle = BLE_LIFECYCLE_CLOSING;
+    if (s_ble.scanner.active) {
+        (void)ble_gap_disc_cancel();
+    }
+    if (s_ble.advertiser.active) {
+        (void)ble_gap_adv_stop();
+    }
+    for (index = 0; index < s_ble.max_connections; ++index) {
+        if (s_ble.connections[index].open &&
+            !s_ble.connections[index].release_on_disconnect) {
+            (void)ble_gap_terminate(s_ble.connections[index].conn_handle,
+                                    BLE_ERR_REM_USER_CONN_TERM);
+        }
+    }
+}
+
+static void ble_orphan_close_worker(void *opaque)
+{
+    ble_adapter_t *adapter = opaque;
+    int result = ble_wait_for_pending_connects(
+                     BLE_CONNECT_CANCEL_QUIESCE_MS)
+                     ? 0
+                     : BLE_HS_ETIMEOUT;
+
+    if (result == 0) {
+        result = ble_cleanup_native(adapter);
+    }
+    atomic_store_explicit(&s_ble_orphan_close.worker_result, result,
+                          memory_order_release);
+    atomic_store_explicit(&s_ble_orphan_close.worker_completed, true,
+                          memory_order_release);
+    if (adapter != NULL && adapter->runtime != NULL) {
+        esp32_mquickjs_notify_activity(adapter->runtime);
+    }
+}
+
+static bool ble_orphan_close_poller(JSContext *ctx,
+                                    esp32_mquickjs_runtime_t *runtime,
+                                    void *opaque)
+{
+    int result;
+
+    (void)ctx;
+    (void)runtime;
+    (void)opaque;
+    if (!atomic_load_explicit(&s_ble_orphan_close.requested,
+                              memory_order_acquire)) {
+        return false;
+    }
+    if (s_ble_orphan_close.generation != s_ble.generation ||
+        s_ble.lifecycle == BLE_LIFECYCLE_CLOSED) {
+        ble_reset_orphan_close();
+        return true;
+    }
+    if (atomic_load_explicit(&s_ble_orphan_close.worker_submitted,
+                             memory_order_acquire)) {
+        if (!atomic_load_explicit(&s_ble_orphan_close.worker_completed,
+                                  memory_order_acquire)) {
+            return false;
+        }
+        result = atomic_load_explicit(&s_ble_orphan_close.worker_result,
+                                      memory_order_acquire);
+        atomic_store_explicit(&s_ble_orphan_close.worker_submitted, false,
+                              memory_order_release);
+        atomic_store_explicit(&s_ble_orphan_close.worker_completed, false,
+                              memory_order_release);
+        if (result == 0) {
+            ble_free_pools(&s_ble);
+            s_ble.lifecycle = BLE_LIFECYCLE_CLOSED;
+            s_ble.runtime = NULL;
+            ble_reset_orphan_close();
+        } else {
+            s_ble.lifecycle = BLE_LIFECYCLE_FAILED;
+            s_ble_orphan_close.retry_not_before_us =
+                esp_timer_get_time() + 50000;
+        }
+        return true;
+    }
+    if (s_ble.lifecycle == BLE_LIFECYCLE_CLOSING ||
+        esp_timer_get_time() < s_ble_orphan_close.retry_not_before_us) {
+        return false;
+    }
+    ble_begin_orphan_close();
+    atomic_store_explicit(&s_ble_orphan_close.worker_completed, false,
+                          memory_order_release);
+    if (!esp32_mquickjs_submit_background_worker(
+            ble_orphan_close_worker, &s_ble)) {
+        s_ble.lifecycle = BLE_LIFECYCLE_FAILED;
+        s_ble_orphan_close.retry_not_before_us =
+            esp_timer_get_time() + 50000;
+        return false;
+    }
+    atomic_store_explicit(&s_ble_orphan_close.worker_submitted, true,
+                          memory_order_release);
+    return true;
+}
+
 static void ble_close_worker(void *opaque)
 {
     esp32_mquickjs_future_driver_state_t *state = opaque;
@@ -5765,6 +5990,7 @@ static JSValue ble_adapter_close_finish(
     ble_free_pools(&s_ble);
     s_ble.lifecycle = BLE_LIFECYCLE_CLOSED;
     s_ble.runtime = NULL;
+    ble_reset_orphan_close();
     ble_retire_handle(ctx, state->owner_ref.val, JS_CLASS_BLE_ADAPTER,
                       &s_ble_closed_adapter_ref);
     return JS_TRUE;
@@ -6193,8 +6419,13 @@ JSValue js_ble_adapter_constructor(JSContext *ctx, JSValue *this_val,
 
 void js_ble_adapter_finalizer(JSContext *ctx, void *opaque)
 {
+    ble_adapter_ref_t *ref = opaque;
+
     (void)ctx;
-    if (opaque != &s_ble_closed_adapter_ref) heap_caps_free(opaque);
+    if (ref != NULL && ref != &s_ble_closed_adapter_ref) {
+        ble_request_orphan_close(ref->generation);
+        heap_caps_free(ref);
+    }
 }
 
 JSValue js_ble_adapter_status(JSContext *ctx, JSValue *this_val,
@@ -6318,8 +6549,17 @@ JSValue js_ble_scanner_constructor(JSContext *ctx, JSValue *this_val,
 
 void js_ble_scanner_finalizer(JSContext *ctx, void *opaque)
 {
+    ble_scanner_ref_t *ref = opaque;
+
     (void)ctx;
-    if (opaque != &s_ble_closed_scanner_ref) heap_caps_free(opaque);
+    if (ref != NULL && ref != &s_ble_closed_scanner_ref) {
+        if (ref->adapter_generation == s_ble.generation &&
+            ref->generation == s_ble.scanner.generation &&
+            s_ble.scanner.open) {
+            ble_request_orphan_close(ref->adapter_generation);
+        }
+        heap_caps_free(ref);
+    }
 }
 
 JSValue js_ble_scanner_receive(JSContext *ctx, JSValue *this_val,
@@ -6386,8 +6626,17 @@ JSValue js_ble_advertiser_constructor(JSContext *ctx, JSValue *this_val,
 
 void js_ble_advertiser_finalizer(JSContext *ctx, void *opaque)
 {
+    ble_advertiser_ref_t *ref = opaque;
+
     (void)ctx;
-    if (opaque != &s_ble_closed_advertiser_ref) heap_caps_free(opaque);
+    if (ref != NULL && ref != &s_ble_closed_advertiser_ref) {
+        if (ref->adapter_generation == s_ble.generation &&
+            ref->generation == s_ble.advertiser.generation &&
+            s_ble.advertiser.open) {
+            ble_request_orphan_close(ref->adapter_generation);
+        }
+        heap_caps_free(ref);
+    }
 }
 
 JSValue js_ble_advertiser_receive(JSContext *ctx, JSValue *this_val,
@@ -6453,8 +6702,18 @@ JSValue js_ble_connection_constructor(JSContext *ctx, JSValue *this_val,
 
 void js_ble_connection_finalizer(JSContext *ctx, void *opaque)
 {
+    ble_connection_ref_t *ref = opaque;
+
     (void)ctx;
-    if (opaque != &s_ble_closed_connection_ref) heap_caps_free(opaque);
+    if (ref != NULL && ref != &s_ble_closed_connection_ref) {
+        if (ref->adapter_generation == s_ble.generation &&
+            ref->index < s_ble.max_connections &&
+            ref->generation == s_ble.connections[ref->index].generation &&
+            s_ble.connections[ref->index].open) {
+            ble_request_orphan_close(ref->adapter_generation);
+        }
+        heap_caps_free(ref);
+    }
 }
 
 JSValue js_ble_connection_receive(JSContext *ctx, JSValue *this_val,
@@ -6491,6 +6750,9 @@ BLE_FUTURE_WRAPPER(js_ble_connection_pair, "pair")
 BLE_FUTURE_WRAPPER(js_ble_connection_exchange_mtu, "exchangeMtu")
 BLE_FUTURE_WRAPPER(js_ble_connection_read_rssi, "readRssi")
 BLE_FUTURE_WRAPPER(js_ble_connection_discover, "discover")
+BLE_FUTURE_WRAPPER(js_ble_connection_read_handle, "readHandle")
+BLE_FUTURE_WRAPPER(js_ble_connection_write_handle, "writeHandle")
+BLE_FUTURE_WRAPPER(js_ble_connection_subscribe_handle, "subscribeHandle")
 BLE_FUTURE_WRAPPER(js_ble_connection_close, "close")
 
 JSValue js_ble_connection_respond_pairing(JSContext *ctx, JSValue *this_val,
@@ -6536,204 +6798,6 @@ JSValue js_ble_connection_respond_pairing(JSContext *ctx, JSValue *this_val,
     return JS_TRUE;
 }
 
-JSValue js_ble_service_constructor(JSContext *ctx, JSValue *this_val,
-                                   int argc, JSValue *argv)
-{
-    (void)this_val; (void)argc; (void)argv;
-    return ble_throw_constructor(ctx, "BLEService");
-}
-
-void js_ble_service_finalizer(JSContext *ctx, void *opaque)
-{
-    (void)ctx;
-    heap_caps_free(opaque);
-}
-
-static JSValue ble_new_characteristic_handle(JSContext *ctx,
-                                             uint16_t connection_index,
-                                             uint16_t characteristic_index)
-{
-    ble_connection_slot_t *slot = &s_ble.connections[connection_index];
-    ble_remote_characteristic_t *characteristic =
-        &slot->characteristics[characteristic_index];
-    ble_attribute_ref_t *ref;
-    char uuid[BLE_UUID_TEXT_MAX];
-    JSGCRef object_ref, properties_ref;
-    JSValue *object = JS_PushGCRef(ctx, &object_ref);
-    JSValue *properties = JS_PushGCRef(ctx, &properties_ref);
-    *object = JS_NewObjectClassUser(ctx, JS_CLASS_BLE_CHARACTERISTIC);
-    *properties = ble_properties_to_js(ctx, characteristic->properties);
-    if (JS_IsException(*object) || JS_IsException(*properties)) goto fail;
-    ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
-    if (ref == NULL) {
-        JS_ThrowOutOfMemory(ctx);
-        goto fail;
-    }
-    ref->adapter_generation = s_ble.generation;
-    ref->connection_index = connection_index;
-    ref->connection_generation = slot->generation;
-    ref->discovery_generation = slot->discovery_generation;
-    ref->index = characteristic_index;
-    JS_SetOpaque(ctx, *object, ref);
-    ble_uuid_to_text(&characteristic->uuid, uuid);
-    if (!esp32_mquickjs_set_property_ref(ctx, object, "uuid",
-                                         JS_NewString(ctx, uuid)) ||
-        !esp32_mquickjs_set_property_ref(ctx, object, "declarationHandle",
-            JS_NewUint32(ctx, characteristic->declaration_handle)) ||
-        !esp32_mquickjs_set_property_ref(ctx, object, "valueHandle",
-            JS_NewUint32(ctx, characteristic->value_handle)) ||
-        !esp32_mquickjs_set_property_ref(ctx, object, "properties", *properties)) {
-        JS_SetOpaque(ctx, *object, NULL);
-        heap_caps_free(ref);
-        goto fail;
-    }
-    JS_PopGCRef(ctx, &properties_ref);
-    return JS_PopGCRef(ctx, &object_ref);
-fail:
-    JS_PopGCRef(ctx, &properties_ref);
-    JS_PopGCRef(ctx, &object_ref);
-    return JS_EXCEPTION;
-}
-
-JSValue js_ble_service_characteristics(JSContext *ctx, JSValue *this_val,
-                                        int argc, JSValue *argv)
-{
-    ble_attribute_ref_t *ref = NULL;
-    ble_connection_slot_t *slot;
-    ble_remote_service_t *service;
-    JSGCRef array_ref, item_ref;
-    JSValue *array = JS_PushGCRef(ctx, &array_ref);
-    JSValue *item = JS_PushGCRef(ctx, &item_ref);
-    uint16_t offset;
-    (void)argv;
-    if (this_val == NULL || argc != 0 ||
-        (slot = ble_attribute_from_value(ctx, *this_val,
-                                         JS_CLASS_BLE_SERVICE,
-                                         &ref, true)) == NULL ||
-        ref->index >= slot->service_count) goto fail;
-    service = &slot->services[ref->index];
-    *array = JS_NewArray(ctx, service->characteristic_count);
-    for (offset = 0; !JS_IsException(*array) &&
-                     offset < service->characteristic_count; ++offset) {
-        *item = ble_new_characteristic_handle(
-            ctx, ref->connection_index, service->first_characteristic + offset);
-        if (JS_IsException(*item) ||
-            JS_IsException(JS_SetPropertyUint32(ctx, *array, offset, *item)))
-            goto fail;
-    }
-    JS_PopGCRef(ctx, &item_ref);
-    return JS_PopGCRef(ctx, &array_ref);
-fail:
-    JS_PopGCRef(ctx, &item_ref);
-    JS_PopGCRef(ctx, &array_ref);
-    return JS_EXCEPTION;
-}
-
-JSValue js_ble_characteristic_constructor(JSContext *ctx, JSValue *this_val,
-                                           int argc, JSValue *argv)
-{
-    (void)this_val; (void)argc; (void)argv;
-    return ble_throw_constructor(ctx, "BLECharacteristic");
-}
-
-void js_ble_characteristic_finalizer(JSContext *ctx, void *opaque)
-{
-    (void)ctx;
-    heap_caps_free(opaque);
-}
-
-static JSValue ble_new_descriptor_handle(JSContext *ctx,
-                                         uint16_t connection_index,
-                                         uint16_t descriptor_index)
-{
-    ble_connection_slot_t *slot = &s_ble.connections[connection_index];
-    ble_remote_descriptor_t *descriptor = &slot->descriptors[descriptor_index];
-    ble_attribute_ref_t *ref;
-    char uuid[BLE_UUID_TEXT_MAX];
-    JSGCRef object_ref;
-    JSValue *object = JS_PushGCRef(ctx, &object_ref);
-    *object = JS_NewObjectClassUser(ctx, JS_CLASS_BLE_DESCRIPTOR);
-    if (JS_IsException(*object)) goto fail;
-    ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
-    if (ref == NULL) {
-        JS_ThrowOutOfMemory(ctx);
-        goto fail;
-    }
-    ref->adapter_generation = s_ble.generation;
-    ref->connection_index = connection_index;
-    ref->connection_generation = slot->generation;
-    ref->discovery_generation = slot->discovery_generation;
-    ref->index = descriptor_index;
-    JS_SetOpaque(ctx, *object, ref);
-    ble_uuid_to_text(&descriptor->uuid, uuid);
-    if (!esp32_mquickjs_set_property_ref(ctx, object, "uuid",
-                                         JS_NewString(ctx, uuid)) ||
-        !esp32_mquickjs_set_property_ref(ctx, object, "handle",
-                                         JS_NewUint32(ctx, descriptor->handle))) {
-        JS_SetOpaque(ctx, *object, NULL);
-        heap_caps_free(ref);
-        goto fail;
-    }
-    return JS_PopGCRef(ctx, &object_ref);
-fail:
-    JS_PopGCRef(ctx, &object_ref);
-    return JS_EXCEPTION;
-}
-
-JSValue js_ble_characteristic_descriptors(JSContext *ctx, JSValue *this_val,
-                                           int argc, JSValue *argv)
-{
-    ble_attribute_ref_t *ref = NULL;
-    ble_connection_slot_t *slot;
-    ble_remote_characteristic_t *characteristic;
-    JSGCRef array_ref, item_ref;
-    JSValue *array = JS_PushGCRef(ctx, &array_ref);
-    JSValue *item = JS_PushGCRef(ctx, &item_ref);
-    uint16_t offset;
-    (void)argv;
-    if (this_val == NULL || argc != 0 ||
-        (slot = ble_attribute_from_value(ctx, *this_val,
-                                         JS_CLASS_BLE_CHARACTERISTIC,
-                                         &ref, true)) == NULL ||
-        ref->index >= slot->characteristic_count) goto fail;
-    characteristic = &slot->characteristics[ref->index];
-    *array = JS_NewArray(ctx, characteristic->descriptor_count);
-    for (offset = 0; !JS_IsException(*array) &&
-                     offset < characteristic->descriptor_count; ++offset) {
-        *item = ble_new_descriptor_handle(
-            ctx, ref->connection_index, characteristic->first_descriptor + offset);
-        if (JS_IsException(*item) ||
-            JS_IsException(JS_SetPropertyUint32(ctx, *array, offset, *item)))
-            goto fail;
-    }
-    JS_PopGCRef(ctx, &item_ref);
-    return JS_PopGCRef(ctx, &array_ref);
-fail:
-    JS_PopGCRef(ctx, &item_ref);
-    JS_PopGCRef(ctx, &array_ref);
-    return JS_EXCEPTION;
-}
-
-BLE_FUTURE_WRAPPER(js_ble_characteristic_read, "read")
-BLE_FUTURE_WRAPPER(js_ble_characteristic_write, "write")
-BLE_FUTURE_WRAPPER(js_ble_characteristic_subscribe, "subscribe")
-
-JSValue js_ble_descriptor_constructor(JSContext *ctx, JSValue *this_val,
-                                      int argc, JSValue *argv)
-{
-    (void)this_val; (void)argc; (void)argv;
-    return ble_throw_constructor(ctx, "BLEDescriptor");
-}
-
-void js_ble_descriptor_finalizer(JSContext *ctx, void *opaque)
-{
-    (void)ctx;
-    heap_caps_free(opaque);
-}
-
-BLE_FUTURE_WRAPPER(js_ble_descriptor_read, "read")
-BLE_FUTURE_WRAPPER(js_ble_descriptor_write, "write")
-
 JSValue js_ble_notification_constructor(JSContext *ctx, JSValue *this_val,
                                         int argc, JSValue *argv)
 {
@@ -6743,8 +6807,27 @@ JSValue js_ble_notification_constructor(JSContext *ctx, JSValue *this_val,
 
 void js_ble_notification_finalizer(JSContext *ctx, void *opaque)
 {
+    ble_subscription_ref_t *ref = opaque;
+
     (void)ctx;
-    if (opaque != &s_ble_closed_subscription_ref) heap_caps_free(opaque);
+    if (ref != NULL && ref != &s_ble_closed_subscription_ref) {
+        if (ref->adapter_generation == s_ble.generation &&
+            ref->connection_index < s_ble.max_connections &&
+            ref->subscription_index < BLE_MAX_SUBSCRIPTIONS) {
+            ble_connection_slot_t *slot =
+                &s_ble.connections[ref->connection_index];
+            ble_subscription_t *subscription =
+                &slot->subscriptions[ref->subscription_index];
+
+            if (slot->generation == ref->connection_generation &&
+                subscription->generation ==
+                    ref->subscription_generation &&
+                subscription->open) {
+                ble_request_orphan_close(ref->adapter_generation);
+            }
+        }
+        heap_caps_free(ref);
+    }
 }
 
 JSValue js_ble_notification_receive(JSContext *ctx, JSValue *this_val,
@@ -7029,6 +7112,13 @@ JSValue js_ble_capabilities(JSContext *ctx, JSValue *this_val,
     (void)this_val; (void)argc; (void)argv;
     *object = JS_NewObject(ctx);
     if (JS_IsException(*object) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "apiVersion",
+                                         JS_NewString(ctx, "v1")) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "target",
+                                         JS_NewString(ctx, CONFIG_IDF_TARGET)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "idfVersion",
+                                         JS_NewString(ctx, IDF_VER)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "supported", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(ctx, object, "classic", JS_FALSE) ||
         !esp32_mquickjs_set_property_ref(ctx, object, "central", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(ctx, object, "peripheral", JS_TRUE) ||
@@ -7063,16 +7153,13 @@ static bool ble_register_future_drivers(JSContext *ctx,
                                         esp32_mquickjs_runtime_t *runtime)
 {
     JSGCRef global_ref, module_ref, adapter_ref, scanner_ref, advertiser_ref,
-        connection_ref, characteristic_ref, descriptor_ref, notification_ref,
-        local_ref, method_ref;
+        connection_ref, notification_ref, local_ref, method_ref;
     JSValue *global = JS_PushGCRef(ctx, &global_ref);
     JSValue *module = JS_PushGCRef(ctx, &module_ref);
     JSValue *adapter = JS_PushGCRef(ctx, &adapter_ref);
     JSValue *scanner = JS_PushGCRef(ctx, &scanner_ref);
     JSValue *advertiser = JS_PushGCRef(ctx, &advertiser_ref);
     JSValue *connection = JS_PushGCRef(ctx, &connection_ref);
-    JSValue *characteristic = JS_PushGCRef(ctx, &characteristic_ref);
-    JSValue *descriptor = JS_PushGCRef(ctx, &descriptor_ref);
     JSValue *notification = JS_PushGCRef(ctx, &notification_ref);
     JSValue *local = JS_PushGCRef(ctx, &local_ref);
     JSValue *method = JS_PushGCRef(ctx, &method_ref);
@@ -7130,19 +7217,11 @@ static bool ble_register_future_drivers(JSContext *ctx,
     BLE_REGISTER_DRIVER(*connection, "exchangeMtu", &s_ble_exchange_mtu_driver);
     BLE_REGISTER_DRIVER(*connection, "readRssi", &s_ble_read_rssi_driver);
     BLE_REGISTER_DRIVER(*connection, "discover", &s_ble_discover_driver);
+    BLE_REGISTER_DRIVER(*connection, "readHandle", &s_ble_gatt_read_driver);
+    BLE_REGISTER_DRIVER(*connection, "writeHandle", &s_ble_gatt_write_driver);
+    BLE_REGISTER_DRIVER(*connection, "subscribeHandle",
+                        &s_ble_subscribe_driver);
     BLE_REGISTER_DRIVER(*connection, "close", &s_ble_connection_close_driver);
-    *characteristic = result
-                          ? JS_NewObjectClassUser(ctx, JS_CLASS_BLE_CHARACTERISTIC)
-                          : JS_EXCEPTION;
-    result = result && !JS_IsException(*characteristic);
-    BLE_REGISTER_DRIVER(*characteristic, "read", &s_ble_gatt_read_driver);
-    BLE_REGISTER_DRIVER(*characteristic, "write", &s_ble_gatt_write_driver);
-    BLE_REGISTER_DRIVER(*characteristic, "subscribe", &s_ble_subscribe_driver);
-    *descriptor = result ? JS_NewObjectClassUser(ctx, JS_CLASS_BLE_DESCRIPTOR)
-                         : JS_EXCEPTION;
-    result = result && !JS_IsException(*descriptor);
-    BLE_REGISTER_DRIVER(*descriptor, "read", &s_ble_descriptor_read_driver);
-    BLE_REGISTER_DRIVER(*descriptor, "write", &s_ble_descriptor_write_driver);
     *notification = result
                         ? JS_NewObjectClassUser(ctx,
                               JS_CLASS_BLE_NOTIFICATION_STREAM)
@@ -7160,8 +7239,6 @@ static bool ble_register_future_drivers(JSContext *ctx,
     JS_PopGCRef(ctx, &method_ref);
     JS_PopGCRef(ctx, &local_ref);
     JS_PopGCRef(ctx, &notification_ref);
-    JS_PopGCRef(ctx, &descriptor_ref);
-    JS_PopGCRef(ctx, &characteristic_ref);
     JS_PopGCRef(ctx, &connection_ref);
     JS_PopGCRef(ctx, &advertiser_ref);
     JS_PopGCRef(ctx, &scanner_ref);
@@ -7176,13 +7253,23 @@ static bool ble_register_future_drivers(JSContext *ctx,
 bool esp32_mquickjs_init_ble_runtime(JSContext *ctx,
                                      esp32_mquickjs_runtime_t *runtime)
 {
+    bool registered;
+
     if (ctx == NULL || runtime == NULL ||
         s_ble.lifecycle != BLE_LIFECYCLE_CLOSED) return false;
     s_ble.ctx = ctx;
     s_ble.runtime = runtime;
     atomic_init(&s_ble_open_state, NULL);
     atomic_init(&s_ble_server_notify_state, NULL);
-    return ble_register_future_drivers(ctx, runtime);
+    ble_reset_orphan_close();
+    registered = ble_register_future_drivers(ctx, runtime);
+    if (registered && !esp32_mquickjs_register_async_poller(
+                          runtime, ble_orphan_close_poller, NULL)) {
+        JS_ThrowInternalError(ctx,
+                              "failed to register BLE orphan close poller");
+        registered = false;
+    }
+    return registered;
 }
 
 bool esp32_mquickjs_deinit_ble_runtime(JSContext *ctx)
@@ -7190,6 +7277,17 @@ bool esp32_mquickjs_deinit_ble_runtime(JSContext *ctx)
     int cleanup_result;
 
     (void)ctx;
+    if (atomic_load_explicit(&s_ble_orphan_close.worker_submitted,
+                             memory_order_acquire)) {
+        while (!atomic_load_explicit(&s_ble_orphan_close.worker_completed,
+                                     memory_order_acquire)) {
+            vTaskDelay(1);
+        }
+        atomic_store_explicit(&s_ble_orphan_close.worker_submitted, false,
+                              memory_order_release);
+        atomic_store_explicit(&s_ble_orphan_close.worker_completed, false,
+                              memory_order_release);
+    }
     if (s_ble.lifecycle != BLE_LIFECYCLE_CLOSED) {
         if (s_ble.scanner.active) (void)ble_gap_disc_cancel();
         if (s_ble.advertiser.active) (void)ble_gap_adv_stop();
@@ -7208,6 +7306,7 @@ bool esp32_mquickjs_deinit_ble_runtime(JSContext *ctx)
         s_ble.lifecycle = BLE_LIFECYCLE_CLOSED;
         s_ble.runtime = NULL;
     }
+    ble_reset_orphan_close();
     return true;
 }
 

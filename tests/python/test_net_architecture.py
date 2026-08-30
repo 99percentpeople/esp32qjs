@@ -64,9 +64,27 @@ class NetArchitectureTests(SourceContractTestCase):
         self.assertIn('JS_CFUNC_DEF("watch", 0, js_net_watch)', stdlib)
         self.assertIn('JS_PROP_CLASS_DEF("net", &js_net_obj)', stdlib)
         self.assertIn("CONFIG_ESP32_MQUICKJS_NET_MAX_INTERFACES", net)
-        self.assertIn("ESP32_MQUICKJS_EVENT_QUEUE_DROP_OLDEST", net)
+        self.assertIn("ESP32_MQUICKJS_EVENT_QUEUE_DROP_NEWEST", net)
         self.assertIn("interface NetInterfaceStatus", declarations)
         self.assertIn("watch(): EventQueue<NetStatusEvent>", declarations)
+
+    def test_ip_event_callback_never_blocks_on_watchers(self):
+        source = (
+            MQUICKJS / "src/modules/net/esp32_mquickjs_net.c"
+        ).read_text(encoding="utf-8")
+        start = source.index("static void net_ip_event_handler(")
+        end = source.index(
+            "\nesp_err_t esp32_mquickjs_net_ensure_initialized(", start
+        )
+        handler = source[start:end]
+
+        self.assertIn("net_try_lock()", handler)
+        self.assertIn(
+            "esp32_mquickjs_event_queue_try_send_from_callback(", handler
+        )
+        self.assertNotIn("net_lock()", handler)
+        self.assertNotIn("esp32_mquickjs_event_queue_send(", handler)
+        self.assertNotIn("portMAX_DELAY", handler)
 
     def test_time_and_websocket_use_transport_neutral_readiness(self):
         time = (MQUICKJS / "src/modules/time/esp32_mquickjs_time.c").read_text(

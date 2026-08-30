@@ -385,23 +385,21 @@ test("bitmap/basic", function () {
   test.ok(source && typeof source.setRect === "function", "BitmapSpanSource should expose setRect");
   test.equal(source.setRect(-1, -1, 2, 2), source, "BitmapSpanSource setRect should return the source");
   test.equal(source.setRect(0, 0, 2, 2), source, "BitmapSpanSource setRect should allow repeated updates");
-  var reusedChunks = rgb.readRectChunks(0, 0, 2, 2, { byteOrder: "be", reuse: true });
-  var reusedFirst = reusedChunks[0];
+  var snapshotChunks = rgb.readRectChunks(0, 0, 2, 2, { byteOrder: "be" });
+  var snapshotFirst = snapshotChunks[0];
 
   rgb.setPixel(0, 0, 0x0001);
-  var reusedAgain = rgb.readRectChunks(0, 0, 2, 2, { byteOrder: "be", reuse: true });
-  test.equal(reusedAgain, reusedChunks, "readRectChunks reuse should keep the chunk array stable");
-  test.equal(reusedAgain[0], reusedFirst, "readRectChunks reuse should keep ByteView wrappers stable");
-  test.equal(reusedAgain[0].toArray()[1], 0x01, "reused ByteView should point at updated pixel data");
-  reusedFirst.close();
-  rgb.setPixel(0, 0, 0x0002);
-  reusedAgain = rgb.readRectChunks(0, 0, 2, 2, { byteOrder: "be", reuse: true });
-  test.equal(reusedAgain, reusedChunks,
-    "readRectChunks reuse should keep the chunk array after a cached ByteView is closed");
-  test.ok(reusedAgain[0] !== reusedFirst,
-    "readRectChunks reuse should replace a closed cached ByteView");
-  test.equal(reusedAgain[0].toArray()[1], 0x02,
-    "replacement ByteView should point at updated pixel data");
+  var freshChunks = rgb.readRectChunks(0, 0, 2, 2, { byteOrder: "be" });
+  test.ok(freshChunks !== snapshotChunks,
+    "readRectChunks should return a fresh snapshot array");
+  test.ok(freshChunks[0] !== snapshotFirst,
+    "readRectChunks should return fresh ByteView snapshots");
+  test.equal(snapshotFirst.toArray()[1], 0x34,
+    "an older ByteView snapshot should not change with its Bitmap producer");
+  test.equal(freshChunks[0].toArray()[1], 0x01,
+    "a fresh ByteView snapshot should include later Bitmap changes");
+  test.equal(snapshotFirst.close(), true, "ByteView close should succeed");
+  test.equal(snapshotFirst.close(), true, "ByteView close should be idempotent");
 
   if (sys.info.features.spi && typeof spi === "object") {
     var bus = spi.openBus();

@@ -15,7 +15,7 @@ Mesh behavior, provisioning, or a product message schema.
   broadcast state, and an owned `ByteView`.
 - `session.stats()` reports the bounded receive EventQueue counters.
 - `session.addPeer(options)` creates an application peer; `peer.update()` and
-  `peer.close()` modify or remove it.
+  `peer.remove()` modify or remove it.
 - `session.peer(address)` returns one generation-checked handle or `null`, and
   `session.peers()` returns key-free peer status snapshots.
 - `peer.send(data, options?)` and `session.broadcast(data, options?)` share one
@@ -62,7 +62,7 @@ try {
     }
   }
   print(result.macDelivered);
-  peer.close();
+  peer.remove();
 } finally {
   session.close();
 }
@@ -90,10 +90,10 @@ Project or Board JavaScript Libraries.
   Close every report or notification `ByteView` after use.
 - Use `adapter.connect(peer, options?)` for outbound connections and
   `advertiser.receive()` for incoming peripheral connections.
-- Run discovery before using `BLEService`, `BLECharacteristic`, or
-  `BLEDescriptor` handles. A later discovery or connection close invalidates
-  the previous attribute handles.
-- `characteristic.subscribe()` returns a separate bounded
+- Run `connection.discover()` before `readHandle()`, `writeHandle()`, or
+  `subscribeHandle()`. Discovery returns flat value records; a later discovery
+  or connection close invalidates the previous handle set.
+- `connection.subscribeHandle()` returns a separate bounded
   `BLENotificationStream`; notifications never consume the connection control
   queue.
 - Declare a GATT Server only in `ble.open({ server: ... })`. Remote callbacks

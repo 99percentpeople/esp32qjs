@@ -95,7 +95,7 @@ Complete `sys.time.sync(...)` after network connection before using a public
 `https://` URL. Certificate authority, DNS name, and validity dates are always
 verified; there is no insecure option.
 
-- `fetch(input, options?)` and `http.fetch(input, options?)` return a `Response`.
+- `http.fetch(input, options?)` returns a `Response`.
 - `new Headers(init?)`
 - `new Request(input, init?)`
 - `new Response(body?, init?)`
@@ -120,7 +120,7 @@ helper.
 
 ```js
 (function () {
-    var response = fetch("https://example.com/status", {
+    var response = http.fetch("https://example.com/status", {
         method: "GET",
         headers: { "accept": "application/json" },
         timeoutMs: 10000,
@@ -137,8 +137,8 @@ For independent calls:
 
 ```js
 (function () {
-    var left = Future.call(fetch, this, ["https://example.com/a"]);
-    var right = Future.call(fetch, this, ["https://example.com/b"]);
+    var left = Future.call(http.fetch, http, ["https://example.com/a"]);
+    var right = Future.call(http.fetch, http, ["https://example.com/b"]);
     var responses = Future.all([left, right]).wait(10000);
     return [responses[0].status, responses[1].status];
 })()
@@ -277,9 +277,9 @@ DMA headroom from total `sys.freeHeap()`.
 `websocketClient.open(options)` returns a handle.
 
 Options include required `url` plus optional `authorization`, `subprotocol`,
-`autoReconnect`, `useCertBundle`, `reconnectMs`, `networkTimeoutMs`,
-`sendTimeoutMs`, `pingIntervalSec`, and `maxMessageBytes`. At least one network
-interface must be ready. The runtime permits one WebSocket client at a time.
+`networkTimeoutMs`, `sendTimeoutMs`, `pingIntervalSec`, and `maxMessageBytes`.
+At least one network interface must be ready. The runtime permits one
+WebSocket client at a time and performs one connection attempt per handle.
 For `wss://`, synchronize time first with `sys.time.sync(...)`.
 
 - `send(textOrBytes)` accepts a string, `ByteSource`, or `ByteSpanSource`.
@@ -290,7 +290,7 @@ For `wss://`, synchronize time first with `sys.time.sync(...)`.
 Events are consumed from a bounded `EventQueue`; no application callback is invoked. Close the handle in `finally`.
 Event types are `open`, `message`, `close`, and `error`. Message events carry
 UTF-8 string `data` for text frames or an owned `ByteView` for binary frames;
-close/error events carry `code`, `message`, and `reconnecting`. Every event has
+close/error events carry `code` and `message`. Every event has
 `sequence` and `timestampUs`.
 
 ```js

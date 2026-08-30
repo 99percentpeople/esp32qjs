@@ -5,7 +5,6 @@
 
 #include "esp_heap_caps.h"
 
-#define ESP32_MQUICKJS_BYTE_VIEW_OWNER_KEY "__esp32qjsByteViewOwner"
 #define ESP32_MQUICKJS_BYTE_SPAN_SOURCE_OWNER_KEY "__esp32qjsByteSpanSourceOwner"
 typedef struct {
     const uint8_t *data;
@@ -116,25 +115,30 @@ static esp32_mquickjs_byte_span_source_object_t *byte_span_source_from_value(JSC
     return source;
 }
 
+static void byte_view_release(esp32_mquickjs_byte_view_t *view)
+{
+    if (view == NULL) {
+        return;
+    }
+    heap_caps_free(view->owned_data);
+    view->owned_data = NULL;
+    view->data = NULL;
+    view->length = 0;
+    view->closed = true;
+}
+
 static JSValue byte_view_make(JSContext *ctx,
-                              JSValue owner,
-                              const uint8_t *data,
                               uint8_t *owned_data,
                               size_t length)
 {
     JSGCRef object_ref;
-    JSGCRef owner_ref;
     JSValue *object;
-    JSValue *rooted_owner;
     esp32_mquickjs_byte_view_t *view;
 
     object = JS_PushGCRef(ctx, &object_ref);
-    rooted_owner = JS_PushGCRef(ctx, &owner_ref);
     *object = JS_UNDEFINED;
-    *rooted_owner = owner;
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_BYTE_VIEW);
     if (JS_IsException(*object)) {
-        JS_PopGCRef(ctx, &owner_ref);
         JS_PopGCRef(ctx, &object_ref);
         heap_caps_free(owned_data);
         return JS_EXCEPTION;
@@ -142,29 +146,16 @@ static JSValue byte_view_make(JSContext *ctx,
 
     view = heap_caps_malloc(sizeof(*view), MALLOC_CAP_8BIT);
     if (view == NULL) {
-        JS_PopGCRef(ctx, &owner_ref);
         JS_PopGCRef(ctx, &object_ref);
         heap_caps_free(owned_data);
         return JS_ThrowOutOfMemory(ctx);
     }
-    view->data = data;
+    view->data = owned_data;
     view->length = length;
     view->owned_data = owned_data;
     view->read_leases = 0;
     view->closed = false;
     JS_SetOpaque(ctx, *object, view);
-
-    if (!JS_IsUndefined(*rooted_owner) &&
-        JS_IsException(JS_SetPropertyStr(ctx, *object, ESP32_MQUICKJS_BYTE_VIEW_OWNER_KEY, *rooted_owner))) {
-        JS_SetOpaque(ctx, *object, NULL);
-        heap_caps_free(view->owned_data);
-        heap_caps_free(view);
-        JS_PopGCRef(ctx, &owner_ref);
-        JS_PopGCRef(ctx, &object_ref);
-        return JS_EXCEPTION;
-    }
-
-    JS_PopGCRef(ctx, &owner_ref);
     return JS_PopGCRef(ctx, &object_ref);
 }
 
@@ -536,17 +527,6 @@ JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx,
     return JS_PopGCRef(ctx, &object_ref);
 }
 
-JSValue esp32_mquickjs_new_byte_view(JSContext *ctx,
-                                     JSValue owner,
-                                     const uint8_t *data,
-                                     size_t length)
-{
-    if (data == NULL && length > 0) {
-        return JS_ThrowInternalError(ctx, "ByteView data pointer is null");
-    }
-    return byte_view_make(ctx, owner, data, NULL, length);
-}
-
 JSValue esp32_mquickjs_new_owned_byte_view(JSContext *ctx,
                                            uint8_t *data,
                                            size_t length)
@@ -554,7 +534,7 @@ JSValue esp32_mquickjs_new_owned_byte_view(JSContext *ctx,
     if (data == NULL && length > 0) {
         return JS_ThrowInternalError(ctx, "ByteView data pointer is null");
     }
-    return byte_view_make(ctx, JS_UNDEFINED, data, data, length);
+    return byte_view_make(ctx, data, length);
 }
 
 bool esp32_mquickjs_byte_view_is_open(JSContext *ctx, JSValue value)
@@ -566,31 +546,6 @@ bool esp32_mquickjs_byte_view_is_open(JSContext *ctx, JSValue value)
     }
     view = JS_GetOpaque(ctx, value);
     return view != NULL && !view->closed;
-}
-
-bool esp32_mquickjs_update_byte_view(JSContext *ctx,
-                                     JSValue value,
-                                     const uint8_t *data,
-                                     size_t length)
-{
-    esp32_mquickjs_byte_view_t *view;
-
-    if (data == NULL && length > 0) {
-        JS_ThrowInternalError(ctx, "ByteView data pointer is null");
-        return false;
-    }
-
-    view = byte_view_from_value(ctx, value, "ByteView update");
-    if (view == NULL) {
-        return false;
-    }
-    if (view->read_leases != 0) {
-        JS_ThrowInternalError(ctx, "ByteView update failed because the ByteView is busy");
-        return false;
-    }
-    view->data = data;
-    view->length = length;
-    return true;
 }
 
 bool esp32_mquickjs_byte_view_acquire_read(JSContext *ctx,
@@ -629,6 +584,11 @@ void esp32_mquickjs_byte_view_release_read(JSContext *ctx, JSValue value)
     view = JS_GetOpaque(ctx, value);
     if (view != NULL && view->read_leases != 0) {
         --view->read_leases;
+        if (view->read_leases == 0 && view->closed) {
+            JS_SetOpaque(ctx, value, NULL);
+            byte_view_release(view);
+            heap_caps_free(view);
+        }
     }
 }
 
@@ -653,22 +613,9 @@ JSValue js_byte_span_source_constructor(JSContext *ctx, JSValue *this_val, int a
     return JS_ThrowTypeError(ctx, "ByteSpanSource cannot be constructed directly");
 }
 
-static void byte_view_release(esp32_mquickjs_byte_view_t *view)
-{
-    if (view == NULL) {
-        return;
-    }
-    heap_caps_free(view->owned_data);
-    view->owned_data = NULL;
-    view->data = NULL;
-    view->length = 0;
-    view->closed = true;
-}
-
 JSValue js_byte_view_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     esp32_mquickjs_byte_view_t *view;
-    JSValue owner_result;
 
     (void)argc;
     (void)argv;
@@ -679,18 +626,13 @@ JSValue js_byte_view_close(JSContext *ctx, JSValue *this_val, int argc, JSValue 
     if (view == NULL) {
         return JS_TRUE;
     }
-    if (view->read_leases != 0) {
-        return JS_ThrowInternalError(
-            ctx, "ByteView.close() failed because the ByteView is busy");
+    view->closed = true;
+    if (view->read_leases == 0) {
+        JS_SetOpaque(ctx, *this_val, NULL);
+        byte_view_release(view);
+        heap_caps_free(view);
     }
-
-    owner_result = JS_SetPropertyStr(ctx, *this_val,
-                                     ESP32_MQUICKJS_BYTE_VIEW_OWNER_KEY,
-                                     JS_UNDEFINED);
-    JS_SetOpaque(ctx, *this_val, NULL);
-    byte_view_release(view);
-    heap_caps_free(view);
-    return JS_IsException(owner_result) ? JS_EXCEPTION : JS_TRUE;
+    return JS_TRUE;
 }
 
 JSValue js_byte_span_source_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

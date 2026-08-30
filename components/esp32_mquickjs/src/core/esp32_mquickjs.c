@@ -22,6 +22,7 @@
 #include "esp32_mquickjs_nvs.h"
 #include "esp32_mquickjs_net.h"
 #include "esp32_mquickjs_peripheral_lease.h"
+#include "esp32_mquickjs_reaper.h"
 #if CONFIG_ESP32_MQUICKJS_FEATURE_RPC
 #include "esp32_mquickjs_rpc.h"
 #endif
@@ -101,6 +102,7 @@ typedef struct {
     void *task_handle;
     size_t poller_count;
     esp32_mquickjs_async_poller_entry_t *pollers;
+    esp32_mquickjs_reaper_registry_t reapers;
     esp32_mquickjs_idle_job_t idle_jobs[ESP32_MQUICKJS_IDLE_JOB_CAPACITY];
     uint8_t idle_head;
     uint8_t idle_tail;
@@ -263,9 +265,54 @@ static bool esp32_mquickjs_init_async_state(esp32_mquickjs_runtime_t *runtime)
         heap_caps_free(state);
         return false;
     }
+    esp32_mquickjs_reaper_init(&state->reapers);
 
     runtime->async_state = state;
     return true;
+}
+
+bool esp32_mquickjs_register_reaper(esp32_mquickjs_runtime_t *runtime,
+                                    esp32_mquickjs_reap_fn reap,
+                                    void *opaque)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+
+    if (state == NULL || reap == NULL ||
+        !esp32_mquickjs_reaper_register(
+            &state->reapers, (esp32_mquickjs_reaper_fn_t)reap, opaque)) {
+        return false;
+    }
+    esp32_mquickjs_notify_activity(runtime);
+    return true;
+}
+
+bool esp32_mquickjs_register_reserved_reaper(
+    esp32_mquickjs_runtime_t *runtime,
+    size_t reserved_slot,
+    esp32_mquickjs_reap_fn reap,
+    void *opaque)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+
+    if (state == NULL || reap == NULL ||
+        !esp32_mquickjs_reaper_register_reserved(
+            &state->reapers, reserved_slot,
+            (esp32_mquickjs_reaper_fn_t)reap, opaque)) {
+        return false;
+    }
+    esp32_mquickjs_notify_activity(runtime);
+    return true;
+}
+
+bool esp32_mquickjs_unregister_reaper(esp32_mquickjs_runtime_t *runtime,
+                                      esp32_mquickjs_reap_fn reap,
+                                      void *opaque)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+
+    return state != NULL && reap != NULL &&
+           esp32_mquickjs_reaper_unregister(
+               &state->reapers, (esp32_mquickjs_reaper_fn_t)reap, opaque);
 }
 
 bool esp32_mquickjs_register_async_poller(esp32_mquickjs_runtime_t *runtime,
@@ -477,6 +524,11 @@ bool esp32_mquickjs_wait_for_activity(esp32_mquickjs_runtime_t *runtime,
     uint32_t remaining_ms;
 
     timeout_ms = esp32_mquickjs_future_next_wait_ms(runtime, timeout_ms);
+    if (state != NULL && esp32_mquickjs_reaper_pending(&state->reapers) > 0 &&
+        (timeout_ms == UINT32_MAX ||
+         timeout_ms > ESP32_MQUICKJS_REAPER_RETRY_MS)) {
+        timeout_ms = ESP32_MQUICKJS_REAPER_RETRY_MS;
+    }
     remaining_ms = timeout_ms;
 
     for (;;) {
@@ -545,6 +597,27 @@ static bool esp32_mquickjs_poll_registered(JSContext *ctx,
         }
     }
     return handled;
+}
+
+static bool esp32_mquickjs_poll_reapers(esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+
+    if (state == NULL) {
+        return false;
+    }
+    return esp32_mquickjs_reaper_poll(&state->reapers,
+                                      ESP32_MQUICKJS_REAPER_BATCH_LIMIT,
+                                      NULL) > 0;
+}
+
+static size_t esp32_mquickjs_reapers_pending(
+    esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+
+    return state == NULL ? 0 :
+           esp32_mquickjs_reaper_pending(&state->reapers);
 }
 
 static void prepare_console_output(void)
@@ -837,6 +910,7 @@ bool esp32_mquickjs_get_resource_status(
     memset(status, 0, sizeof(*status));
     status->timers_capacity = ESP32_MQUICKJS_MAX_TIMERS;
     status->async_pollers_capacity = ESP32_MQUICKJS_MAX_ASYNC_POLLERS;
+    status->orphans_capacity = ESP32_MQUICKJS_REAPER_CAPACITY;
     timer_state = esp32_mquickjs_timer_state(runtime);
     if (timer_state != NULL && timer_state->slots != NULL) {
         for (i = 0; i < ESP32_MQUICKJS_MAX_TIMERS; ++i) {
@@ -848,6 +922,8 @@ bool esp32_mquickjs_get_resource_status(
     async_state = esp32_mquickjs_async_state(runtime);
     if (async_state != NULL) {
         status->async_pollers_registered = (uint32_t)async_state->poller_count;
+        status->orphans_pending =
+            (uint32_t)esp32_mquickjs_reaper_pending(&async_state->reapers);
     }
     if (!esp32_mquickjs_get_future_status(runtime, &future_status) ||
         !esp32_mquickjs_get_event_queue_status(runtime, &event_status)) {
@@ -1258,6 +1334,10 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
         return false;
     }
     if (!esp32_mquickjs_prepare_future_runtime_destroy(ctx, runtime)) {
+        return false;
+    }
+    (void)esp32_mquickjs_poll_reapers(runtime);
+    if (esp32_mquickjs_reapers_pending(runtime) > 0) {
         return false;
     }
     esp32_mquickjs_clear_idle_jobs(ctx, runtime);
@@ -1726,6 +1806,8 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
     }
     if (state == NULL || state->queue == NULL || state->slots == NULL) {
         async_handled = esp32_mquickjs_poll_registered(ctx, runtime);
+        core_async_handled = esp32_mquickjs_poll_reapers(runtime) ||
+                             core_async_handled;
         core_async_handled = esp32_mquickjs_poll_idle_job(ctx, runtime) ||
                              core_async_handled;
         if (core_async_handled || async_handled) {
@@ -1775,6 +1857,8 @@ esp32_mquickjs_poll_result_t esp32_mquickjs_poll(JSContext *ctx,
     }
 
     async_handled = esp32_mquickjs_poll_registered(ctx, runtime);
+    core_async_handled = esp32_mquickjs_poll_reapers(runtime) ||
+                         core_async_handled;
     core_async_handled = esp32_mquickjs_poll_idle_job(ctx, runtime) ||
                          core_async_handled;
     if (core_async_handled || async_handled) {

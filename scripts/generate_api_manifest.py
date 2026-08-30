@@ -110,6 +110,10 @@ SURFACES = {
     "js_usb_serial": (
         "usbSerial", "USBSerialModule", "usbSerial", "usbSerial"
     ),
+    "js_usb_serial_handle_proto": (
+        "USBSerialHandle.prototype", "USBSerialTextHandle", "usbSerial",
+        "usbSerial"
+    ),
     "js_rpc_codec_proto": (
         "RPCCodec.prototype", "RPCCodec", "rpc", "RPCCodec"
     ),
@@ -130,6 +134,10 @@ SURFACES = {
     "js_websocket_client": (
         "websocketClient", "WebSocketClientModule", "websocket", "websocketClient"
     ),
+    "js_websocket_handle_proto": (
+        "WebSocketClientHandle.prototype", "WebSocketClientHandle", "websocket",
+        "websocketClient"
+    ),
     "js_wifi": ("wifi", "WiFiModule", "wifi", "wifi"),
     "js_espnow_session_proto": (
         "EspNowSession.prototype", "EspNowSession", "espNow", "EspNowSession"
@@ -149,15 +157,6 @@ SURFACES = {
     ),
     "js_ble_connection_proto": (
         "BLEConnection.prototype", "BLEConnection", "ble", "BLEConnection"
-    ),
-    "js_ble_service_proto": (
-        "BLEService.prototype", "BLEService", "ble", "BLEService"
-    ),
-    "js_ble_characteristic_proto": (
-        "BLECharacteristic.prototype", "BLECharacteristic", "ble", "BLECharacteristic"
-    ),
-    "js_ble_descriptor_proto": (
-        "BLEDescriptor.prototype", "BLEDescriptor", "ble", "BLEDescriptor"
     ),
     "js_ble_notification_proto": (
         "BLENotificationStream.prototype", "BLENotificationStream", "ble",
@@ -230,12 +229,12 @@ CLASSES = {
     "BLEConnection": (
         "BLEConnection", "BLEConnection", "ble", "BLEConnection"
     ),
-    "BLEService": ("BLEService", "BLEService", "ble", "BLEService"),
-    "BLECharacteristic": (
-        "BLECharacteristic", "BLECharacteristic", "ble", "BLECharacteristic"
+    "USBSerialHandle": (
+        "USBSerialHandle", "USBSerialTextHandle", "usbSerial", "usbSerial"
     ),
-    "BLEDescriptor": (
-        "BLEDescriptor", "BLEDescriptor", "ble", "BLEDescriptor"
+    "WebSocketClientHandle": (
+        "WebSocketClientHandle", "WebSocketClientHandle", "websocket",
+        "websocketClient"
     ),
     "BLENotificationStream": (
         "BLENotificationStream", "BLENotificationStream", "ble",

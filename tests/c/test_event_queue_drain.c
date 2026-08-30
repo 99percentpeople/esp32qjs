@@ -36,6 +36,12 @@ typedef struct {
     bool wake_on_send;
 } fake_isr_queue_t;
 
+typedef struct {
+    int events[2];
+    size_t count;
+    size_t send_calls;
+} fake_callback_queue_t;
+
 static bool fake_receive(void *source, void *event)
 {
     fake_queue_t *queue = source;
@@ -140,6 +146,18 @@ static bool fake_isr_send(void *destination,
     if (task_woken != NULL && queue->wake_on_send) {
         *task_woken = 1;
     }
+    return true;
+}
+
+static bool fake_callback_try_send(void *destination, const void *event)
+{
+    fake_callback_queue_t *queue = destination;
+
+    queue->send_calls++;
+    if (queue->count >= 2) {
+        return false;
+    }
+    queue->events[queue->count++] = *(const int *)event;
     return true;
 }
 
@@ -282,6 +300,30 @@ static void test_isr_producer_saturation_counts_every_drop(void)
     assert(dropped == 98);
 }
 
+static void test_callback_producer_never_retries_and_counts_every_drop(void)
+{
+    fake_callback_queue_t queue = {0};
+    uint32_t dropped = 0;
+    int event;
+    int accepted = 0;
+
+    for (event = 0; event < 100; ++event) {
+        if (esp32_mquickjs_event_queue_enqueue_from_callback(
+                &queue, &event, fake_callback_try_send, &dropped)) {
+            accepted++;
+        }
+    }
+    assert(accepted == 2);
+    assert(queue.count == 2);
+    assert(queue.events[0] == 0 && queue.events[1] == 1);
+    assert(queue.send_calls == 100);
+    assert(dropped == 98);
+
+    assert(!esp32_mquickjs_event_queue_enqueue_from_callback(
+        NULL, &event, fake_callback_try_send, &dropped));
+    assert(dropped == 98);
+}
+
 int main(void)
 {
     test_drain_drops_owned_payloads_without_allocating();
@@ -290,5 +332,6 @@ int main(void)
     test_retry_failure_accounts_for_both_events_without_double_free();
     test_drop_new_rejects_without_consuming_caller_ownership();
     test_isr_producer_saturation_counts_every_drop();
+    test_callback_producer_never_retries_and_counts_every_drop();
     return 0;
 }

@@ -60,6 +60,24 @@ bool esp32_mquickjs_event_queue_enqueue(
     return false;
 }
 
+bool esp32_mquickjs_event_queue_enqueue_from_callback(
+    void *destination,
+    const void *event,
+    esp32_mquickjs_event_queue_enqueue_send_fn try_send,
+    uint32_t *dropped_count)
+{
+    if (destination == NULL || event == NULL || try_send == NULL) {
+        return false;
+    }
+    if (try_send(destination, event)) {
+        return true;
+    }
+    if (dropped_count != NULL) {
+        (*dropped_count)++;
+    }
+    return false;
+}
+
 bool esp32_mquickjs_event_queue_enqueue_from_isr(
     void *destination,
     const void *event,

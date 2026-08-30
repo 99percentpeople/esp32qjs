@@ -703,63 +703,43 @@
       }
     },
     {
-      "name": "BLEService",
-      "globalName": "BLEService",
+      "name": "USBSerialHandle",
+      "globalName": "USBSerialHandle",
       "arity": 0,
-      "implementation": "js_ble_service_constructor",
-      "classId": "JS_CLASS_BLE_SERVICE",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "implementation": "js_usb_serial_handle_constructor",
+      "classId": "JS_CLASS_USB_SERIAL_HANDLE",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL",
       "stdlib": {
         "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "definition": "js_ble_service_class"
+        "definition": "js_usb_serial_handle_class"
       },
       "typescript": {
         "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "BLEService"
+        "declaration": "USBSerialTextHandle"
       },
       "documentation": {
         "file": "docs/c-api.md",
-        "ownerToken": "BLEService"
+        "ownerToken": "usbSerial"
       }
     },
     {
-      "name": "BLECharacteristic",
-      "globalName": "BLECharacteristic",
+      "name": "WebSocketClientHandle",
+      "globalName": "WebSocketClientHandle",
       "arity": 0,
-      "implementation": "js_ble_characteristic_constructor",
-      "classId": "JS_CLASS_BLE_CHARACTERISTIC",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "implementation": "js_websocket_handle_constructor",
+      "classId": "JS_CLASS_WEBSOCKET_CLIENT_HANDLE",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET",
       "stdlib": {
         "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "definition": "js_ble_characteristic_class"
+        "definition": "js_websocket_handle_class"
       },
       "typescript": {
         "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "BLECharacteristic"
+        "declaration": "WebSocketClientHandle"
       },
       "documentation": {
         "file": "docs/c-api.md",
-        "ownerToken": "BLECharacteristic"
-      }
-    },
-    {
-      "name": "BLEDescriptor",
-      "globalName": "BLEDescriptor",
-      "arity": 0,
-      "implementation": "js_ble_descriptor_constructor",
-      "classId": "JS_CLASS_BLE_DESCRIPTOR",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "definition": "js_ble_descriptor_class"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "BLEDescriptor"
-      },
-      "documentation": {
-        "file": "docs/c-api.md",
-        "ownerToken": "BLEDescriptor"
+        "ownerToken": "websocketClient"
       }
     },
     {
@@ -1143,106 +1123,6 @@
       }
     },
     {
-      "qualifiedName": "BLECharacteristic.prototype.descriptors",
-      "surface": "BLECharacteristic.prototype",
-      "name": "descriptors",
-      "arity": 0,
-      "implementation": "js_ble_characteristic_descriptors",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
-      "execution": "immediate",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_ble_characteristic_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "BLECharacteristic"
-      },
-      "documentation": {
-        "file": "docs/c-api.md",
-        "ownerToken": "BLECharacteristic"
-      }
-    },
-    {
-      "qualifiedName": "BLECharacteristic.prototype.read",
-      "surface": "BLECharacteristic.prototype",
-      "name": "read",
-      "arity": 1,
-      "implementation": "js_ble_characteristic_read",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
-      "execution": "nativeFuture",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_ble_characteristic_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "BLECharacteristic"
-      },
-      "documentation": {
-        "file": "docs/c-api.md",
-        "ownerToken": "BLECharacteristic"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
-        "function": "ble_register_future_drivers"
-      }
-    },
-    {
-      "qualifiedName": "BLECharacteristic.prototype.subscribe",
-      "surface": "BLECharacteristic.prototype",
-      "name": "subscribe",
-      "arity": 1,
-      "implementation": "js_ble_characteristic_subscribe",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
-      "execution": "nativeFuture",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_ble_characteristic_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "BLECharacteristic"
-      },
-      "documentation": {
-        "file": "docs/c-api.md",
-        "ownerToken": "BLECharacteristic"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
-        "function": "ble_register_future_drivers"
-      }
-    },
-    {
-      "qualifiedName": "BLECharacteristic.prototype.write",
-      "surface": "BLECharacteristic.prototype",
-      "name": "write",
-      "arity": 2,
-      "implementation": "js_ble_characteristic_write",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
-      "execution": "nativeFuture",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_ble_characteristic_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "BLECharacteristic"
-      },
-      "documentation": {
-        "file": "docs/c-api.md",
-        "ownerToken": "BLECharacteristic"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
-        "function": "ble_register_future_drivers"
-      }
-    },
-    {
       "qualifiedName": "BLEConnection.prototype.close",
       "surface": "BLEConnection.prototype",
       "name": "close",
@@ -1344,6 +1224,28 @@
       "futureRegistration": {
         "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
         "function": "ble_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "BLEConnection.prototype.readHandle",
+      "surface": "BLEConnection.prototype",
+      "name": "readHandle",
+      "arity": 2,
+      "implementation": "js_ble_connection_read_handle",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_ble_connection_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "BLEConnection"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "BLEConnection"
       }
     },
     {
@@ -1465,55 +1367,47 @@
       }
     },
     {
-      "qualifiedName": "BLEDescriptor.prototype.read",
-      "surface": "BLEDescriptor.prototype",
-      "name": "read",
-      "arity": 1,
-      "implementation": "js_ble_descriptor_read",
+      "qualifiedName": "BLEConnection.prototype.subscribeHandle",
+      "surface": "BLEConnection.prototype",
+      "name": "subscribeHandle",
+      "arity": 3,
+      "implementation": "js_ble_connection_subscribe_handle",
       "visibility": "public",
       "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
-      "execution": "nativeFuture",
+      "execution": "immediate",
       "stdlib": {
         "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_ble_descriptor_proto"
+        "table": "js_ble_connection_proto"
       },
       "typescript": {
         "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "BLEDescriptor"
+        "declaration": "BLEConnection"
       },
       "documentation": {
         "file": "docs/c-api.md",
-        "ownerToken": "BLEDescriptor"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
-        "function": "ble_register_future_drivers"
+        "ownerToken": "BLEConnection"
       }
     },
     {
-      "qualifiedName": "BLEDescriptor.prototype.write",
-      "surface": "BLEDescriptor.prototype",
-      "name": "write",
-      "arity": 2,
-      "implementation": "js_ble_descriptor_write",
+      "qualifiedName": "BLEConnection.prototype.writeHandle",
+      "surface": "BLEConnection.prototype",
+      "name": "writeHandle",
+      "arity": 3,
+      "implementation": "js_ble_connection_write_handle",
       "visibility": "public",
       "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
-      "execution": "nativeFuture",
+      "execution": "immediate",
       "stdlib": {
         "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_ble_descriptor_proto"
+        "table": "js_ble_connection_proto"
       },
       "typescript": {
         "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "BLEDescriptor"
+        "declaration": "BLEConnection"
       },
       "documentation": {
         "file": "docs/c-api.md",
-        "ownerToken": "BLEDescriptor"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c",
-        "function": "ble_register_future_drivers"
+        "ownerToken": "BLEConnection"
       }
     },
     {
@@ -1842,28 +1736,6 @@
       "documentation": {
         "file": "docs/c-api.md",
         "ownerToken": "BLEScanner"
-      }
-    },
-    {
-      "qualifiedName": "BLEService.prototype.characteristics",
-      "surface": "BLEService.prototype",
-      "name": "characteristics",
-      "arity": 0,
-      "implementation": "js_ble_service_characteristics",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
-      "execution": "immediate",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_ble_service_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "BLEService"
-      },
-      "documentation": {
-        "file": "docs/c-api.md",
-        "ownerToken": "BLEService"
       }
     },
     {
@@ -3133,14 +3005,14 @@
       }
     },
     {
-      "qualifiedName": "EspNowPeer.prototype.close",
+      "qualifiedName": "EspNowPeer.prototype.remove",
       "surface": "EspNowPeer.prototype",
-      "name": "close",
+      "name": "remove",
       "arity": 0,
-      "implementation": "js_espnow_peer_close",
+      "implementation": "js_espnow_peer_remove",
       "visibility": "public",
       "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
-      "execution": "nativeFuture",
+      "execution": "immediate",
       "stdlib": {
         "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
         "table": "js_espnow_peer_proto"
@@ -3152,10 +3024,6 @@
       "documentation": {
         "file": "docs/c-api.md",
         "ownerToken": "EspNowPeer"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c",
-        "function": "espnow_register_future_drivers"
       }
     },
     {
@@ -3378,6 +3246,28 @@
       "futureRegistration": {
         "file": "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c",
         "function": "espnow_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "EspNowSession.prototype.recover",
+      "surface": "EspNowSession.prototype",
+      "name": "recover",
+      "arity": 0,
+      "implementation": "js_espnow_session_recover",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowSession"
       }
     },
     {
@@ -6377,6 +6267,226 @@
       }
     },
     {
+      "qualifiedName": "USBSerialHandle.prototype.close",
+      "surface": "USBSerialHandle.prototype",
+      "name": "close",
+      "arity": 0,
+      "implementation": "js_usb_serial_close",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_usb_serial_handle_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "USBSerialTextHandle"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "usbSerial"
+      }
+    },
+    {
+      "qualifiedName": "USBSerialHandle.prototype.receive",
+      "surface": "USBSerialHandle.prototype",
+      "name": "receive",
+      "arity": 1,
+      "implementation": "js_usb_serial_receive",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_usb_serial_handle_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "USBSerialTextHandle"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "usbSerial"
+      }
+    },
+    {
+      "qualifiedName": "USBSerialHandle.prototype.send",
+      "surface": "USBSerialHandle.prototype",
+      "name": "send",
+      "arity": 1,
+      "implementation": "js_usb_serial_send",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_usb_serial_handle_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "USBSerialTextHandle"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "usbSerial"
+      }
+    },
+    {
+      "qualifiedName": "USBSerialHandle.prototype.stats",
+      "surface": "USBSerialHandle.prototype",
+      "name": "stats",
+      "arity": 0,
+      "implementation": "js_usb_serial_stats",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_usb_serial_handle_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "USBSerialTextHandle"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "usbSerial"
+      }
+    },
+    {
+      "qualifiedName": "USBSerialHandle.prototype.status",
+      "surface": "USBSerialHandle.prototype",
+      "name": "status",
+      "arity": 0,
+      "implementation": "js_usb_serial_status",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_usb_serial_handle_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "USBSerialTextHandle"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "usbSerial"
+      }
+    },
+    {
+      "qualifiedName": "WebSocketClientHandle.prototype.close",
+      "surface": "WebSocketClientHandle.prototype",
+      "name": "close",
+      "arity": 0,
+      "implementation": "js_websocket_close",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_websocket_handle_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WebSocketClientHandle"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "websocketClient"
+      }
+    },
+    {
+      "qualifiedName": "WebSocketClientHandle.prototype.receive",
+      "surface": "WebSocketClientHandle.prototype",
+      "name": "receive",
+      "arity": 1,
+      "implementation": "js_websocket_receive",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_websocket_handle_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WebSocketClientHandle"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "websocketClient"
+      }
+    },
+    {
+      "qualifiedName": "WebSocketClientHandle.prototype.send",
+      "surface": "WebSocketClientHandle.prototype",
+      "name": "send",
+      "arity": 1,
+      "implementation": "js_websocket_send",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_websocket_handle_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WebSocketClientHandle"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "websocketClient"
+      }
+    },
+    {
+      "qualifiedName": "WebSocketClientHandle.prototype.stats",
+      "surface": "WebSocketClientHandle.prototype",
+      "name": "stats",
+      "arity": 0,
+      "implementation": "js_websocket_stats",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_websocket_handle_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WebSocketClientHandle"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "websocketClient"
+      }
+    },
+    {
+      "qualifiedName": "WebSocketClientHandle.prototype.status",
+      "surface": "WebSocketClientHandle.prototype",
+      "name": "status",
+      "arity": 0,
+      "implementation": "js_websocket_status",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_websocket_handle_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WebSocketClientHandle"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "websocketClient"
+      }
+    },
+    {
       "qualifiedName": "adc.channelToIo",
       "surface": "adc",
       "name": "channelToIo",
@@ -6891,28 +7001,6 @@
       }
     },
     {
-      "qualifiedName": "delay",
-      "surface": "global",
-      "name": "delay",
-      "arity": 1,
-      "implementation": "js_sleep",
-      "visibility": "public",
-      "feature": "core",
-      "execution": "immediate",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_global_object_extra"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "global"
-      },
-      "documentation": {
-        "file": "docs/c-api.md",
-        "ownerToken": "Global Helpers"
-      }
-    },
-    {
       "qualifiedName": "espNow.capabilities",
       "surface": "espNow",
       "name": "capabilities",
@@ -6958,32 +7046,6 @@
       "futureRegistration": {
         "file": "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c",
         "function": "espnow_register_future_drivers"
-      }
-    },
-    {
-      "qualifiedName": "fetch",
-      "surface": "global",
-      "name": "fetch",
-      "arity": 2,
-      "implementation": "js_http_fetch",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_HTTP",
-      "execution": "nativeFuture",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_global_object_extra"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "global"
-      },
-      "documentation": {
-        "file": "docs/c-api.md",
-        "ownerToken": "Global Helpers"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/http/esp32_mquickjs_http_future.c",
-        "function": "esp32_mquickjs_init_http_future_runtime"
       }
     },
     {
@@ -8727,11 +8789,11 @@
       }
     },
     {
-      "qualifiedName": "usbSerial.close",
+      "qualifiedName": "usbSerial.capabilities",
       "surface": "usbSerial",
-      "name": "close",
+      "name": "capabilities",
       "arity": 0,
-      "implementation": "js_usb_serial_close",
+      "implementation": "js_usb_serial_capabilities",
       "visibility": "public",
       "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL",
       "execution": "immediate",
@@ -8771,59 +8833,11 @@
       }
     },
     {
-      "qualifiedName": "usbSerial.send",
-      "surface": "usbSerial",
-      "name": "send",
-      "arity": 1,
-      "implementation": "js_usb_serial_send",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL",
-      "execution": "nativeFuture",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_usb_serial"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "USBSerialModule"
-      },
-      "documentation": {
-        "file": "docs/c-api.md",
-        "ownerToken": "usbSerial"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/usb_serial/esp32_mquickjs_usb_serial.c",
-        "function": "usb_serial_register_future_driver"
-      }
-    },
-    {
-      "qualifiedName": "usbSerial.status",
-      "surface": "usbSerial",
-      "name": "status",
-      "arity": 0,
-      "implementation": "js_usb_serial_status",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL",
-      "execution": "immediate",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_usb_serial"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "USBSerialModule"
-      },
-      "documentation": {
-        "file": "docs/c-api.md",
-        "ownerToken": "usbSerial"
-      }
-    },
-    {
-      "qualifiedName": "websocketClient.close",
+      "qualifiedName": "websocketClient.capabilities",
       "surface": "websocketClient",
-      "name": "close",
+      "name": "capabilities",
       "arity": 0,
-      "implementation": "js_websocket_close",
+      "implementation": "js_websocket_capabilities",
       "visibility": "public",
       "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET",
       "execution": "immediate",
@@ -8846,54 +8860,6 @@
       "name": "open",
       "arity": 1,
       "implementation": "js_websocket_open",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET",
-      "execution": "immediate",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_websocket_client"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "WebSocketClientModule"
-      },
-      "documentation": {
-        "file": "docs/c-api.md",
-        "ownerToken": "websocketClient"
-      }
-    },
-    {
-      "qualifiedName": "websocketClient.send",
-      "surface": "websocketClient",
-      "name": "send",
-      "arity": 1,
-      "implementation": "js_websocket_send",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET",
-      "execution": "nativeFuture",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_websocket_client"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "WebSocketClientModule"
-      },
-      "documentation": {
-        "file": "docs/c-api.md",
-        "ownerToken": "websocketClient"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/websocket/esp32_mquickjs_websocket.c",
-        "function": "websocket_register_future_driver"
-      }
-    },
-    {
-      "qualifiedName": "websocketClient.status",
-      "surface": "websocketClient",
-      "name": "status",
-      "arity": 0,
-      "implementation": "js_websocket_status",
       "visibility": "public",
       "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET",
       "execution": "immediate",

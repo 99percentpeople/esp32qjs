@@ -87,7 +87,7 @@ test("http/offline", function () {
     "bytes(maxBytes) should reject an oversized body");
 
   try {
-    fetch("http://127.0.0.1:9/binary", {
+    http.fetch("http://127.0.0.1:9/binary", {
       method: "POST",
       headers: { "content-length": "2" },
       body: embeddedBytes,
@@ -124,18 +124,13 @@ test("http/offline", function () {
   fs.remove(streamPath);
 
   test.ok(typeof http.fetch === "function", "http.fetch should exist");
+  test.ok(typeof fetch === "undefined",
+    "global fetch alias should live in a JavaScript Library");
   test.ok(typeof http.fetchAsync === "undefined", "http.fetchAsync should not exist");
   test.ok(typeof http.async === "undefined", "http.async should be removed");
   test.ok(typeof http.DEFAULT_TIMEOUT_MS === "number", "http timeout constant");
   test.ok(typeof http.MAX_BODY_BYTES === "number" && http.MAX_BODY_BYTES > 0,
     "http response body limit constant");
-
-  try {
-    fetch("https://example.com", function () {});
-  } catch (globalFailure) {
-    globalFetchError = globalFailure && globalFailure.message ? globalFailure.message : String(globalFailure);
-  }
-  test.ok(globalFetchError.indexOf("Future.call") >= 0, "global fetch should reject callback overloads");
 
   try {
     http.fetch("https://example.com", function () {});
