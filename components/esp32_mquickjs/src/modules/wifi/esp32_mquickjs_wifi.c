@@ -634,11 +634,14 @@ static EventBits_t wifi_wait_for_bits(EventBits_t bits_to_wait_for,
         if (slice_ms > 0 && wait_ticks == 0) {
             wait_ticks = 1;
         }
+        (void)wifi_driver_event_poller(NULL, runtime, NULL);
         bits = xEventGroupWaitBits(s_wifi_state.event_group,
                                    bits_to_wait_for,
                                    clear_on_exit ? pdTRUE : pdFALSE,
                                    pdFALSE,
                                    wait_ticks);
+        (void)wifi_driver_event_poller(NULL, runtime, NULL);
+        bits |= xEventGroupGetBits(s_wifi_state.event_group);
         if (!esp32_mquickjs_cooperate(runtime)) {
             if (out_interrupted != NULL) {
                 *out_interrupted = true;

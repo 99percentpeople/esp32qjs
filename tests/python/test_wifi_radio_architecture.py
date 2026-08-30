@@ -93,6 +93,17 @@ class WifiRadioArchitectureTests(unittest.TestCase):
             ensure_started.index("wifi_wait_for_bits"),
         )
 
+    def test_wifi_start_wait_drains_deferred_driver_events(self):
+        wifi = (
+            MQUICKJS / "src/modules/wifi/esp32_mquickjs_wifi.c"
+        ).read_text(encoding="utf-8")
+        wait = wifi[
+            wifi.index("static EventBits_t wifi_wait_for_bits") :
+            wifi.index("esp_err_t esp32_mquickjs_wifi_ensure_started")
+        ]
+
+        self.assertIn("wifi_driver_event_poller(NULL, runtime, NULL)", wait)
+
     def test_wifi_init_failure_releases_every_owned_stage_in_reverse(self):
         wifi = (
             MQUICKJS / "src/modules/wifi/esp32_mquickjs_wifi.c"
