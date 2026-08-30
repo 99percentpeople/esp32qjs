@@ -271,6 +271,7 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("csiSoakDurationMs", hardware_test)
+        self.assertIn("cfg.csiSoakDurationMs <= 3600000", hardware_test)
         self.assertIn("minimumInternalLargest", hardware_test)
         self.assertIn("minimumDmaLargest", hardware_test)
         self.assertIn("batch.close()", hardware_test)
@@ -320,6 +321,8 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
 
         self.assertIn("--csi-hardware", workflow)
         self.assertIn("--csi-soak", workflow)
+        self.assertIn("TEST_JS_CONFIG", workflow)
+        self.assertIn('"csiSoakDurationMs":3600000', workflow)
         self.assertIn("scripts/hardware_lab_evidence.py", workflow)
         self.assertIn("CSI_ROUTER_LABEL", workflow)
         self.assertIn("CSI_PEER_LABEL", workflow)

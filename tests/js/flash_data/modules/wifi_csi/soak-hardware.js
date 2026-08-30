@@ -5,7 +5,7 @@ test("wifi_csi/soak-hardware", function () {
     ? { schema: "wifi-csi-he/1", enableLegacy: true, ht20: true, heSu: true }
     : { schema: "wifi-csi-legacy/1", lltf: true, htLtf: true, scale: "auto" };
   var durationMs = typeof cfg.csiSoakDurationMs === "number" &&
-      cfg.csiSoakDurationMs >= 60000 && cfg.csiSoakDurationMs <= 600000
+      cfg.csiSoakDurationMs >= 60000 && cfg.csiSoakDurationMs <= 3600000
     ? cfg.csiSoakDurationMs : 300000;
   var session = null;
   var batch = null;

@@ -45,13 +45,14 @@ jobs:
           --router-label "${ESP32QJS_CSI_ROUTER_LABEL}"
           --peer-label "${ESP32QJS_CSI_PEER_LABEL}"
           --channel-band "${ESP32QJS_CSI_CHANNEL_BAND}"
-          --test-command "uv run python scripts/remote.py --build-context <recorded> --target <recorded> test --scope js --network --loopback --media-hardware --wireless-hardware --csi-hardware --csi-soak"
+          --test-command "TEST_JS_CONFIG='{\"csiSoakDurationMs\":3600000}' uv run python scripts/remote.py --build-context <recorded> --target <recorded> test --scope js --network --loopback --media-hardware --wireless-hardware --csi-hardware --csi-soak"
           --output build/hardware-lab/csi-context.json
       - name: Run device JavaScript regression suite
         env:
           TEST_WIFI_SSID: ${{ secrets.TEST_WIFI_SSID }}
           TEST_WIFI_PASSWORD: ${{ secrets.TEST_WIFI_PASSWORD }}
           TEST_HTTP_URL: ${{ vars.TEST_HTTP_URL }}
+          TEST_JS_CONFIG: '{"csiSoakDurationMs":3600000}'
         run: |
           set -o pipefail
           uv run python scripts/remote.py \

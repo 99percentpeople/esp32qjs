@@ -238,7 +238,7 @@ JS_TEST_MODULES = (
             JsTestCase(
                 "modules/wifi_csi/soak-hardware.js",
                 required_capabilities=("csi-hardware", "csi-soak"),
-                timeout_seconds=720.0,
+                timeout_seconds=3720.0,
                 reset_before=True,
                 reset_after=True,
                 record_details=True,
@@ -2882,7 +2882,7 @@ def parse_args(
     test.add_argument(
         "--csi-soak",
         action="store_true",
-        help="Enable the additional 1-10 minute Wi-Fi CSI memory soak; also pass --csi-hardware.",
+        help="Enable the additional 1-60 minute Wi-Fi CSI memory soak; also pass --csi-hardware.",
     )
     test.add_argument(
         "--no-flash-firmware",

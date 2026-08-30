@@ -206,6 +206,7 @@ class RemoteConfigTests(unittest.TestCase):
             ("csi-hardware", "csi-soak"),
         )
         self.assertTrue(soak[0].record_details)
+        self.assertGreaterEqual(soak[0].timeout_seconds, 3660.0)
         self.assertEqual(
             REMOTE.JS_TEST_CAPABILITY_FLAGS["csi-soak"],
             "--csi-soak",
