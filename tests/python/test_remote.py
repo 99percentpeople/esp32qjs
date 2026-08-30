@@ -230,6 +230,13 @@ class RemoteConfigTests(unittest.TestCase):
         )
         self.assertTrue(module.cases[0].record_details)
 
+    def test_csi_repl_module_does_not_require_mutually_exclusive_usb_serial(self):
+        module = REMOTE.resolve_js_modules(["wifi_csi"])[0]
+
+        self.assertNotIn("usbSerial", module.required_features)
+        self.assertIn("wifiCsi", module.required_features)
+        self.assertIn("rpc", module.required_features)
+
     def test_csi_coexistence_modules_require_their_real_dependencies(self):
         expected = {
             "wifi_csi_ble": (
@@ -320,6 +327,41 @@ class RemoteConfigTests(unittest.TestCase):
         self.assertEqual(
             [entry for entry in test_config.cmake_cache_entries if entry.startswith("-DESP32QJS_BUILD_CONTEXT_DIR=")],
             [f"-DESP32QJS_BUILD_CONTEXT_DIR={context}"],
+        )
+
+    def test_js_test_build_forces_serial_observability_for_product_contexts(self):
+        config = self.config()
+        with tempfile.TemporaryDirectory() as temp_name:
+            product_defaults = Path(temp_name) / "sdkconfig.defaults"
+            product_defaults.write_text(
+                "# CONFIG_ESP32QJS_ENABLE_REPL is not set\n"
+                "CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS=y\n",
+                encoding="utf-8",
+            )
+            config = REMOTE.replace(
+                config,
+                build_context_sdkconfig_defaults=product_defaults,
+            )
+            test_config = REMOTE.js_test_build_config(config)
+
+        defaults = test_config.build_context_sdkconfig_defaults.read_text(
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            [
+                line
+                for line in defaults.splitlines()
+                if "CONFIG_ESP32QJS_ENABLE_REPL" in line
+            ][-1],
+            "CONFIG_ESP32QJS_ENABLE_REPL=y",
+        )
+        self.assertEqual(
+            [
+                line
+                for line in defaults.splitlines()
+                if "CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS" in line
+            ][-1],
+            "# CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS is not set",
         )
 
     def test_js_tests_flash_and_monitor_the_instrumented_context(self):

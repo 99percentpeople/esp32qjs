@@ -9,6 +9,12 @@ test("wifi_csi/associated-hardware", function () {
   var samples = null;
   var copy = null;
   var source = null;
+  var trafficClient = null;
+  var trafficResponse = null;
+  var trafficRequestText =
+    "GET / HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n\r\n";
+  var trafficRequest = [];
+  var requestIndex;
   var status;
   var stats;
 
@@ -32,7 +38,26 @@ test("wifi_csi/associated-hardware", function () {
     try {
       sys.time.sync({ servers: ["pool.ntp.org"], timeoutMs: 5000 });
     } catch (ignoredTimeError) {}
-    frame = session.receive(8000);
+    frame = session.receive(1000);
+    if (frame === null) {
+      trafficClient = socket.openTCP({ localPort: 0 });
+      test.ok(trafficClient.connect("example.com", 80, { timeoutMs: 10000 }),
+        "associated CSI traffic probe should connect");
+      for (requestIndex = 0; requestIndex < trafficRequestText.length;
+           requestIndex += 1) {
+        trafficRequest.push(trafficRequestText.charCodeAt(requestIndex));
+      }
+      test.ok(trafficClient.send(trafficRequest, 5000) > 0,
+        "associated CSI traffic probe should send a request");
+      trafficResponse = trafficClient.recv(512, 5000);
+      test.ok(trafficResponse !== null,
+        "associated CSI traffic probe should receive response bytes");
+      trafficResponse.close();
+      trafficResponse = null;
+      trafficClient.close();
+      trafficClient = null;
+      frame = session.receive(8000);
+    }
     test.ok(frame !== null,
       "associated traffic should produce a CSI frame");
     test.ok(frame.info.layout.byteLength > 0,
@@ -60,6 +85,8 @@ test("wifi_csi/associated-hardware", function () {
     if (samples !== null) samples.close();
     if (copy !== null) copy.close();
     if (frame !== null) frame.close();
+    if (trafficResponse !== null) trafficResponse.close();
+    if (trafficClient !== null) trafficClient.close();
     if (session !== null) session.close();
     try { wifi.disconnect(); } catch (ignoredFinalDisconnectError) {}
   }

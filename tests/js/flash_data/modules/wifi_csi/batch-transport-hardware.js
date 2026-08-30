@@ -1,4 +1,5 @@
 test("wifi_csi/batch-transport-hardware", function () {
+  var cfg = test.requireConfig("wifiSsid", "wifiPassword");
   var caps = wifiCsi.capabilities();
   var capture = caps.configSchema === "wifi-csi-he/1"
     ? { schema: "wifi-csi-he/1", enableLegacy: true, ht20: true, heSu: true }
@@ -12,23 +13,37 @@ test("wifi_csi/batch-transport-hardware", function () {
   var rpcOutputSource = null;
   var codec = null;
   var stream = null;
+  var status;
+  var workspaceFs = fs.volume("/workspace");
   var path = "wifi-csi-batch.bin";
   var rpcPath = "wifi-csi-rpc.bin";
   var sourceBytes;
   var written;
-  var usbWritten;
+  var usbWritten = null;
   var rpcWritten;
 
   test.equal(caps.supports.promiscuous, true,
     "batch hardware capture requires the promiscuous Build Context gate");
   try {
     try { wifi.disconnect(); } catch (ignoredDisconnectError) {}
+    wifi.connect(cfg.wifiSsid, {
+      password: cfg.wifiPassword,
+      timeoutMs: 15000
+    });
     session = wifiCsi.open({
       source: "promiscuous",
       channel: "current",
       conflict: "fail",
       capture: capture,
       queue: { capacity: 8, overflow: "drop-newest" }
+    });
+    status = session.status();
+    wifi.scan({
+      channel: status.effective.channel,
+      showHidden: true,
+      passive: false,
+      dwellMs: 250,
+      timeoutMs: 3000
     });
     batch = session.receiveBatch(8, 8000);
     test.ok(batch !== null && batch.frameCount >= 1,
@@ -39,7 +54,7 @@ test("wifi_csi/batch-transport-hardware", function () {
     sourceBytes = source.byteLength;
     test.ok(sourceBytes > batch.info(0).layout.byteLength,
       "the batch protocol should include header and normalized metadata");
-    stream = fs.open(path, "w");
+    stream = workspaceFs.open(path, "wb");
     written = stream.write(source);
     test.equal(written, sourceBytes,
       "file transport should consume the complete scatter/gather source");
@@ -47,18 +62,20 @@ test("wifi_csi/batch-transport-hardware", function () {
     stream = null;
     source.close();
     source = null;
-    test.equal(fs.stat(path).size, written,
+    test.equal(workspaceFs.stat(path).size, written,
       "persisted esp32qjs-csi/1 bytes should match the source length");
 
-    usbSource = batch.source({ format: "esp32qjs-csi/1" });
-    serial = usbSerial.open({ mode: "binary", chunkBytes: 4096 });
-    usbWritten = serial.send(usbSource);
-    usbSource.close();
-    usbSource = null;
-    serial.close();
-    serial = null;
-    test.equal(usbWritten, sourceBytes,
-      "USB Serial should consume the complete CSI batch source");
+    if (sys.info.features.usbSerial) {
+      usbSource = batch.source({ format: "esp32qjs-csi/1" });
+      serial = usbSerial.open({ mode: "binary", chunkBytes: 4096 });
+      usbWritten = serial.send(usbSource);
+      usbSource.close();
+      usbSource = null;
+      serial.close();
+      serial = null;
+      test.equal(usbWritten, sourceBytes,
+        "USB Serial should consume the complete CSI batch source");
+    }
 
     codec = rpc.createCodec({
       fields: ["data"],
@@ -69,7 +86,7 @@ test("wifi_csi/batch-transport-hardware", function () {
     rpcOutputSource = codec.encode(1, 1, 0, { data: rpcInputSource });
     test.ok(rpcOutputSource instanceof _ByteSpanSource,
       "RPC should frame a final CSI ByteSpanSource without flattening it");
-    stream = fs.open(rpcPath, "w");
+    stream = workspaceFs.open(rpcPath, "wb");
     rpcWritten = stream.write(rpcOutputSource);
     stream.close();
     stream = null;
@@ -79,7 +96,7 @@ test("wifi_csi/batch-transport-hardware", function () {
     rpcInputSource = null;
     test.ok(rpcWritten > sourceBytes,
       "RPC framing should preserve the CSI bytes plus protocol overhead");
-    test.equal(fs.stat(rpcPath).size, rpcWritten,
+    test.equal(workspaceFs.stat(rpcPath).size, rpcWritten,
       "the streamed RPC envelope should be persisted completely");
   } finally {
     if (stream !== null) stream.close();
@@ -91,8 +108,9 @@ test("wifi_csi/batch-transport-hardware", function () {
     if (codec !== null) codec.close();
     if (batch !== null) batch.close();
     if (session !== null) session.close();
-    try { if (fs.exists(path)) fs.remove(path); } catch (ignoredRemoveError) {}
-    try { if (fs.exists(rpcPath)) fs.remove(rpcPath); } catch (ignoredRpcRemoveError) {}
+    try { wifi.disconnect(); } catch (ignoredFinalDisconnectError) {}
+    try { if (workspaceFs.exists(path)) workspaceFs.remove(path); } catch (ignoredRemoveError) {}
+    try { if (workspaceFs.exists(rpcPath)) workspaceFs.remove(rpcPath); } catch (ignoredRpcRemoveError) {}
   }
 
   return {

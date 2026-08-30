@@ -252,7 +252,7 @@ JS_TEST_MODULES = (
                 record_details=True,
             ),
         ),
-        required_features=("wifiCsi", "wifi", "fs", "rpc", "usbSerial"),
+        required_features=("wifiCsi", "wifi", "fs", "rpc"),
     ),
     JsTestModule(
         "wifi_csi_camera",

@@ -223,11 +223,28 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
             / "tests/js/flash_data/modules/wifi_csi/batch-transport-hardware.js"
         ).read_text(encoding="utf-8")
 
+        self.assertIn('workspaceFs = fs.volume("/workspace")', hardware_test)
+        self.assertIn('workspaceFs.open(path, "wb")', hardware_test)
+        self.assertIn('workspaceFs.open(rpcPath, "wb")', hardware_test)
         self.assertIn("stream.write(source)", hardware_test)
+        self.assertIn("if (sys.info.features.usbSerial)", hardware_test)
         self.assertIn('usbSerial.open({ mode: "binary"', hardware_test)
         self.assertIn("serial.send(usbSource)", hardware_test)
         self.assertIn("codec.encode(1, 1, 0, { data: rpcInputSource })", hardware_test)
         self.assertIn("rpcOutputSource instanceof _ByteSpanSource", hardware_test)
+
+    def test_associated_hardware_generates_addressed_network_traffic(self):
+        hardware_test = (
+            ROOT
+            / "tests/js/flash_data/modules/wifi_csi/associated-hardware.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("socket.openTCP({ localPort: 0 })", hardware_test)
+        self.assertIn('trafficClient.connect("example.com", 80', hardware_test)
+        self.assertIn("trafficClient.send(", hardware_test)
+        self.assertIn("trafficClient.recv(", hardware_test)
+        self.assertIn("trafficRequestText.charCodeAt", hardware_test)
+        self.assertIn("frame = session.receive(1000)", hardware_test)
 
     def test_hardware_saturation_holds_and_releases_the_complete_pool(self):
         hardware_test = (
@@ -239,6 +256,25 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertIn("stats.freePoolSlots", hardware_test)
         self.assertIn("stats.droppedPoolFull", hardware_test)
         self.assertIn("frames[i].close()", hardware_test)
+        self.assertIn('test.requireConfig("wifiSsid", "wifiPassword")', hardware_test)
+        self.assertIn("wifi.connect(cfg.wifiSsid", hardware_test)
+        self.assertIn("wifi.scan({", hardware_test)
+        self.assertIn("channel: status.effective.channel", hardware_test)
+        self.assertIn("session.stop()", hardware_test)
+        self.assertIn("trafficClient.send(", hardware_test)
+        self.assertIn("trafficRequestText.charCodeAt", hardware_test)
+
+    def test_short_promiscuous_hardware_cases_generate_ap_channel_traffic(self):
+        directory = ROOT / "tests/js/flash_data/modules/wifi_csi"
+        for name in (
+            "promiscuous-hardware.js",
+            "batch-transport-hardware.js",
+            "throughput-hardware.js",
+        ):
+            source = (directory / name).read_text(encoding="utf-8")
+            self.assertIn('test.requireConfig("wifiSsid", "wifiPassword")', source)
+            self.assertIn("wifi.connect(cfg.wifiSsid", source)
+            self.assertIn("wifi.scan({", source)
 
     def test_hardware_throughput_records_rates_drops_bytes_and_memory(self):
         hardware_test = (

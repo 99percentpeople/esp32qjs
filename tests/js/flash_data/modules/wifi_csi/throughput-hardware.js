@@ -1,4 +1,5 @@
 test("wifi_csi/throughput-hardware", function () {
+  var cfg = test.requireConfig("wifiSsid", "wifiPassword");
   var caps = wifiCsi.capabilities();
   var capture = caps.configSchema === "wifi-csi-he/1"
     ? { schema: "wifi-csi-he/1", enableLegacy: true, ht20: true, heSu: true }
@@ -24,6 +25,10 @@ test("wifi_csi/throughput-hardware", function () {
     "throughput qualification requires the promiscuous Build Context gate");
   try {
     try { wifi.disconnect(); } catch (ignoredDisconnectError) {}
+    wifi.connect(cfg.wifiSsid, {
+      password: cfg.wifiPassword,
+      timeoutMs: 15000
+    });
     gc();
     before = sys.status.memory;
     session = wifiCsi.open({
@@ -41,6 +46,16 @@ test("wifi_csi/throughput-hardware", function () {
     startMs = sys.millis();
     while (sys.millis() - startMs < durationMs) {
       batch = session.receiveBatch(batchFrames, 1000);
+      if (batch === null) {
+        wifi.scan({
+          channel: status.effective.channel,
+          showHidden: true,
+          passive: false,
+          dwellMs: 250,
+          timeoutMs: 3000
+        });
+        batch = session.receiveBatch(batchFrames, 1000);
+      }
       if (batch !== null) {
         source = batch.source({ format: "esp32qjs-csi/1" });
         transportBytes += source.byteLength;
