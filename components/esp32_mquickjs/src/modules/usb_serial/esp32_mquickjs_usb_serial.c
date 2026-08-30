@@ -611,6 +611,7 @@ JSValue js_usb_serial_open(JSContext *ctx,
     JSGCRef handle_ref;
     JSValue *queue_object;
     JSValue *handle;
+    JSValue return_value;
     esp32_mquickjs_usb_serial_ref_t *ref = NULL;
     size_t max_frame_bytes;
     bool binary;
@@ -699,8 +700,9 @@ JSValue js_usb_serial_open(JSContext *ctx,
     s_usb_serial_state.event_queue = JS_GetOpaque(ctx, *queue_object);
     s_usb_serial_state.generation = ref->generation;
     s_usb_serial_state.opened = true;
+    return_value = JS_PopGCRef(ctx, &handle_ref);
     JS_PopGCRef(ctx, &queue_ref);
-    return JS_PopGCRef(ctx, &handle_ref);
+    return return_value;
 }
 
 JSValue js_usb_serial_close(JSContext *ctx,

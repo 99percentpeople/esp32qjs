@@ -59,6 +59,30 @@ class GcArchitectureTests(SourceContractTestCase):
             gateway.index("*args_array = JS_NewArray"),
         )
 
+    def test_usb_serial_open_releases_temporary_roots_in_lifo_order(self):
+        source = (
+            MQUICKJS
+            / "src"
+            / "modules"
+            / "usb_serial"
+            / "esp32_mquickjs_usb_serial.c"
+        ).read_text(encoding="utf-8")
+        function_start = source.index("JSValue js_usb_serial_open(")
+        function_end = source.index("\nJSValue js_usb_serial_close(", function_start)
+        success = source[
+            source.index("s_usb_serial_state.opened = true;", function_start):function_end
+        ]
+
+        self.assertIn(
+            "return_value = JS_PopGCRef(ctx, &handle_ref);",
+            success,
+        )
+        self.assertLess(
+            success.index("JS_PopGCRef(ctx, &handle_ref)"),
+            success.index("JS_PopGCRef(ctx, &queue_ref)"),
+        )
+        self.assertIn("return return_value;", success)
+
     def test_http_server_roots_request_while_attaching_native_identity(self):
         source = (
             MQUICKJS / "src" / "modules" / "http" / "esp32_mquickjs_http_server.c"
