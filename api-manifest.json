@@ -623,6 +623,66 @@
       }
     },
     {
+      "name": "WiFiCsiSession",
+      "globalName": "WiFiCsiSession",
+      "arity": 0,
+      "implementation": "js_wifi_csi_session_constructor",
+      "classId": "JS_CLASS_WIFI_CSI_SESSION",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "definition": "js_wifi_csi_session_class"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiSession"
+      }
+    },
+    {
+      "name": "WiFiCsiFrame",
+      "globalName": "WiFiCsiFrame",
+      "arity": 0,
+      "implementation": "js_wifi_csi_frame_constructor",
+      "classId": "JS_CLASS_WIFI_CSI_FRAME",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "definition": "js_wifi_csi_frame_class"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiFrame"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiFrame"
+      }
+    },
+    {
+      "name": "WiFiCsiBatch",
+      "globalName": "WiFiCsiBatch",
+      "arity": 0,
+      "implementation": "js_wifi_csi_batch_constructor",
+      "classId": "JS_CLASS_WIFI_CSI_BATCH",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "definition": "js_wifi_csi_batch_class"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiBatch"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiBatch"
+      }
+    },
+    {
       "name": "BLEAdapter",
       "globalName": "BLEAdapter",
       "arity": 0,
@@ -6487,6 +6547,358 @@
       }
     },
     {
+      "qualifiedName": "WiFiCsiBatch.prototype.close",
+      "surface": "WiFiCsiBatch.prototype",
+      "name": "close",
+      "arity": 0,
+      "implementation": "js_wifi_csi_batch_close",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi_batch_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiBatch"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiBatch"
+      }
+    },
+    {
+      "qualifiedName": "WiFiCsiBatch.prototype.info",
+      "surface": "WiFiCsiBatch.prototype",
+      "name": "info",
+      "arity": 1,
+      "implementation": "js_wifi_csi_batch_info",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi_batch_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiBatch"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiBatch"
+      }
+    },
+    {
+      "qualifiedName": "WiFiCsiBatch.prototype.samples",
+      "surface": "WiFiCsiBatch.prototype",
+      "name": "samples",
+      "arity": 1,
+      "implementation": "js_wifi_csi_batch_samples",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi_batch_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiBatch"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiBatch"
+      }
+    },
+    {
+      "qualifiedName": "WiFiCsiBatch.prototype.source",
+      "surface": "WiFiCsiBatch.prototype",
+      "name": "source",
+      "arity": 1,
+      "implementation": "js_wifi_csi_batch_source",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi_batch_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiBatch"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiBatch"
+      }
+    },
+    {
+      "qualifiedName": "WiFiCsiFrame.prototype.close",
+      "surface": "WiFiCsiFrame.prototype",
+      "name": "close",
+      "arity": 0,
+      "implementation": "js_wifi_csi_frame_close",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi_frame_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiFrame"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiFrame"
+      }
+    },
+    {
+      "qualifiedName": "WiFiCsiFrame.prototype.copySamples",
+      "surface": "WiFiCsiFrame.prototype",
+      "name": "copySamples",
+      "arity": 0,
+      "implementation": "js_wifi_csi_frame_copy_samples",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi_frame_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiFrame"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiFrame"
+      }
+    },
+    {
+      "qualifiedName": "WiFiCsiFrame.prototype.samples",
+      "surface": "WiFiCsiFrame.prototype",
+      "name": "samples",
+      "arity": 0,
+      "implementation": "js_wifi_csi_frame_samples",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi_frame_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiFrame"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiFrame"
+      }
+    },
+    {
+      "qualifiedName": "WiFiCsiFrame.prototype.source",
+      "surface": "WiFiCsiFrame.prototype",
+      "name": "source",
+      "arity": 0,
+      "implementation": "js_wifi_csi_frame_source",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi_frame_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiFrame"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiFrame"
+      }
+    },
+    {
+      "qualifiedName": "WiFiCsiSession.prototype.close",
+      "surface": "WiFiCsiSession.prototype",
+      "name": "close",
+      "arity": 0,
+      "implementation": "js_wifi_csi_session_close",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiSession"
+      }
+    },
+    {
+      "qualifiedName": "WiFiCsiSession.prototype.configure",
+      "surface": "WiFiCsiSession.prototype",
+      "name": "configure",
+      "arity": 1,
+      "implementation": "js_wifi_csi_session_configure",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiSession"
+      }
+    },
+    {
+      "qualifiedName": "WiFiCsiSession.prototype.receive",
+      "surface": "WiFiCsiSession.prototype",
+      "name": "receive",
+      "arity": 1,
+      "implementation": "js_wifi_csi_session_receive",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiSession"
+      }
+    },
+    {
+      "qualifiedName": "WiFiCsiSession.prototype.receiveBatch",
+      "surface": "WiFiCsiSession.prototype",
+      "name": "receiveBatch",
+      "arity": 2,
+      "implementation": "js_wifi_csi_session_receive_batch",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiSession"
+      }
+    },
+    {
+      "qualifiedName": "WiFiCsiSession.prototype.start",
+      "surface": "WiFiCsiSession.prototype",
+      "name": "start",
+      "arity": 0,
+      "implementation": "js_wifi_csi_session_start",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiSession"
+      }
+    },
+    {
+      "qualifiedName": "WiFiCsiSession.prototype.stats",
+      "surface": "WiFiCsiSession.prototype",
+      "name": "stats",
+      "arity": 0,
+      "implementation": "js_wifi_csi_session_stats",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiSession"
+      }
+    },
+    {
+      "qualifiedName": "WiFiCsiSession.prototype.status",
+      "surface": "WiFiCsiSession.prototype",
+      "name": "status",
+      "arity": 0,
+      "implementation": "js_wifi_csi_session_status",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiSession"
+      }
+    },
+    {
+      "qualifiedName": "WiFiCsiSession.prototype.stop",
+      "surface": "WiFiCsiSession.prototype",
+      "name": "stop",
+      "arity": 0,
+      "implementation": "js_wifi_csi_session_stop",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "WiFiCsiSession"
+      }
+    },
+    {
       "qualifiedName": "adc.channelToIo",
       "surface": "adc",
       "name": "channelToIo",
@@ -9018,6 +9430,50 @@
       "documentation": {
         "file": "docs/c-api.md",
         "ownerToken": "wifi"
+      }
+    },
+    {
+      "qualifiedName": "wifiCsi.capabilities",
+      "surface": "wifiCsi",
+      "name": "capabilities",
+      "arity": 0,
+      "implementation": "js_wifi_csi_capabilities",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiModule"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "wifiCsi"
+      }
+    },
+    {
+      "qualifiedName": "wifiCsi.open",
+      "surface": "wifiCsi",
+      "name": "open",
+      "arity": 1,
+      "implementation": "js_wifi_csi_open",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiModule"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "wifiCsi"
       }
     }
   ]

@@ -825,7 +825,8 @@ static JSValue wifi_make_status_object(JSContext *ctx)
     *clients_obj = JS_NewObject(ctx);
     client_total =
         radio_status.clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_WIFI_STA] +
-        radio_status.clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_ESPNOW];
+        radio_status.clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_ESPNOW] +
+        radio_status.clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_CSI];
     if (JS_IsException(*status_obj) || JS_IsException(*radio_obj) ||
         JS_IsException(*clients_obj)) {
         goto fail;
@@ -843,6 +844,11 @@ static JSValue wifi_make_status_object(JSContext *ctx)
             JS_NewUint32(
                 ctx, radio_status.clients[
                          ESP32_MQUICKJS_WIFI_RADIO_CLIENT_ESPNOW])) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, clients_obj, "wifiCsi",
+            JS_NewUint32(
+                ctx, radio_status.clients[
+                         ESP32_MQUICKJS_WIFI_RADIO_CLIENT_CSI])) ||
         !esp32_mquickjs_set_property_ref(ctx, radio_obj, "generation",
                                          JS_NewUint32(
                                              ctx, radio_status.generation)) ||

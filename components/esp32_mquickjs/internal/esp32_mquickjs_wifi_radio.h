@@ -15,6 +15,7 @@
 typedef enum {
     ESP32_MQUICKJS_WIFI_RADIO_CLIENT_WIFI_STA = 0,
     ESP32_MQUICKJS_WIFI_RADIO_CLIENT_ESPNOW,
+    ESP32_MQUICKJS_WIFI_RADIO_CLIENT_CSI,
     ESP32_MQUICKJS_WIFI_RADIO_CLIENT_COUNT,
 } esp32_mquickjs_wifi_radio_client_t;
 
@@ -23,6 +24,13 @@ typedef struct {
     esp32_mquickjs_wifi_radio_client_t client;
     bool acquired;
 } esp32_mquickjs_wifi_radio_lease_t;
+
+typedef struct {
+    uint32_t generation;
+    esp32_mquickjs_wifi_radio_client_t client;
+    bool acquired;
+    bool framework_enabled;
+} esp32_mquickjs_wifi_radio_promiscuous_lease_t;
 
 typedef struct {
     uint32_t generation;
@@ -37,6 +45,10 @@ typedef struct {
     int8_t max_tx_power_quarter_dbm;
     bool power_save_available;
     wifi_ps_type_t power_save;
+    bool fixed_channel_claimed;
+    esp32_mquickjs_wifi_radio_client_t fixed_channel_client;
+    bool promiscuous_claimed;
+    esp32_mquickjs_wifi_radio_client_t promiscuous_client;
     uint32_t clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_COUNT];
 } esp32_mquickjs_wifi_radio_status_t;
 
@@ -60,6 +72,16 @@ esp_err_t esp32_mquickjs_wifi_radio_set_channel(
     esp32_mquickjs_wifi_radio_lease_t *lease,
     uint8_t primary,
     wifi_second_chan_t secondary);
+
+void esp32_mquickjs_wifi_radio_release_channel(
+    esp32_mquickjs_wifi_radio_lease_t *lease);
+
+esp_err_t esp32_mquickjs_wifi_radio_acquire_promiscuous(
+    esp32_mquickjs_wifi_radio_lease_t *radio_lease,
+    esp32_mquickjs_wifi_radio_promiscuous_lease_t *out_lease);
+
+void esp32_mquickjs_wifi_radio_release_promiscuous(
+    esp32_mquickjs_wifi_radio_promiscuous_lease_t *lease);
 
 void esp32_mquickjs_wifi_radio_release(
     esp32_mquickjs_wifi_radio_lease_t *lease);

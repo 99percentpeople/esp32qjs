@@ -516,6 +516,18 @@ bool esp32_mquickjs_event_queue_try_send_from_callback(
     return true;
 }
 
+bool esp32_mquickjs_event_queue_try_receive(
+    esp32_mquickjs_event_queue_t *queue,
+    void *event)
+{
+    if (queue == NULL || event == NULL || queue->resources.events == NULL ||
+        atomic_load_explicit(&queue->closed, memory_order_acquire)) {
+        return false;
+    }
+    return xQueueReceive((QueueHandle_t)queue->resources.events,
+                         event, 0) == pdTRUE;
+}
+
 bool esp32_mquickjs_event_queue_send_from_isr(esp32_mquickjs_event_queue_t *queue,
                                               const void *event,
                                               int *task_woken)

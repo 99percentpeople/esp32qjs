@@ -14,6 +14,7 @@
 #include "esp32_mquickjs_i2s.h"
 #include "esp32_mquickjs_rmt.h"
 #include "esp32_mquickjs_espnow.h"
+#include "esp32_mquickjs_wifi_csi.h"
 #include "esp32_mquickjs_ble.h"
 #include "esp32_mquickjs_camera.h"
 #include "esp32_mquickjs_bitmap.h"
@@ -1373,6 +1374,9 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
         return false;
     }
 #endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI
+    esp32_mquickjs_deinit_wifi_csi_runtime(ctx);
+#endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW
     esp32_mquickjs_deinit_espnow_runtime(ctx);
 #endif
@@ -1688,6 +1692,12 @@ bool esp32_mquickjs_install_globals(JSContext *ctx,
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     if (!esp32_mquickjs_init_wifi_runtime(ctx, runtime)) {
+        esp32_mquickjs_print_exception(ctx);
+        return false;
+    }
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI
+    if (!esp32_mquickjs_init_wifi_csi_runtime(ctx, runtime)) {
         esp32_mquickjs_print_exception(ctx);
         return false;
     }

@@ -21,6 +21,8 @@ typedef struct {
     bool read_leased;
 } esp32_mquickjs_byte_source_chunk_t;
 
+typedef void (*esp32_mquickjs_byte_view_release_fn)(void *opaque);
+
 typedef struct {
     int class_id;
     bool (*open)(JSContext *ctx,
@@ -85,6 +87,13 @@ JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx,
 JSValue esp32_mquickjs_new_owned_byte_view(JSContext *ctx,
                                            uint8_t *data,
                                            size_t length);
+
+JSValue esp32_mquickjs_new_retained_byte_view(
+    JSContext *ctx,
+    const uint8_t *data,
+    size_t length,
+    esp32_mquickjs_byte_view_release_fn release,
+    void *release_opaque);
 
 bool esp32_mquickjs_byte_view_is_open(JSContext *ctx, JSValue value);
 

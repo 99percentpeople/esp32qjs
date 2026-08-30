@@ -9,7 +9,8 @@
 typedef struct {
     const uint8_t *data;
     size_t length;
-    uint8_t *owned_data;
+    esp32_mquickjs_byte_view_release_fn release;
+    void *release_opaque;
     uint16_t read_leases;
     bool closed;
 } esp32_mquickjs_byte_view_t;
@@ -117,19 +118,29 @@ static esp32_mquickjs_byte_span_source_object_t *byte_span_source_from_value(JSC
 
 static void byte_view_release(esp32_mquickjs_byte_view_t *view)
 {
+    esp32_mquickjs_byte_view_release_fn release;
+    void *release_opaque;
+
     if (view == NULL) {
         return;
     }
-    heap_caps_free(view->owned_data);
-    view->owned_data = NULL;
+    release = view->release;
+    release_opaque = view->release_opaque;
+    view->release = NULL;
+    view->release_opaque = NULL;
     view->data = NULL;
     view->length = 0;
     view->closed = true;
+    if (release != NULL) {
+        release(release_opaque);
+    }
 }
 
 static JSValue byte_view_make(JSContext *ctx,
-                              uint8_t *owned_data,
-                              size_t length)
+                              const uint8_t *data,
+                              size_t length,
+                              esp32_mquickjs_byte_view_release_fn release,
+                              void *release_opaque)
 {
     JSGCRef object_ref;
     JSValue *object;
@@ -140,19 +151,24 @@ static JSValue byte_view_make(JSContext *ctx,
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_BYTE_VIEW);
     if (JS_IsException(*object)) {
         JS_PopGCRef(ctx, &object_ref);
-        heap_caps_free(owned_data);
+        if (release != NULL) {
+            release(release_opaque);
+        }
         return JS_EXCEPTION;
     }
 
     view = heap_caps_malloc(sizeof(*view), MALLOC_CAP_8BIT);
     if (view == NULL) {
         JS_PopGCRef(ctx, &object_ref);
-        heap_caps_free(owned_data);
+        if (release != NULL) {
+            release(release_opaque);
+        }
         return JS_ThrowOutOfMemory(ctx);
     }
-    view->data = owned_data;
+    view->data = data;
     view->length = length;
-    view->owned_data = owned_data;
+    view->release = release;
+    view->release_opaque = release_opaque;
     view->read_leases = 0;
     view->closed = false;
     JS_SetOpaque(ctx, *object, view);
@@ -534,7 +550,26 @@ JSValue esp32_mquickjs_new_owned_byte_view(JSContext *ctx,
     if (data == NULL && length > 0) {
         return JS_ThrowInternalError(ctx, "ByteView data pointer is null");
     }
-    return byte_view_make(ctx, data, length);
+    return byte_view_make(ctx, data, length,
+                          (esp32_mquickjs_byte_view_release_fn)heap_caps_free,
+                          data);
+}
+
+JSValue esp32_mquickjs_new_retained_byte_view(
+    JSContext *ctx,
+    const uint8_t *data,
+    size_t length,
+    esp32_mquickjs_byte_view_release_fn release,
+    void *release_opaque)
+{
+    if ((data == NULL && length > 0) || release == NULL) {
+        if (release != NULL) {
+            release(release_opaque);
+        }
+        return JS_ThrowInternalError(
+            ctx, "retained ByteView requires data and a release callback");
+    }
+    return byte_view_make(ctx, data, length, release, release_opaque);
 }
 
 bool esp32_mquickjs_byte_view_is_open(JSContext *ctx, JSValue value)

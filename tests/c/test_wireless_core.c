@@ -69,12 +69,12 @@ static void test_address_and_keys(void)
 static void test_pool(void)
 {
     esp32_mquickjs_native_pool_t pool;
-    uint16_t slots[64];
+    uint16_t slots[128];
     uint16_t slot;
     assert(!esp32_mquickjs_native_pool_init(&pool, 0));
-    assert(!esp32_mquickjs_native_pool_init(&pool, 65));
-    assert(esp32_mquickjs_native_pool_init(&pool, 64));
-    for (uint16_t index = 0; index < 64; ++index) {
+    assert(!esp32_mquickjs_native_pool_init(&pool, 129));
+    assert(esp32_mquickjs_native_pool_init(&pool, 128));
+    for (uint16_t index = 0; index < 128; ++index) {
         assert(esp32_mquickjs_native_pool_acquire(&pool, &slots[index]));
         assert(slots[index] == index);
     }

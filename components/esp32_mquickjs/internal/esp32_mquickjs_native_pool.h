@@ -10,10 +10,12 @@
 extern "C" {
 #endif
 
-#define ESP32_MQUICKJS_NATIVE_POOL_MAX_CAPACITY 64U
+#define ESP32_MQUICKJS_NATIVE_POOL_MAX_CAPACITY 128U
+#define ESP32_MQUICKJS_NATIVE_POOL_WORD_COUNT \
+    (ESP32_MQUICKJS_NATIVE_POOL_MAX_CAPACITY / 32U)
 
 typedef struct {
-    _Atomic uint32_t free_bits[2];
+    _Atomic uint32_t free_bits[ESP32_MQUICKJS_NATIVE_POOL_WORD_COUNT];
     uint8_t capacity;
 } esp32_mquickjs_native_pool_t;
 

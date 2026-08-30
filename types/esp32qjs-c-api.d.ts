@@ -1110,6 +1110,7 @@ namespace ESP32QJS {
     readonly websocket: boolean;
     readonly bitmap: boolean;
     readonly wifi: boolean;
+    readonly wifiCsi: boolean;
     readonly espNow: boolean;
     readonly ble: boolean;
     readonly tls: boolean;
@@ -2478,6 +2479,7 @@ namespace ESP32QJS {
       total: number;
       wifiStation: number;
       espNow: number;
+      wifiCsi: number;
     };
   }
 
@@ -2631,6 +2633,259 @@ namespace ESP32QJS {
     connect(ssid: string, options?: WiFiConnectOptions): WiFiStatus;
     disconnect(timeoutMs?: number): WiFiStatus;
     scan(options?: WiFiScanOptions): WiFiScanResult[];
+  }
+
+  type WiFiCsiConfigSchema = "wifi-csi-legacy/1" | "wifi-csi-he/1";
+  type WiFiCsiSourceMode = "associated" | "promiscuous";
+  type WiFiCsiPhyFormat =
+    | "legacy"
+    | "ht"
+    | "vht"
+    | "he-su"
+    | "he-mu"
+    | "he-er-su"
+    | "he-tb"
+    | "unknown";
+
+  interface WiFiCsiCapabilities {
+    readonly apiVersion: "wifi-csi/1";
+    readonly target: string;
+    readonly idfVersion: string;
+    readonly configSchema: WiFiCsiConfigSchema;
+    readonly sources: WiFiCsiSourceMode[];
+    readonly phyFormats: WiFiCsiPhyFormat[];
+    readonly limits: {
+      maxFrameBytes: number;
+      maxPoolCapacity: number;
+      maxQueueCapacity: number;
+      maxBatchFrames: number;
+      scaleMinimum: number | null;
+      scaleMaximum: number | null;
+      shiftMinimum: number | null;
+      shiftMaximum: number | null;
+    };
+    readonly supports: {
+      fixedChannel: boolean;
+      promiscuous: boolean;
+      sourceMacFilter: boolean;
+      destinationMacFilter: boolean;
+      rssiFilter: boolean;
+      nativeDecimation: boolean;
+      nativeRateLimit: boolean;
+      vht: boolean;
+      he: boolean;
+      heStbcSelection: boolean;
+      manualScaling: boolean;
+      lltfBitMode: boolean;
+    };
+  }
+
+  interface WiFiCsiLegacyCaptureConfig {
+    schema: "wifi-csi-legacy/1";
+    lltf?: boolean;
+    htLtf?: boolean;
+    stbcHtLtf2?: boolean;
+    ltfMerge?: boolean;
+    adjacentSubcarrierFilter?: boolean;
+    scale?: "auto" | { shiftBits: number };
+    dumpAck?: boolean;
+  }
+
+  interface WiFiCsiHeCaptureConfig {
+    schema: "wifi-csi-he/1";
+    enableLegacy?: boolean;
+    forceLegacyLtf?: boolean;
+    ht20?: boolean;
+    ht40?: boolean;
+    vht?: boolean;
+    heSu?: boolean;
+    heMu?: boolean;
+    heDcm?: boolean;
+    heBeamformed?: boolean;
+    heStbcLtf?: "first" | "second" | "alternate";
+    valueScale?: number;
+    dumpAck?: boolean;
+    lltfBits?: 8 | 12;
+  }
+
+  interface WiFiCsiOpenOptions {
+    source?: WiFiCsiSourceMode;
+    channel?: "current" | number;
+    conflict?: "fail";
+    capture: WiFiCsiLegacyCaptureConfig | WiFiCsiHeCaptureConfig;
+    filter?: {
+      sourceMac?: string | string[];
+      destinationMac?: string | string[];
+      minimumRssi?: number;
+      sampleEvery?: number;
+      maximumRateHz?: number;
+      validOnly?: boolean;
+    };
+    queue?: {
+      capacity?: number;
+      overflow?: "drop-newest";
+    };
+    powerSavePolicy?: "preserve" | "require-none";
+  }
+
+  type WiFiCsiState =
+    | "running"
+    | "stopped"
+    | "stopping"
+    | "faulted"
+    | "closed";
+
+  type WiFiCsiErrorCode =
+    | "WIFI_CSI_NOT_COMPILED"
+    | "WIFI_CSI_NOT_SUPPORTED"
+    | "WIFI_CSI_ALREADY_OPEN"
+    | "WIFI_CSI_NOT_OPEN"
+    | "WIFI_CSI_NOT_RUNNING"
+    | "WIFI_CSI_CLOSING"
+    | "WIFI_CSI_CONFIG_SCHEMA_MISMATCH"
+    | "WIFI_CSI_CONFIG_UNSUPPORTED"
+    | "WIFI_CSI_CONFIG_INVALID"
+    | "WIFI_CSI_RADIO_CONFLICT"
+    | "WIFI_CSI_PROMISCUOUS_CONFLICT"
+    | "WIFI_CSI_POWER_SAVE_CONFLICT"
+    | "WIFI_CSI_RESOURCE_EXHAUSTED"
+    | "WIFI_CSI_FRAME_TOO_LARGE"
+    | "WIFI_CSI_STALE_FRAME"
+    | "WIFI_CSI_DRIVER_ERROR"
+    | "WIFI_CSI_CLEANUP_PENDING";
+
+  interface WiFiCsiError extends NativeError {
+    code: WiFiCsiErrorCode;
+    operation: "wifiCsi";
+    details: {
+      stage?: string | null;
+      espCode?: number;
+      espName?: string;
+      requestedChannel?: number;
+      effectiveChannel?: number;
+      radioGeneration?: number;
+      configSchema?: WiFiCsiConfigSchema;
+    };
+  }
+
+  interface WiFiCsiStatus {
+    generation: number;
+    state: WiFiCsiState;
+    requested: WiFiCsiOpenOptions;
+    effective: {
+      source: WiFiCsiSourceMode;
+      channel: number;
+      secondaryChannel: "none" | "above" | "below";
+      radioGeneration: number;
+      configSchema: WiFiCsiConfigSchema;
+      maxFrameBytes: number;
+      queueCapacity: number;
+      poolCapacity: number;
+      powerSave: string;
+      timestampAccuracy: "normal" | "power-save-dependent";
+    };
+    lastError: WiFiCsiError | null;
+  }
+
+  interface WiFiCsiStats {
+    callbacks: number;
+    accepted: number;
+    deliveredFrames: number;
+    deliveredBatches: number;
+    filteredMac: number;
+    filteredRssi: number;
+    filteredDecimation: number;
+    filteredRateLimit: number;
+    invalidChannelEstimate: number;
+    droppedPoolFull: number;
+    droppedQueueFull: number;
+    droppedFrameTooLarge: number;
+    droppedClosing: number;
+    receivedBytes: number;
+    leasedFrames: number;
+    freePoolSlots: number;
+    queue: EventQueueStats;
+  }
+
+  interface WiFiCsiSegment {
+    type:
+      | "lltf"
+      | "ht-ltf"
+      | "stbc-ht-ltf2"
+      | "vht-ltf"
+      | "he-ltf1"
+      | "he-ltf2"
+      | "mixed"
+      | "unknown";
+    offsetBytes: number;
+    lengthBytes: number;
+  }
+
+  interface WiFiCsiFrameInfo {
+    sequence: number;
+    timestampUs: number;
+    rxSequence: number;
+    generation: number;
+    sourceMac: string;
+    destinationMac: string;
+    rssi: number;
+    noiseFloor: number | null;
+    channel: number;
+    secondaryChannel: "none" | "above" | "below";
+    antenna: number | null;
+    phy: {
+      format: WiFiCsiPhyFormat;
+      bandwidthMHz: 20 | 40 | null;
+      mcs: number | null;
+      stbc: boolean | null;
+    };
+    validity: {
+      firstWordInvalid: boolean;
+      channelEstimateValid: boolean | null;
+      truncated: false;
+    };
+    layout: {
+      schema: string;
+      componentOrder: "imaginary-real";
+      sampleBits: 8 | 12 | null;
+      byteLength: number;
+      segments: WiFiCsiSegment[];
+    };
+  }
+
+  class WiFiCsiFrame {
+    private constructor();
+    readonly info: WiFiCsiFrameInfo;
+    samples(): ByteView;
+    copySamples(): ByteView;
+    source(): ByteSpanSource;
+    close(): boolean;
+  }
+
+  class WiFiCsiBatch {
+    private constructor();
+    readonly frameCount: number;
+    info(index: number): WiFiCsiFrameInfo;
+    samples(index: number): ByteView;
+    source(options?: { format?: "esp32qjs-csi/1" }): ByteSpanSource;
+    close(): boolean;
+  }
+
+  class WiFiCsiSession {
+    private constructor();
+    status(): WiFiCsiStatus;
+    stats(): WiFiCsiStats;
+    receive(timeoutMs?: number): WiFiCsiFrame | null;
+    receiveBatch(maximumFrames?: number, timeoutMs?: number): WiFiCsiBatch | null;
+    stop(): WiFiCsiStatus;
+    configure(options: WiFiCsiOpenOptions): WiFiCsiStatus;
+    start(): WiFiCsiStatus;
+    close(): boolean;
+  }
+
+  interface WiFiCsiModule {
+    capabilities(): WiFiCsiCapabilities;
+    open(options: WiFiCsiOpenOptions): WiFiCsiSession;
   }
 
   type EspNowAddress = string;
@@ -3423,6 +3678,9 @@ namespace ESP32QJS {
   const SPIDevice: { readonly prototype: ESP32QJS.SPIDevice };
   const EspNowSession: { readonly prototype: ESP32QJS.EspNowSession };
   const EspNowPeer: { readonly prototype: ESP32QJS.EspNowPeer };
+  const WiFiCsiSession: { readonly prototype: ESP32QJS.WiFiCsiSession };
+  const WiFiCsiFrame: { readonly prototype: ESP32QJS.WiFiCsiFrame };
+  const WiFiCsiBatch: { readonly prototype: ESP32QJS.WiFiCsiBatch };
   const BLEAdapter: { readonly prototype: ESP32QJS.BLEAdapter };
   const BLEScanner: { readonly prototype: ESP32QJS.BLEScanner };
   const BLEAdvertiser: { readonly prototype: ESP32QJS.BLEAdvertiser };
@@ -3526,6 +3784,8 @@ namespace ESP32QJS {
   var wifi: ESP32QJS.WiFiModule;
   /** Station-interface ESP-NOW sessions, peers, receive queues, and sends. */
   var espNow: ESP32QJS.EspNowModule;
+  /** Bounded Wi-Fi CSI capture sessions and zero-copy frame/batch leases. */
+  var wifiCsi: ESP32QJS.WiFiCsiModule;
   /** Generic ESP-NimBLE central, peripheral, GATT, and security API. */
   var ble: ESP32QJS.BLEModule;
   /** HTTP client/server namespace. Exposed when either `sys.info.features.http` or `.httpServer` is enabled. */

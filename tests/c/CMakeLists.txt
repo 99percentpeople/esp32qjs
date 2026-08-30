@@ -299,3 +299,34 @@ add_executable(test_wireless_core
 )
 target_include_directories(test_wireless_core PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_wireless_core COMMAND test_wireless_core)
+
+set(WIFI_CSI_RESOURCE_SOURCES
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_native_pool.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_native_lease.c
+    ../../components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi_resources.c
+)
+
+foreach(WIFI_CSI_RESOURCE_TEST
+        test_wifi_csi_resources
+        test_wifi_csi_pool
+        test_wifi_csi_filter
+        test_wifi_csi_callback_publish
+        test_wifi_csi_lease)
+    add_executable(${WIFI_CSI_RESOURCE_TEST}
+        ${WIFI_CSI_RESOURCE_TEST}.c
+        ${WIFI_CSI_RESOURCE_SOURCES}
+    )
+    target_include_directories(${WIFI_CSI_RESOURCE_TEST} PRIVATE
+        ../../components/esp32_mquickjs/internal
+    )
+    add_test(NAME ${WIFI_CSI_RESOURCE_TEST} COMMAND ${WIFI_CSI_RESOURCE_TEST})
+endforeach()
+
+add_executable(test_wifi_csi_target_config
+    test_wifi_csi_target_config.c
+    ../../components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_config.c
+)
+target_include_directories(test_wifi_csi_target_config PRIVATE
+    ../../components/esp32_mquickjs/internal
+)
+add_test(NAME test_wifi_csi_target_config COMMAND test_wifi_csi_target_config)

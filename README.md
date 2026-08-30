@@ -133,6 +133,7 @@ and Libraries. Typical entries include:
 | `net` | Network interfaces | esp32c3, esp32c5, esp32s3 | none |
 | `wifi` | Wi-Fi | esp32c3, esp32c5, esp32s3 | `net` |
 | `espnow` | ESP-NOW | esp32c3, esp32c5, esp32s3 | none |
+| `wifi_csi` | Wi-Fi CSI | esp32c3, esp32c5, esp32s3 | none |
 | `ble` | Bluetooth LE | esp32c3, esp32c5, esp32s3 | none |
 | `tls` | TLS | esp32c3, esp32c5, esp32s3 | `net` |
 | `socket` | Socket | esp32c3, esp32c5, esp32s3 | `net` |

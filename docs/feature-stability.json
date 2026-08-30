@@ -50,6 +50,12 @@
       "evidence": "Interface replacement, reconnect, and non-Wi-Fi ESP-NETIF coverage beyond completed Wi-Fi lock/event-group/queue allocation rollback and later init-stage cleanup"
     },
     {
+      "features": ["wifi_csi"],
+      "area": "`wifiCsi`",
+      "status": "Hardware pending",
+      "evidence": "C3/S3 legacy and C5 HE RF capture, PHY metadata, 2.4/5 GHz, coexistence, transport throughput, 500-cycle close/reopen, and long-duration memory qualification are required beyond host ownership tests and target build coverage"
+    },
+    {
       "features": ["espnow"],
       "area": "`espNow`",
       "status": "Candidate",

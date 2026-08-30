@@ -36,6 +36,7 @@ FEATURES = {
     "socket": "CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET",
     "websocket": "CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET",
     "wifi": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI",
+    "wifiCsi": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
     "espNow": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
     "ble": "CONFIG_ESP32_MQUICKJS_FEATURE_BLE",
     "net": "CONFIG_ESP32_MQUICKJS_FEATURE_NET",
@@ -139,6 +140,17 @@ SURFACES = {
         "websocketClient"
     ),
     "js_wifi": ("wifi", "WiFiModule", "wifi", "wifi"),
+    "js_wifi_csi_session_proto": (
+        "WiFiCsiSession.prototype", "WiFiCsiSession", "wifiCsi",
+        "WiFiCsiSession"
+    ),
+    "js_wifi_csi_frame_proto": (
+        "WiFiCsiFrame.prototype", "WiFiCsiFrame", "wifiCsi", "WiFiCsiFrame"
+    ),
+    "js_wifi_csi_batch_proto": (
+        "WiFiCsiBatch.prototype", "WiFiCsiBatch", "wifiCsi", "WiFiCsiBatch"
+    ),
+    "js_wifi_csi": ("wifiCsi", "WiFiCsiModule", "wifiCsi", "wifiCsi"),
     "js_espnow_session_proto": (
         "EspNowSession.prototype", "EspNowSession", "espNow", "EspNowSession"
     ),
@@ -221,6 +233,15 @@ CLASSES = {
         "EspNowSession", "EspNowSession", "espNow", "EspNowSession"
     ),
     "EspNowPeer": ("EspNowPeer", "EspNowPeer", "espNow", "EspNowPeer"),
+    "WiFiCsiSession": (
+        "WiFiCsiSession", "WiFiCsiSession", "wifiCsi", "WiFiCsiSession"
+    ),
+    "WiFiCsiFrame": (
+        "WiFiCsiFrame", "WiFiCsiFrame", "wifiCsi", "WiFiCsiFrame"
+    ),
+    "WiFiCsiBatch": (
+        "WiFiCsiBatch", "WiFiCsiBatch", "wifiCsi", "WiFiCsiBatch"
+    ),
     "BLEAdapter": ("BLEAdapter", "BLEAdapter", "ble", "BLEAdapter"),
     "BLEScanner": ("BLEScanner", "BLEScanner", "ble", "BLEScanner"),
     "BLEAdvertiser": (

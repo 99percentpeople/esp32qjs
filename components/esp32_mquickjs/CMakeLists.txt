@@ -24,6 +24,7 @@ set(ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS
     CONFIG_ESP32_MQUICKJS_FEATURE_NET
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW
+    CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI
     CONFIG_ESP32_MQUICKJS_FEATURE_BLE
     CONFIG_ESP32_MQUICKJS_FEATURE_TLS
     CONFIG_ESP32_MQUICKJS_FEATURE_SOCKET
@@ -489,6 +490,17 @@ esp32_mquickjs_append_feature_component(
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW
     "src/modules/espnow/esp32_mquickjs_espnow.c"
+    PRIV_REQUIRES
+        esp_wifi
+)
+
+esp32_mquickjs_append_feature_component(
+    CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI
+    "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_resources.c"
+    "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_config.c"
+    "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_legacy.c"
+    "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_he.c"
+    "src/modules/wifi_csi/esp32_mquickjs_wifi_csi.c"
     PRIV_REQUIRES
         esp_wifi
 )

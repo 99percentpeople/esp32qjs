@@ -190,6 +190,34 @@ JS_TEST_MODULES = (
         required_features=("espnow",),
     ),
     JsTestModule(
+        "wifi_csi",
+        (
+            JsTestCase("modules/wifi_csi/offline.js"),
+            JsTestCase(
+                "modules/wifi_csi/associated-hardware.js",
+                required_capabilities=("csi-hardware",),
+                timeout_seconds=45.0,
+                reset_before=True,
+                reset_after=True,
+            ),
+            JsTestCase(
+                "modules/wifi_csi/promiscuous-hardware.js",
+                required_capabilities=("csi-hardware",),
+                timeout_seconds=30.0,
+                reset_before=True,
+                reset_after=True,
+            ),
+            JsTestCase(
+                "modules/wifi_csi/batch-transport-hardware.js",
+                required_capabilities=("csi-hardware",),
+                timeout_seconds=45.0,
+                reset_before=True,
+                reset_after=True,
+            ),
+        ),
+        required_features=("wifiCsi", "wifi", "fs", "rpc"),
+    ),
+    JsTestModule(
         "ble",
         (JsTestCase("modules/ble/offline.js", timeout_seconds=45.0),),
         required_features=("ble",),
@@ -239,6 +267,7 @@ JS_TEST_CAPABILITY_FLAGS = {
     "loopback": "--loopback",
     "media-hardware": "--media-hardware",
     "wireless-hardware": "--wireless-hardware",
+    "csi-hardware": "--csi-hardware",
 }
 
 
@@ -1554,6 +1583,8 @@ def resolve_js_test_capabilities(args: argparse.Namespace) -> set[str]:
         capabilities.add("media-hardware")
     if args.wireless_hardware:
         capabilities.add("wireless-hardware")
+    if args.csi_hardware:
+        capabilities.add("csi-hardware")
     return capabilities
 
 
@@ -2438,6 +2469,8 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
             raise SystemExit("`--media-hardware` requires JS scope.")
         if args.wireless_hardware:
             raise SystemExit("`--wireless-hardware` requires JS scope.")
+        if args.csi_hardware:
+            raise SystemExit("`--csi-hardware` requires JS scope.")
         if args.no_flash_firmware:
             raise SystemExit("`--no-flash-firmware` requires JS scope.")
         if args.no_flash_fs:
@@ -2711,6 +2744,11 @@ def parse_args(
         "--wireless-hardware",
         action="store_true",
         help="Enable isolated on-device Wi-Fi/ESP-NOW radio lifecycle E2E cases.",
+    )
+    test.add_argument(
+        "--csi-hardware",
+        action="store_true",
+        help="Enable Wi-Fi CSI RF capture and batch-transport hardware cases.",
     )
     test.add_argument(
         "--no-flash-firmware",

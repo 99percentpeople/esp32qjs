@@ -1,5 +1,50 @@
 # Local Wireless API
 
+## Wi-Fi CSI
+
+`wifiCsi` is a bounded raw Channel State Information capture primitive, not a
+presence/motion classifier. Call `wifiCsi.capabilities()` and select the exact
+reported `configSchema`; C3/S3 use `wifi-csi-legacy/1`, while C5 uses
+`wifi-csi-he/1`. Do not guess schema or PHY support from a board name.
+
+`wifiCsi.open(options)` immediately starts the only session. Associated mode
+preserves the current radio channel. Promiscuous and fixed-channel modes work
+only when enabled by the Build Context and never silently disconnect Station,
+move SoftAP, or override ESP-NOW. `powerSavePolicy` checks/reports modem sleep
+but does not change it.
+
+Use `receive()` for one `WiFiCsiFrame` or `receiveBatch()` for transport. A
+frame owns a fixed-pool slot. `samples()` and `source()` retain that slot;
+`copySamples()` makes an independent owned snapshot. A batch source emits the
+little-endian `esp32qjs-csi/1` scatter/gather protocol. Close frames, batches,
+views, and sources deterministically. Session close waits for the native Wi-Fi
+callback to become quiescent, while outstanding leases keep pool storage alive.
+
+Native firmware preserves raw imaginary-real IQ order and normalized metadata.
+FFT, magnitude, phase, filtering policy beyond the bounded native admission
+filter, recognition, storage, and upload belong in JavaScript Libraries.
+
+```js
+var caps = wifiCsi.capabilities();
+var capture = caps.configSchema === "wifi-csi-he/1"
+  ? { schema: "wifi-csi-he/1", enableLegacy: true, ht20: true, heSu: true }
+  : { schema: "wifi-csi-legacy/1", lltf: true, htLtf: true, scale: "auto" };
+var session = wifiCsi.open({ capture: capture });
+try {
+  var frame = session.receive(1000);
+  if (frame) {
+    try { print(frame.info.rssi, frame.info.layout.byteLength); }
+    finally { frame.close(); }
+  }
+} finally {
+  session.close();
+}
+```
+
+Target compilation and host ownership tests do not substitute for RF hardware
+qualification. Treat PHY metadata, actual frame sizes, rate/throughput, and
+long-duration coexistence as hardware-pending until recorded per target.
+
 ## ESP-NOW
 
 `espNow` is a generic station-interface ESP-NOW transport. It does not provide

@@ -49,6 +49,9 @@ bool esp32_mquickjs_event_queue_send(esp32_mquickjs_event_queue_t *queue,
 bool esp32_mquickjs_event_queue_try_send_from_callback(
     esp32_mquickjs_event_queue_t *queue,
     const void *event);
+bool esp32_mquickjs_event_queue_try_receive(
+    esp32_mquickjs_event_queue_t *queue,
+    void *event);
 bool esp32_mquickjs_event_queue_send_from_isr(esp32_mquickjs_event_queue_t *queue,
                                               const void *event,
                                               int *task_woken);

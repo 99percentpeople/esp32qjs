@@ -161,6 +161,29 @@ class RemoteConfigTests(unittest.TestCase):
             "--wireless-hardware",
         )
 
+    def test_csi_hardware_matrix_is_opt_in_and_separate(self):
+        args, _, _ = REMOTE.parse_args(
+            ["test", "--scope", "js", "--module", "wifi_csi",
+             "--csi-hardware"]
+        )
+        module = REMOTE.resolve_js_modules(["wifi_csi"])[0]
+        hardware_cases = [
+            case for case in module.cases
+            if "csi-hardware" in case.required_capabilities
+        ]
+
+        self.assertEqual(
+            REMOTE.resolve_js_test_capabilities(args),
+            {"csi-hardware"},
+        )
+        self.assertEqual(len(hardware_cases), 3)
+        self.assertTrue(all(case.path.endswith("-hardware.js")
+                            for case in hardware_cases))
+        self.assertEqual(
+            REMOTE.JS_TEST_CAPABILITY_FLAGS["csi-hardware"],
+            "--csi-hardware",
+        )
+
     def test_js_test_build_creates_a_real_context_and_selected_tree(self):
         config = self.config()
         modules = REMOTE.resolve_js_modules(["bitmap", "camera-bitmap"])

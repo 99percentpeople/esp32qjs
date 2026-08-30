@@ -167,6 +167,55 @@ config ESP32_MQUICKJS_FEATURE_ESPNOW
         Enable bounded station-interface ESP-NOW sessions with a fixed receive
         pool, EventQueue delivery, peer management, and Future-backed sends.
 
+config ESP32_MQUICKJS_FEATURE_WIFI_CSI
+    bool "Enable Wi-Fi CSI module"
+    default n
+    depends on SOC_WIFI_SUPPORTED && ESP_WIFI_CSI_ENABLED
+    depends on IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32C5 || IDF_TARGET_ESP32S3
+    select ESP32_MQUICKJS_WIFI_RADIO
+    help
+        Enable bounded raw Wi-Fi channel-state capture. The callback copies
+        normalized metadata and driver CSI bytes into a fixed internal-memory
+        pool; DSP and application policy remain in JavaScript.
+
+config ESP32_MQUICKJS_WIFI_CSI_POOL_CAPACITY
+    int "Wi-Fi CSI frame pool capacity"
+    range 2 128
+    default 16
+    depends on ESP32_MQUICKJS_FEATURE_WIFI_CSI
+
+config ESP32_MQUICKJS_WIFI_CSI_QUEUE_LEN
+    int "Wi-Fi CSI receive queue capacity"
+    range 1 128
+    default 16
+    depends on ESP32_MQUICKJS_FEATURE_WIFI_CSI
+    help
+        Must not exceed the frame pool capacity. Invalid Build Contexts fail
+        at compile time and runtime initialization.
+
+config ESP32_MQUICKJS_WIFI_CSI_MAX_FRAME_BYTES
+    int "Maximum bytes retained per Wi-Fi CSI frame"
+    range 128 4096
+    default 1024 if IDF_TARGET_ESP32C5
+    default 512
+    depends on ESP32_MQUICKJS_FEATURE_WIFI_CSI
+
+config ESP32_MQUICKJS_WIFI_CSI_MAX_BATCH_FRAMES
+    int "Maximum frames in one Wi-Fi CSI batch"
+    range 1 128
+    default 8
+    depends on ESP32_MQUICKJS_FEATURE_WIFI_CSI
+
+config ESP32_MQUICKJS_WIFI_CSI_ALLOW_PROMISCUOUS
+    bool "Allow explicit promiscuous Wi-Fi CSI sessions"
+    default n
+    depends on ESP32_MQUICKJS_FEATURE_WIFI_CSI
+
+config ESP32_MQUICKJS_WIFI_CSI_ALLOW_FIXED_CHANNEL
+    bool "Allow explicit fixed-channel Wi-Fi CSI sessions"
+    default n
+    depends on ESP32_MQUICKJS_FEATURE_WIFI_CSI
+
 config ESP32_MQUICKJS_ESPNOW_RX_QUEUE_LEN
     int "Default ESP-NOW receive capacity"
     range 1 32

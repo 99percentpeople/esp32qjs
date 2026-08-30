@@ -1884,6 +1884,102 @@ After synchronization, `Date.now()` and `new Date()` use the same wall clock;
 `sys.millis()`, `sys.micros()`, and `performance.now()` remain monotonic uptime
 clocks and are not affected by SNTP adjustments.
 
+## `wifiCsi` Module
+
+`wifiCsi` exposes bounded, target-normalized Wi-Fi Channel State Information
+capture when `sys.info.features.wifiCsi` is enabled. It copies the transient
+ESP-IDF CSI buffer into a fixed native pool in the Wi-Fi callback; signal
+processing, persistence, recognition, and upload policy remain JavaScript
+Library responsibilities.
+
+- `wifiCsi.capabilities()` returns API/target/IDF identity, the required
+  `wifi-csi-legacy/1` or `wifi-csi-he/1` capture schema, supported PHY/source
+  modes, Build Context limits, and optional radio controls. Select a capture
+  schema from this object; do not infer it from the target name.
+- `wifiCsi.open(options)` validates the entire v1 object, acquires a shared
+  radio client, allocates the fixed pool and DROP_NEWEST EventQueue, registers
+  the native callback, and starts capture. Only one session may be open.
+- Associated capture preserves the current radio channel. Promiscuous and
+  fixed-channel capture require explicit Build Context gates and exclusive
+  radio ownership. Conflicts fail without disconnecting Station, moving the AP,
+  or changing ESP-NOW behind the caller's back.
+- `powerSavePolicy: "preserve"` reports timing as power-save dependent when
+  modem sleep is active. `"require-none"` rejects open instead of changing the
+  Station power-save setting.
+
+Legacy C3/S3 capture uses `wifi-csi-legacy/1` fields `lltf`, `htLtf`,
+`stbcHtLtf2`, `ltfMerge`, `adjacentSubcarrierFilter`, `scale`, and `dumpAck`.
+C5 uses `wifi-csi-he/1` fields `enableLegacy`, `forceLegacyLtf`, `ht20`, `ht40`,
+`vht`, HE format controls, `heStbcLtf`, `valueScale`, `dumpAck`, and `lltfBits`.
+Unknown or target-incompatible fields are rejected.
+
+### `WiFiCsiSession`
+
+`status()` returns the requested and effective radio/capture settings plus the
+session generation and lifecycle. `stats()` separates filtering, invalid
+channel estimates, pool exhaustion, queue overflow, oversized frames, closing
+drops, delivered frames/batches, bytes, and live leases.
+
+`receive(timeoutMs?)` returns one `WiFiCsiFrame` or `null`; `receiveBatch(
+maximumFrames?, timeoutMs?)` waits for the first frame and non-blockingly drains
+additional events into one `WiFiCsiBatch`. `stop()` disables and unregisters
+the callback and waits for callback quiescence before returning. Reconfiguration
+is allowed only while stopped through `configure(options)`, followed by
+`start()`. `close()` is idempotent and may leave pool storage retained until
+the last frame, view, source, or batch lease is released.
+
+### `WiFiCsiFrame`
+
+`info` contains normalized MAC, RSSI, channel, PHY, validity, sequence, time,
+and layout metadata. `samples()` returns a pool-backed retained `ByteView`;
+`copySamples()` returns an independent owned snapshot; `source()` returns a
+one-shot retained `ByteSpanSource`. Close every frame and every derived view or
+source deterministically. Raw IQ bytes retain ESP-IDF order and report
+`componentOrder: "imaginary-real"`; firmware does not calculate magnitude,
+phase, FFT, or application features.
+
+### `WiFiCsiBatch`
+
+`frameCount`, `info(index)`, and `samples(index)` inspect retained frames.
+`source({ format: "esp32qjs-csi/1" })` emits a little-endian scatter/gather
+stream without constructing JavaScript sample arrays. The v1 stream starts
+with a 24-byte header (`E32QCSI1`, version, frame count, metadata bytes, payload
+bytes), followed by 16-byte directory entries, fixed 64-byte normalized
+metadata records, and the original IQ payload bytes. Close the source before
+closing the batch unless the consumer already completed it; either may remain
+alive safely because each owns its own native lease.
+
+```js
+var caps = wifiCsi.capabilities();
+var capture = caps.configSchema === "wifi-csi-he/1"
+  ? { schema: "wifi-csi-he/1", enableLegacy: true, ht20: true, heSu: true }
+  : { schema: "wifi-csi-legacy/1", lltf: true, htLtf: true, scale: "auto" };
+var session = wifiCsi.open({
+  source: "associated",
+  channel: "current",
+  conflict: "fail",
+  capture: capture,
+  queue: { capacity: 16, overflow: "drop-newest" }
+});
+try {
+  var frame = session.receive(1000);
+  if (frame !== null) {
+    try {
+      print(frame.info.rssi, frame.info.layout.byteLength);
+    } finally {
+      frame.close();
+    }
+  }
+} finally {
+  session.close();
+}
+```
+
+Hardware qualification is still required for actual C3/S3 legacy and C5 HE
+frame semantics, PHY coverage, long-duration throughput, coexistence, and
+close/reopen soak. Host tests and target builds establish contract and memory
+ownership only; they do not prove RF capture behavior.
+
 ## `espNow` Module
 
 `espNow` exposes generic station-interface ESP-NOW transport when
