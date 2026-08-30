@@ -2123,7 +2123,7 @@ namespace ESP32QJS {
     | "uxga";
   type CameraGrabMode = "whenEmpty" | "latest";
   type CameraBufferLocation = "psram" | "dram";
-  type CameraSensorModel = "ov2640" | "ov3660";
+  type CameraSensorModel = "ov2640" | "ov3660" | "ov5640";
 
   interface CameraPins {
     pwdn?: number;

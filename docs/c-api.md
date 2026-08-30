@@ -946,7 +946,7 @@ capture only: no background video, codecs, MJPEG, RTSP, or upload policy.
 
 - `camera.capabilities()`
   Return target, PSRAM status/size, compiled sensor drivers, pixel formats, and
-  frame sizes. Version 1 probes OV2640 or OV3660 after initialization; callers
+  frame sizes. Version 1 probes OV2640, OV3660, or OV5640 after initialization; callers
   do not select a sensor model.
 - `camera.open(options?)`
   Open the singleton camera. Options include `pixelFormat`, `frameSize`,
@@ -968,7 +968,7 @@ explicitly pairs two framebuffers with `latest`.
   worker exits, so the stale handle must not be reused.
 - `cam.status()`
   Return configuration and ownership state. `status().sensor.model` reports
-  the detected `ov2640` or `ov3660`.
+  the detected `ov2640`, `ov3660`, or `ov5640`.
 - `cam.controls()` / `cam.setControl(name, value)`
   Read or update `frameSize`, `jpegQuality`, `brightness`, `contrast`,
   `saturation`, `horizontalMirror`, or `verticalFlip`.

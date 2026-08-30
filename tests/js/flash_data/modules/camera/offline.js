@@ -13,6 +13,8 @@ test("camera/offline", function () {
     "OV2640 should be compiled");
   test.ok(capabilities.sensorDrivers.indexOf("ov3660") >= 0,
     "OV3660 should be compiled");
+  test.ok(capabilities.sensorDrivers.indexOf("ov5640") >= 0,
+    "OV5640 should be compiled");
   test.ok(capabilities.pixelFormats.indexOf("jpeg") >= 0,
     "JPEG should be supported");
   test.ok(capabilities.frameSizes.indexOf("qvga") >= 0,

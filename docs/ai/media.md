@@ -91,7 +91,7 @@ PDM always yields signed 16-bit little-endian mono PCM:
 
 ## Camera capture
 
-- `camera.capabilities()` reports target, PSRAM, compiled OV2640/OV3660
+- `camera.capabilities()` reports target, PSRAM, and the compiled OV2640/OV3660/OV5640
   drivers, formats, and frame sizes.
 - `camera.open(options?)` uses explicit pins over selected hardware constants.
   The resolved map must contain every required signal. It probes the sensor;
@@ -101,7 +101,7 @@ PDM always yields signed 16-bit little-endian mono PCM:
   returns `null` and leaves the camera open. Cancellation or exec interruption
   closes that camera instance after the native worker exits; do not reuse its
   handle.
-- `cam.status().sensor.model` is `"ov2640"` or `"ov3660"` after probing.
+- `cam.status().sensor.model` is `"ov2640"`, `"ov3660"`, or `"ov5640"` after probing.
 - `cam.controls()` and `cam.setControl(name, value)` cover `frameSize`,
   `jpegQuality`, `brightness`, `contrast`, `saturation`, `horizontalMirror`,
   and `verticalFlip`.

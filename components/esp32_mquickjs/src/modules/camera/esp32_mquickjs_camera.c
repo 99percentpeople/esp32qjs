@@ -319,13 +319,27 @@ static const char *camera_sensor_model(const sensor_t *sensor)
     if (sensor == NULL) {
         return "unknown";
     }
+#if CONFIG_OV2640_SUPPORT
     if (sensor->id.PID == OV2640_PID) {
         return "ov2640";
     }
+#endif
+#if CONFIG_OV3660_SUPPORT
     if (sensor->id.PID == OV3660_PID) {
         return "ov3660";
     }
+#endif
+#if CONFIG_OV5640_SUPPORT
+    if (sensor->id.PID == OV5640_PID) {
+        return "ov5640";
+    }
+#endif
     return "unknown";
+}
+
+static bool camera_sensor_supported(const sensor_t *sensor)
+{
+    return strcmp(camera_sensor_model(sensor), "unknown") != 0;
 }
 
 static bool camera_slot_matches(uint32_t generation)
@@ -1625,7 +1639,18 @@ static JSValue camera_string_array(JSContext *ctx,
 JSValue js_camera_capabilities(JSContext *ctx, JSValue *this_val,
                                int argc, JSValue *argv)
 {
-    static const char *const sensors[] = {"ov2640", "ov3660"};
+    static const char *const sensors[] = {
+#if CONFIG_OV2640_SUPPORT
+        "ov2640",
+#endif
+#if CONFIG_OV3660_SUPPORT
+        "ov3660",
+#endif
+#if CONFIG_OV5640_SUPPORT
+        "ov5640",
+#endif
+        NULL,
+    };
     static const char *const formats[] = {"jpeg", "grayscale", "rgb565"};
     const char *frame_names[sizeof(s_frame_sizes) / sizeof(s_frame_sizes[0])];
     JSGCRef result_ref;
@@ -1646,7 +1671,7 @@ JSValue js_camera_capabilities(JSContext *ctx, JSValue *this_val,
     }
     *result = JS_NewObject(ctx);
     *sensor_values = camera_string_array(
-        ctx, sensors, sizeof(sensors) / sizeof(sensors[0]));
+        ctx, sensors, (sizeof(sensors) / sizeof(sensors[0])) - 1U);
     *format_values = camera_string_array(
         ctx, formats, sizeof(formats) / sizeof(formats[0]));
     *size_values = camera_string_array(
@@ -1962,9 +1987,7 @@ parsed:
     s_camera.allocated = true;
     s_camera.initialized = true;
     s_camera.sensor = esp_camera_sensor_get();
-    if (s_camera.sensor == NULL ||
-        (s_camera.sensor->id.PID != OV2640_PID &&
-         s_camera.sensor->id.PID != OV3660_PID)) {
+    if (!camera_sensor_supported(s_camera.sensor)) {
         s_camera.release_pending = true;
         err = camera_cleanup();
         if (err != ESP_OK) {

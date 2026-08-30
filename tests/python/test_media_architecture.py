@@ -313,6 +313,8 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn("does not accept a sensor model; the driver probes it", source)
         self.assertIn("OV2640_PID", source)
         self.assertIn("OV3660_PID", source)
+        self.assertIn("OV5640_PID", source)
+        self.assertIn('#if CONFIG_OV5640_SUPPORT', source)
 
     def test_camera_deinit_failure_retains_driver_and_leases_for_retry(self):
         source = (
