@@ -50,7 +50,8 @@ int main(void)
     esp32_mquickjs_wifi_csi_slot_t *slot =
         esp32_mquickjs_wifi_csi_slot_from_event(&resources, &first_event);
     assert(slot != NULL);
-    assert(esp32_mquickjs_wifi_csi_slot_request_close(&resources, slot));
+    assert(esp32_mquickjs_wifi_csi_slot_discard_event(
+        &resources, &first_event));
 
     esp32_mquickjs_wifi_csi_resources_set_accepting(&resources, false);
     assert(esp32_mquickjs_wifi_csi_callback_publish(

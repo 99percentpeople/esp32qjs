@@ -211,11 +211,6 @@ config ESP32_MQUICKJS_WIFI_CSI_ALLOW_PROMISCUOUS
     default n
     depends on ESP32_MQUICKJS_FEATURE_WIFI_CSI
 
-config ESP32_MQUICKJS_WIFI_CSI_ALLOW_FIXED_CHANNEL
-    bool "Allow explicit fixed-channel Wi-Fi CSI sessions"
-    default n
-    depends on ESP32_MQUICKJS_FEATURE_WIFI_CSI
-
 config ESP32_MQUICKJS_ESPNOW_RX_QUEUE_LEN
     int "Default ESP-NOW receive capacity"
     range 1 32

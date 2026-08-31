@@ -26,8 +26,11 @@ static void test_repeated_resource_lifecycle_returns_to_baseline(void)
             ESP32_MQUICKJS_WIFI_CSI_PUBLISH_ACCEPTED);
         slot = esp32_mquickjs_wifi_csi_slot_from_event(&resources, &event);
         assert(slot != NULL);
+        assert(esp32_mquickjs_wifi_csi_slot_take_event_owner(
+            &resources, &event));
         assert(!esp32_mquickjs_wifi_csi_resources_deinit(&resources));
-        assert(esp32_mquickjs_wifi_csi_slot_request_close(&resources, slot));
+        assert(esp32_mquickjs_wifi_csi_slot_close_public_owner(
+            &resources, slot));
         assert(atomic_load(&resources.counters.leased_frames) == 0U);
         assert(esp32_mquickjs_wifi_csi_resources_deinit(&resources));
         assert(state.allocations == 0);

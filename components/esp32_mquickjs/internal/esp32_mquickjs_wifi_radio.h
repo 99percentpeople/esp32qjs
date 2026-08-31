@@ -21,12 +21,14 @@ typedef enum {
 
 typedef struct {
     uint32_t generation;
+    uint32_t identity;
     esp32_mquickjs_wifi_radio_client_t client;
     bool acquired;
 } esp32_mquickjs_wifi_radio_lease_t;
 
 typedef struct {
     uint32_t generation;
+    uint32_t radio_lease_identity;
     esp32_mquickjs_wifi_radio_client_t client;
     bool acquired;
     bool framework_enabled;
@@ -47,6 +49,7 @@ typedef struct {
     wifi_ps_type_t power_save;
     bool fixed_channel_claimed;
     esp32_mquickjs_wifi_radio_client_t fixed_channel_client;
+    uint32_t fixed_channel_lease_identity;
     bool promiscuous_claimed;
     esp32_mquickjs_wifi_radio_client_t promiscuous_client;
     uint32_t clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_COUNT];

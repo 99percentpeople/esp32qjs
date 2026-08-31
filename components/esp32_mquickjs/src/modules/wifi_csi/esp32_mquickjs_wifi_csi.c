@@ -8,6 +8,7 @@
 #include "esp32_mquickjs_options.h"
 #include "esp32_mquickjs_reaper.h"
 #include "esp32_mquickjs_wifi_csi_resources.h"
+#include "esp32_mquickjs_wifi_csi_batch.h"
 #include "esp32_mquickjs_wifi_csi_target.h"
 
 #ifdef CONFIG_ESP32_MQUICKJS_WIFI_CSI_ALLOW_PROMISCUOUS
@@ -16,15 +17,11 @@
 #define WIFI_CSI_PROMISCUOUS_SUPPORTED false
 #endif
 
-#ifdef CONFIG_ESP32_MQUICKJS_WIFI_CSI_ALLOW_FIXED_CHANNEL
-#define WIFI_CSI_FIXED_CHANNEL_SUPPORTED true
-#else
-#define WIFI_CSI_FIXED_CHANNEL_SUPPORTED false
-#endif
 #include "esp32_mquickjs_wifi_radio.h"
 #include "utils/esp32_mquickjs_byte_source.h"
 
 #include <stdatomic.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -32,6 +29,7 @@
 #include "esp_idf_version.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -49,7 +47,9 @@
 #define WIFI_CSI_EVENT_QUEUE_KEY "_eventQueue"
 #define WIFI_CSI_BATCH_HEADER_BYTES 24U
 #define WIFI_CSI_BATCH_DIRECTORY_BYTES 16U
-#define WIFI_CSI_BATCH_METADATA_BYTES 64U
+#define WIFI_CSI_BATCH_METADATA_BYTES 192U
+#define WIFI_CSI_BATCH_SEGMENT_BYTES 40U
+#define WIFI_CSI_BATCH_SEGMENT_BASE 60U
 #define WIFI_CSI_BINARY_VERSION 1U
 
 typedef enum {
@@ -90,7 +90,9 @@ typedef struct {
     uint32_t filtered_rssi;
     uint32_t filtered_decimation;
     uint32_t filtered_rate_limit;
-    uint32_t invalid_channel_estimate;
+    uint32_t filtered_first_word_invalid;
+    uint32_t filtered_channel_estimate_invalid;
+    uint32_t invalid_callback_data;
     uint32_t dropped_pool_full;
     uint32_t dropped_queue_full;
     uint32_t dropped_frame_too_large;
@@ -122,6 +124,7 @@ typedef struct {
     uint32_t radio_generation;
     wifi_ps_type_t effective_power_save;
     esp_err_t last_error;
+    const char *last_error_code;
     const char *last_error_stage;
 } wifi_csi_session_t;
 
@@ -624,18 +627,20 @@ static bool wifi_csi_parse_open_options_rooted(JSContext *ctx, JSValue *value,
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property) &&
         !wifi_csi_string_equals(ctx, property, "current")) {
-#if CONFIG_ESP32_MQUICKJS_WIFI_CSI_ALLOW_FIXED_CHANNEL
         if (!esp32_mquickjs_value_to_bounded_u32(
-                ctx, property, 1U, 196U, &number)) {
+                ctx, property, 1U, UINT8_MAX, &number) ||
+            !esp32_mquickjs_wifi_csi_target_channel_structurally_valid(
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+                true,
+#else
+                false,
+#endif
+                (uint8_t)number)) {
             return JS_ThrowRangeError(
-                ctx, "channel expects current or a channel number"), false;
+                ctx, "channel is not structurally valid for this target"), false;
         }
         options->fixed_channel = true;
         options->channel = (uint8_t)number;
-#else
-        return JS_ThrowTypeError(
-            ctx, "WIFI_CSI_CONFIG_UNSUPPORTED: fixed channel is disabled by this Build Context"), false;
-#endif
     }
     property = JS_GetPropertyStr(ctx, *value, "conflict");
     if (JS_IsException(property) ||
@@ -787,7 +792,9 @@ static void wifi_csi_snapshot_stats(wifi_csi_session_t *session)
     WIFI_CSI_SNAPSHOT(filtered_rssi);
     WIFI_CSI_SNAPSHOT(filtered_decimation);
     WIFI_CSI_SNAPSHOT(filtered_rate_limit);
-    WIFI_CSI_SNAPSHOT(invalid_channel_estimate);
+    WIFI_CSI_SNAPSHOT(filtered_first_word_invalid);
+    WIFI_CSI_SNAPSHOT(filtered_channel_estimate_invalid);
+    WIFI_CSI_SNAPSHOT(invalid_callback_data);
     WIFI_CSI_SNAPSHOT(dropped_pool_full);
     WIFI_CSI_SNAPSHOT(dropped_queue_full);
     WIFI_CSI_SNAPSHOT(dropped_frame_too_large);
@@ -852,7 +859,7 @@ static void wifi_csi_lease_request_close(wifi_csi_lease_ref_t *lease)
     if (lease == NULL || lease->released) return;
     slot = wifi_csi_resolve_event(&lease->event);
     if (slot != NULL) {
-        (void)esp32_mquickjs_wifi_csi_slot_request_close(
+        (void)esp32_mquickjs_wifi_csi_slot_close_public_owner(
             &s_wifi_csi.resources, slot);
     }
     lease->released = true;
@@ -906,7 +913,7 @@ static void wifi_csi_rx_callback(void *opaque, wifi_csi_info_t *info)
     }
     if (info == NULL || info->buf == NULL) {
         atomic_fetch_add_explicit(
-            &session->resources.counters.invalid_channel_estimate, 1U,
+            &session->resources.counters.invalid_callback_data, 1U,
             memory_order_relaxed);
     } else {
         esp32_mquickjs_wifi_csi_target_normalize_metadata(
@@ -928,8 +935,8 @@ static void wifi_csi_event_drop(void *event, void *opaque)
     slot = esp32_mquickjs_wifi_csi_slot_from_event(
         &session->resources, receive_event);
     if (slot != NULL) {
-        (void)esp32_mquickjs_wifi_csi_slot_request_close(
-            &session->resources, slot);
+        (void)esp32_mquickjs_wifi_csi_slot_discard_event(
+            &session->resources, receive_event);
     }
     wifi_csi_maybe_destroy_resources(session);
 }
@@ -956,6 +963,7 @@ static JSValue wifi_csi_throw_driver_error(JSContext *ctx,
     JSValue result;
 
     s_wifi_csi.last_error = err;
+    s_wifi_csi.last_error_code = code;
     s_wifi_csi.last_error_stage = stage;
     *details = JS_NewObject(ctx);
     if (JS_IsException(*details) ||
@@ -1056,6 +1064,7 @@ static esp_err_t wifi_csi_start_native(wifi_csi_session_t *session)
     }
     session->csi_enabled = true;
     session->last_error = ESP_OK;
+    session->last_error_code = NULL;
     session->last_error_stage = NULL;
     atomic_store_explicit(&session->lifecycle, WIFI_CSI_RUNNING,
                           memory_order_release);
@@ -1072,6 +1081,29 @@ fail_radio_policy:
         esp32_mquickjs_wifi_radio_release_channel(&session->radio_lease);
     }
     return err;
+}
+
+static const char *wifi_csi_start_error_code(
+    const wifi_csi_session_t *session, esp_err_t err)
+{
+    const char *stage = session != NULL && session->last_error_stage != NULL
+        ? session->last_error_stage : "";
+
+    if (strcmp(stage, "power_save_policy") == 0) {
+        return "WIFI_CSI_POWER_SAVE_CONFLICT";
+    }
+    if (session != NULL &&
+        session->options.source == WIFI_CSI_SOURCE_PROMISCUOUS &&
+        strcmp(stage, "wifi_radio_acquire_promiscuous") == 0) {
+        return "WIFI_CSI_PROMISCUOUS_CONFLICT";
+    }
+    if (session != NULL && session->options.fixed_channel &&
+        strcmp(stage, "wifi_radio_set_channel") == 0) {
+        return err == ESP_ERR_NOT_ALLOWED || err == ESP_ERR_INVALID_ARG
+            ? "WIFI_CSI_REGULATORY_CONFLICT"
+            : "WIFI_CSI_RADIO_CONFLICT";
+    }
+    return "WIFI_CSI_DRIVER_ERROR";
 }
 
 static void wifi_csi_finish_stop(wifi_csi_session_t *session)
@@ -1326,6 +1358,148 @@ static JSValue wifi_csi_string_array(JSContext *ctx,
     return JS_PopGCRef(ctx, &array_ref);
 }
 
+static JSValue wifi_csi_24ghz_channels_to_js(
+    JSContext *ctx, const wifi_country_t *country)
+{
+    JSGCRef array_ref, item_ref;
+    JSValue *array = JS_PushGCRef(ctx, &array_ref);
+    JSValue *item = JS_PushGCRef(ctx, &item_ref);
+    uint16_t channel;
+    uint16_t end;
+    uint32_t index = 0U;
+
+    *array = JS_NewArray(ctx, 0);
+    *item = JS_UNDEFINED;
+    if (JS_IsException(*array)) goto fail;
+    end = (uint16_t)country->schan + country->nchan;
+    for (channel = country->schan; channel < end && channel <= 14U;
+         ++channel) {
+        *item = JS_NewUint32(ctx, channel);
+        if (JS_IsException(*item) ||
+            JS_IsException(JS_SetPropertyUint32(ctx, *array, index++, *item)))
+            goto fail;
+        *item = JS_UNDEFINED;
+    }
+    JS_PopGCRef(ctx, &item_ref);
+    return JS_PopGCRef(ctx, &array_ref);
+
+fail:
+    JS_PopGCRef(ctx, &item_ref);
+    JS_PopGCRef(ctx, &array_ref);
+    return JS_EXCEPTION;
+}
+
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+static JSValue wifi_csi_5ghz_channels_to_js(
+    JSContext *ctx, uint32_t channel_mask)
+{
+    static const uint8_t channels[] = {
+        36U, 40U, 44U, 48U, 52U, 56U, 60U, 64U,
+        100U, 104U, 108U, 112U, 116U, 120U, 124U, 128U,
+        132U, 136U, 140U, 144U, 149U, 153U, 157U, 161U,
+        165U, 169U, 173U, 177U,
+    };
+    JSGCRef array_ref, item_ref;
+    JSValue *array = JS_PushGCRef(ctx, &array_ref);
+    JSValue *item = JS_PushGCRef(ctx, &item_ref);
+    uint32_t input_index;
+    uint32_t output_index = 0U;
+
+    *array = JS_NewArray(ctx, 0);
+    *item = JS_UNDEFINED;
+    if (JS_IsException(*array)) goto fail;
+    for (input_index = 0U; input_index < sizeof(channels); ++input_index) {
+        if ((channel_mask & (1UL << (input_index + 1U))) == 0U) continue;
+        *item = JS_NewUint32(ctx, channels[input_index]);
+        if (JS_IsException(*item) ||
+            JS_IsException(JS_SetPropertyUint32(
+                ctx, *array, output_index++, *item))) goto fail;
+        *item = JS_UNDEFINED;
+    }
+    JS_PopGCRef(ctx, &item_ref);
+    return JS_PopGCRef(ctx, &array_ref);
+
+fail:
+    JS_PopGCRef(ctx, &item_ref);
+    JS_PopGCRef(ctx, &array_ref);
+    return JS_EXCEPTION;
+}
+#endif
+
+static JSValue wifi_csi_radio_capabilities_to_js(JSContext *ctx)
+{
+    JSGCRef result_ref, bands_ref, band_ref, allowed_ref;
+    JSValue *result = JS_PushGCRef(ctx, &result_ref);
+    JSValue *bands = JS_PushGCRef(ctx, &bands_ref);
+    JSValue *band = JS_PushGCRef(ctx, &band_ref);
+    JSValue *allowed = JS_PushGCRef(ctx, &allowed_ref);
+    wifi_country_t country = {0};
+    bool country_available = esp_wifi_get_country(&country) == ESP_OK;
+    char country_code[4] = {0};
+    const char *policy = NULL;
+    uint32_t band_index = 0U;
+
+    *result = JS_NewObject(ctx);
+    *bands = JS_NewArray(ctx, 0);
+    *band = JS_UNDEFINED;
+    *allowed = JS_UNDEFINED;
+    if (JS_IsException(*result) || JS_IsException(*bands)) goto fail;
+    if (country_available) {
+        memcpy(country_code, country.cc, sizeof(country.cc));
+        if (country.policy == WIFI_COUNTRY_POLICY_AUTO) policy = "auto";
+        if (country.policy == WIFI_COUNTRY_POLICY_MANUAL) policy = "manual";
+    }
+    *band = JS_NewObject(ctx);
+    *allowed = country_available
+        ? wifi_csi_24ghz_channels_to_js(ctx, &country) : JS_NULL;
+    if (JS_IsException(*band) || JS_IsException(*allowed) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, band, "band", JS_NewString(ctx, "2.4GHz")) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, band, "allowedChannels", *allowed) ||
+        JS_IsException(JS_SetPropertyUint32(
+            ctx, *bands, band_index++, *band))) goto fail;
+    *allowed = JS_UNDEFINED;
+    *band = JS_UNDEFINED;
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    *band = JS_NewObject(ctx);
+    *allowed = country_available &&
+            country.policy == WIFI_COUNTRY_POLICY_MANUAL &&
+            country.wifi_5g_channel_mask != 0U
+        ? wifi_csi_5ghz_channels_to_js(
+            ctx, country.wifi_5g_channel_mask) : JS_NULL;
+    if (JS_IsException(*band) || JS_IsException(*allowed) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, band, "band", JS_NewString(ctx, "5GHz")) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, band, "allowedChannels", *allowed) ||
+        JS_IsException(JS_SetPropertyUint32(
+            ctx, *bands, band_index++, *band))) goto fail;
+    *allowed = JS_UNDEFINED;
+    *band = JS_UNDEFINED;
+#endif
+    if (!esp32_mquickjs_set_property_ref(
+            ctx, result, "country", country_available
+                ? JS_NewString(ctx, country_code) : JS_NULL) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "policy", policy != NULL
+                ? JS_NewString(ctx, policy) : JS_NULL) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "bands", *bands))
+        goto fail;
+    *bands = JS_UNDEFINED;
+    JS_PopGCRef(ctx, &allowed_ref);
+    JS_PopGCRef(ctx, &band_ref);
+    JS_PopGCRef(ctx, &bands_ref);
+    return JS_PopGCRef(ctx, &result_ref);
+
+fail:
+    JS_PopGCRef(ctx, &allowed_ref);
+    JS_PopGCRef(ctx, &band_ref);
+    JS_PopGCRef(ctx, &bands_ref);
+    JS_PopGCRef(ctx, &result_ref);
+    return JS_EXCEPTION;
+}
+
 static JSValue wifi_csi_mac_array(JSContext *ctx,
                                   const uint8_t values[][6],
                                   uint8_t count)
@@ -1545,18 +1719,187 @@ fail:
     return JS_EXCEPTION;
 }
 
+static const char *wifi_csi_sample_encoding_name(
+    esp32_mquickjs_wifi_csi_sample_encoding_t encoding)
+{
+    switch (encoding) {
+        case ESP32_MQUICKJS_WIFI_CSI_SAMPLE_ENCODING_SIGNED_INT8:
+            return "signed-int8";
+        case ESP32_MQUICKJS_WIFI_CSI_SAMPLE_ENCODING_SIGNED_INT12_LE:
+            return "signed-int12-le";
+        case ESP32_MQUICKJS_WIFI_CSI_SAMPLE_ENCODING_SIGNED_INT12_PACKED:
+            return "signed-int12-packed";
+        default:
+            return "unknown";
+    }
+}
+
+static const char *wifi_csi_layout_schema_name(
+    esp32_mquickjs_wifi_csi_layout_schema_t schema)
+{
+    switch (schema) {
+        case ESP32_MQUICKJS_WIFI_CSI_LAYOUT_SCHEMA_LEGACY:
+            return "wifi-csi-legacy-layout/1";
+        case ESP32_MQUICKJS_WIFI_CSI_LAYOUT_SCHEMA_HE:
+            return "wifi-csi-he-layout/1";
+        default:
+            return "unknown";
+    }
+}
+
+static const char *wifi_csi_segment_type_name(
+    esp32_mquickjs_wifi_csi_segment_type_t type)
+{
+    switch (type) {
+        case ESP32_MQUICKJS_WIFI_CSI_SEGMENT_LLTF: return "lltf";
+        case ESP32_MQUICKJS_WIFI_CSI_SEGMENT_HT_LTF: return "ht-ltf";
+        case ESP32_MQUICKJS_WIFI_CSI_SEGMENT_STBC_HT_LTF2:
+            return "stbc-ht-ltf2";
+        case ESP32_MQUICKJS_WIFI_CSI_SEGMENT_VHT_LTF: return "vht-ltf";
+        case ESP32_MQUICKJS_WIFI_CSI_SEGMENT_HE_LTF1: return "he-ltf1";
+        case ESP32_MQUICKJS_WIFI_CSI_SEGMENT_HE_LTF2: return "he-ltf2";
+        case ESP32_MQUICKJS_WIFI_CSI_SEGMENT_MIXED: return "mixed";
+        default: return "unknown";
+    }
+}
+
+static JSValue wifi_csi_layout_to_js(
+    JSContext *ctx, const esp32_mquickjs_wifi_csi_layout_t *native_layout)
+{
+    JSGCRef layout_ref, segments_ref, segment_ref, ranges_ref;
+    JSGCRef range_ref, nulls_ref, item_ref;
+    JSValue *layout = JS_PushGCRef(ctx, &layout_ref);
+    JSValue *segments = JS_PushGCRef(ctx, &segments_ref);
+    JSValue *segment = JS_PushGCRef(ctx, &segment_ref);
+    JSValue *ranges = JS_PushGCRef(ctx, &ranges_ref);
+    JSValue *range = JS_PushGCRef(ctx, &range_ref);
+    JSValue *nulls = JS_PushGCRef(ctx, &nulls_ref);
+    JSValue *item = JS_PushGCRef(ctx, &item_ref);
+    uint8_t segment_index;
+
+    *layout = JS_NewObject(ctx);
+    *segments = JS_NewArray(ctx, native_layout->segment_count);
+    *segment = JS_UNDEFINED;
+    *ranges = JS_UNDEFINED;
+    *range = JS_UNDEFINED;
+    *nulls = JS_UNDEFINED;
+    *item = JS_UNDEFINED;
+    if (JS_IsException(*layout) || JS_IsException(*segments)) goto fail;
+    for (segment_index = 0U;
+         segment_index < native_layout->segment_count;
+         ++segment_index) {
+        const esp32_mquickjs_wifi_csi_segment_t *native_segment =
+            &native_layout->segments[segment_index];
+        uint8_t range_index;
+        uint8_t null_index;
+
+        *segment = JS_NewObject(ctx);
+        *ranges = JS_NewArray(ctx, native_segment->subcarrier_range_count);
+        *nulls = JS_NewArray(ctx, native_segment->null_subcarrier_count);
+        if (JS_IsException(*segment) || JS_IsException(*ranges) ||
+            JS_IsException(*nulls)) goto fail;
+        for (range_index = 0U;
+             range_index < native_segment->subcarrier_range_count;
+             ++range_index) {
+            *range = JS_NewObject(ctx);
+            if (JS_IsException(*range) ||
+                !esp32_mquickjs_set_property_ref(
+                    ctx, range, "start",
+                    JS_NewInt32(ctx,
+                        native_segment->subcarrier_ranges[range_index].start)) ||
+                !esp32_mquickjs_set_property_ref(
+                    ctx, range, "end",
+                    JS_NewInt32(ctx,
+                        native_segment->subcarrier_ranges[range_index].end)) ||
+                JS_IsException(JS_SetPropertyUint32(
+                    ctx, *ranges, range_index, *range))) goto fail;
+            *range = JS_UNDEFINED;
+        }
+        for (null_index = 0U;
+             null_index < native_segment->null_subcarrier_count;
+             ++null_index) {
+            *item = JS_NewInt32(
+                ctx, native_segment->null_subcarriers[null_index]);
+            if (JS_IsException(*item) ||
+                JS_IsException(JS_SetPropertyUint32(
+                    ctx, *nulls, null_index, *item))) goto fail;
+            *item = JS_UNDEFINED;
+        }
+        if (!esp32_mquickjs_set_property_ref(
+                ctx, segment, "type", JS_NewString(
+                    ctx, wifi_csi_segment_type_name(native_segment->type))) ||
+            !esp32_mquickjs_set_property_ref(
+                ctx, segment, "offsetBytes",
+                JS_NewUint32(ctx, native_segment->offset_bytes)) ||
+            !esp32_mquickjs_set_property_ref(
+                ctx, segment, "lengthBytes",
+                JS_NewUint32(ctx, native_segment->length_bytes)) ||
+            !esp32_mquickjs_set_property_ref(
+                ctx, segment, "iqPairCount",
+                JS_NewUint32(ctx, native_segment->iq_pair_count)) ||
+            !esp32_mquickjs_set_property_ref(
+                ctx, segment, "subcarrierRanges", *ranges) ||
+            !esp32_mquickjs_set_property_ref(
+                ctx, segment, "nullSubcarriers", *nulls) ||
+            JS_IsException(JS_SetPropertyUint32(
+                ctx, *segments, segment_index, *segment))) goto fail;
+        *ranges = JS_UNDEFINED;
+        *nulls = JS_UNDEFINED;
+        *segment = JS_UNDEFINED;
+    }
+    if (!esp32_mquickjs_set_property_ref(
+            ctx, layout, "schema", JS_NewString(
+                ctx, wifi_csi_layout_schema_name(native_layout->schema))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, layout, "componentOrder",
+            JS_NewString(ctx, "imaginary-real")) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, layout, "sampleEncoding", JS_NewString(
+                ctx, wifi_csi_sample_encoding_name(
+                    native_layout->sample_encoding))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, layout, "sampleBits", native_layout->sample_bits > 0U
+                ? JS_NewUint32(ctx, native_layout->sample_bits) : JS_NULL) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, layout, "byteLength",
+            JS_NewUint32(ctx, native_layout->byte_length)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, layout, "iqPairCount",
+            JS_NewUint32(ctx, native_layout->iq_pair_count)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, layout, "trailingPaddingBytes",
+            JS_NewUint32(ctx, native_layout->trailing_padding_bytes)) ||
+        !esp32_mquickjs_set_property_ref(ctx, layout, "segments", *segments))
+        goto fail;
+    *segments = JS_UNDEFINED;
+    JS_PopGCRef(ctx, &item_ref);
+    JS_PopGCRef(ctx, &nulls_ref);
+    JS_PopGCRef(ctx, &range_ref);
+    JS_PopGCRef(ctx, &ranges_ref);
+    JS_PopGCRef(ctx, &segment_ref);
+    JS_PopGCRef(ctx, &segments_ref);
+    return JS_PopGCRef(ctx, &layout_ref);
+
+fail:
+    JS_PopGCRef(ctx, &item_ref);
+    JS_PopGCRef(ctx, &nulls_ref);
+    JS_PopGCRef(ctx, &range_ref);
+    JS_PopGCRef(ctx, &ranges_ref);
+    JS_PopGCRef(ctx, &segment_ref);
+    JS_PopGCRef(ctx, &segments_ref);
+    JS_PopGCRef(ctx, &layout_ref);
+    return JS_EXCEPTION;
+}
+
 static JSValue wifi_csi_frame_info_to_js(
     JSContext *ctx, const esp32_mquickjs_wifi_csi_slot_t *slot)
 {
     const esp32_mquickjs_wifi_csi_metadata_t *metadata = &slot->metadata;
     JSGCRef result_ref, phy_ref, validity_ref, layout_ref;
-    JSGCRef segments_ref, segment_ref;
     JSValue *result = JS_PushGCRef(ctx, &result_ref);
     JSValue *phy = JS_PushGCRef(ctx, &phy_ref);
     JSValue *validity = JS_PushGCRef(ctx, &validity_ref);
     JSValue *layout = JS_PushGCRef(ctx, &layout_ref);
-    JSValue *segments = JS_PushGCRef(ctx, &segments_ref);
-    JSValue *segment = JS_PushGCRef(ctx, &segment_ref);
     char source_mac[18];
     char destination_mac[18];
 
@@ -1565,12 +1908,9 @@ static JSValue wifi_csi_frame_info_to_js(
     *result = JS_NewObject(ctx);
     *phy = JS_NewObject(ctx);
     *validity = JS_NewObject(ctx);
-    *layout = JS_NewObject(ctx);
-    *segments = JS_NewArray(ctx, 0);
-    *segment = JS_NewObject(ctx);
+    *layout = wifi_csi_layout_to_js(ctx, &metadata->layout);
     if (JS_IsException(*result) || JS_IsException(*phy) ||
         JS_IsException(*validity) || JS_IsException(*layout) ||
-        JS_IsException(*segments) || JS_IsException(*segment) ||
         !esp32_mquickjs_set_property_ref(
             ctx, phy, "format",
             JS_NewString(ctx, wifi_csi_phy_name(metadata->phy))) ||
@@ -1593,36 +1933,10 @@ static JSValue wifi_csi_frame_info_to_js(
         !esp32_mquickjs_set_property_ref(
             ctx, validity, "truncated", JS_FALSE) ||
         !esp32_mquickjs_set_property_ref(
-            ctx, segment, "type", JS_NewString(ctx, "unknown")) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, segment, "offsetBytes", JS_NewUint32(ctx, 0U)) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, segment, "lengthBytes",
-            JS_NewUint32(ctx, (uint32_t)slot->length)) ||
-        JS_IsException(JS_SetPropertyUint32(ctx, *segments, 0U, *segment)))
-        goto fail;
-    *segment = JS_UNDEFINED;
-    if (!esp32_mquickjs_set_property_ref(
-            ctx, layout, "schema", JS_NewString(ctx,
-                esp32_mquickjs_wifi_csi_target_is_he()
-                    ? "wifi-csi-he-layout/1"
-                    : "wifi-csi-legacy-layout/1")) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, layout, "componentOrder",
-            JS_NewString(ctx, "imaginary-real")) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, layout, "sampleBits", metadata->sample_bits > 0U
-                ? JS_NewUint32(ctx, metadata->sample_bits) : JS_NULL) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, layout, "byteLength",
-            JS_NewUint32(ctx, (uint32_t)slot->length)) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, layout, "segments", *segments) ||
-        !esp32_mquickjs_set_property_ref(
             ctx, result, "sequence", JS_NewUint32(ctx, slot->sequence)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, result, "timestampUs",
-            JS_NewUint32(ctx, metadata->timestamp_us)) ||
+            JS_NewInt64(ctx, (int64_t)metadata->timestamp_us)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, result, "rxSequence",
             JS_NewUint32(ctx, metadata->rx_sequence)) ||
@@ -1655,17 +1969,12 @@ static JSValue wifi_csi_frame_info_to_js(
     *phy = JS_UNDEFINED;
     *validity = JS_UNDEFINED;
     *layout = JS_UNDEFINED;
-    *segments = JS_UNDEFINED;
-    JS_PopGCRef(ctx, &segment_ref);
-    JS_PopGCRef(ctx, &segments_ref);
     JS_PopGCRef(ctx, &layout_ref);
     JS_PopGCRef(ctx, &validity_ref);
     JS_PopGCRef(ctx, &phy_ref);
     return JS_PopGCRef(ctx, &result_ref);
 
 fail:
-    JS_PopGCRef(ctx, &segment_ref);
-    JS_PopGCRef(ctx, &segments_ref);
     JS_PopGCRef(ctx, &layout_ref);
     JS_PopGCRef(ctx, &validity_ref);
     JS_PopGCRef(ctx, &phy_ref);
@@ -1687,6 +1996,12 @@ static JSValue wifi_csi_make_frame(
     if (slot == NULL) {
         JS_ThrowReferenceError(ctx,
             "WIFI_CSI_STALE_FRAME: receive event is stale");
+        goto fail;
+    }
+    if (!esp32_mquickjs_wifi_csi_slot_take_event_owner(
+            &s_wifi_csi.resources, event)) {
+        JS_ThrowReferenceError(ctx,
+            "WIFI_CSI_STALE_FRAME: receive event owner was already consumed");
         goto fail;
     }
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_WIFI_CSI_FRAME);
@@ -1828,6 +2143,17 @@ static void wifi_csi_write_u32_le(uint8_t *output, uint32_t value)
     output[3] = (uint8_t)(value >> 24U);
 }
 
+static void wifi_csi_write_u64_le(uint8_t *output, uint64_t value)
+{
+    wifi_csi_write_u32_le(output, (uint32_t)value);
+    wifi_csi_write_u32_le(output + 4U, (uint32_t)(value >> 32U));
+}
+
+static void wifi_csi_write_i16_le(uint8_t *output, int16_t value)
+{
+    wifi_csi_write_u16_le(output, (uint16_t)value);
+}
+
 static uint16_t wifi_csi_metadata_flags(
     const esp32_mquickjs_wifi_csi_metadata_t *metadata)
 {
@@ -1851,31 +2177,74 @@ static void wifi_csi_encode_metadata(
     const esp32_mquickjs_wifi_csi_slot_t *slot)
 {
     const esp32_mquickjs_wifi_csi_metadata_t *metadata = &slot->metadata;
+    const esp32_mquickjs_wifi_csi_layout_t *layout = &metadata->layout;
+    uint8_t segment_index;
 
     memset(output, 0, WIFI_CSI_BATCH_METADATA_BYTES);
     wifi_csi_write_u32_le(output + 0U, slot->sequence);
-    wifi_csi_write_u32_le(output + 4U, metadata->timestamp_us);
-    wifi_csi_write_u32_le(output + 8U, metadata->rx_sequence);
-    wifi_csi_write_u32_le(output + 12U, slot->session_generation);
-    memcpy(output + 16U, metadata->source_mac, 6U);
-    memcpy(output + 22U, metadata->destination_mac, 6U);
-    output[28] = (uint8_t)metadata->rssi;
-    output[29] = (uint8_t)metadata->noise_floor;
-    output[30] = metadata->channel;
-    output[31] = (uint8_t)metadata->secondary;
-    output[32] = metadata->antenna_available
+    wifi_csi_write_u64_le(output + 4U, metadata->timestamp_us);
+    wifi_csi_write_u32_le(output + 12U, metadata->rx_sequence);
+    wifi_csi_write_u32_le(output + 16U, slot->session_generation);
+    memcpy(output + 20U, metadata->source_mac, 6U);
+    memcpy(output + 26U, metadata->destination_mac, 6U);
+    output[32] = (uint8_t)metadata->rssi;
+    output[33] = (uint8_t)metadata->noise_floor;
+    output[34] = metadata->channel;
+    output[35] = (uint8_t)metadata->secondary;
+    output[36] = metadata->antenna_available
         ? metadata->antenna : UINT8_MAX;
-    output[33] = (uint8_t)metadata->phy;
-    output[34] = metadata->bandwidth_available
+    output[37] = (uint8_t)metadata->phy;
+    output[38] = metadata->bandwidth_available
         ? metadata->bandwidth_mhz : 0U;
-    output[35] = metadata->mcs_available ? metadata->mcs : UINT8_MAX;
-    wifi_csi_write_u16_le(output + 36U,
+    output[39] = metadata->mcs_available ? metadata->mcs : UINT8_MAX;
+    wifi_csi_write_u16_le(output + 40U,
                            wifi_csi_metadata_flags(metadata));
-    output[38] = metadata->sample_bits;
-    output[39] = 0xffU;
-    wifi_csi_write_u32_le(output + 40U, (uint32_t)slot->length);
-    wifi_csi_write_u32_le(output + 44U, 0U);
-    wifi_csi_write_u32_le(output + 48U, (uint32_t)slot->length);
+    output[42] = (uint8_t)layout->sample_encoding;
+    output[43] = layout->sample_bits;
+    wifi_csi_write_u32_le(output + 44U, (uint32_t)slot->length);
+    wifi_csi_write_u32_le(output + 48U, layout->iq_pair_count);
+    wifi_csi_write_u16_le(output + 52U, layout->trailing_padding_bytes);
+    output[54] = layout->segment_count;
+    output[55] = (uint8_t)layout->schema;
+    output[56] = 0U; /* imaginary-real */
+    output[57] = layout->known ? 1U : 0U;
+    for (segment_index = 0U;
+         segment_index < layout->segment_count &&
+         segment_index < ESP32_MQUICKJS_WIFI_CSI_MAX_SEGMENTS;
+         ++segment_index) {
+        const esp32_mquickjs_wifi_csi_segment_t *segment =
+            &layout->segments[segment_index];
+        uint8_t *encoded = output + WIFI_CSI_BATCH_SEGMENT_BASE +
+            ((size_t)segment_index * WIFI_CSI_BATCH_SEGMENT_BYTES);
+        uint8_t range_index;
+        uint8_t null_index;
+
+        encoded[0] = (uint8_t)segment->type;
+        encoded[1] = segment->subcarrier_range_count;
+        encoded[2] = segment->null_subcarrier_count;
+        wifi_csi_write_u32_le(encoded + 4U, segment->offset_bytes);
+        wifi_csi_write_u32_le(encoded + 8U, segment->length_bytes);
+        wifi_csi_write_u32_le(encoded + 12U, segment->iq_pair_count);
+        for (range_index = 0U;
+             range_index < segment->subcarrier_range_count &&
+             range_index < ESP32_MQUICKJS_WIFI_CSI_MAX_SUBCARRIER_RANGES;
+             ++range_index) {
+            wifi_csi_write_i16_le(
+                encoded + 16U + ((size_t)range_index * 4U),
+                segment->subcarrier_ranges[range_index].start);
+            wifi_csi_write_i16_le(
+                encoded + 18U + ((size_t)range_index * 4U),
+                segment->subcarrier_ranges[range_index].end);
+        }
+        for (null_index = 0U;
+             null_index < segment->null_subcarrier_count &&
+             null_index < ESP32_MQUICKJS_WIFI_CSI_MAX_NULL_SUBCARRIERS;
+             ++null_index) {
+            wifi_csi_write_i16_le(
+                encoded + 24U + ((size_t)null_index * 2U),
+                segment->null_subcarriers[null_index]);
+        }
+    }
 }
 
 static bool wifi_csi_batch_source_build_control(
@@ -2134,13 +2503,24 @@ JSValue js_wifi_csi_capabilities(JSContext *ctx, JSValue *this_val,
     static const char *const phy_he[] = {
         "legacy", "ht", "vht", "he-su", "he-mu", "he-er-su", "he-tb",
     };
+    static const char *const phy_he_no_vht[] = {
+        "legacy", "ht", "he-su", "he-mu", "he-er-su", "he-tb",
+    };
+    static const char *const encodings_legacy[] = {"signed-int8"};
+    static const char *const encodings_he[] = {
+        "signed-int8", "signed-int12-le", "signed-int12-packed",
+    };
     JSGCRef result_ref, sources_ref, formats_ref, limits_ref, supports_ref;
+    JSGCRef radio_ref, encodings_ref;
     JSValue *result = JS_PushGCRef(ctx, &result_ref);
     JSValue *sources = JS_PushGCRef(ctx, &sources_ref);
     JSValue *formats = JS_PushGCRef(ctx, &formats_ref);
     JSValue *limits = JS_PushGCRef(ctx, &limits_ref);
     JSValue *supports = JS_PushGCRef(ctx, &supports_ref);
+    JSValue *radio = JS_PushGCRef(ctx, &radio_ref);
+    JSValue *encodings = JS_PushGCRef(ctx, &encodings_ref);
     bool he = esp32_mquickjs_wifi_csi_target_is_he();
+    bool vht = esp32_mquickjs_wifi_csi_target_supports_vht();
 
     (void)this_val;
     (void)argc;
@@ -2153,15 +2533,27 @@ JSValue js_wifi_csi_capabilities(JSContext *ctx, JSValue *this_val,
     *sources = wifi_csi_string_array(ctx, sources_associated, 1U);
 #endif
     *formats = he
-        ? wifi_csi_string_array(ctx, phy_he,
-                                sizeof(phy_he) / sizeof(phy_he[0]))
+        ? (vht
+            ? wifi_csi_string_array(
+                ctx, phy_he, sizeof(phy_he) / sizeof(phy_he[0]))
+            : wifi_csi_string_array(
+                ctx, phy_he_no_vht,
+                sizeof(phy_he_no_vht) / sizeof(phy_he_no_vht[0])))
         : wifi_csi_string_array(ctx, phy_legacy,
                                 sizeof(phy_legacy) / sizeof(phy_legacy[0]));
     *limits = JS_NewObject(ctx);
     *supports = JS_NewObject(ctx);
+    *radio = wifi_csi_radio_capabilities_to_js(ctx);
+    *encodings = he
+        ? wifi_csi_string_array(
+            ctx, encodings_he, sizeof(encodings_he) / sizeof(encodings_he[0]))
+        : wifi_csi_string_array(
+            ctx, encodings_legacy,
+            sizeof(encodings_legacy) / sizeof(encodings_legacy[0]));
     if (JS_IsException(*result) || JS_IsException(*sources) ||
         JS_IsException(*formats) || JS_IsException(*limits) ||
-        JS_IsException(*supports) ||
+        JS_IsException(*supports) || JS_IsException(*radio) ||
+        JS_IsException(*encodings) ||
         !esp32_mquickjs_set_property_ref(
             ctx, limits, "maxFrameBytes",
             JS_NewUint32(ctx,
@@ -2188,7 +2580,7 @@ JSValue js_wifi_csi_capabilities(JSContext *ctx, JSValue *this_val,
             ctx, limits, "shiftMaximum", he ? JS_NULL : JS_NewUint32(ctx, 15U)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, supports, "fixedChannel",
-            JS_NewBool(WIFI_CSI_FIXED_CHANNEL_SUPPORTED)) ||
+            JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(
             ctx, supports, "promiscuous",
             JS_NewBool(WIFI_CSI_PROMISCUOUS_SUPPORTED)) ||
@@ -2204,7 +2596,7 @@ JSValue js_wifi_csi_capabilities(JSContext *ctx, JSValue *this_val,
             ctx, supports, "nativeRateLimit", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(
             ctx, supports, "vht",
-            JS_NewBool(esp32_mquickjs_wifi_csi_target_supports_vht())) ||
+            JS_NewBool(vht)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, supports, "he", JS_NewBool(he)) ||
         !esp32_mquickjs_set_property_ref(
@@ -2215,6 +2607,8 @@ JSValue js_wifi_csi_capabilities(JSContext *ctx, JSValue *this_val,
             ctx, supports, "lltfBitMode",
             JS_NewBool(
                 esp32_mquickjs_wifi_csi_target_supports_lltf_bit_mode())) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, supports, "layout", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(
             ctx, result, "apiVersion", JS_NewString(ctx, "wifi-csi/1")) ||
         !esp32_mquickjs_set_property_ref(
@@ -2228,13 +2622,20 @@ JSValue js_wifi_csi_capabilities(JSContext *ctx, JSValue *this_val,
                 esp32_mquickjs_wifi_csi_target_schema_name())) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "sources", *sources) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "phyFormats", *formats) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "sampleEncodings", *encodings) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "limits", *limits) ||
-        !esp32_mquickjs_set_property_ref(ctx, result, "supports", *supports))
+        !esp32_mquickjs_set_property_ref(ctx, result, "supports", *supports) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "radio", *radio))
         goto fail;
     *sources = JS_UNDEFINED;
     *formats = JS_UNDEFINED;
     *limits = JS_UNDEFINED;
     *supports = JS_UNDEFINED;
+    *radio = JS_UNDEFINED;
+    *encodings = JS_UNDEFINED;
+    JS_PopGCRef(ctx, &encodings_ref);
+    JS_PopGCRef(ctx, &radio_ref);
     JS_PopGCRef(ctx, &supports_ref);
     JS_PopGCRef(ctx, &limits_ref);
     JS_PopGCRef(ctx, &formats_ref);
@@ -2242,6 +2643,8 @@ JSValue js_wifi_csi_capabilities(JSContext *ctx, JSValue *this_val,
     return JS_PopGCRef(ctx, &result_ref);
 
 fail:
+    JS_PopGCRef(ctx, &encodings_ref);
+    JS_PopGCRef(ctx, &radio_ref);
     JS_PopGCRef(ctx, &supports_ref);
     JS_PopGCRef(ctx, &limits_ref);
     JS_PopGCRef(ctx, &formats_ref);
@@ -2338,22 +2741,7 @@ JSValue js_wifi_csi_open(JSContext *ctx, JSValue *this_val,
     }
     err = wifi_csi_start_native(&s_wifi_csi);
     if (err != ESP_OK) {
-        const char *code = strcmp(
-                s_wifi_csi.last_error_stage != NULL
-                    ? s_wifi_csi.last_error_stage : "",
-                "power_save_policy") == 0
-            ? "WIFI_CSI_POWER_SAVE_CONFLICT"
-            : s_wifi_csi.options.source == WIFI_CSI_SOURCE_PROMISCUOUS &&
-                    s_wifi_csi.last_error_stage != NULL &&
-                    strcmp(s_wifi_csi.last_error_stage,
-                           "wifi_radio_acquire_promiscuous") == 0
-                ? "WIFI_CSI_PROMISCUOUS_CONFLICT"
-                : s_wifi_csi.options.fixed_channel &&
-                        s_wifi_csi.last_error_stage != NULL &&
-                        strcmp(s_wifi_csi.last_error_stage,
-                               "wifi_radio_set_channel") == 0
-                    ? "WIFI_CSI_RADIO_CONFLICT"
-                    : "WIFI_CSI_DRIVER_ERROR";
+        const char *code = wifi_csi_start_error_code(&s_wifi_csi, err);
         wifi_csi_throw_driver_error(
             ctx, code,
             s_wifi_csi.last_error_stage != NULL
@@ -2439,7 +2827,8 @@ static JSValue wifi_csi_status_to_js(JSContext *ctx,
                 JS_NewString(ctx, esp_err_to_name(session->last_error))) ||
             !esp32_mquickjs_set_property_ref(
                 ctx, error, "code",
-                JS_NewString(ctx, "WIFI_CSI_DRIVER_ERROR")) ||
+                JS_NewString(ctx, session->last_error_code != NULL
+                    ? session->last_error_code : "WIFI_CSI_DRIVER_ERROR")) ||
             !esp32_mquickjs_set_property_ref(
                 ctx, error, "operation", JS_NewString(ctx, "wifiCsi")) ||
             !esp32_mquickjs_set_property_ref(
@@ -2611,9 +3000,17 @@ JSValue js_wifi_csi_session_stats(JSContext *ctx, JSValue *this_val,
             ctx, result, "filteredRateLimit",
             JS_NewUint32(ctx, WIFI_CSI_COUNTER(filtered_rate_limit))) ||
         !esp32_mquickjs_set_property_ref(
-            ctx, result, "invalidChannelEstimate",
+            ctx, result, "filteredFirstWordInvalid",
             JS_NewUint32(ctx,
-                WIFI_CSI_COUNTER(invalid_channel_estimate))) ||
+                WIFI_CSI_COUNTER(filtered_first_word_invalid))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "filteredChannelEstimateInvalid",
+            JS_NewUint32(ctx,
+                WIFI_CSI_COUNTER(filtered_channel_estimate_invalid))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "invalidCallbackData",
+            JS_NewUint32(ctx,
+                WIFI_CSI_COUNTER(invalid_callback_data))) ||
         !esp32_mquickjs_set_property_ref(
             ctx, result, "droppedPoolFull",
             JS_NewUint32(ctx, WIFI_CSI_COUNTER(dropped_pool_full))) ||
@@ -2734,6 +3131,7 @@ JSValue js_wifi_csi_session_configure(JSContext *ctx, JSValue *this_val,
     session->resources.filter_qualified = 0U;
     session->resources.last_accepted_timestamp_set = false;
     session->last_error = ESP_OK;
+    session->last_error_code = NULL;
     session->last_error_stage = NULL;
     return wifi_csi_status_to_js(ctx, session);
 }
@@ -2767,7 +3165,7 @@ JSValue js_wifi_csi_session_start(JSContext *ctx, JSValue *this_val,
     if (err != ESP_OK) {
         atomic_store(&session->lifecycle, WIFI_CSI_FAULTED);
         return wifi_csi_throw_driver_error(
-            ctx, "WIFI_CSI_DRIVER_ERROR",
+            ctx, wifi_csi_start_error_code(session, err),
             session->last_error_stage != NULL
                 ? session->last_error_stage : "start", err);
     }
@@ -3139,47 +3537,107 @@ JSValue js_wifi_csi_session_receive_batch(JSContext *ctx,
                                           int argc,
                                           JSValue *argv)
 {
+    static const char *const allowed[] = {
+        "maximumFrames", "minimumFrames", "timeoutMs", "maximumLatencyMs",
+    };
     wifi_csi_session_t *session;
     wifi_csi_batch_ref_t *batch = NULL;
     wifi_csi_frame_ref_t *frame_ref;
-    JSGCRef first_ref, object_ref;
+    JSGCRef first_ref, object_ref, options_ref;
     JSValue *first = JS_PushGCRef(ctx, &first_ref);
     JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    JSValue *options = JS_PushGCRef(ctx, &options_ref);
     uint32_t maximum_frames = CONFIG_ESP32_MQUICKJS_WIFI_CSI_MAX_BATCH_FRAMES;
-    JSValue receive_argument;
-    int receive_argc = 0;
+    uint32_t minimum_frames = 1U;
+    uint32_t timeout_ms = 0U;
+    uint32_t maximum_latency_ms = 0U;
+    bool timeout_set = false;
+    int64_t latency_deadline_us = 0;
 
     *first = JS_UNDEFINED;
     *object = JS_UNDEFINED;
+    *options = JS_UNDEFINED;
     if (this_val == NULL ||
         (session = wifi_csi_session_from_value(
-            ctx, *this_val, false)) == NULL || argc > 2) goto fail;
-    if (argc >= 1 && !JS_IsUndefined(argv[0]) &&
-        !esp32_mquickjs_value_to_bounded_u32(
-            ctx, argv[0], 1U,
-            CONFIG_ESP32_MQUICKJS_WIFI_CSI_MAX_BATCH_FRAMES,
-            &maximum_frames)) {
-        JS_ThrowRangeError(ctx,
-            "maximumFrames exceeds this Build Context");
+            ctx, *this_val, false)) == NULL) goto fail;
+    if (argc > 1) {
+        JS_ThrowTypeError(
+            ctx, "WiFiCsiSession.receiveBatch(options?) expects at most one argument");
         goto fail;
     }
-    if (argc >= 2 && !JS_IsUndefined(argv[1])) {
-        uint32_t timeout_ms;
+    if (argc == 1 && !JS_IsUndefined(argv[0])) {
+        JSValue property;
 
-        if (!esp32_mquickjs_value_to_bounded_u32(
-                ctx, argv[1], 0U, UINT32_MAX, &timeout_ms)) {
+        *options = argv[0];
+        if (!esp32_mquickjs_validate_plain_options(
+                ctx, *options, "WiFiCsiSession.receiveBatch()",
+                allowed, sizeof(allowed) / sizeof(allowed[0]))) goto fail;
+        property = JS_GetPropertyStr(ctx, *options, "maximumFrames");
+        if (JS_IsException(property)) goto fail;
+        if (!JS_IsUndefined(property) &&
+            !esp32_mquickjs_value_to_bounded_u32(
+                ctx, property, 1U,
+                CONFIG_ESP32_MQUICKJS_WIFI_CSI_MAX_BATCH_FRAMES,
+                &maximum_frames)) {
             JS_ThrowRangeError(ctx,
-                "timeoutMs must be a non-negative integer");
+                "maximumFrames exceeds this Build Context");
             goto fail;
         }
-        receive_argument = argv[1];
-        receive_argc = 1;
+        property = JS_GetPropertyStr(ctx, *options, "minimumFrames");
+        if (JS_IsException(property)) goto fail;
+        if (!JS_IsUndefined(property) &&
+            !esp32_mquickjs_value_to_bounded_u32(
+                ctx, property, 1U,
+                CONFIG_ESP32_MQUICKJS_WIFI_CSI_MAX_BATCH_FRAMES,
+                &minimum_frames)) {
+            JS_ThrowRangeError(ctx,
+                "minimumFrames exceeds this Build Context");
+            goto fail;
+        }
+        if (minimum_frames > maximum_frames) {
+            JS_ThrowRangeError(
+                ctx, "minimumFrames must not exceed maximumFrames");
+            goto fail;
+        }
+        property = JS_GetPropertyStr(ctx, *options, "timeoutMs");
+        if (JS_IsException(property)) goto fail;
+        if (!JS_IsUndefined(property)) {
+            if (!esp32_mquickjs_value_to_bounded_u32(
+                    ctx, property, 0U, INT32_MAX, &timeout_ms)) {
+                JS_ThrowRangeError(
+                    ctx, "timeoutMs must be an integer from 0 to INT32_MAX");
+                goto fail;
+            }
+            timeout_set = true;
+        }
+        property = JS_GetPropertyStr(ctx, *options, "maximumLatencyMs");
+        if (JS_IsException(property)) goto fail;
+        if (!JS_IsUndefined(property) &&
+            !esp32_mquickjs_value_to_bounded_u32(
+                ctx, property, 0U, INT32_MAX, &maximum_latency_ms)) {
+            JS_ThrowRangeError(ctx,
+                "maximumLatencyMs must be an integer from 0 to INT32_MAX");
+            goto fail;
+        }
     }
-    *first = js_wifi_csi_session_receive(
-        ctx, this_val, receive_argc,
-        receive_argc > 0 ? &receive_argument : NULL);
+    if (!esp32_mquickjs_wifi_csi_batch_options_valid(
+            maximum_frames, minimum_frames, timeout_ms,
+            maximum_latency_ms,
+            CONFIG_ESP32_MQUICKJS_WIFI_CSI_MAX_BATCH_FRAMES)) {
+        JS_ThrowRangeError(ctx, "invalid receiveBatch aggregation options");
+        goto fail;
+    }
+    if (timeout_set) {
+        JSValue receive_argument = JS_NewUint32(ctx, timeout_ms);
+
+        *first = js_wifi_csi_session_receive(
+            ctx, this_val, 1, &receive_argument);
+    } else {
+        *first = js_wifi_csi_session_receive(ctx, this_val, 0, NULL);
+    }
     if (JS_IsException(*first)) goto fail;
     if (JS_IsNull(*first)) {
+        JS_PopGCRef(ctx, &options_ref);
         JS_PopGCRef(ctx, &object_ref);
         JS_PopGCRef(ctx, &first_ref);
         return JS_NULL;
@@ -3208,13 +3666,60 @@ JSValue js_wifi_csi_session_receive_batch(JSContext *ctx,
     atomic_fetch_sub_explicit(
         &session->resources.counters.delivered_frames, 1U,
         memory_order_relaxed);
-    while (batch->frame_count < maximum_frames) {
-        esp32_mquickjs_wifi_csi_event_t event;
+    *first = JS_UNDEFINED;
+    latency_deadline_us = esp_timer_get_time() +
+        ((int64_t)maximum_latency_ms * 1000LL);
+    for (;;) {
+        while (batch->frame_count < maximum_frames) {
+            esp32_mquickjs_wifi_csi_event_t event;
 
-        if (!esp32_mquickjs_event_queue_try_receive(
-                session->event_queue, &event)) break;
-        if (wifi_csi_resolve_event(&event) != NULL) {
-            batch->events[batch->frame_count++] = event;
+            if (!esp32_mquickjs_event_queue_try_receive(
+                    session->event_queue, &event)) break;
+            if (wifi_csi_resolve_event(&event) != NULL &&
+                esp32_mquickjs_wifi_csi_slot_take_event_owner(
+                    &session->resources, &event)) {
+                batch->events[batch->frame_count++] = event;
+            }
+        }
+        if (esp32_mquickjs_wifi_csi_batch_should_return(
+                batch->frame_count, minimum_frames, maximum_frames,
+                maximum_latency_ms,
+                esp_timer_get_time() >= latency_deadline_us)) break;
+        {
+            int64_t remaining_us = latency_deadline_us - esp_timer_get_time();
+            uint32_t remaining_ms;
+            JSValue receive_argument;
+
+            if (remaining_us <= 0) break;
+            remaining_ms = (uint32_t)((remaining_us + 999LL) / 1000LL);
+            receive_argument = JS_NewUint32(ctx, remaining_ms);
+            *first = js_wifi_csi_session_receive(
+                ctx, this_val, 1, &receive_argument);
+            if (JS_IsException(*first)) goto fail_batch;
+            if (JS_IsNull(*first)) {
+                *first = JS_UNDEFINED;
+                break;
+            }
+            if (JS_GetClassID(ctx, *first) != JS_CLASS_WIFI_CSI_FRAME ||
+                (frame_ref = JS_GetOpaque(ctx, *first)) == NULL) {
+                JS_ThrowInternalError(ctx,
+                    "Wi-Fi CSI receive returned an invalid frame");
+                goto fail_batch;
+            }
+            batch->events[batch->frame_count].session_generation =
+                frame_ref->session_generation;
+            batch->events[batch->frame_count].slot_index =
+                frame_ref->slot_index;
+            batch->events[batch->frame_count].slot_generation =
+                frame_ref->slot_generation;
+            batch->frame_count += 1U;
+            frame_ref->closed = true;
+            JS_SetOpaque(ctx, *first, NULL);
+            heap_caps_free(frame_ref);
+            atomic_fetch_sub_explicit(
+                &session->resources.counters.delivered_frames, 1U,
+                memory_order_relaxed);
+            *first = JS_UNDEFINED;
         }
     }
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_WIFI_CSI_BATCH);
@@ -3229,6 +3734,8 @@ JSValue js_wifi_csi_session_receive_batch(JSContext *ctx,
     atomic_fetch_add_explicit(
         &session->resources.counters.delivered_batches, 1U,
         memory_order_relaxed);
+    *options = JS_UNDEFINED;
+    JS_PopGCRef(ctx, &options_ref);
     JSValue return_value = JS_PopGCRef(ctx, &object_ref);
     JS_PopGCRef(ctx, &first_ref);
     return return_value;
@@ -3246,6 +3753,7 @@ fail:
         JS_GetClassID(ctx, *first) == JS_CLASS_WIFI_CSI_FRAME) {
         (void)js_wifi_csi_frame_close(ctx, first, 0, NULL);
     }
+    JS_PopGCRef(ctx, &options_ref);
     JS_PopGCRef(ctx, &object_ref);
     JS_PopGCRef(ctx, &first_ref);
     return JS_EXCEPTION;

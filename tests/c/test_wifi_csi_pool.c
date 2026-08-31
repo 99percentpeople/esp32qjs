@@ -25,6 +25,10 @@ int main(void)
     assert(slot->sequence == 1);
     assert(slot->length == sizeof(payload));
     assert(slot->payload[3] == 4);
+    assert(esp32_mquickjs_wifi_csi_slot_take_event_owner(
+        &resources, &event));
+    assert(!esp32_mquickjs_wifi_csi_slot_take_event_owner(
+        &resources, &event));
 
     esp32_mquickjs_wifi_csi_event_t stale = event;
     stale.slot_generation++;
@@ -33,8 +37,8 @@ int main(void)
     stale.session_generation++;
     assert(esp32_mquickjs_wifi_csi_slot_from_event(&resources, &stale) == NULL);
 
-    assert(esp32_mquickjs_wifi_csi_slot_request_close(&resources, slot));
-    assert(!esp32_mquickjs_wifi_csi_slot_request_close(&resources, slot));
+    assert(esp32_mquickjs_wifi_csi_slot_close_public_owner(&resources, slot));
+    assert(!esp32_mquickjs_wifi_csi_slot_close_public_owner(&resources, slot));
     assert(atomic_load(&resources.counters.leased_frames) == 0);
     assert(esp32_mquickjs_native_pool_available(&resources.pool) == 2);
     assert(esp32_mquickjs_wifi_csi_resources_deinit(&resources));

@@ -497,7 +497,9 @@ esp32_mquickjs_append_feature_component(
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI
     "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_resources.c"
+    "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_batch.c"
     "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_config.c"
+    "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_layout.c"
     "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_legacy.c"
     "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_he.c"
     "src/modules/wifi_csi/esp32_mquickjs_wifi_csi.c"

@@ -2639,6 +2639,11 @@ namespace ESP32QJS {
 
   type WiFiCsiConfigSchema = "wifi-csi-legacy/1" | "wifi-csi-he/1";
   type WiFiCsiSourceMode = "associated" | "promiscuous";
+  type WiFiCsiSampleEncoding =
+    | "signed-int8"
+    | "signed-int12-le"
+    | "signed-int12-packed"
+    | "unknown";
   type WiFiCsiPhyFormat =
     | "legacy"
     | "ht"
@@ -2656,6 +2661,15 @@ namespace ESP32QJS {
     readonly configSchema: WiFiCsiConfigSchema;
     readonly sources: WiFiCsiSourceMode[];
     readonly phyFormats: WiFiCsiPhyFormat[];
+    readonly sampleEncodings: Exclude<WiFiCsiSampleEncoding, "unknown">[];
+    readonly radio: {
+      country: string | null;
+      policy: "auto" | "manual" | null;
+      bands: Array<{
+        band: "2.4GHz" | "5GHz";
+        allowedChannels: number[] | null;
+      }>;
+    };
     readonly limits: {
       maxFrameBytes: number;
       maxPoolCapacity: number;
@@ -2679,6 +2693,7 @@ namespace ESP32QJS {
       heStbcSelection: boolean;
       manualScaling: boolean;
       lltfBitMode: boolean;
+      layout: true;
     };
   }
 
@@ -2748,6 +2763,7 @@ namespace ESP32QJS {
     | "WIFI_CSI_CONFIG_UNSUPPORTED"
     | "WIFI_CSI_CONFIG_INVALID"
     | "WIFI_CSI_RADIO_CONFLICT"
+    | "WIFI_CSI_REGULATORY_CONFLICT"
     | "WIFI_CSI_PROMISCUOUS_CONFLICT"
     | "WIFI_CSI_POWER_SAVE_CONFLICT"
     | "WIFI_CSI_RESOURCE_EXHAUSTED"
@@ -2798,7 +2814,9 @@ namespace ESP32QJS {
     filteredRssi: number;
     filteredDecimation: number;
     filteredRateLimit: number;
-    invalidChannelEstimate: number;
+    filteredFirstWordInvalid: number;
+    filteredChannelEstimateInvalid: number;
+    invalidCallbackData: number;
     droppedPoolFull: number;
     droppedQueueFull: number;
     droppedFrameTooLarge: number;
@@ -2821,6 +2839,9 @@ namespace ESP32QJS {
       | "unknown";
     offsetBytes: number;
     lengthBytes: number;
+    iqPairCount: number;
+    subcarrierRanges: Array<{ start: number; end: number }>;
+    nullSubcarriers: number[];
   }
 
   interface WiFiCsiFrameInfo {
@@ -2849,10 +2870,20 @@ namespace ESP32QJS {
     layout: {
       schema: string;
       componentOrder: "imaginary-real";
+      sampleEncoding: WiFiCsiSampleEncoding;
       sampleBits: 8 | 12 | null;
       byteLength: number;
+      iqPairCount: number;
+      trailingPaddingBytes: number;
       segments: WiFiCsiSegment[];
     };
+  }
+
+  interface WiFiCsiBatchReceiveOptions {
+    maximumFrames?: number;
+    minimumFrames?: number;
+    timeoutMs?: number;
+    maximumLatencyMs?: number;
   }
 
   class WiFiCsiFrame {
@@ -2878,7 +2909,7 @@ namespace ESP32QJS {
     status(): WiFiCsiStatus;
     stats(): WiFiCsiStats;
     receive(timeoutMs?: number): WiFiCsiFrame | null;
-    receiveBatch(maximumFrames?: number, timeoutMs?: number): WiFiCsiBatch | null;
+    receiveBatch(options?: WiFiCsiBatchReceiveOptions): WiFiCsiBatch | null;
     stop(): WiFiCsiStatus;
     configure(options: WiFiCsiOpenOptions): WiFiCsiStatus;
     start(): WiFiCsiStatus;

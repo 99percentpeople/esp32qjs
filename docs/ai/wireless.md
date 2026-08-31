@@ -8,12 +8,16 @@ reported `configSchema`; C3/S3 use `wifi-csi-legacy/1`, while C5 uses
 `wifi-csi-he/1`. Do not guess schema or PHY support from a board name.
 
 `wifiCsi.open(options)` immediately starts the only session. Associated mode
-preserves the current radio channel. Promiscuous and fixed-channel modes work
-only when enabled by the Build Context and never silently disconnect Station,
-move SoftAP, or override ESP-NOW. `powerSavePolicy` checks/reports modem sleep
-but does not change it.
+preserves the current radio channel. Promiscuous mode is Build Context gated;
+numeric channels always use an exclusive shared-radio lease and are checked
+against the current country information. Neither path silently disconnects
+Station, moves SoftAP, or overrides ESP-NOW. `capabilities().radio` uses `null`
+when ESP-IDF cannot authoritatively enumerate allowed channels.
+`powerSavePolicy` checks/reports modem sleep but does not change it.
 
-Use `receive()` for one `WiFiCsiFrame` or `receiveBatch()` for transport. A
+Use `receive()` for one `WiFiCsiFrame` or object-only
+`receiveBatch({ maximumFrames, minimumFrames, timeoutMs, maximumLatencyMs })`
+for bounded aggregation and transport. A
 frame owns a fixed-pool slot. `samples()` and `source()` retain that slot;
 `copySamples()` makes an independent owned snapshot. A batch source emits the
 little-endian `esp32qjs-csi/1` scatter/gather protocol. Close frames, batches,
@@ -21,6 +25,9 @@ views, and sources deterministically. Session close waits for the native Wi-Fi
 callback to become quiescent, while outstanding leases keep pool storage alive.
 
 Native firmware preserves raw imaginary-real IQ order and normalized metadata.
+Layout describes detected 8/12-bit encoding, IQ pairs, padding, ordered
+subcarrier ranges, and null subcarriers; ambiguous observations are reported as
+`unknown`. `timestampUs` is boot-relative, wrap-extended driver time, not UTC.
 FFT, magnitude, phase, filtering policy beyond the bounded native admission
 filter, recognition, storage, and upload belong in JavaScript Libraries.
 

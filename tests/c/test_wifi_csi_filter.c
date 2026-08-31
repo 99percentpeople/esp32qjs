@@ -38,6 +38,9 @@ int main(void)
     metadata.channel_estimate_valid = false;
     assert(!esp32_mquickjs_wifi_csi_filter_accept(&resources, &metadata));
     metadata.channel_estimate_valid = true;
+    metadata.first_word_invalid = true;
+    assert(!esp32_mquickjs_wifi_csi_filter_accept(&resources, &metadata));
+    metadata.first_word_invalid = false;
 
     resources.filter.sample_every = 2;
     resources.filter_qualified = 0;
@@ -57,7 +60,10 @@ int main(void)
 
     assert(atomic_load(&resources.counters.filtered_mac) == 1);
     assert(atomic_load(&resources.counters.filtered_rssi) == 1);
-    assert(atomic_load(&resources.counters.invalid_channel_estimate) == 1);
+    assert(atomic_load(
+        &resources.counters.filtered_channel_estimate_invalid) == 1);
+    assert(atomic_load(
+        &resources.counters.filtered_first_word_invalid) == 1);
     assert(atomic_load(&resources.counters.filtered_decimation) == 1);
     assert(atomic_load(&resources.counters.filtered_rate_limit) == 1);
     assert(esp32_mquickjs_wifi_csi_resources_deinit(&resources));

@@ -56,6 +56,8 @@ bool esp32_mquickjs_wifi_csi_resources_init(
         resources->slots[index].payload = resources->payload_storage +
             ((size_t)index * (size_t)max_frame_bytes);
         atomic_init(&resources->slots[index].return_accounted, true);
+        atomic_init(&resources->slots[index].owner,
+                    ESP32_MQUICKJS_WIFI_CSI_OWNER_NONE);
     }
     atomic_init(&resources->callbacks_active, 0U);
     atomic_init(&resources->sequence, 0U);
@@ -162,12 +164,23 @@ bool esp32_mquickjs_wifi_csi_filter_accept(
                                   memory_order_relaxed);
         return false;
     }
-    if (filter->valid_only && metadata->channel_estimate_valid_available &&
-        !metadata->channel_estimate_valid) {
-        atomic_fetch_add_explicit(
-            &resources->counters.invalid_channel_estimate, 1U,
-            memory_order_relaxed);
-        return false;
+    if (filter->valid_only) {
+        bool invalid = false;
+
+        if (metadata->first_word_invalid) {
+            atomic_fetch_add_explicit(
+                &resources->counters.filtered_first_word_invalid, 1U,
+                memory_order_relaxed);
+            invalid = true;
+        }
+        if (metadata->channel_estimate_valid_available &&
+            !metadata->channel_estimate_valid) {
+            atomic_fetch_add_explicit(
+                &resources->counters.filtered_channel_estimate_invalid, 1U,
+                memory_order_relaxed);
+            invalid = true;
+        }
+        if (invalid) return false;
     }
     qualified = resources->filter_qualified++;
     if (filter->sample_every > 1U &&
@@ -180,7 +193,7 @@ bool esp32_mquickjs_wifi_csi_filter_accept(
     if (filter->maximum_rate_hz > 0U &&
         resources->last_accepted_timestamp_set) {
         uint32_t minimum_interval = 1000000U / filter->maximum_rate_hz;
-        uint32_t elapsed = metadata->timestamp_us -
+        uint64_t elapsed = metadata->timestamp_us -
             resources->last_accepted_timestamp_us;
 
         if (minimum_interval > 0U && elapsed < minimum_interval) {
@@ -193,6 +206,27 @@ bool esp32_mquickjs_wifi_csi_filter_accept(
     resources->last_accepted_timestamp_us = metadata->timestamp_us;
     resources->last_accepted_timestamp_set = true;
     return true;
+}
+
+static uint64_t wifi_csi_extend_driver_timestamp(
+    esp32_mquickjs_wifi_csi_resources_t *resources, uint32_t timestamp_us)
+{
+    if (!resources->driver_timestamp_set) {
+        resources->driver_timestamp_set = true;
+        resources->last_driver_timestamp_us = timestamp_us;
+        return timestamp_us;
+    }
+    if (timestamp_us < resources->last_driver_timestamp_us &&
+        resources->last_driver_timestamp_us - timestamp_us >
+            (UINT32_MAX / 2U)) {
+        resources->driver_timestamp_epoch_us += 1ULL << 32U;
+    }
+    if (!(timestamp_us < resources->last_driver_timestamp_us &&
+          resources->last_driver_timestamp_us - timestamp_us <=
+              (UINT32_MAX / 2U))) {
+        resources->last_driver_timestamp_us = timestamp_us;
+    }
+    return resources->driver_timestamp_epoch_us + timestamp_us;
 }
 
 static void wifi_csi_slot_account_return(
@@ -220,6 +254,7 @@ esp32_mquickjs_wifi_csi_callback_publish(
     void *publish_opaque)
 {
     esp32_mquickjs_wifi_csi_event_t event;
+    esp32_mquickjs_wifi_csi_metadata_t normalized_metadata;
     esp32_mquickjs_wifi_csi_slot_t *slot;
     uint16_t slot_index;
     uint32_t slot_generation;
@@ -233,7 +268,11 @@ esp32_mquickjs_wifi_csi_callback_publish(
                                   memory_order_relaxed);
         return ESP32_MQUICKJS_WIFI_CSI_PUBLISH_CLOSING;
     }
-    if (!esp32_mquickjs_wifi_csi_filter_accept(resources, metadata)) {
+    normalized_metadata = *metadata;
+    normalized_metadata.timestamp_us = wifi_csi_extend_driver_timestamp(
+        resources, normalized_metadata.driver_timestamp_us);
+    if (!esp32_mquickjs_wifi_csi_filter_accept(
+            resources, &normalized_metadata)) {
         return ESP32_MQUICKJS_WIFI_CSI_PUBLISH_FILTERED;
     }
     if (length > resources->max_frame_bytes) {
@@ -256,12 +295,15 @@ esp32_mquickjs_wifi_csi_callback_publish(
     slot->slot_generation = slot_generation;
     slot->sequence = atomic_fetch_add_explicit(
         &resources->sequence, 1U, memory_order_relaxed) + 1U;
-    slot->metadata = *metadata;
+    slot->metadata = normalized_metadata;
     slot->length = length;
     if (length > 0U) {
         memcpy(slot->payload, payload, length);
     }
     atomic_store_explicit(&slot->return_accounted, false,
+                          memory_order_release);
+    atomic_store_explicit(&slot->owner,
+                          ESP32_MQUICKJS_WIFI_CSI_OWNER_EVENT,
                           memory_order_release);
     if (!esp32_mquickjs_native_lease_init(
             &slot->lease, &resources->pool, slot_index, slot_generation)) {
@@ -277,7 +319,7 @@ esp32_mquickjs_wifi_csi_callback_publish(
     event.slot_index = slot_index;
     event.slot_generation = slot_generation;
     if (!publish(&event, publish_opaque)) {
-        (void)esp32_mquickjs_wifi_csi_slot_request_close(resources, slot);
+        (void)esp32_mquickjs_wifi_csi_slot_discard_event(resources, &event);
         atomic_fetch_add_explicit(&resources->counters.dropped_queue_full, 1U,
                                   memory_order_relaxed);
         return ESP32_MQUICKJS_WIFI_CSI_PUBLISH_QUEUE_FULL;
@@ -338,14 +380,53 @@ bool esp32_mquickjs_wifi_csi_slot_release(
     return released;
 }
 
-bool esp32_mquickjs_wifi_csi_slot_request_close(
+bool esp32_mquickjs_wifi_csi_slot_take_event_owner(
+    esp32_mquickjs_wifi_csi_resources_t *resources,
+    const esp32_mquickjs_wifi_csi_event_t *event)
+{
+    esp32_mquickjs_wifi_csi_slot_t *slot =
+        esp32_mquickjs_wifi_csi_slot_from_event(resources, event);
+    uint8_t expected = ESP32_MQUICKJS_WIFI_CSI_OWNER_EVENT;
+
+    return slot != NULL && atomic_compare_exchange_strong_explicit(
+        &slot->owner, &expected, ESP32_MQUICKJS_WIFI_CSI_OWNER_PUBLIC,
+        memory_order_acq_rel, memory_order_acquire);
+}
+
+bool esp32_mquickjs_wifi_csi_slot_discard_event(
+    esp32_mquickjs_wifi_csi_resources_t *resources,
+    const esp32_mquickjs_wifi_csi_event_t *event)
+{
+    esp32_mquickjs_wifi_csi_slot_t *slot =
+        esp32_mquickjs_wifi_csi_slot_from_event(resources, event);
+    uint8_t expected = ESP32_MQUICKJS_WIFI_CSI_OWNER_EVENT;
+    bool closed;
+
+    if (slot == NULL || !atomic_compare_exchange_strong_explicit(
+            &slot->owner, &expected, ESP32_MQUICKJS_WIFI_CSI_OWNER_CLOSED,
+            memory_order_acq_rel, memory_order_acquire)) {
+        return false;
+    }
+    closed = esp32_mquickjs_native_lease_request_close(
+        &slot->lease, slot->slot_generation);
+    wifi_csi_slot_account_return(resources, slot);
+    return closed;
+}
+
+bool esp32_mquickjs_wifi_csi_slot_close_public_owner(
     esp32_mquickjs_wifi_csi_resources_t *resources,
     esp32_mquickjs_wifi_csi_slot_t *slot)
 {
+    uint8_t expected = ESP32_MQUICKJS_WIFI_CSI_OWNER_PUBLIC;
     bool closed;
 
     if (resources == NULL || slot == NULL ||
         slot->session_generation != resources->generation) {
+        return false;
+    }
+    if (!atomic_compare_exchange_strong_explicit(
+            &slot->owner, &expected, ESP32_MQUICKJS_WIFI_CSI_OWNER_CLOSED,
+            memory_order_acq_rel, memory_order_acquire)) {
         return false;
     }
     closed = esp32_mquickjs_native_lease_request_close(

@@ -213,6 +213,52 @@ static void test_close_release_gate_requires_full_quiescence(void)
     assert(esp32_mquickjs_wireless_close_can_release(0, true));
 }
 
+static void test_fixed_channel_owner_is_lease_exclusive(void)
+{
+    esp32_mquickjs_wireless_fixed_channel_owner_t owner = {0};
+    uint32_t generation;
+
+    assert(esp32_mquickjs_wireless_fixed_channel_check(
+        &owner, 11U, 1U, 6U, 0U) ==
+        ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_ACQUIRE);
+    assert(esp32_mquickjs_wireless_fixed_channel_claim(
+        &owner, 11U, 1U, 6U, 0U));
+    generation = owner.generation;
+
+    assert(esp32_mquickjs_wireless_fixed_channel_check(
+        &owner, 11U, 1U, 6U, 0U) ==
+        ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_IDEMPOTENT);
+    assert(esp32_mquickjs_wireless_fixed_channel_claim(
+        &owner, 11U, 1U, 6U, 0U));
+    assert(owner.generation == generation);
+
+    assert(esp32_mquickjs_wireless_fixed_channel_check(
+        &owner, 12U, 1U, 6U, 0U) ==
+        ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_CONFLICT);
+    assert(esp32_mquickjs_wireless_fixed_channel_check(
+        &owner, 13U, 2U, 6U, 0U) ==
+        ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_CONFLICT);
+    assert(esp32_mquickjs_wireless_fixed_channel_check(
+        &owner, 13U, 2U, 11U, 0U) ==
+        ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_CONFLICT);
+    assert(!esp32_mquickjs_wireless_fixed_channel_release(
+        &owner, 12U, 1U));
+    assert(owner.claimed && owner.primary_channel == 6U &&
+           owner.generation == generation);
+
+    assert(esp32_mquickjs_wireless_fixed_channel_check(
+        &owner, 11U, 1U, 11U, 0U) ==
+        ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_CHANGE);
+    assert(esp32_mquickjs_wireless_fixed_channel_claim(
+        &owner, 11U, 1U, 11U, 0U));
+    assert(owner.generation != generation && owner.primary_channel == 11U);
+    assert(!esp32_mquickjs_wireless_fixed_channel_release(
+        &owner, 13U, 2U));
+    assert(esp32_mquickjs_wireless_fixed_channel_release(
+        &owner, 11U, 1U));
+    assert(!owner.claimed);
+}
+
 static void test_ble_helpers(void)
 {
     uint8_t value[8] = {0};
@@ -258,6 +304,7 @@ int main(void)
     test_timeout_state();
     test_native_operation_completion_lifecycle();
     test_close_release_gate_requires_full_quiescence();
+    test_fixed_channel_owner_is_lease_exclusive();
     test_ble_helpers();
     puts("wireless core tests passed");
     return 0;

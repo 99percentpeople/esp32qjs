@@ -119,7 +119,7 @@ void esp32_mquickjs_wifi_csi_target_normalize_metadata(
     metadata->noise_floor_available = true;
     metadata->channel = rx->channel;
     metadata->secondary = he_secondary(rx->second);
-    metadata->timestamp_us = rx->timestamp;
+    metadata->driver_timestamp_us = rx->timestamp;
     metadata->rx_sequence = info->rx_seq;
     metadata->first_word_invalid = info->first_word_invalid;
     metadata->channel_estimate_valid =
@@ -128,10 +128,10 @@ void esp32_mquickjs_wifi_csi_target_normalize_metadata(
     metadata->phy = he_phy(rx->cur_bb_format);
     metadata->bandwidth_mhz = rx->second == 0U ? 20U : 40U;
     metadata->bandwidth_available = true;
-    metadata->sample_bits = config != NULL &&
-            config->schema == ESP32_MQUICKJS_WIFI_CSI_SCHEMA_HE
-        ? config->config.he.lltf_bits
-        : 0U;
+    esp32_mquickjs_wifi_csi_target_decode_he_signal(
+        metadata, rx->he_siga1, rx->he_siga2);
+    esp32_mquickjs_wifi_csi_target_build_he_layout(
+        metadata, config, info->len);
 }
 
 #endif

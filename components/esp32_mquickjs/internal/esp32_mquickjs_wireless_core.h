@@ -37,6 +37,23 @@ typedef struct {
     uint16_t index;
 } esp32_mquickjs_wireless_critical_slot_t;
 
+typedef struct {
+    bool claimed;
+    uint32_t lease_identity;
+    uint32_t client;
+    uint8_t primary_channel;
+    uint8_t secondary_channel;
+    uint32_t generation;
+} esp32_mquickjs_wireless_fixed_channel_owner_t;
+
+typedef enum {
+    ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_INVALID = 0,
+    ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_CONFLICT,
+    ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_ACQUIRE,
+    ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_CHANGE,
+    ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_IDEMPOTENT,
+} esp32_mquickjs_wireless_fixed_channel_result_t;
+
 typedef bool (*esp32_mquickjs_wireless_event_send_from_isr_fn)(
     void *destination, const void *event, int *task_woken);
 typedef bool (*esp32_mquickjs_wireless_event_try_send_from_callback_fn)(
@@ -110,6 +127,19 @@ bool esp32_mquickjs_wireless_critical_reserve(
 bool esp32_mquickjs_wireless_critical_take(
     esp32_mquickjs_wireless_critical_slot_t *slot,
     uint32_t generation, uint16_t *out_index);
+
+esp32_mquickjs_wireless_fixed_channel_result_t
+esp32_mquickjs_wireless_fixed_channel_check(
+    const esp32_mquickjs_wireless_fixed_channel_owner_t *owner,
+    uint32_t lease_identity, uint32_t client,
+    uint8_t primary_channel, uint8_t secondary_channel);
+bool esp32_mquickjs_wireless_fixed_channel_claim(
+    esp32_mquickjs_wireless_fixed_channel_owner_t *owner,
+    uint32_t lease_identity, uint32_t client,
+    uint8_t primary_channel, uint8_t secondary_channel);
+bool esp32_mquickjs_wireless_fixed_channel_release(
+    esp32_mquickjs_wireless_fixed_channel_owner_t *owner,
+    uint32_t lease_identity, uint32_t client);
 
 #ifdef __cplusplus
 }

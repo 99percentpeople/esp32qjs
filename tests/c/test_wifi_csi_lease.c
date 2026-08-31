@@ -22,10 +22,12 @@ int main(void)
     esp32_mquickjs_wifi_csi_slot_t *slot =
         esp32_mquickjs_wifi_csi_slot_from_event(&resources, &event);
     assert(slot != NULL);
+    assert(esp32_mquickjs_wifi_csi_slot_take_event_owner(
+        &resources, &event));
     assert(esp32_mquickjs_wifi_csi_slot_retain(&resources, slot));
     assert(esp32_mquickjs_wifi_csi_slot_retain(&resources, slot));
     assert(esp32_mquickjs_native_lease_retain_count(&slot->lease) == 3);
-    assert(esp32_mquickjs_wifi_csi_slot_request_close(&resources, slot));
+    assert(esp32_mquickjs_wifi_csi_slot_close_public_owner(&resources, slot));
     assert(esp32_mquickjs_native_pool_available(&resources.pool) == 0);
     assert(atomic_load(&resources.counters.leased_frames) == 1);
     assert(esp32_mquickjs_wifi_csi_slot_release(&resources, slot));

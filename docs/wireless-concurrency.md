@@ -21,6 +21,8 @@ event, and wake an already registered Future.
 | ESP-NOW session lifecycle, generation, counters, and active operations | Runtime, worker, and Wi-Fi callbacks | All three contexts | C11 atomics; peer and radio mutations remain serialized by the native Future resource lane |
 | ESP-NOW receive payloads | Wi-Fi callback | Runtime event conversion | Fixed native pool; the queued event contains only generation and slot index, and drop/discard returns the slot |
 | ESP-NOW EventQueue native pointer | Runtime, Wi-Fi callback, and close worker | Wi-Fi callback and runtime | A native retain is held from successful open until quiescent close, so JS disposal or finalization cannot free callback-visible storage |
+| Wi-Fi CSI pool slots | Wi-Fi callback, EventQueue, and runtime objects | All three contexts | Publish creates the sole event owner; dequeue transfers it once to a Frame or Batch; drop/discard and public close release it once. Views and sources add native retains, while owned copies do not retain slots. |
+| Wi-Fi CSI fixed channel | Shared radio service | Station, SoftAP, ESP-NOW, and CSI clients | The owner is an exact lease identity, not merely a client kind. Repeating the same channel on that lease is idempotent; every other lease conflicts without mutating radio state. |
 
 ## Teardown invariants
 
@@ -34,8 +36,15 @@ ESP-NOW close has two phases:
 1. Mark the session closing, close its EventQueue, and unregister receive and
    send callbacks. No callback-visible storage is freed in this phase.
 2. Wait until the atomic active-callback count reaches zero, deinitialize
-   ESP-NOW, release the Wi-Fi radio lease, discard queued payloads, free native
-   pools, and release the EventQueue native retain.
+ESP-NOW, release the Wi-Fi radio lease, discard queued payloads, free native
+pools, and release the EventQueue native retain.
+
+Wi-Fi CSI close first stops admission, disables CSI, unregisters the callback,
+and waits for the active callback count to reach zero. It then discards queued
+events through the same event-owner release path. An event already dequeued by
+a receive Future is dropped by Future destruction if JS conversion never ran.
+The old pool is destroyed only after callback, event/public owner, and all
+View/Source native retains have reached zero; generations are never reused.
 
 If an explicit ESP-NOW close exceeds its Future deadline, cleanup continues in
 the worker and the session remains closing. The caller receives

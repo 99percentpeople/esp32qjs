@@ -15,7 +15,9 @@ MAGIC = b"E32QCSI1"
 VERSION = 1
 HEADER_BYTES = 24
 DIRECTORY_BYTES = 16
-METADATA_BYTES = 64
+METADATA_BYTES = 192
+SEGMENT_BYTES = 40
+SEGMENT_BASE = 60
 
 PHY_FORMATS = (
     "legacy",
@@ -28,10 +30,56 @@ PHY_FORMATS = (
     "unknown",
 )
 SECONDARY_CHANNELS = ("none", "above", "below")
+SAMPLE_ENCODINGS = (
+    "unknown",
+    "signed-int8",
+    "signed-int12-le",
+    "signed-int12-packed",
+)
+LAYOUT_SCHEMAS = ("unknown", "wifi-csi-legacy-layout/1", "wifi-csi-he-layout/1")
+SEGMENT_TYPES = (
+    "unknown",
+    "lltf",
+    "ht-ltf",
+    "stbc-ht-ltf2",
+    "vht-ltf",
+    "he-ltf1",
+    "he-ltf2",
+    "mixed",
+)
 
 
 class CsiProtocolError(ValueError):
     """The byte stream is not a valid ``esp32qjs-csi/1`` batch."""
+
+
+@dataclass(frozen=True)
+class CsiSubcarrierRange:
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class CsiSegment:
+    type: str
+    offset_bytes: int
+    length_bytes: int
+    iq_pair_count: int
+    subcarrier_ranges: tuple[CsiSubcarrierRange, ...]
+    null_subcarriers: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class CsiLayout:
+    schema: str
+    component_order: str
+    sample_encoding: str
+    sample_bits: int | None
+    byte_length: int
+    iq_pair_count: int
+    trailing_padding_bytes: int
+    known: bool
+    segments: tuple[CsiSegment, ...]
 
 
 @dataclass(frozen=True)
@@ -53,8 +101,7 @@ class CsiMetadata:
     stbc: bool | None
     first_word_invalid: bool
     channel_estimate_valid: bool | None
-    sample_bits: int | None
-    byte_length: int
+    layout: CsiLayout
 
 
 @dataclass(frozen=True)
@@ -75,29 +122,115 @@ def _mac(value: memoryview) -> str:
 
 
 def _parse_metadata(record: memoryview) -> CsiMetadata:
-    sequence, timestamp_us, rx_sequence, generation = struct.unpack_from(
-        "<IIII", record, 0
-    )
-    rssi = struct.unpack_from("<b", record, 28)[0]
-    noise_floor_raw = struct.unpack_from("<b", record, 29)[0]
+    sequence = struct.unpack_from("<I", record, 0)[0]
+    timestamp_us = struct.unpack_from("<Q", record, 4)[0]
+    rx_sequence, generation = struct.unpack_from("<II", record, 12)
+    rssi = struct.unpack_from("<b", record, 32)[0]
+    noise_floor_raw = struct.unpack_from("<b", record, 33)[0]
     channel, secondary, antenna, phy, bandwidth, mcs = struct.unpack_from(
-        "<BBBBBB", record, 30
+        "<BBBBBB", record, 34
     )
-    flags = struct.unpack_from("<H", record, 36)[0]
-    sample_bits = record[38]
-    byte_length = struct.unpack_from("<I", record, 40)[0]
+    flags = struct.unpack_from("<H", record, 40)[0]
+    encoding, sample_bits = struct.unpack_from("<BB", record, 42)
+    byte_length, iq_pair_count = struct.unpack_from("<II", record, 44)
+    trailing_padding_bytes = struct.unpack_from("<H", record, 52)[0]
+    segment_count, schema, component_order, known = struct.unpack_from(
+        "<BBBB", record, 54
+    )
 
     if secondary >= len(SECONDARY_CHANNELS):
         raise CsiProtocolError(f"invalid secondary-channel value {secondary}")
     if phy >= len(PHY_FORMATS):
         raise CsiProtocolError(f"invalid PHY-format value {phy}")
+    if encoding >= len(SAMPLE_ENCODINGS):
+        raise CsiProtocolError(f"invalid sample-encoding value {encoding}")
+    if schema >= len(LAYOUT_SCHEMAS):
+        raise CsiProtocolError(f"invalid layout-schema value {schema}")
+    if component_order != 0:
+        raise CsiProtocolError(f"invalid component-order value {component_order}")
+    if known not in (0, 1):
+        raise CsiProtocolError(f"invalid layout-known value {known}")
+    if segment_count > 3:
+        raise CsiProtocolError(f"invalid segment count {segment_count}")
+
+    segments: list[CsiSegment] = []
+    expected_offset = 0
+    total_iq_pairs = 0
+    for segment_index in range(segment_count):
+        segment_offset = SEGMENT_BASE + segment_index * SEGMENT_BYTES
+        segment_type, range_count, null_count = struct.unpack_from(
+            "<BBB", record, segment_offset
+        )
+        if segment_type >= len(SEGMENT_TYPES):
+            raise CsiProtocolError(
+                f"invalid segment-type value {segment_type}"
+            )
+        if range_count > 2:
+            raise CsiProtocolError(f"invalid subcarrier-range count {range_count}")
+        if null_count > 3:
+            raise CsiProtocolError(f"invalid null-subcarrier count {null_count}")
+        offset_bytes, length_bytes, segment_iq_pairs = struct.unpack_from(
+            "<III", record, segment_offset + 4
+        )
+        if offset_bytes != expected_offset:
+            raise CsiProtocolError(
+                f"segment {segment_index} has non-contiguous byte offset"
+            )
+        ranges = tuple(
+            CsiSubcarrierRange(
+                *struct.unpack_from(
+                    "<hh", record, segment_offset + 16 + range_index * 4
+                )
+            )
+            for range_index in range(range_count)
+        )
+        nulls = tuple(
+            struct.unpack_from(
+                "<h", record, segment_offset + 24 + null_index * 2
+            )[0]
+            for null_index in range(null_count)
+        )
+        segments.append(
+            CsiSegment(
+                SEGMENT_TYPES[segment_type],
+                offset_bytes,
+                length_bytes,
+                segment_iq_pairs,
+                ranges,
+                nulls,
+            )
+        )
+        expected_offset += length_bytes
+        total_iq_pairs += segment_iq_pairs
+    if expected_offset + trailing_padding_bytes != byte_length:
+        raise CsiProtocolError("layout segment lengths do not match payload length")
+    if total_iq_pairs != iq_pair_count:
+        raise CsiProtocolError("layout IQ-pair counts do not match metadata")
+    if known and (
+        encoding == 0 or schema == 0 or segment_count == 0 or sample_bits == 0
+    ):
+        raise CsiProtocolError("known layout has incomplete encoding metadata")
+    expected_sample_bits = {1: 8, 2: 12, 3: 12}.get(encoding)
+    if expected_sample_bits is not None and sample_bits != expected_sample_bits:
+        raise CsiProtocolError("sample bits do not match sample encoding")
+    layout = CsiLayout(
+        schema=LAYOUT_SCHEMAS[schema],
+        component_order="imaginary-real",
+        sample_encoding=SAMPLE_ENCODINGS[encoding],
+        sample_bits=sample_bits or None,
+        byte_length=byte_length,
+        iq_pair_count=iq_pair_count,
+        trailing_padding_bytes=trailing_padding_bytes,
+        known=bool(known),
+        segments=tuple(segments),
+    )
     return CsiMetadata(
         sequence=sequence,
         timestamp_us=timestamp_us,
         rx_sequence=rx_sequence,
         generation=generation,
-        source_mac=_mac(record[16:22]),
-        destination_mac=_mac(record[22:28]) if flags & (1 << 0) else None,
+        source_mac=_mac(record[20:26]),
+        destination_mac=_mac(record[26:32]) if flags & (1 << 0) else None,
         rssi=rssi,
         noise_floor=noise_floor_raw if flags & (1 << 1) else None,
         channel=channel,
@@ -111,8 +244,7 @@ def _parse_metadata(record: memoryview) -> CsiMetadata:
         channel_estimate_valid=(
             bool(flags & (1 << 9)) if flags & (1 << 8) else None
         ),
-        sample_bits=sample_bits or None,
-        byte_length=byte_length,
+        layout=layout,
     )
 
 
@@ -165,7 +297,7 @@ def parse_batch(data: bytes | bytearray | memoryview) -> CsiBatch:
 
         record = view[metadata_offset : metadata_offset + record_length]
         metadata = _parse_metadata(record)
-        if metadata.byte_length != payload_length:
+        if metadata.layout.byte_length != payload_length:
             raise CsiProtocolError(
                 f"frame {index} metadata length does not match its payload"
             )

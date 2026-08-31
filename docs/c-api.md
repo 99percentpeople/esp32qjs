@@ -1900,10 +1900,13 @@ Library responsibilities.
 - `wifiCsi.open(options)` validates the entire v1 object, acquires a shared
   radio client, allocates the fixed pool and DROP_NEWEST EventQueue, registers
   the native callback, and starts capture. Only one session may be open.
-- Associated capture preserves the current radio channel. Promiscuous and
-  fixed-channel capture require explicit Build Context gates and exclusive
-  radio ownership. Conflicts fail without disconnecting Station, moving the AP,
-  or changing ESP-NOW behind the caller's back.
+- Associated capture preserves the current radio channel. Promiscuous capture
+  requires its Build Context gate. Numeric channels are always mediated by the
+  shared radio service and require an exclusive lease. Conflicts fail without
+  disconnecting Station, moving the AP, or changing ESP-NOW behind the caller's
+  back. `capabilities().radio` reports the current country/policy and only the
+  channel sets ESP-IDF can describe authoritatively; `null` means unknown, not
+  unrestricted.
 - `powerSavePolicy: "preserve"` reports timing as power-save dependent when
   modem sleep is active. `"require-none"` rejects open instead of changing the
   Station power-save setting.
@@ -1914,16 +1917,31 @@ C5 uses `wifi-csi-he/1` fields `enableLegacy`, `forceLegacyLtf`, `ht20`, `ht40`,
 `vht`, HE format controls, `heStbcLtf`, `valueScale`, `dumpAck`, and `lltfBits`.
 Unknown or target-incompatible fields are rejected.
 
+| Target family | Capture schema | PHY/layout surface | Numeric channel surface |
+| --- | --- | --- | --- |
+| ESP32-C3 / ESP32-S3 | `wifi-csi-legacy/1` | Legacy/HT, signed int8 | Structurally valid 2.4 GHz channels, then country/coexistence checks |
+| ESP32-C5 | `wifi-csi-he/1` | Legacy/HT, target-gated VHT, HE-SU; observed 8/12-bit encoding | 2.4/5 GHz target channels, then country mask/coexistence checks |
+
+HE-MU, HE-ER-SU, HE-TB, unsupported bandwidths, and any other combination that
+the local ESP-IDF metadata cannot describe uniquely retain their PHY name but
+return an explicit unknown Layout.
+
 ### `WiFiCsiSession`
 
 `status()` returns the requested and effective radio/capture settings plus the
-session generation and lifecycle. `stats()` separates filtering, invalid
-channel estimates, pool exhaustion, queue overflow, oversized frames, closing
-drops, delivered frames/batches, bytes, and live leases.
+session generation and lifecycle. `stats()` separates first-word and channel-
+estimate validity filtering, invalid callback data, pool exhaustion, queue
+overflow, oversized frames, closing drops, delivered frames/batches, bytes,
+and live leases.
 
-`receive(timeoutMs?)` returns one `WiFiCsiFrame` or `null`; `receiveBatch(
-maximumFrames?, timeoutMs?)` waits for the first frame and non-blockingly drains
-additional events into one `WiFiCsiBatch`. `stop()` disables and unregisters
+`receive(timeoutMs?)` returns one `WiFiCsiFrame` or `null`.
+`receiveBatch(options?)` accepts only an options object. `maximumFrames`
+defaults to the Build Context limit, `minimumFrames` to 1,
+`maximumLatencyMs` to 0, and omitted `timeoutMs` waits indefinitely for the
+first frame. After that frame it drains the queue. If fewer than
+`minimumFrames` are available, it waits at most `maximumLatencyMs`; expiry or
+stop/close returns the partial batch, while a first-frame timeout or stop/close
+before any frame returns `null`. `stop()` disables and unregisters
 the callback and waits for callback quiescence before returning. Reconfiguration
 is allowed only while stopped through `configure(options)`, followed by
 `start()`. `close()` is idempotent and may leave pool storage retained until
@@ -1932,7 +1950,12 @@ the last frame, view, source, or batch lease is released.
 ### `WiFiCsiFrame`
 
 `info` contains normalized MAC, RSSI, channel, PHY, validity, sequence, time,
-and layout metadata. `samples()` returns a pool-backed retained `ByteView`;
+and layout metadata. `timestampUs` is a boot-relative driver timestamp extended
+across 32-bit wraps and returned as a JavaScript number; it is not UTC. Layout
+reports sample encoding, IQ-pair count, trailing padding, ordered subcarrier
+ranges, and null subcarriers, or explicitly reports an unknown layout when the
+observed PHY/configuration/length combination is ambiguous. `samples()` returns
+a pool-backed retained `ByteView`;
 `copySamples()` returns an independent owned snapshot; `source()` returns a
 one-shot retained `ByteSpanSource`. Close every frame and every derived view or
 source deterministically. Raw IQ bytes retain ESP-IDF order and report
@@ -1945,8 +1968,11 @@ phase, FFT, or application features.
 `source({ format: "esp32qjs-csi/1" })` emits a little-endian scatter/gather
 stream without constructing JavaScript sample arrays. The v1 stream starts
 with a 24-byte header (`E32QCSI1`, version, frame count, metadata bytes, payload
-bytes), followed by 16-byte directory entries, fixed 64-byte normalized
-metadata records, and the original IQ payload bytes. Close the source before
+bytes), followed by 16-byte directory entries, fixed 192-byte normalized
+metadata records, and the original IQ payload bytes. Each record carries the
+little-endian uint64 timestamp plus the complete bounded Layout/Segment
+description. The exact offsets and enum values are frozen in
+[`wifi-csi-protocol.md`](wifi-csi-protocol.md). Close the source before
 closing the batch unless the consumer already completed it; either may remain
 alive safely because each owns its own native lease.
 
@@ -1971,6 +1997,13 @@ try {
       frame.close();
     }
   }
+  var batch = session.receiveBatch({
+    maximumFrames: 8,
+    minimumFrames: 4,
+    timeoutMs: 1000,
+    maximumLatencyMs: 20
+  });
+  if (batch !== null) batch.close();
 } finally {
   session.close();
 }

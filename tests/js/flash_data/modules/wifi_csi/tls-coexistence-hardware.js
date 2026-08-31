@@ -51,7 +51,7 @@ test("wifi_csi/tls-coexistence-hardware", function () {
         client.close();
         client = null;
       }
-      batch = session.receiveBatch(batchFrames, 2000);
+      batch = session.receiveBatch({ maximumFrames: batchFrames, timeoutMs: 2000 });
       if (batch !== null) {
         frames += batch.frameCount;
         batch.close();

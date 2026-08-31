@@ -311,7 +311,8 @@ foreach(WIFI_CSI_RESOURCE_TEST
         test_wifi_csi_pool
         test_wifi_csi_filter
         test_wifi_csi_callback_publish
-        test_wifi_csi_lease)
+        test_wifi_csi_lease
+        test_wifi_csi_ownership)
     add_executable(${WIFI_CSI_RESOURCE_TEST}
         ${WIFI_CSI_RESOURCE_TEST}.c
         ${WIFI_CSI_RESOURCE_SOURCES}
@@ -330,3 +331,21 @@ target_include_directories(test_wifi_csi_target_config PRIVATE
     ../../components/esp32_mquickjs/internal
 )
 add_test(NAME test_wifi_csi_target_config COMMAND test_wifi_csi_target_config)
+
+add_executable(test_wifi_csi_layout
+    test_wifi_csi_layout.c
+    ../../components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_layout.c
+)
+target_include_directories(test_wifi_csi_layout PRIVATE
+    ../../components/esp32_mquickjs/internal
+)
+add_test(NAME test_wifi_csi_layout COMMAND test_wifi_csi_layout)
+
+add_executable(test_wifi_csi_batch
+    test_wifi_csi_batch.c
+    ../../components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi_batch.c
+)
+target_include_directories(test_wifi_csi_batch PRIVATE
+    ../../components/esp32_mquickjs/internal
+)
+add_test(NAME test_wifi_csi_batch COMMAND test_wifi_csi_batch)

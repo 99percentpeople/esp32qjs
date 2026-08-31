@@ -2,7 +2,10 @@
 #define ESP32_MQUICKJS_WIFI_CSI_TARGET_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+
+#include "esp32_mquickjs_wifi_csi_resources.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -68,14 +71,26 @@ esp32_mquickjs_wifi_csi_target_config_validate(
     bool vht_supported,
     bool lltf_bit_mode_supported,
     const esp32_mquickjs_wifi_csi_capture_config_t *config);
+bool esp32_mquickjs_wifi_csi_target_channel_structurally_valid(
+    bool supports_5ghz, uint8_t channel);
+void esp32_mquickjs_wifi_csi_target_decode_he_signal(
+    esp32_mquickjs_wifi_csi_metadata_t *metadata,
+    uint32_t signal_a1,
+    uint16_t signal_a2);
+void esp32_mquickjs_wifi_csi_target_build_legacy_layout(
+    esp32_mquickjs_wifi_csi_metadata_t *metadata,
+    const esp32_mquickjs_wifi_csi_capture_config_t *config,
+    size_t frame_length);
+void esp32_mquickjs_wifi_csi_target_build_he_layout(
+    esp32_mquickjs_wifi_csi_metadata_t *metadata,
+    const esp32_mquickjs_wifi_csi_capture_config_t *config,
+    size_t frame_length);
 
 #if defined(CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI) && \
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI
 
 #include "esp_err.h"
 #include "esp_wifi.h"
-
-#include "esp32_mquickjs_wifi_csi_resources.h"
 
 bool esp32_mquickjs_wifi_csi_target_is_he(void);
 bool esp32_mquickjs_wifi_csi_target_supports_vht(void);

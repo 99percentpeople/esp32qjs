@@ -55,6 +55,7 @@ struct esp32_mquickjs_future_driver_state {
     void *event;
     uint32_t timeout_ms;
     bool received;
+    bool event_finished;
     _Atomic bool timed_out;
     _Atomic bool completed;
     bool queue_retained;
@@ -823,6 +824,7 @@ static JSValue event_queue_future_finish(JSContext *ctx,
     if (state == NULL || !state->received) {
         return JS_NULL;
     }
+    state->event_finished = true;
     return state->queue->to_js(ctx, state->event, state->queue->opaque);
 }
 
@@ -848,6 +850,11 @@ static void event_queue_future_destroy(esp32_mquickjs_future_driver_state_t *sta
     }
     queue = state->queue;
     release_queue = state->native_queue_retained;
+    if (state->received && !state->event_finished && queue != NULL &&
+        queue->drop != NULL) {
+        queue->drop(state->event, queue->opaque);
+        state->event_finished = true;
+    }
     if (state->timer != NULL) {
         (void)esp_timer_stop(state->timer);
         esp_timer_delete(state->timer);

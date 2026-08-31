@@ -45,7 +45,7 @@ test("wifi_csi/throughput-hardware", function () {
     status = session.status();
     startMs = sys.millis();
     while (sys.millis() - startMs < durationMs) {
-      batch = session.receiveBatch(batchFrames, 1000);
+      batch = session.receiveBatch({ maximumFrames: batchFrames, timeoutMs: 1000 });
       if (batch === null) {
         wifi.scan({
           channel: status.effective.channel,
@@ -54,7 +54,7 @@ test("wifi_csi/throughput-hardware", function () {
           dwellMs: 250,
           timeoutMs: 3000
         });
-        batch = session.receiveBatch(batchFrames, 1000);
+        batch = session.receiveBatch({ maximumFrames: batchFrames, timeoutMs: 1000 });
       }
       if (batch !== null) {
         source = batch.source({ format: "esp32qjs-csi/1" });

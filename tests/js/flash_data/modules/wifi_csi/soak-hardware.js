@@ -49,7 +49,7 @@ test("wifi_csi/soak-hardware", function () {
     startMs = sys.millis();
     nextSampleMs = startMs + 10000;
     while (sys.millis() - startMs < durationMs) {
-      batch = session.receiveBatch(batchFrames, 1000);
+      batch = session.receiveBatch({ maximumFrames: batchFrames, timeoutMs: 1000 });
       if (batch !== null) {
         frames += batch.frameCount;
         batches += 1;

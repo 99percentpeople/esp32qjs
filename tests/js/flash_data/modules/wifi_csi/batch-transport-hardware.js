@@ -45,7 +45,7 @@ test("wifi_csi/batch-transport-hardware", function () {
       dwellMs: 250,
       timeoutMs: 3000
     });
-    batch = session.receiveBatch(8, 8000);
+    batch = session.receiveBatch({ maximumFrames: 8, timeoutMs: 8000 });
     test.ok(batch !== null && batch.frameCount >= 1,
       "batch capture should retain at least one frame");
     test.ok(batch.info(0).layout.byteLength > 0,

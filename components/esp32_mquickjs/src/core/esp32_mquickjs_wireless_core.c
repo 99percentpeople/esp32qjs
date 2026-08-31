@@ -264,3 +264,67 @@ bool esp32_mquickjs_wireless_critical_take(
     slot->index = 0U;
     return true;
 }
+
+esp32_mquickjs_wireless_fixed_channel_result_t
+esp32_mquickjs_wireless_fixed_channel_check(
+    const esp32_mquickjs_wireless_fixed_channel_owner_t *owner,
+    uint32_t lease_identity, uint32_t client,
+    uint8_t primary_channel, uint8_t secondary_channel)
+{
+    if (owner == NULL || lease_identity == 0U || primary_channel == 0U) {
+        return ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_INVALID;
+    }
+    if (!owner->claimed) {
+        return ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_ACQUIRE;
+    }
+    if (owner->lease_identity != lease_identity || owner->client != client) {
+        return ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_CONFLICT;
+    }
+    return owner->primary_channel == primary_channel &&
+            owner->secondary_channel == secondary_channel
+        ? ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_IDEMPOTENT
+        : ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_CHANGE;
+}
+
+bool esp32_mquickjs_wireless_fixed_channel_claim(
+    esp32_mquickjs_wireless_fixed_channel_owner_t *owner,
+    uint32_t lease_identity, uint32_t client,
+    uint8_t primary_channel, uint8_t secondary_channel)
+{
+    esp32_mquickjs_wireless_fixed_channel_result_t result =
+        esp32_mquickjs_wireless_fixed_channel_check(
+            owner, lease_identity, client, primary_channel,
+            secondary_channel);
+
+    if (result == ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_INVALID ||
+        result == ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_CONFLICT) {
+        return false;
+    }
+    if (result == ESP32_MQUICKJS_WIRELESS_FIXED_CHANNEL_IDEMPOTENT) {
+        return true;
+    }
+    owner->claimed = true;
+    owner->lease_identity = lease_identity;
+    owner->client = client;
+    owner->primary_channel = primary_channel;
+    owner->secondary_channel = secondary_channel;
+    owner->generation++;
+    if (owner->generation == 0U) owner->generation = 1U;
+    return true;
+}
+
+bool esp32_mquickjs_wireless_fixed_channel_release(
+    esp32_mquickjs_wireless_fixed_channel_owner_t *owner,
+    uint32_t lease_identity, uint32_t client)
+{
+    if (owner == NULL || !owner->claimed || lease_identity == 0U ||
+        owner->lease_identity != lease_identity || owner->client != client) {
+        return false;
+    }
+    owner->claimed = false;
+    owner->lease_identity = 0U;
+    owner->client = 0U;
+    owner->primary_channel = 0U;
+    owner->secondary_channel = 0U;
+    return true;
+}

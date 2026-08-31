@@ -23,7 +23,14 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertIn("range 2 128", kconfig)
         self.assertIn("range 128 4096", kconfig)
         self.assertIn("ESP32_MQUICKJS_WIFI_CSI_ALLOW_PROMISCUOUS", kconfig)
-        self.assertIn("ESP32_MQUICKJS_WIFI_CSI_ALLOW_FIXED_CHANNEL", kconfig)
+        self.assertNotIn("ESP32_MQUICKJS_WIFI_CSI_ALLOW_FIXED_CHANNEL", kconfig)
+
+        source = (MODULE / "esp32_mquickjs_wifi_csi.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("WIFI_CSI_ALLOW_FIXED_CHANNEL", source)
+        self.assertIn('supports, "fixedChannel"', source)
+        self.assertIn("JS_TRUE", source)
 
     def test_callback_has_no_js_allocation_or_blocking_send(self):
         source = (MODULE / "esp32_mquickjs_wifi_csi.c").read_text(
@@ -138,9 +145,42 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         ]
 
         self.assertLess(
+            success.index("JS_PopGCRef(ctx, &options_ref)"),
+            success.index("JS_PopGCRef(ctx, &object_ref)"),
+        )
+        self.assertLess(
             success.index("JS_PopGCRef(ctx, &object_ref)"),
             success.index("JS_PopGCRef(ctx, &first_ref)"),
         )
+
+    def test_receive_batch_is_object_only_and_bounds_aggregation_times(self):
+        source = (MODULE / "esp32_mquickjs_wifi_csi.c").read_text(
+            encoding="utf-8"
+        )
+        receive_batch = source[
+            source.index("JSValue js_wifi_csi_session_receive_batch") :
+            source.index("bool esp32_mquickjs_init_wifi_csi_runtime")
+        ]
+
+        self.assertIn('"maximumFrames", "minimumFrames"', receive_batch)
+        self.assertIn('"timeoutMs", "maximumLatencyMs"', receive_batch)
+        self.assertIn("argc > 1", receive_batch)
+        self.assertIn("minimum_frames > maximum_frames", receive_batch)
+        self.assertGreaterEqual(receive_batch.count("INT32_MAX"), 2)
+        self.assertIn("latency_deadline_us", receive_batch)
+        self.assertIn("esp32_mquickjs_event_queue_try_receive", receive_batch)
+
+    def test_in_flight_event_is_dropped_if_receive_future_is_destroyed(self):
+        event_queue = (
+            MQUICKJS / "src/core/esp32_mquickjs_event_queue.c"
+        ).read_text(encoding="utf-8")
+        destroy = event_queue[
+            event_queue.index("static void event_queue_future_destroy") :
+            event_queue.index("static const esp32_mquickjs_future_driver_t")
+        ]
+
+        self.assertIn("state->received && !state->event_finished", destroy)
+        self.assertIn("queue->drop(state->event, queue->opaque)", destroy)
 
     def test_finalizers_only_release_leases_or_schedule_cleanup(self):
         source = (MODULE / "esp32_mquickjs_wifi_csi.c").read_text(
@@ -214,7 +254,11 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertIn('memcpy(source->control, "E32QCSI1", 8U)', source)
         self.assertIn("wifi_csi_write_u16_le", source)
         self.assertIn("wifi_csi_write_u32_le", source)
+        self.assertIn("wifi_csi_write_u64_le", source)
+        self.assertIn("WIFI_CSI_BATCH_METADATA_BYTES 192U", source)
         self.assertIn('MAGIC = b"E32QCSI1"', parser)
+        self.assertIn("METADATA_BYTES = 192", parser)
+        self.assertIn('struct.unpack_from("<Q", record, 4)', parser)
         self.assertIn('struct.unpack_from("<8sHHIII"', parser)
 
     def test_generic_span_length_contract_is_used_by_csi_hardware_tests(self):
@@ -342,7 +386,7 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         ):
             source = (directory / name).read_text(encoding="utf-8")
             self.assertIn("caps.limits.maxBatchFrames", source)
-            self.assertIn("session.receiveBatch(batchFrames", source)
+            self.assertIn("maximumFrames: batchFrames", source)
             self.assertNotIn("session.receiveBatch(16", source)
 
     def test_hardware_soak_tracks_memory_floor_without_retaining_batches(self):
@@ -409,8 +453,9 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertIn("ESP32_MQUICKJS_WIFI_RADIO_CLIENT_CSI", header)
         self.assertIn("esp32_mquickjs_wifi_radio_acquire_promiscuous", header)
         self.assertIn("esp32_mquickjs_wifi_radio_release_promiscuous", header)
-        self.assertIn("fixed_channel_claimed", radio)
-        self.assertIn("fixed_channel_client", radio)
+        self.assertIn("fixed_channel_owner", radio)
+        self.assertIn("lease->identity", radio)
+        self.assertIn("wifi_radio_validate_regulatory_channel", radio)
         self.assertIn("promiscuous_claimed", radio)
         self.assertIn("promiscuous_client", radio)
         self.assertIn("esp_wifi_sta_get_ap_info", radio)

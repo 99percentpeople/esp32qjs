@@ -60,7 +60,6 @@ void esp32_mquickjs_wifi_csi_target_normalize_metadata(
 {
     const wifi_pkt_rx_ctrl_t *rx = &info->rx_ctrl;
 
-    (void)config;
     memset(metadata, 0, sizeof(*metadata));
     memcpy(metadata->source_mac, info->mac, 6U);
     memcpy(metadata->destination_mac, info->dmac, 6U);
@@ -70,12 +69,11 @@ void esp32_mquickjs_wifi_csi_target_normalize_metadata(
     metadata->noise_floor_available = true;
     metadata->channel = rx->channel;
     metadata->secondary = legacy_secondary(rx->secondary_channel);
-    metadata->timestamp_us = rx->timestamp;
+    metadata->driver_timestamp_us = rx->timestamp;
     metadata->rx_sequence = info->rx_seq;
     metadata->antenna = rx->ant;
     metadata->antenna_available = true;
     metadata->first_word_invalid = info->first_word_invalid;
-    metadata->sample_bits = 8U;
     metadata->stbc = rx->stbc != 0U;
     metadata->stbc_available = true;
     if (rx->sig_mode == 1U) {
@@ -95,6 +93,8 @@ void esp32_mquickjs_wifi_csi_target_normalize_metadata(
         metadata->bandwidth_mhz = 20U;
         metadata->bandwidth_available = true;
     }
+    esp32_mquickjs_wifi_csi_target_build_legacy_layout(
+        metadata, config, info->len);
 }
 
 #endif
