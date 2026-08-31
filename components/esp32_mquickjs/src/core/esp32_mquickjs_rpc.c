@@ -27,6 +27,13 @@
 #define RPC_STREAM_DIRECTORY_BYTES 96U
 #define RPC_STREAM_PATH_BYTES 160U
 #define RPC_FILE_SOURCE_CHUNK_BYTES 4096U
+#define RPC_BUFFER_INITIAL_BYTES 256U
+#define RPC_STREAM_SEGMENT_BYTES 4096U
+#define RPC_STREAM_MAX_RECORD_BYTES \
+    (ESP32_MQUICKJS_RPC_HEADER_BYTES + RPC_STREAM_SEGMENT_BYTES + \
+     ESP32_MQUICKJS_RPC_CRC_BYTES)
+#define RPC_STREAM_MAX_FRAME_BYTES \
+    (RPC_STREAM_MAX_RECORD_BYTES + (RPC_STREAM_MAX_RECORD_BYTES / 254U) + 2U)
 
 typedef struct rpc_file_source_object rpc_file_source_object_t;
 typedef struct rpc_codec_slot rpc_codec_slot_t;
@@ -60,8 +67,8 @@ typedef struct {
     esp32_mquickjs_byte_span_source_t source;
     esp32_mquickjs_byte_span_t span;
     size_t span_offset;
-    uint8_t segment[ESP32_MQUICKJS_RPC_SEGMENT_BYTES];
-    uint8_t frame[ESP32_MQUICKJS_RPC_MAX_FRAME_BYTES];
+    uint8_t segment[RPC_STREAM_SEGMENT_BYTES];
+    uint8_t frame[RPC_STREAM_MAX_FRAME_BYTES];
 } rpc_encoded_stream_object_t;
 
 struct rpc_file_source_object {
@@ -107,10 +114,12 @@ typedef struct {
     size_t length;
     size_t capacity;
     bool failed;
+    bool out_of_memory;
     bool sealed;
     bool has_stream;
     size_t stream_length;
-    JSValue stream_value;
+    JSGCRef stream_ref;
+    bool stream_rooted;
 } rpc_buffer_t;
 
 typedef struct {
@@ -303,16 +312,51 @@ static void rpc_decoder_stream_cleanup(rpc_decoder_slot_t *slot)
 
 static bool rpc_buffer_append(rpc_buffer_t *buffer, const void *data, size_t length)
 {
+    size_t required;
+
     if (buffer->failed || buffer->sealed ||
-        length > buffer->capacity - buffer->length) {
+        length > ESP32_MQUICKJS_RPC_MESSAGE_BYTES - buffer->length) {
         buffer->failed = true;
         return false;
+    }
+    required = buffer->length + length;
+    if (required > buffer->capacity) {
+        size_t capacity = buffer->capacity == 0
+                              ? RPC_BUFFER_INITIAL_BYTES
+                              : buffer->capacity;
+        uint8_t *grown;
+
+        while (capacity < required) {
+            capacity = capacity > ESP32_MQUICKJS_RPC_MESSAGE_BYTES / 2U
+                           ? ESP32_MQUICKJS_RPC_MESSAGE_BYTES
+                           : capacity * 2U;
+        }
+        grown = realloc(buffer->data, capacity);
+        if (grown == NULL) {
+            buffer->failed = true;
+            buffer->out_of_memory = true;
+            return false;
+        }
+        buffer->data = grown;
+        buffer->capacity = capacity;
     }
     if (length != 0) {
         memcpy(buffer->data + buffer->length, data, length);
         buffer->length += length;
     }
     return true;
+}
+
+static void rpc_buffer_cleanup(JSContext *ctx, rpc_buffer_t *buffer)
+{
+    free(buffer->data);
+    buffer->data = NULL;
+    buffer->length = 0;
+    buffer->capacity = 0;
+    if (buffer->stream_rooted) {
+        JS_DeleteGCRef(ctx, &buffer->stream_ref);
+        buffer->stream_rooted = false;
+    }
 }
 
 static bool rpc_buffer_byte(rpc_buffer_t *buffer, uint8_t value)
@@ -415,14 +459,14 @@ static int rpc_map_key_compare(const void *left_value, const void *right_value)
 
 static bool rpc_encode_value(JSContext *ctx,
                              const rpc_codec_slot_t *codec,
-                             JSValue value,
+                             JSGCRef *value_ref,
                              rpc_buffer_t *buffer,
                              unsigned int depth,
                              bool string_keys_allowed);
 
 static bool rpc_encode_array(JSContext *ctx,
                              const rpc_codec_slot_t *codec,
-                             JSValue value,
+                             JSGCRef *value_ref,
                              rpc_buffer_t *buffer,
                              unsigned int depth,
                              bool string_keys_allowed)
@@ -432,7 +476,7 @@ static bool rpc_encode_array(JSContext *ctx,
     uint32_t length;
     uint32_t i;
 
-    *length_value = JS_GetPropertyStr(ctx, value, "length");
+    *length_value = JS_GetPropertyStr(ctx, value_ref->val, "length");
     if (JS_IsException(*length_value) || JS_ToUint32(ctx, &length, *length_value) != 0 ||
         !rpc_encode_unsigned(buffer, 4, length)) {
         JS_PopGCRef(ctx, &length_ref);
@@ -442,9 +486,9 @@ static bool rpc_encode_array(JSContext *ctx,
     for (i = 0; i < length; ++i) {
         JSGCRef item_ref;
         JSValue *item = JS_PushGCRef(ctx, &item_ref);
-        *item = JS_GetPropertyUint32(ctx, value, i);
+        *item = JS_GetPropertyUint32(ctx, value_ref->val, i);
         if (JS_IsException(*item) ||
-            !rpc_encode_value(ctx, codec, *item, buffer, depth + 1U,
+            !rpc_encode_value(ctx, codec, &item_ref, buffer, depth + 1U,
                               string_keys_allowed)) {
             JS_PopGCRef(ctx, &item_ref);
             return false;
@@ -465,7 +509,7 @@ static void rpc_free_map_keys(rpc_map_key_t *keys, size_t length)
 
 static bool rpc_encode_map(JSContext *ctx,
                            const rpc_codec_slot_t *codec,
-                           JSValue value,
+                           JSGCRef *value_ref,
                            rpc_buffer_t *buffer,
                            unsigned int depth,
                            bool string_keys_allowed)
@@ -479,7 +523,7 @@ static bool rpc_encode_map(JSContext *ctx,
     uint32_t i;
     bool ok = false;
 
-    *keys_array = esp32_mquickjs_own_property_keys(ctx, value);
+    *keys_array = esp32_mquickjs_own_property_keys(ctx, value_ref->val);
     *length_value = JS_IsException(*keys_array)
                         ? JS_EXCEPTION
                         : JS_GetPropertyStr(ctx, *keys_array, "length");
@@ -587,10 +631,10 @@ static bool rpc_encode_map(JSContext *ctx,
                 goto done;
             }
         }
-        *item = JS_GetPropertyStr(ctx, value, keys[i].name);
+        *item = JS_GetPropertyStr(ctx, value_ref->val, keys[i].name);
         if (JS_IsException(*item) ||
             !rpc_encode_value(
-                ctx, codec, *item, buffer, depth + 1U,
+                ctx, codec, &item_ref, buffer, depth + 1U,
                 string_keys_allowed ||
                     (keys[i].integer_key &&
                      rpc_field_is_dynamic(codec, keys[i].field_id)))) {
@@ -610,7 +654,7 @@ done:
 
 static bool rpc_encode_value(JSContext *ctx,
                              const rpc_codec_slot_t *codec,
-                             JSValue value,
+                             JSGCRef *value_ref,
                              rpc_buffer_t *buffer,
                              unsigned int depth,
                              bool string_keys_allowed)
@@ -619,16 +663,16 @@ static bool rpc_encode_value(JSContext *ctx,
         JS_ThrowRangeError(ctx, "RPCCodec.encode() payload exceeds the nesting limit");
         return false;
     }
-    if (JS_IsNull(value)) {
+    if (JS_IsNull(value_ref->val)) {
         return rpc_buffer_byte(buffer, 0xf6);
     }
-    if (JS_IsBool(value)) {
+    if (JS_IsBool(value_ref->val)) {
         return rpc_buffer_byte(buffer,
-                               JS_VALUE_GET_SPECIAL_VALUE(value) ? 0xf5 : 0xf4);
+                               JS_VALUE_GET_SPECIAL_VALUE(value_ref->val) ? 0xf5 : 0xf4);
     }
-    if (JS_IsNumber(ctx, value)) {
+    if (JS_IsNumber(ctx, value_ref->val)) {
         double number;
-        if (JS_ToNumber(ctx, &number, value) != 0 || !isfinite(number)) {
+        if (JS_ToNumber(ctx, &number, value_ref->val) != 0 || !isfinite(number)) {
             JS_ThrowTypeError(ctx, "RPCCodec.encode() requires finite numbers");
             return false;
         }
@@ -647,21 +691,21 @@ static bool rpc_encode_value(JSContext *ctx,
             return rpc_buffer_append(buffer, bytes, sizeof(bytes));
         }
     }
-    if (JS_IsString(ctx, value)) {
+    if (JS_IsString(ctx, value_ref->val)) {
         JSCStringBuf string_buf;
         size_t length = 0;
-        const char *string = JS_ToCStringLen(ctx, &length, value, &string_buf);
+        const char *string = JS_ToCStringLen(ctx, &length, value_ref->val, &string_buf);
         if (string == NULL) {
             return false;
         }
         return rpc_encode_unsigned(buffer, 3, length) &&
                rpc_buffer_append(buffer, string, length);
     }
-    if (JS_GetClassID(ctx, value) == JS_CLASS_BYTE_SPAN_SOURCE ||
-        JS_GetClassID(ctx, value) == JS_CLASS_BITMAP_SPAN_SOURCE) {
+    if (JS_GetClassID(ctx, value_ref->val) == JS_CLASS_BYTE_SPAN_SOURCE ||
+        JS_GetClassID(ctx, value_ref->val) == JS_CLASS_BITMAP_SPAN_SOURCE) {
         size_t length = 0;
         if (buffer->has_stream ||
-            !esp32_mquickjs_byte_span_source_known_length(ctx, value, &length) ||
+            !esp32_mquickjs_byte_span_source_known_length(ctx, value_ref->val, &length) ||
             length > ESP32_MQUICKJS_RPC_STREAM_BYTES ||
             !rpc_encode_unsigned(buffer, 2, length)) {
             if (!JS_HasException(ctx)) {
@@ -673,29 +717,30 @@ static bool rpc_encode_value(JSContext *ctx,
         }
         buffer->has_stream = true;
         buffer->stream_length = length;
-        buffer->stream_value = value;
+        *JS_AddGCRef(ctx, &buffer->stream_ref) = value_ref->val;
+        buffer->stream_rooted = true;
         buffer->sealed = true;
         return true;
     }
-    if (JS_GetClassID(ctx, value) == JS_CLASS_BYTE_VIEW) {
+    if (JS_GetClassID(ctx, value_ref->val) == JS_CLASS_BYTE_VIEW) {
         const uint8_t *data = NULL;
         size_t length = 0;
         bool ok;
-        if (!esp32_mquickjs_byte_view_acquire_read(ctx, value, "RPCCodec.encode()",
+        if (!esp32_mquickjs_byte_view_acquire_read(ctx, value_ref->val, "RPCCodec.encode()",
                                                    &data, &length)) {
             return false;
         }
         ok = rpc_encode_unsigned(buffer, 2, length) &&
              rpc_buffer_append(buffer, data, length);
-        esp32_mquickjs_byte_view_release_read(ctx, value);
+        esp32_mquickjs_byte_view_release_read(ctx, value_ref->val);
         return ok;
     }
-    if (JS_IsArray(ctx, value)) {
-        return rpc_encode_array(ctx, codec, value, buffer, depth,
+    if (JS_IsArray(ctx, value_ref->val)) {
+        return rpc_encode_array(ctx, codec, value_ref, buffer, depth,
                                 string_keys_allowed);
     }
-    if (JS_GetClassID(ctx, value) == JS_CLASS_OBJECT) {
-        return rpc_encode_map(ctx, codec, value, buffer, depth,
+    if (JS_GetClassID(ctx, value_ref->val) == JS_CLASS_OBJECT) {
+        return rpc_encode_map(ctx, codec, value_ref, buffer, depth,
                               string_keys_allowed);
     }
     JS_ThrowTypeError(ctx, "RPCCodec.encode() payload contains an unsupported value");
@@ -1060,7 +1105,7 @@ static JSValue rpc_new_handle(JSContext *ctx,
 
 static bool rpc_codec_copy_fields(JSContext *ctx,
                                   rpc_codec_slot_t *codec,
-                                  JSValue fields_value)
+                                  JSGCRef *fields_ref)
 {
     JSGCRef length_ref;
     JSValue *length_value = JS_PushGCRef(ctx, &length_ref);
@@ -1068,8 +1113,8 @@ static bool rpc_codec_copy_fields(JSContext *ctx,
     uint32_t i;
     size_t total_bytes = 0;
 
-    *length_value = JS_GetPropertyStr(ctx, fields_value, "length");
-    if (!JS_IsArray(ctx, fields_value) || JS_IsException(*length_value) ||
+    *length_value = JS_GetPropertyStr(ctx, fields_ref->val, "length");
+    if (!JS_IsArray(ctx, fields_ref->val) || JS_IsException(*length_value) ||
         JS_ToUint32(ctx, &count, *length_value) != 0 ||
         count == 0 || count > RPC_CODEC_FIELDS) {
         JS_PopGCRef(ctx, &length_ref);
@@ -1093,7 +1138,7 @@ static bool rpc_codec_copy_fields(JSContext *ctx,
         size_t field_len = 0;
         uint32_t previous;
 
-        *field_value = JS_GetPropertyUint32(ctx, fields_value, i);
+        *field_value = JS_GetPropertyUint32(ctx, fields_ref->val, i);
         field = JS_IsString(ctx, *field_value)
                     ? JS_ToCStringLen(ctx, &field_len, *field_value, &field_buf)
                     : NULL;
@@ -1128,19 +1173,19 @@ static bool rpc_codec_copy_fields(JSContext *ctx,
 
 static bool rpc_codec_mark_dynamic_fields(JSContext *ctx,
                                           rpc_codec_slot_t *codec,
-                                          JSValue dynamic_value)
+                                          JSGCRef *dynamic_ref)
 {
     JSGCRef length_ref;
     JSValue *length_value;
     uint32_t count;
     uint32_t i;
 
-    if (JS_IsUndefined(dynamic_value)) {
+    if (JS_IsUndefined(dynamic_ref->val)) {
         return true;
     }
     length_value = JS_PushGCRef(ctx, &length_ref);
-    *length_value = JS_GetPropertyStr(ctx, dynamic_value, "length");
-    if (!JS_IsArray(ctx, dynamic_value) || JS_IsException(*length_value) ||
+    *length_value = JS_GetPropertyStr(ctx, dynamic_ref->val, "length");
+    if (!JS_IsArray(ctx, dynamic_ref->val) || JS_IsException(*length_value) ||
         JS_ToUint32(ctx, &count, *length_value) != 0 ||
         count > codec->field_count) {
         JS_PopGCRef(ctx, &length_ref);
@@ -1156,7 +1201,7 @@ static bool rpc_codec_mark_dynamic_fields(JSContext *ctx,
         const char *field;
         uint32_t field_id;
 
-        *field_value = JS_GetPropertyUint32(ctx, dynamic_value, i);
+        *field_value = JS_GetPropertyUint32(ctx, dynamic_ref->val, i);
         field = JS_IsString(ctx, *field_value)
                     ? JS_ToCString(ctx, *field_value, &field_buf)
                     : NULL;
@@ -1220,8 +1265,8 @@ JSValue js_rpc_create_codec(JSContext *ctx,
     *string_keys = JS_GetPropertyStr(ctx, argv[0], "allowStringKeys");
     if (JS_IsException(*fields) || JS_IsException(*dynamic_fields) ||
         JS_IsException(*stream_directory) || JS_IsException(*string_keys) ||
-        !rpc_codec_copy_fields(ctx, codec, *fields) ||
-        !rpc_codec_mark_dynamic_fields(ctx, codec, *dynamic_fields)) {
+        !rpc_codec_copy_fields(ctx, codec, &fields_ref) ||
+        !rpc_codec_mark_dynamic_fields(ctx, codec, &dynamic_ref)) {
         goto failed;
     }
     if (!JS_IsUndefined(*string_keys)) {
@@ -1918,7 +1963,7 @@ static JSValue rpc_make_encoded_stream(JSContext *ctx,
     JSValue *source;
 
     if (stream == NULL) {
-        free(payload->data);
+        rpc_buffer_cleanup(ctx, payload);
         return JS_ThrowOutOfMemory(ctx);
     }
     stream->ctx = ctx;
@@ -1926,14 +1971,19 @@ static JSValue rpc_make_encoded_stream(JSContext *ctx,
     stream->request_id = request_id;
     stream->flags = flags;
     stream->prefix = payload->data;
+    payload->data = NULL;
     stream->prefix_len = payload->length;
     stream->source_len = payload->stream_length;
     esp32_mquickjs_byte_span_clear(&stream->span);
     source = JS_AddGCRef(ctx, &stream->source_ref);
-    *source = payload->stream_value;
+    *source = payload->stream_ref.val;
     stream->rooted = true;
-    return esp32_mquickjs_new_byte_span_source(
-        ctx, payload->stream_value, &s_rpc_encoded_stream_ops, stream);
+    {
+        JSValue result = esp32_mquickjs_new_byte_span_source(
+            ctx, payload->stream_ref.val, &s_rpc_encoded_stream_ops, stream);
+        rpc_buffer_cleanup(ctx, payload);
+        return result;
+    }
 }
 
 JSValue js_rpc_encode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -1943,11 +1993,11 @@ JSValue js_rpc_encode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
     uint32_t request_id;
     uint32_t flags;
     rpc_buffer_t payload;
-    uint8_t *payload_data;
     JSGCRef frames_ref;
     JSValue *frames;
     size_t offset = 0;
     uint32_t index = 0;
+    bool encoded;
     if (argc != 4 || this_val == NULL ||
         (codec = rpc_codec_from_value(
              ctx, *this_val, "RPCCodec.encode()")) == NULL ||
@@ -1959,18 +2009,23 @@ JSValue js_rpc_encode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
         return JS_ThrowTypeError(ctx,
                                  "RPCCodec.encode(opcode, requestId, flags, payload) received invalid arguments");
     }
-    payload_data = malloc(ESP32_MQUICKJS_RPC_MESSAGE_BYTES);
-    if (payload_data == NULL) return JS_ThrowOutOfMemory(ctx);
     payload = (rpc_buffer_t){
-        .data = payload_data,
-        .capacity = ESP32_MQUICKJS_RPC_MESSAGE_BYTES,
-        .stream_value = JS_UNDEFINED,
+        0,
     };
-    if (!rpc_encode_value(ctx, codec, argv[3], &payload, 0,
-                          codec->allow_string_keys) ||
-        payload.failed) {
-        free(payload_data);
+    {
+        JSGCRef input_ref;
+        JSValue *input = JS_PushGCRef(ctx, &input_ref);
+        *input = argv[3];
+        encoded = rpc_encode_value(ctx, codec, &input_ref, &payload, 0,
+                                   codec->allow_string_keys);
+        JS_PopGCRef(ctx, &input_ref);
+    }
+    if (!encoded || payload.failed) {
+        rpc_buffer_cleanup(ctx, &payload);
         if (!JS_HasException(ctx)) {
+            if (payload.out_of_memory) {
+                return JS_ThrowOutOfMemory(ctx);
+            }
             return JS_ThrowRangeError(ctx, "RPCCodec.encode() payload exceeds 65536 bytes");
         }
         return JS_EXCEPTION;
@@ -1986,7 +2041,7 @@ JSValue js_rpc_encode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
         }
         if (cbor_parser_init(payload.data, payload.length, 0, &parser, &root) !=
                 CborNoError) {
-            free(payload_data);
+            rpc_buffer_cleanup(ctx, &payload);
             return JS_ThrowInternalError(ctx,
                                          "RPCCodec.encode() produced invalid CBOR");
         }
@@ -1995,7 +2050,7 @@ JSValue js_rpc_encode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
         if ((!payload.has_stream || payload.stream_length == 0)
                 ? validation_error != CborNoError
                 : validation_error != CborErrorUnexpectedEOF) {
-            free(payload_data);
+            rpc_buffer_cleanup(ctx, &payload);
             if (validation_error == CborErrorInvalidUtf8TextString) {
                 return JS_ThrowTypeError(
                     ctx, "RPCCodec.encode() text values must be valid CBOR text");
@@ -2007,7 +2062,7 @@ JSValue js_rpc_encode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
     if (payload.has_stream) {
         if (payload.length > ESP32_MQUICKJS_RPC_STREAM_PREFIX_BYTES ||
             payload.length + payload.stream_length > UINT32_MAX) {
-            free(payload_data);
+            rpc_buffer_cleanup(ctx, &payload);
             return JS_ThrowRangeError(ctx, "RPCCodec.encode() stream exceeds its size limit");
         }
         return rpc_make_encoded_stream(ctx, (uint16_t)opcode, request_id,
@@ -2026,7 +2081,7 @@ JSValue js_rpc_encode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
         JSValue *view;
         esp32_mquickjs_rpc_wire_error_t wire_error;
         if (wire == NULL) {
-            free(payload_data);
+            rpc_buffer_cleanup(ctx, &payload);
             JS_PopGCRef(ctx, &frames_ref);
             return JS_ThrowOutOfMemory(ctx);
         }
@@ -2038,7 +2093,7 @@ JSValue js_rpc_encode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
             ESP32_MQUICKJS_RPC_MAX_FRAME_BYTES, &wire_len);
         if (wire_error != ESP32_MQUICKJS_RPC_WIRE_OK) {
             free(wire);
-            free(payload_data);
+            rpc_buffer_cleanup(ctx, &payload);
             JS_PopGCRef(ctx, &frames_ref);
             return JS_ThrowInternalError(ctx, "RPCCodec.encode() wire error: %s",
                                          esp32_mquickjs_rpc_wire_error_name(wire_error));
@@ -2048,14 +2103,14 @@ JSValue js_rpc_encode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv
         if (JS_IsException(*view) ||
             JS_IsException(JS_SetPropertyUint32(ctx, *frames, index++, *view))) {
             JS_PopGCRef(ctx, &view_ref);
-            free(payload_data);
+            rpc_buffer_cleanup(ctx, &payload);
             JS_PopGCRef(ctx, &frames_ref);
             return JS_EXCEPTION;
         }
         JS_PopGCRef(ctx, &view_ref);
         offset += segment_len;
     } while (offset < payload.length || (payload.length == 0 && index == 0));
-    free(payload_data);
+    rpc_buffer_cleanup(ctx, &payload);
     return JS_PopGCRef(ctx, &frames_ref);
 }
 

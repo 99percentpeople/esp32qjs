@@ -312,16 +312,16 @@ static void wifi_csi_default_options(wifi_csi_options_t *options)
     }
 }
 
-static bool wifi_csi_parse_mac_values(
-    JSContext *ctx, JSValue value, const char *name,
+static bool wifi_csi_parse_mac_values_rooted(
+    JSContext *ctx, JSValue *value, const char *name,
     uint8_t output[][6], uint8_t *count)
 {
     uint32_t length = 1U;
     uint32_t index;
-    bool array = JS_IsArray(ctx, value);
+    bool array = JS_IsArray(ctx, *value);
 
     if (array) {
-        JSValue length_value = JS_GetPropertyStr(ctx, value, "length");
+        JSValue length_value = JS_GetPropertyStr(ctx, *value, "length");
 
         if (JS_IsException(length_value) ||
             JS_ToUint32(ctx, &length, length_value) != 0 ||
@@ -333,7 +333,7 @@ static bool wifi_csi_parse_mac_values(
     }
     for (index = 0; index < length; ++index) {
         JSValue entry = array
-            ? JS_GetPropertyUint32(ctx, value, index) : value;
+            ? JS_GetPropertyUint32(ctx, *value, index) : *value;
         JSCStringBuf buffer;
         const char *text = JS_IsString(ctx, entry)
             ? JS_ToCString(ctx, entry, &buffer) : NULL;
@@ -349,7 +349,22 @@ static bool wifi_csi_parse_mac_values(
     return true;
 }
 
-static bool wifi_csi_parse_filter(JSContext *ctx, JSValue value,
+static bool wifi_csi_parse_mac_values(
+    JSContext *ctx, JSValue value, const char *name,
+    uint8_t output[][6], uint8_t *count)
+{
+    JSGCRef value_ref;
+    JSValue *rooted_value = JS_PushGCRef(ctx, &value_ref);
+    bool result;
+
+    *rooted_value = value;
+    result = wifi_csi_parse_mac_values_rooted(
+        ctx, rooted_value, name, output, count);
+    JS_PopGCRef(ctx, &value_ref);
+    return result;
+}
+
+static bool wifi_csi_parse_filter_rooted(JSContext *ctx, JSValue *value,
                                   esp32_mquickjs_wifi_csi_filter_t *filter)
 {
     static const char *const allowed[] = {
@@ -361,22 +376,22 @@ static bool wifi_csi_parse_filter(JSContext *ctx, JSValue value,
     uint32_t unsigned_value;
 
     if (!esp32_mquickjs_validate_plain_options(
-            ctx, value, "wifiCsi.open({ filter })", allowed, 6U)) {
+            ctx, *value, "wifiCsi.open({ filter })", allowed, 6U)) {
         return false;
     }
-    property = JS_GetPropertyStr(ctx, value, "sourceMac");
+    property = JS_GetPropertyStr(ctx, *value, "sourceMac");
     if (JS_IsException(property) ||
         (!JS_IsUndefined(property) &&
          !wifi_csi_parse_mac_values(ctx, property, "filter.sourceMac",
                                     filter->source_macs,
                                     &filter->source_mac_count))) return false;
-    property = JS_GetPropertyStr(ctx, value, "destinationMac");
+    property = JS_GetPropertyStr(ctx, *value, "destinationMac");
     if (JS_IsException(property) ||
         (!JS_IsUndefined(property) &&
          !wifi_csi_parse_mac_values(ctx, property, "filter.destinationMac",
                                     filter->destination_macs,
                                     &filter->destination_mac_count))) return false;
-    property = JS_GetPropertyStr(ctx, value, "minimumRssi");
+    property = JS_GetPropertyStr(ctx, *value, "minimumRssi");
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property)) {
         if (!esp32_mquickjs_value_to_bounded_i32(
@@ -387,7 +402,7 @@ static bool wifi_csi_parse_filter(JSContext *ctx, JSValue value,
         filter->minimum_rssi = (int8_t)signed_value;
         filter->minimum_rssi_set = true;
     }
-    property = JS_GetPropertyStr(ctx, value, "sampleEvery");
+    property = JS_GetPropertyStr(ctx, *value, "sampleEvery");
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property)) {
         if (!esp32_mquickjs_value_to_bounded_u32(
@@ -397,7 +412,7 @@ static bool wifi_csi_parse_filter(JSContext *ctx, JSValue value,
         }
         filter->sample_every = unsigned_value;
     }
-    property = JS_GetPropertyStr(ctx, value, "maximumRateHz");
+    property = JS_GetPropertyStr(ctx, *value, "maximumRateHz");
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property)) {
         if (!esp32_mquickjs_value_to_bounded_u32(
@@ -408,11 +423,24 @@ static bool wifi_csi_parse_filter(JSContext *ctx, JSValue value,
         filter->maximum_rate_hz = unsigned_value;
     }
     return wifi_csi_get_optional_bool(
-        ctx, value, "validOnly", &filter->valid_only);
+        ctx, *value, "validOnly", &filter->valid_only);
 }
 
-static bool wifi_csi_parse_legacy_capture(
-    JSContext *ctx, JSValue value,
+static bool wifi_csi_parse_filter(JSContext *ctx, JSValue value,
+                                  esp32_mquickjs_wifi_csi_filter_t *filter)
+{
+    JSGCRef value_ref;
+    JSValue *rooted_value = JS_PushGCRef(ctx, &value_ref);
+    bool result;
+
+    *rooted_value = value;
+    result = wifi_csi_parse_filter_rooted(ctx, rooted_value, filter);
+    JS_PopGCRef(ctx, &value_ref);
+    return result;
+}
+
+static bool wifi_csi_parse_legacy_capture_rooted(
+    JSContext *ctx, JSValue *value,
     esp32_mquickjs_wifi_csi_capture_config_t *capture)
 {
     static const char *const allowed[] = {
@@ -424,20 +452,20 @@ static bool wifi_csi_parse_legacy_capture(
     static const char *const scale_allowed[] = {"shiftBits"};
 
     if (!esp32_mquickjs_validate_plain_options(
-            ctx, value, "wifiCsi legacy capture", allowed, 8U)) return false;
-    if (!wifi_csi_get_optional_bool(ctx, value, "lltf",
+            ctx, *value, "wifiCsi legacy capture", allowed, 8U)) return false;
+    if (!wifi_csi_get_optional_bool(ctx, *value, "lltf",
             &capture->config.legacy.lltf) ||
-        !wifi_csi_get_optional_bool(ctx, value, "htLtf",
+        !wifi_csi_get_optional_bool(ctx, *value, "htLtf",
             &capture->config.legacy.ht_ltf) ||
-        !wifi_csi_get_optional_bool(ctx, value, "stbcHtLtf2",
+        !wifi_csi_get_optional_bool(ctx, *value, "stbcHtLtf2",
             &capture->config.legacy.stbc_ht_ltf2) ||
-        !wifi_csi_get_optional_bool(ctx, value, "ltfMerge",
+        !wifi_csi_get_optional_bool(ctx, *value, "ltfMerge",
             &capture->config.legacy.ltf_merge) ||
-        !wifi_csi_get_optional_bool(ctx, value, "adjacentSubcarrierFilter",
+        !wifi_csi_get_optional_bool(ctx, *value, "adjacentSubcarrierFilter",
             &capture->config.legacy.adjacent_subcarrier_filter) ||
-        !wifi_csi_get_optional_bool(ctx, value, "dumpAck",
+        !wifi_csi_get_optional_bool(ctx, *value, "dumpAck",
             &capture->config.legacy.dump_ack)) return false;
-    property = JS_GetPropertyStr(ctx, value, "scale");
+    property = JS_GetPropertyStr(ctx, *value, "scale");
     if (JS_IsException(property)) return false;
     if (JS_IsUndefined(property) || wifi_csi_string_equals(ctx, property, "auto")) {
         capture->config.legacy.manual_scale = false;
@@ -448,6 +476,8 @@ static bool wifi_csi_parse_legacy_capture(
             ctx, property, "wifiCsi legacy scale", scale_allowed, 1U)) {
         return false;
     }
+    property = JS_GetPropertyStr(ctx, *value, "scale");
+    if (JS_IsException(property)) return false;
     property = JS_GetPropertyStr(ctx, property, "shiftBits");
     if (JS_IsException(property) ||
         !esp32_mquickjs_value_to_bounded_u32(ctx, property, 0U, 15U, &shift)) {
@@ -458,8 +488,23 @@ static bool wifi_csi_parse_legacy_capture(
     return true;
 }
 
-static bool wifi_csi_parse_he_capture(
+static bool wifi_csi_parse_legacy_capture(
     JSContext *ctx, JSValue value,
+    esp32_mquickjs_wifi_csi_capture_config_t *capture)
+{
+    JSGCRef value_ref;
+    JSValue *rooted_value = JS_PushGCRef(ctx, &value_ref);
+    bool result;
+
+    *rooted_value = value;
+    result = wifi_csi_parse_legacy_capture_rooted(
+        ctx, rooted_value, capture);
+    JS_PopGCRef(ctx, &value_ref);
+    return result;
+}
+
+static bool wifi_csi_parse_he_capture_rooted(
+    JSContext *ctx, JSValue *value,
     esp32_mquickjs_wifi_csi_capture_config_t *capture)
 {
     static const char *const allowed[] = {
@@ -475,28 +520,28 @@ static bool wifi_csi_parse_he_capture(
     };
 
     if (!esp32_mquickjs_validate_plain_options(
-            ctx, value, "wifiCsi HE capture", allowed, 14U)) return false;
-    if (!wifi_csi_get_optional_bool(ctx, value, "enableLegacy",
+            ctx, *value, "wifiCsi HE capture", allowed, 14U)) return false;
+    if (!wifi_csi_get_optional_bool(ctx, *value, "enableLegacy",
             &capture->config.he.enable_legacy) ||
-        !wifi_csi_get_optional_bool(ctx, value, "forceLegacyLtf",
+        !wifi_csi_get_optional_bool(ctx, *value, "forceLegacyLtf",
             &capture->config.he.force_legacy_ltf) ||
-        !wifi_csi_get_optional_bool(ctx, value, "ht20",
+        !wifi_csi_get_optional_bool(ctx, *value, "ht20",
             &capture->config.he.ht20) ||
-        !wifi_csi_get_optional_bool(ctx, value, "ht40",
+        !wifi_csi_get_optional_bool(ctx, *value, "ht40",
             &capture->config.he.ht40) ||
-        !wifi_csi_get_optional_bool(ctx, value, "vht",
+        !wifi_csi_get_optional_bool(ctx, *value, "vht",
             &capture->config.he.vht) ||
-        !wifi_csi_get_optional_bool(ctx, value, "heSu",
+        !wifi_csi_get_optional_bool(ctx, *value, "heSu",
             &capture->config.he.he_su) ||
-        !wifi_csi_get_optional_bool(ctx, value, "heMu",
+        !wifi_csi_get_optional_bool(ctx, *value, "heMu",
             &capture->config.he.he_mu) ||
-        !wifi_csi_get_optional_bool(ctx, value, "heDcm",
+        !wifi_csi_get_optional_bool(ctx, *value, "heDcm",
             &capture->config.he.he_dcm) ||
-        !wifi_csi_get_optional_bool(ctx, value, "heBeamformed",
+        !wifi_csi_get_optional_bool(ctx, *value, "heBeamformed",
             &capture->config.he.he_beamformed) ||
-        !wifi_csi_get_optional_bool(ctx, value, "dumpAck",
+        !wifi_csi_get_optional_bool(ctx, *value, "dumpAck",
             &capture->config.he.dump_ack)) return false;
-    property = JS_GetPropertyStr(ctx, value, "heStbcLtf");
+    property = JS_GetPropertyStr(ctx, *value, "heStbcLtf");
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property)) {
         if (!esp32_mquickjs_value_to_enum(
@@ -507,7 +552,7 @@ static bool wifi_csi_parse_he_capture(
         capture->config.he.he_stbc_ltf =
             (esp32_mquickjs_wifi_csi_he_stbc_t)choice;
     }
-    property = JS_GetPropertyStr(ctx, value, "valueScale");
+    property = JS_GetPropertyStr(ctx, *value, "valueScale");
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property)) {
         if (!esp32_mquickjs_value_to_bounded_u32(
@@ -516,7 +561,7 @@ static bool wifi_csi_parse_he_capture(
         }
         capture->config.he.value_scale = (uint8_t)number;
     }
-    property = JS_GetPropertyStr(ctx, value, "lltfBits");
+    property = JS_GetPropertyStr(ctx, *value, "lltfBits");
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property)) {
         if (!esp32_mquickjs_value_to_bounded_u32(
@@ -529,7 +574,21 @@ static bool wifi_csi_parse_he_capture(
     return true;
 }
 
-static bool wifi_csi_parse_open_options(JSContext *ctx, JSValue value,
+static bool wifi_csi_parse_he_capture(
+    JSContext *ctx, JSValue value,
+    esp32_mquickjs_wifi_csi_capture_config_t *capture)
+{
+    JSGCRef value_ref;
+    JSValue *rooted_value = JS_PushGCRef(ctx, &value_ref);
+    bool result;
+
+    *rooted_value = value;
+    result = wifi_csi_parse_he_capture_rooted(ctx, rooted_value, capture);
+    JS_PopGCRef(ctx, &value_ref);
+    return result;
+}
+
+static bool wifi_csi_parse_open_options_rooted(JSContext *ctx, JSValue *value,
                                         wifi_csi_options_t *options)
 {
     static const char *const allowed[] = {
@@ -543,8 +602,8 @@ static bool wifi_csi_parse_open_options(JSContext *ctx, JSValue value,
 
     wifi_csi_default_options(options);
     if (!esp32_mquickjs_validate_plain_options(
-            ctx, value, "wifiCsi.open(options)", allowed, 7U)) return false;
-    property = JS_GetPropertyStr(ctx, value, "source");
+            ctx, *value, "wifiCsi.open(options)", allowed, 7U)) return false;
+    property = JS_GetPropertyStr(ctx, *value, "source");
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property)) {
         if (wifi_csi_string_equals(ctx, property, "associated")) {
@@ -561,7 +620,7 @@ static bool wifi_csi_parse_open_options(JSContext *ctx, JSValue value,
                 ctx, "source expects associated or promiscuous"), false;
         }
     }
-    property = JS_GetPropertyStr(ctx, value, "channel");
+    property = JS_GetPropertyStr(ctx, *value, "channel");
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property) &&
         !wifi_csi_string_equals(ctx, property, "current")) {
@@ -578,13 +637,13 @@ static bool wifi_csi_parse_open_options(JSContext *ctx, JSValue value,
             ctx, "WIFI_CSI_CONFIG_UNSUPPORTED: fixed channel is disabled by this Build Context"), false;
 #endif
     }
-    property = JS_GetPropertyStr(ctx, value, "conflict");
+    property = JS_GetPropertyStr(ctx, *value, "conflict");
     if (JS_IsException(property) ||
         (!JS_IsUndefined(property) &&
          !wifi_csi_string_equals(ctx, property, "fail"))) {
         return JS_ThrowTypeError(ctx, "conflict only supports fail"), false;
     }
-    property = JS_GetPropertyStr(ctx, value, "powerSavePolicy");
+    property = JS_GetPropertyStr(ctx, *value, "powerSavePolicy");
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property)) {
         if (wifi_csi_string_equals(ctx, property, "preserve")) {
@@ -596,16 +655,18 @@ static bool wifi_csi_parse_open_options(JSContext *ctx, JSValue value,
                 ctx, "powerSavePolicy expects preserve or require-none"), false;
         }
     }
-    property = JS_GetPropertyStr(ctx, value, "filter");
+    property = JS_GetPropertyStr(ctx, *value, "filter");
     if (JS_IsException(property) ||
         (!JS_IsUndefined(property) &&
          !wifi_csi_parse_filter(ctx, property, &options->filter))) return false;
-    property = JS_GetPropertyStr(ctx, value, "queue");
+    property = JS_GetPropertyStr(ctx, *value, "queue");
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property)) {
         if (!esp32_mquickjs_validate_plain_options(
                 ctx, property, "wifiCsi.open({ queue })",
                 queue_allowed, 2U)) return false;
+        property = JS_GetPropertyStr(ctx, *value, "queue");
+        if (JS_IsException(property)) return false;
         JSValue queue_property = JS_GetPropertyStr(ctx, property, "capacity");
         if (JS_IsException(queue_property)) return false;
         if (!JS_IsUndefined(queue_property)) {
@@ -617,6 +678,8 @@ static bool wifi_csi_parse_open_options(JSContext *ctx, JSValue value,
             }
             options->queue_capacity = number;
         }
+        property = JS_GetPropertyStr(ctx, *value, "queue");
+        if (JS_IsException(property)) return false;
         queue_property = JS_GetPropertyStr(ctx, property, "overflow");
         if (JS_IsException(queue_property) ||
             (!JS_IsUndefined(queue_property) &&
@@ -625,7 +688,7 @@ static bool wifi_csi_parse_open_options(JSContext *ctx, JSValue value,
                 ctx, "queue.overflow only supports drop-newest"), false;
         }
     }
-    property = JS_GetPropertyStr(ctx, value, "capture");
+    property = JS_GetPropertyStr(ctx, *value, "capture");
     if (JS_IsException(property) || JS_IsUndefined(property)) {
         return JS_ThrowTypeError(ctx, "wifiCsi.open() requires capture"), false;
     }
@@ -633,10 +696,14 @@ static bool wifi_csi_parse_open_options(JSContext *ctx, JSValue value,
     if (JS_IsException(schema)) return false;
     if (wifi_csi_string_equals(ctx, schema, "wifi-csi-legacy/1")) {
         options->capture.schema = ESP32_MQUICKJS_WIFI_CSI_SCHEMA_LEGACY;
+        property = JS_GetPropertyStr(ctx, *value, "capture");
+        if (JS_IsException(property)) return false;
         if (!wifi_csi_parse_legacy_capture(ctx, property,
                                            &options->capture)) return false;
     } else if (wifi_csi_string_equals(ctx, schema, "wifi-csi-he/1")) {
         options->capture.schema = ESP32_MQUICKJS_WIFI_CSI_SCHEMA_HE;
+        property = JS_GetPropertyStr(ctx, *value, "capture");
+        if (JS_IsException(property)) return false;
         if (!wifi_csi_parse_he_capture(ctx, property,
                                        &options->capture)) return false;
     } else {
@@ -659,6 +726,19 @@ static bool wifi_csi_parse_open_options(JSContext *ctx, JSValue value,
                     : "WIFI_CSI_CONFIG_INVALID: invalid capture config"), false;
     }
     return true;
+}
+
+static bool wifi_csi_parse_open_options(JSContext *ctx, JSValue value,
+                                        wifi_csi_options_t *options)
+{
+    JSGCRef value_ref;
+    JSValue *rooted_value = JS_PushGCRef(ctx, &value_ref);
+    bool result;
+
+    *rooted_value = value;
+    result = wifi_csi_parse_open_options_rooted(ctx, rooted_value, options);
+    JS_PopGCRef(ctx, &value_ref);
+    return result;
 }
 
 static void *wifi_csi_resource_calloc(size_t count, size_t size, void *opaque)
@@ -1219,22 +1299,30 @@ static JSValue wifi_csi_string_array(JSContext *ctx,
                                      size_t count)
 {
     JSGCRef array_ref;
+    JSGCRef item_ref;
     JSValue *array = JS_PushGCRef(ctx, &array_ref);
+    JSValue *item = JS_PushGCRef(ctx, &item_ref);
     size_t index;
 
     *array = JS_NewArray(ctx, 0);
+    *item = JS_UNDEFINED;
     if (JS_IsException(*array)) {
+        JS_PopGCRef(ctx, &item_ref);
         JS_PopGCRef(ctx, &array_ref);
         return JS_EXCEPTION;
     }
     for (index = 0; index < count; ++index) {
-        if (JS_IsException(JS_SetPropertyUint32(
-                ctx, *array, (uint32_t)index,
-                JS_NewString(ctx, values[index])))) {
+        *item = JS_NewString(ctx, values[index]);
+        if (JS_IsException(*item) ||
+            JS_IsException(JS_SetPropertyUint32(
+                ctx, *array, (uint32_t)index, *item))) {
+            JS_PopGCRef(ctx, &item_ref);
             JS_PopGCRef(ctx, &array_ref);
             return JS_EXCEPTION;
         }
+        *item = JS_UNDEFINED;
     }
+    JS_PopGCRef(ctx, &item_ref);
     return JS_PopGCRef(ctx, &array_ref);
 }
 
@@ -1243,11 +1331,15 @@ static JSValue wifi_csi_mac_array(JSContext *ctx,
                                   uint8_t count)
 {
     JSGCRef array_ref;
+    JSGCRef item_ref;
     JSValue *array = JS_PushGCRef(ctx, &array_ref);
+    JSValue *item = JS_PushGCRef(ctx, &item_ref);
     uint8_t index;
 
     *array = JS_NewArray(ctx, 0);
+    *item = JS_UNDEFINED;
     if (JS_IsException(*array)) {
+        JS_PopGCRef(ctx, &item_ref);
         JS_PopGCRef(ctx, &array_ref);
         return JS_EXCEPTION;
     }
@@ -1255,12 +1347,17 @@ static JSValue wifi_csi_mac_array(JSContext *ctx,
         char text[18];
 
         wifi_csi_format_mac(values[index], text);
-        if (JS_IsException(JS_SetPropertyUint32(
-                ctx, *array, index, JS_NewString(ctx, text)))) {
+        *item = JS_NewString(ctx, text);
+        if (JS_IsException(*item) ||
+            JS_IsException(JS_SetPropertyUint32(
+                ctx, *array, index, *item))) {
+            JS_PopGCRef(ctx, &item_ref);
             JS_PopGCRef(ctx, &array_ref);
             return JS_EXCEPTION;
         }
+        *item = JS_UNDEFINED;
     }
+    JS_PopGCRef(ctx, &item_ref);
     return JS_PopGCRef(ctx, &array_ref);
 }
 

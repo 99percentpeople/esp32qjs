@@ -1929,14 +1929,28 @@ JSValue js_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     return JS_ThrowInternalError(ctx, "load() requires the fs feature");
 #else
     JSCStringBuf command_buf;
-    const char *command;
+    char command[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+    const char *source;
+    size_t command_len;
 
     (void)this_val;
     if (argc < 1 || !JS_IsString(ctx, argv[0])) {
         return JS_ThrowTypeError(ctx, "load(path) expects a script path");
     }
 
-    command = JS_ToCString(ctx, argv[0], &command_buf);
+    source = JS_ToCStringLen(ctx, &command_len, argv[0], &command_buf);
+    if (source == NULL) {
+        return JS_EXCEPTION;
+    }
+    if (command_len >= sizeof(command)) {
+        return JS_ThrowTypeError(ctx, "load(path) path is too long");
+    }
+
+    /* JS_ToCStringLen may point into the moving MQuickJS heap.  The active
+       filesystem lookup allocates JS values, so preserve the path in native
+       storage before it can trigger a compacting collection. */
+    memcpy(command, source, command_len);
+    command[command_len] = '\0';
 
     return esp32_mquickjs_load_from_active_fs(ctx, s_active_runtime, command);
 #endif

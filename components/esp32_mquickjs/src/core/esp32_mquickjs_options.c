@@ -7,7 +7,14 @@
 
 JSValue esp32_mquickjs_own_property_keys(JSContext *ctx, JSValue value)
 {
-    return js_object_keys(ctx, NULL, 1, &value);
+    JSGCRef value_ref;
+    JSValue *rooted_value = JS_PushGCRef(ctx, &value_ref);
+    JSValue result;
+
+    *rooted_value = value;
+    result = js_object_keys(ctx, NULL, 1, rooted_value);
+    JS_PopGCRef(ctx, &value_ref);
+    return result;
 }
 
 bool esp32_mquickjs_validate_plain_options(

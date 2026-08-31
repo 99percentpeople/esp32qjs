@@ -32,7 +32,7 @@ class FilesystemRootArchitectureTests(SourceContractTestCase):
 
         self.assertIn('JS_CLASS_DEF("FsVolume"', source)
         self.assertIn('JS_CFUNC_DEF("volume", 1, js_fs_volume)', source)
-        self.assertIn("fs_volume_root(ctx, receiver, api_name)", source)
+        self.assertIn("fs_volume_root(ctx, receiver_ref->val, api_name)", source)
         self.assertNotIn("js_fs_set_root", source)
         self.assertNotIn("char fs_root[ESP32_MQUICKJS_FS_ROOT_MAX];\n    char startup_fs_root", source)
         self.assertNotIn("/workspace", source.lower())

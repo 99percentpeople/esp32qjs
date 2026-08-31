@@ -736,6 +736,7 @@ JSValue js_fs_volume(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     JSCStringBuf path_buf;
     const char *path;
+    char root[ESP32_MQUICKJS_FS_ROOT_MAX];
 
     if (fs_volume_root(ctx, *this_val, "fs.volume(root)") == NULL) {
         return JS_EXCEPTION;
@@ -747,7 +748,12 @@ JSValue js_fs_volume(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     if (path == NULL) {
         return JS_EXCEPTION;
     }
-    return fs_make_volume(ctx, path);
+    if (strlen(path) >= sizeof(root)) {
+        return JS_ThrowRangeError(
+            ctx, "fs.volume(root) requires a shorter mounted root path");
+    }
+    snprintf(root, sizeof(root), "%s", path);
+    return fs_make_volume(ctx, root);
 }
 
 JSValue js_fs_volume_constructor(JSContext *ctx, JSValue *this_val,
@@ -1129,7 +1135,7 @@ static void fs_future_release(esp32_mquickjs_future_driver_state_t *state)
 
 static bool fs_future_prepare_common(
     JSContext *ctx,
-    JSValue receiver,
+    JSGCRef *receiver_ref,
     fs_future_kind_t kind,
     int argc,
     JSGCRef *argv,
@@ -1200,20 +1206,20 @@ static bool fs_future_prepare_common(
         snprintf(state->mode, sizeof(state->mode), "%s", mode);
     }
     if (kind == FS_FUTURE_LIST && argc == 0) {
-        const char *root = fs_volume_root(ctx, receiver, api_name);
+        const char *root = fs_volume_root(ctx, receiver_ref->val, api_name);
 
         if (root == NULL) {
             fs_future_release(state);
             return false;
         }
         snprintf(state->path, sizeof(state->path), "%s", root);
-    } else if (js_value_to_fs_path(ctx, receiver, argv[0].val, api_name,
+    } else if (js_value_to_fs_path(ctx, receiver_ref->val, argv[0].val, api_name,
                                    state->path, sizeof(state->path)) != 0) {
         fs_future_release(state);
         return false;
     }
     if (kind == FS_FUTURE_RENAME &&
-        js_value_to_fs_path(ctx, receiver, argv[1].val, api_name,
+        js_value_to_fs_path(ctx, receiver_ref->val, argv[1].val, api_name,
                             state->to_path, sizeof(state->to_path)) != 0) {
         fs_future_release(state);
         return false;
@@ -1262,7 +1268,7 @@ static bool fs_future_prepare_common(
     static bool name(JSContext *ctx, JSGCRef *this_ref, int argc, JSGCRef *argv, \
                      esp32_mquickjs_future_driver_state_t **out_state) \
     { \
-        return fs_future_prepare_common(ctx, this_ref->val, kind_value, argc, \
+        return fs_future_prepare_common(ctx, this_ref, kind_value, argc, \
                                         argv, out_state); \
     }
 

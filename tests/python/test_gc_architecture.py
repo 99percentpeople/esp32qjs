@@ -46,6 +46,105 @@ class GcArchitectureTests(SourceContractTestCase):
                 source,
             )
 
+    def test_fs_future_prepare_uses_its_rooted_receiver(self):
+        source = (
+            MQUICKJS / "src" / "modules" / "fs" / "esp32_mquickjs_fs.c"
+        ).read_text(encoding="utf-8")
+        start = source.index("static bool fs_future_prepare_common(")
+        end = source.index("\n#define FS_PREPARE", start)
+        prepare = source[start:end]
+
+        self.assertIn("JSGCRef *receiver_ref", prepare)
+        self.assertIn("receiver_ref->val", prepare)
+        self.assertNotRegex(prepare, r"\bJSValue receiver\b")
+
+    def test_fs_volume_copies_movable_root_before_object_allocation(self):
+        source = (
+            MQUICKJS / "src" / "modules" / "fs" / "esp32_mquickjs_fs.c"
+        ).read_text(encoding="utf-8")
+        start = source.index("JSValue js_fs_volume(")
+        end = source.index("\nJSValue js_fs_volume_constructor(", start)
+        volume = source[start:end]
+
+        self.assertIn("char root[ESP32_MQUICKJS_FS_ROOT_MAX];", volume)
+        self.assertIn("snprintf(root, sizeof(root), \"%s\", path);", volume)
+        self.assertIn("return fs_make_volume(ctx, root);", volume)
+        self.assertLess(
+            volume.index("snprintf(root, sizeof(root), \"%s\", path);"),
+            volume.index("fs_make_volume(ctx, root)"),
+        )
+
+    def test_rpc_codec_parsers_dereference_rooted_arrays_after_lookup(self):
+        source = (
+            MQUICKJS / "src" / "core" / "esp32_mquickjs_rpc.c"
+        ).read_text(encoding="utf-8")
+        fields_start = source.index("static bool rpc_codec_copy_fields(")
+        fields_end = source.index("\nstatic bool rpc_codec_mark_dynamic_fields(", fields_start)
+        fields = source[fields_start:fields_end]
+        dynamic_start = fields_end + 1
+        dynamic_end = source.index("\nJSValue js_rpc_create_codec(", dynamic_start)
+        dynamic = source[dynamic_start:dynamic_end]
+
+        self.assertIn("JSGCRef *fields_ref", fields)
+        self.assertIn("fields_ref->val", fields)
+        self.assertNotRegex(fields, r"\bJSValue fields_value\b")
+        self.assertIn("JSGCRef *dynamic_ref", dynamic)
+        self.assertIn("dynamic_ref->val", dynamic)
+        self.assertNotRegex(dynamic, r"\bJSValue dynamic_value\b")
+
+    def test_rpc_encoder_dereferences_rooted_values_after_allocations(self):
+        source = (
+            MQUICKJS / "src" / "core" / "esp32_mquickjs_rpc.c"
+        ).read_text(encoding="utf-8")
+        start = source.index("static bool rpc_encode_value(")
+        end = source.index("\nstatic bool rpc_decode_unsigned(", start)
+        encoder = source[start:end]
+
+        self.assertIn("JSGCRef *value_ref", encoder)
+        self.assertIn("value_ref->val", encoder)
+        self.assertNotRegex(encoder, r"\bJSValue value\b")
+        self.assertIn("rpc_encode_value(ctx, codec, &item_ref", encoder)
+        self.assertIn("*JS_AddGCRef(ctx, &buffer->stream_ref) = value_ref->val", encoder)
+        self.assertIn("JS_DeleteGCRef(ctx, &buffer->stream_ref)", source)
+
+    def test_socket_option_parsers_keep_their_input_rooted(self):
+        source = (
+            MQUICKJS / "src" / "modules" / "socket" /
+            "esp32_mquickjs_socket.c"
+        ).read_text(encoding="utf-8")
+
+        for function_name, next_function, property_name in (
+            ("socket_open_options", "socket_listen_options", "option"),
+            ("socket_listen_options", "socket_connect_options", "option"),
+            ("socket_connect_options", "socket_class_matches_protocol", "timeout"),
+        ):
+            start = source.index(f"static bool {function_name}(")
+            end = source.index(f"\nstatic bool {next_function}(", start)
+            parser = source[start:end]
+
+            self.assertIn("JSGCRef options_ref;", parser)
+            self.assertIn("*rooted_options = options;", parser)
+            self.assertIn(f"JSGCRef {property_name}_ref;", parser)
+            self.assertIn(
+                f"{property_name} = JS_PushGCRef(ctx, &{property_name}_ref);",
+                parser,
+            )
+            self.assertRegex(
+                parser,
+                rf"\*{property_name} = JS_GetPropertyStr\(ctx, "
+                r"\*rooted_options,",
+            )
+            self.assertIn("JS_GetPropertyStr(ctx, *rooted_options,", parser)
+            self.assertNotRegex(
+                parser,
+                r"JS_GetPropertyStr\(ctx, options,",
+            )
+            rooted_parser = parser[parser.index("*rooted_options = options;") :]
+            self.assertNotRegex(
+                rooted_parser,
+                r"(?:JS_GetClassID|JS_IsArray)\(ctx, options\)",
+            )
+
     def test_hidden_future_call_roots_receiver_before_allocating_arguments(self):
         future = (
             MQUICKJS / "src" / "core" / "esp32_mquickjs_future.c"
@@ -57,6 +156,31 @@ class GcArchitectureTests(SourceContractTestCase):
         self.assertLess(
             gateway.index("rooted_receiver = JS_PushGCRef"),
             gateway.index("*args_array = JS_NewArray"),
+        )
+
+    def test_socket_sync_future_gateway_roots_receiver_before_method_lookup(self):
+        source = (
+            MQUICKJS / "src" / "modules" / "socket" /
+            "esp32_mquickjs_socket.c"
+        ).read_text(encoding="utf-8")
+        function_start = source.index("static JSValue socket_future_call_and_wait(")
+        function_end = source.index("\ntypedef enum {", function_start)
+        gateway = source[function_start:function_end]
+
+        self.assertIn("JSGCRef receiver_ref;", gateway)
+        self.assertIn("*receiver = this_value;", gateway)
+        self.assertIn(
+            "JS_GetPropertyStr(ctx, *receiver, method_name)",
+            gateway,
+        )
+        self.assertIn(
+            "*method,\n                                                     *receiver,",
+            gateway,
+        )
+        rooted_gateway = gateway[gateway.index("*receiver = this_value;") :]
+        self.assertNotIn(
+            "JS_GetPropertyStr(ctx, this_value, method_name)",
+            rooted_gateway,
         )
 
     def test_usb_serial_open_releases_temporary_roots_in_lifo_order(self):
@@ -128,6 +252,25 @@ class GcArchitectureTests(SourceContractTestCase):
         self.assertEqual(gc_function.count("JS_GC(ctx);"), 1)
         self.assertNotIn("native_gc", gc_function)
         self.assertNotIn("byte_source_take_gc_request", gc_function)
+
+    def test_load_copies_movable_path_before_filesystem_lookup(self):
+        core = (MQUICKJS / "src" / "core" / "esp32_mquickjs.c").read_text(
+            encoding="utf-8"
+        )
+        function_start = core.index("JSValue js_load(")
+        function_end = core.index("\nJSValue js_sleep(", function_start)
+        load_function = core[function_start:function_end]
+
+        self.assertIn(
+            "char command[ESP32_MQUICKJS_MAX_SCRIPT_PATH];",
+            load_function,
+        )
+        self.assertIn("JS_ToCStringLen(ctx, &command_len", load_function)
+        self.assertIn("memcpy(command, source, command_len);", load_function)
+        self.assertLess(
+            load_function.index("memcpy(command, source, command_len);"),
+            load_function.index("esp32_mquickjs_load_from_active_fs("),
+        )
 
     def test_mquickjs_collects_automatically_on_allocation_pressure(self):
         engine = (

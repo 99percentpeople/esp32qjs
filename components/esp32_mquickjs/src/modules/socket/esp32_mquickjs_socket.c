@@ -260,7 +260,9 @@ static bool socket_open_options(JSContext *ctx,
                                 int *out_local_port,
                                 bool *out_secure)
 {
+    JSGCRef options_ref;
     JSGCRef option_ref;
+    JSValue *rooted_options;
     JSValue *option;
     bool valid = true;
 
@@ -269,19 +271,23 @@ static bool socket_open_options(JSContext *ctx,
     if (JS_IsUndefined(options) || JS_IsNull(options)) {
         return true;
     }
-    if (JS_GetClassID(ctx, options) < 0 || JS_IsArray(ctx, options)) {
+    rooted_options = JS_PushGCRef(ctx, &options_ref);
+    *rooted_options = options;
+    if (JS_GetClassID(ctx, *rooted_options) < 0 ||
+        JS_IsArray(ctx, *rooted_options)) {
+        JS_PopGCRef(ctx, &options_ref);
         return false;
     }
 
     option = JS_PushGCRef(ctx, &option_ref);
-    *option = JS_GetPropertyStr(ctx, options, "localPort");
+    *option = JS_GetPropertyStr(ctx, *rooted_options, "localPort");
     if (JS_IsException(*option) ||
         (!JS_IsUndefined(*option) &&
          !socket_to_int(ctx, *option, 0, 65535, out_local_port))) {
         valid = false;
     }
     if (valid) {
-        *option = JS_GetPropertyStr(ctx, options, "tls");
+        *option = JS_GetPropertyStr(ctx, *rooted_options, "tls");
         if (JS_IsException(*option) ||
             (!JS_IsUndefined(*option) && !JS_IsBool(*option))) {
             valid = false;
@@ -290,6 +296,7 @@ static bool socket_open_options(JSContext *ctx,
         }
     }
     JS_PopGCRef(ctx, &option_ref);
+    JS_PopGCRef(ctx, &options_ref);
     return valid;
 }
 
@@ -298,24 +305,32 @@ static bool socket_listen_options(JSContext *ctx,
                                   int *out_local_port,
                                   int *out_backlog)
 {
+    JSGCRef options_ref;
     JSGCRef option_ref;
+    JSValue *rooted_options;
     JSValue *option;
     bool valid = true;
 
     *out_local_port = 0;
     *out_backlog = SOCKET_DEFAULT_LISTEN_BACKLOG;
-    if (JS_IsUndefined(options) || JS_IsNull(options) ||
-        JS_GetClassID(ctx, options) < 0 || JS_IsArray(ctx, options)) {
+    if (JS_IsUndefined(options) || JS_IsNull(options)) {
+        return false;
+    }
+    rooted_options = JS_PushGCRef(ctx, &options_ref);
+    *rooted_options = options;
+    if (JS_GetClassID(ctx, *rooted_options) < 0 ||
+        JS_IsArray(ctx, *rooted_options)) {
+        JS_PopGCRef(ctx, &options_ref);
         return false;
     }
     option = JS_PushGCRef(ctx, &option_ref);
-    *option = JS_GetPropertyStr(ctx, options, "localPort");
+    *option = JS_GetPropertyStr(ctx, *rooted_options, "localPort");
     if (JS_IsException(*option) || JS_IsUndefined(*option) ||
         !socket_to_int(ctx, *option, 0, 65535, out_local_port)) {
         valid = false;
     }
     if (valid) {
-        *option = JS_GetPropertyStr(ctx, options, "backlog");
+        *option = JS_GetPropertyStr(ctx, *rooted_options, "backlog");
         if (JS_IsException(*option) ||
             (!JS_IsUndefined(*option) &&
              !socket_to_int(ctx, *option, 1,
@@ -325,6 +340,7 @@ static bool socket_listen_options(JSContext *ctx,
         }
     }
     JS_PopGCRef(ctx, &option_ref);
+    JS_PopGCRef(ctx, &options_ref);
     return valid;
 }
 
@@ -332,7 +348,9 @@ static bool socket_connect_options(JSContext *ctx,
                                    JSValue options,
                                    int *out_timeout_ms)
 {
+    JSGCRef options_ref;
     JSGCRef timeout_ref;
+    JSValue *rooted_options;
     JSValue *timeout;
     bool valid;
 
@@ -340,16 +358,21 @@ static bool socket_connect_options(JSContext *ctx,
     if (JS_IsUndefined(options) || JS_IsNull(options)) {
         return true;
     }
-    if (JS_GetClassID(ctx, options) < 0 || JS_IsArray(ctx, options)) {
+    rooted_options = JS_PushGCRef(ctx, &options_ref);
+    *rooted_options = options;
+    if (JS_GetClassID(ctx, *rooted_options) < 0 ||
+        JS_IsArray(ctx, *rooted_options)) {
+        JS_PopGCRef(ctx, &options_ref);
         return false;
     }
     timeout = JS_PushGCRef(ctx, &timeout_ref);
-    *timeout = JS_GetPropertyStr(ctx, options, "timeoutMs");
+    *timeout = JS_GetPropertyStr(ctx, *rooted_options, "timeoutMs");
     valid = !JS_IsException(*timeout) &&
             (JS_IsUndefined(*timeout) ||
              socket_to_int(ctx, *timeout, 0, SOCKET_MAX_TIMEOUT_MS,
                            out_timeout_ms));
     JS_PopGCRef(ctx, &timeout_ref);
+    JS_PopGCRef(ctx, &options_ref);
     return valid;
 }
 
@@ -375,10 +398,15 @@ static socket_entry_t *socket_require_handle(JSContext *ctx,
     socket_entry_t *entry;
     int class_id = JS_GetClassID(ctx, value);
 
-    if (!socket_class_matches_protocol(class_id, protocol, listener) ||
-        (ref = JS_GetOpaque(ctx, value)) == NULL) {
+    if (!socket_class_matches_protocol(class_id, protocol, listener)) {
         JS_ThrowTypeError(ctx, "%s expects the matching socket object",
                           api_name);
+        return NULL;
+    }
+    ref = JS_GetOpaque(ctx, value);
+    if (ref == NULL) {
+        JS_ThrowReferenceError(ctx, "%s cannot use a closed or stale socket",
+                               api_name);
         return NULL;
     }
     entry = socket_find_entry_generation(ref->id, ref->generation);
@@ -842,22 +870,26 @@ static JSValue socket_future_call_and_wait(JSContext *ctx,
                                            int argc,
                                            JSValue *argv)
 {
+    JSGCRef receiver_ref;
     JSGCRef method_ref;
+    JSValue *receiver = JS_PushGCRef(ctx, &receiver_ref);
     JSValue *method = JS_PushGCRef(ctx, &method_ref);
     JSValue result;
 
-    *method = JS_GetPropertyStr(ctx, this_value, method_name);
+    *receiver = this_value;
+    *method = JS_GetPropertyStr(ctx, *receiver, method_name);
     if (JS_IsException(*method)) {
         result = JS_EXCEPTION;
     } else {
         result = esp32_mquickjs_future_call_and_wait(ctx,
                                                      esp32_mquickjs_get_active_runtime(),
                                                      *method,
-                                                     this_value,
+                                                     *receiver,
                                                      argc,
                                                      argv);
     }
     JS_PopGCRef(ctx, &method_ref);
+    JS_PopGCRef(ctx, &receiver_ref);
     return result;
 }
 

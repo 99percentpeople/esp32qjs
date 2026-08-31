@@ -248,6 +248,11 @@ Network tests require `TEST_WIFI_SSID`, `TEST_WIFI_PASSWORD`, and
 Use `--no-flash-firmware` and `--no-flash-fs` only when intentionally reusing a
 compatible test image.
 
+The dedicated JS test context preserves the selected Build Context's exact
+Flash, PSRAM mode, and JS heap size. ESP32-S3 tests disable per-allocation
+`DEBUG_GC` only when that Build Context actually selects PSRAM; a no-PSRAM
+context continues to use the internal heap and the common `DEBUG_GC` stress.
+
 ## Native runtime integration
 
 Custom ESP-IDF applications can embed `components/esp32qjs_runtime` rather than

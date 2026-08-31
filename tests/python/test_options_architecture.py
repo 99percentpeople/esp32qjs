@@ -11,8 +11,16 @@ class NativeOptionsArchitectureTests(unittest.TestCase):
         source = (
             MQUICKJS / "src/core/esp32_mquickjs_options.c"
         ).read_text(encoding="utf-8")
+        helper = source[
+            source.index("JSValue esp32_mquickjs_own_property_keys(") :
+            source.index("\nbool esp32_mquickjs_validate_plain_options(")
+        ]
 
-        self.assertIn("js_object_keys(ctx, NULL, 1, &value)", source)
+        self.assertIn("JSGCRef value_ref;", helper)
+        self.assertIn("*rooted_value = value;", helper)
+        self.assertIn("js_object_keys(ctx, NULL, 1, rooted_value)", helper)
+        self.assertIn("JS_PopGCRef(ctx, &value_ref);", helper)
+        self.assertNotIn("js_object_keys(ctx, NULL, 1, &value)", helper)
         self.assertIn("JS_GetClassID(ctx, options) != JS_CLASS_OBJECT", source)
         self.assertNotIn("JS_GetGlobalObject", source)
         self.assertNotIn('JS_GetPropertyStr(ctx, *object, "keys")', source)

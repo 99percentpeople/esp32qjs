@@ -317,6 +317,28 @@ class RemoteConfigTests(unittest.TestCase):
             {"bytes": 5014, "truncated": True},
         )
 
+    def test_js_case_command_retries_once_when_start_marker_is_missing(self):
+        case = REMOTE.JsTestCase("modules/core/eval.js", timeout_seconds=5.0)
+        session = SimpleNamespace(process=SimpleNamespace(poll=lambda: None))
+        payload = b'__TEST_PASS__:{"name":"core/eval"}\n'
+
+        with (
+            patch.object(REMOTE, "send_js_command") as send,
+            patch.object(REMOTE, "read_monitor_chunk", side_effect=(b"", payload)),
+            patch.object(
+                REMOTE.time,
+                "monotonic",
+                side_effect=(0.0, 2.1, 2.1, 2.1, 2.4),
+            ),
+        ):
+            result = REMOTE.run_js_test_case(session, case)
+
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(send.call_count, 2)
+        first_command = send.call_args_list[0].args[1]
+        self.assertIn(REMOTE.JS_TEST_CASE_START_PREFIX, first_command)
+        self.assertEqual(send.call_args_list[1].args[1], first_command)
+
     def test_js_test_build_creates_a_real_context_and_selected_tree(self):
         config = self.config()
         modules = REMOTE.resolve_js_modules(["bitmap", "camera-bitmap"])
@@ -334,10 +356,35 @@ class RemoteConfigTests(unittest.TestCase):
         self.assertFalse((context / "flash_data/modules/wifi").exists())
         defaults = (context / "sdkconfig.defaults").read_text(encoding="utf-8")
         self.assertIn("CONFIG_ESP32_MQUICKJS_DEBUG_GC=y", defaults)
-        self.assertIn("CONFIG_ESP32QJS_JS_HEAP_SIZE=524288", defaults)
-        self.assertIn('CONFIG_ESP32_MQUICKJS_PSRAM_MODE="octal"', defaults)
-        self.assertIn("CONFIG_SPIRAM=y", defaults)
-        self.assertIn("CONFIG_SPIRAM_MODE_OCT=y", defaults)
+        self.assertNotIn("# CONFIG_ESP32_MQUICKJS_DEBUG_GC is not set", defaults)
+        self.assertIn("CONFIG_ESP32QJS_JS_HEAP_SIZE=106496", defaults)
+        self.assertIn('CONFIG_ESP32_MQUICKJS_PSRAM_MODE="none"', defaults)
+        self.assertIn("CONFIG_SPIRAM=n", defaults)
+        self.assertNotIn("CONFIG_SPIRAM=y", defaults)
+        self.assertNotIn("CONFIG_SPIRAM_MODE_OCT=y", defaults)
+        self.assertIn("CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=2", defaults)
+        self.assertIn("CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=2", defaults)
+        self.assertIn("CONFIG_ESP_WIFI_RX_BA_WIN=2", defaults)
+        self.assertIn("CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8", defaults)
+        self.assertIn("CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=8", defaults)
+        self.assertIn("CONFIG_ESP_WIFI_MGMT_SBUF_NUM=8", defaults)
+        self.assertIn("CONFIG_ESP32QJS_SECONDARY_LITTLEFS=y", defaults)
+        self.assertEqual(
+            [
+                line
+                for line in defaults.splitlines()
+                if "CONFIG_ESP32QJS_LITTLEFS_FORMAT_ON_MOUNT_FAIL" in line
+            ][-1],
+            "CONFIG_ESP32QJS_LITTLEFS_FORMAT_ON_MOUNT_FAIL=y",
+        )
+        self.assertIn(
+            'CONFIG_ESP32QJS_SECONDARY_LITTLEFS_PARTITION_LABEL="workspace"',
+            defaults,
+        )
+        self.assertIn(
+            'CONFIG_ESP32QJS_SECONDARY_LITTLEFS_BASE_PATH="/workspace"',
+            defaults,
+        )
         self.assertEqual(
             json.loads((context / "precompile.json").read_text(encoding="utf-8"))["inline"],
             ["_test/harness.js"],
@@ -345,6 +392,42 @@ class RemoteConfigTests(unittest.TestCase):
         self.assertEqual(
             [entry for entry in test_config.cmake_cache_entries if entry.startswith("-DESP32QJS_BUILD_CONTEXT_DIR=")],
             [f"-DESP32QJS_BUILD_CONTEXT_DIR={context}"],
+        )
+
+    def test_js_test_build_disables_debug_gc_only_for_psram_contexts(self):
+        config = self.config()
+        with tempfile.TemporaryDirectory() as temp_name:
+            product_defaults = Path(temp_name) / "sdkconfig.defaults"
+            product_defaults.write_text(
+                'CONFIG_ESP32_MQUICKJS_PSRAM_MODE="octal"\n'
+                "CONFIG_SPIRAM=y\n"
+                "CONFIG_SPIRAM_MODE_OCT=y\n"
+                "CONFIG_ESP32QJS_JS_HEAP_SIZE=4194304\n",
+                encoding="utf-8",
+            )
+            config = REMOTE.replace(
+                config,
+                psram_mode="octal",
+                psram_size_bytes=8 * 1024 * 1024,
+                build_context_sdkconfig_defaults=product_defaults,
+            )
+            test_config = REMOTE.js_test_build_config(config)
+
+        defaults = test_config.build_context_sdkconfig_defaults.read_text(
+            encoding="utf-8",
+        )
+        self.assertIn('CONFIG_ESP32_MQUICKJS_PSRAM_MODE="octal"', defaults)
+        self.assertIn("CONFIG_SPIRAM=y", defaults)
+        self.assertIn("CONFIG_SPIRAM_MODE_OCT=y", defaults)
+        self.assertIn("CONFIG_ESP32QJS_JS_HEAP_SIZE=4194304", defaults)
+        self.assertNotIn("CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=2", defaults)
+        self.assertEqual(
+            [
+                line
+                for line in defaults.splitlines()
+                if "CONFIG_ESP32_MQUICKJS_DEBUG_GC" in line
+            ][-1],
+            "# CONFIG_ESP32_MQUICKJS_DEBUG_GC is not set",
         )
 
     def test_js_test_build_forces_serial_observability_for_product_contexts(self):

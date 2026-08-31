@@ -100,3 +100,13 @@ class CiBuildContextTests(unittest.TestCase):
                 CI_CONTEXT.generate_context(
                     "esp32c5", "representative-psram", Path(name)
                 )
+
+    def test_s3_no_psram_context_reserves_internal_heap_for_wifi(self):
+        with tempfile.TemporaryDirectory() as name:
+            output = CI_CONTEXT.generate_context(
+                "esp32s3", "representative", Path(name)
+            )
+            defaults = (output / "sdkconfig.defaults").read_text(encoding="utf-8")
+
+        self.assertIn("CONFIG_SPIRAM=n", defaults)
+        self.assertIn("CONFIG_ESP32QJS_JS_HEAP_SIZE=106496", defaults)

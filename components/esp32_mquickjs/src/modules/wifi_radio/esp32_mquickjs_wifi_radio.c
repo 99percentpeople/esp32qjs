@@ -146,12 +146,7 @@ esp_err_t esp32_mquickjs_wifi_radio_ensure_started(
     taskEXIT_CRITICAL(&s_radio.lock);
     ESP_RETURN_ON_ERROR(
         esp_wifi_get_mode(&current_mode), TAG, "read Wi-Fi mode failed");
-    merged_mode = current_mode;
-    if (required_mode == WIFI_MODE_APSTA || current_mode == WIFI_MODE_AP) {
-        merged_mode = WIFI_MODE_APSTA;
-    } else if (current_mode == WIFI_MODE_NULL) {
-        merged_mode = WIFI_MODE_STA;
-    }
+    merged_mode = required_mode;
     if (merged_mode != current_mode) {
         ESP_RETURN_ON_ERROR(
             esp_wifi_set_mode(merged_mode), TAG, "set Wi-Fi mode failed");

@@ -151,6 +151,36 @@ class TransportArchitectureTests(SourceContractTestCase):
         ):
             self.assertNotIn(application_rule, source)
 
+    def test_rpc_encoder_grows_payload_storage_on_demand(self):
+        source = (
+            MQUICKJS / "src" / "core" / "esp32_mquickjs_rpc.c"
+        ).read_text(encoding="utf-8")
+        append_start = source.index("static bool rpc_buffer_append(")
+        append_end = source.index("\nstatic bool rpc_buffer_byte(", append_start)
+        append = source[append_start:append_end]
+        encode_start = source.index("JSValue js_rpc_encode(")
+        encode_end = source.index("\nJSValue js_rpc_bytes(", encode_start)
+        encode = source[encode_start:encode_end]
+
+        self.assertIn("RPC_BUFFER_INITIAL_BYTES", append)
+        self.assertIn("realloc(buffer->data, capacity)", append)
+        self.assertIn("ESP32_MQUICKJS_RPC_MESSAGE_BYTES - buffer->length", append)
+        self.assertNotIn("malloc(ESP32_MQUICKJS_RPC_MESSAGE_BYTES)", encode)
+        self.assertIn("if (payload.out_of_memory)", encode)
+
+    def test_rpc_stream_sender_uses_bounded_working_segments(self):
+        source = (
+            MQUICKJS / "src" / "core" / "esp32_mquickjs_rpc.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("#define RPC_STREAM_SEGMENT_BYTES 4096U", source)
+        self.assertIn("uint8_t segment[RPC_STREAM_SEGMENT_BYTES];", source)
+        self.assertIn("uint8_t frame[RPC_STREAM_MAX_FRAME_BYTES];", source)
+        self.assertNotIn(
+            "uint8_t segment[ESP32_MQUICKJS_RPC_SEGMENT_BYTES];",
+            source,
+        )
+
     def test_websocket_control_frames_are_not_application_errors(self):
         source = (
             MQUICKJS / "src" / "modules" / "websocket" / "esp32_mquickjs_websocket.c"

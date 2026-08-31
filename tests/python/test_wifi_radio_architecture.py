@@ -57,6 +57,20 @@ class WifiRadioArchitectureTests(unittest.TestCase):
         self.assertNotIn("err = esp_wifi_start();", wifi)
         self.assertIn("ESP32_MQUICKJS_WIFI_RADIO_CLIENT_WIFI_STA", wifi)
 
+    def test_active_leases_override_a_persisted_wifi_mode(self):
+        radio = (
+            MQUICKJS
+            / "src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+        ).read_text(encoding="utf-8")
+        ensure_started = radio[
+            radio.index("esp_err_t esp32_mquickjs_wifi_radio_ensure_started") :
+            radio.index("esp_err_t esp32_mquickjs_wifi_radio_get_channel")
+        ]
+
+        self.assertIn("merged_mode = required_mode;", ensure_started)
+        self.assertNotIn("current_mode == WIFI_MODE_AP", ensure_started)
+        self.assertNotIn("merged_mode = current_mode", ensure_started)
+
     def test_wifi_reconciles_a_radio_started_before_its_event_handler(self):
         header = (
             MQUICKJS / "internal/esp32_mquickjs_wifi_radio.h"

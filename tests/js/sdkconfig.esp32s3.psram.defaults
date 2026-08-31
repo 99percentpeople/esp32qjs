@@ -1,0 +1,4 @@
+# DEBUG_GC compacts before every JS allocation and can fault the shared
+# flash/PSRAM cache during context construction. PSRAM Build Contexts exercise
+# the normal compacting collector; internal-heap contexts retain DEBUG_GC.
+# CONFIG_ESP32_MQUICKJS_DEBUG_GC is not set

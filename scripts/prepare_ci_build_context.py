@@ -44,6 +44,11 @@ def sdkconfig_text(
     selected = selected_feature_ids(features, target, profile)
     psram_mode = "quad" if profile == "representative-psram" else "none"
     psram_bytes = 8 * 1024 * 1024 if psram_mode == "quad" else 0
+    heap_size = (
+        4194304
+        if psram_mode != "none"
+        else (106496 if target == "esp32s3" else 262144)
+    )
     lines = [
         "# Generated CI Build Context v1; do not edit.",
         "CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE=y",
@@ -53,7 +58,7 @@ def sdkconfig_text(
         f"CONFIG_SPIRAM={'y' if psram_mode != 'none' else 'n'}",
         f"CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC={'n' if psram_mode != 'none' else 'y'}",
         f"CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC={'y' if psram_mode != 'none' else 'n'}",
-        f"CONFIG_ESP32QJS_JS_HEAP_SIZE={4194304 if psram_mode != 'none' else 262144}",
+        f"CONFIG_ESP32QJS_JS_HEAP_SIZE={heap_size}",
     ]
     native_features: list[str] = []
     for feature in features:

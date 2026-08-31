@@ -59,6 +59,8 @@ JS_TEST_PASS_PREFIX = "__TEST_PASS__:"
 JS_TEST_SKIP_PREFIX = "__TEST_SKIP__:"
 JS_TEST_FAIL_PREFIX = "__TEST_FAIL__:"
 JS_TEST_FORBIDDEN_OUTPUT_MARKER = "__ESP32QJS_HANDLED_FUTURE_REJECTION__"
+JS_TEST_CASE_START_PREFIX = "__ESP32QJS_TEST_CASE_START__:"
+JS_TEST_CASE_START_RETRY_SECONDS = 2.0
 JS_TEST_DETAILS_MAX_BYTES = 4096
 JS_REPL_BANNER_MARKER = "Run help() for usage."
 MONITOR_READY_MARKER = "--- Quit:"
@@ -2054,6 +2056,16 @@ def js_test_build_config(
     test_defaults = [JS_TEST_SDKCONFIG_DEFAULTS]
     if target_defaults.is_file():
         test_defaults.append(target_defaults)
+    target_psram_defaults = (
+        JS_TEST_DIR / f"sdkconfig.{config.idf_target}.psram.defaults"
+    )
+    if config.psram_mode != "none" and target_psram_defaults.is_file():
+        test_defaults.append(target_psram_defaults)
+    target_nopsram_defaults = (
+        JS_TEST_DIR / f"sdkconfig.{config.idf_target}.nopsram.defaults"
+    )
+    if config.psram_mode == "none" and target_nopsram_defaults.is_file():
+        test_defaults.append(target_nopsram_defaults)
     context_dir = build_dir / "esp32qjs-test-context"
     if context_dir.exists():
         shutil.rmtree(context_dir)
@@ -2262,29 +2274,33 @@ def run_js_test_case(session: MonitorSession, case: JsTestCase) -> JsCaseResult:
     """Execute one JS test case file and collect a structured pass/fail result."""
     print(f"Running JS test {case.path}", flush=True)
     case_path = json.dumps(case.path)
+    case_start_marker = f"{JS_TEST_CASE_START_PREFIX}{case.path}"
+    command = (
+        f"print({json.dumps(case_start_marker)}); "
+        "try { "
+        f"load({case_path}); "
+        "} catch (error) { "
+        'print("__TEST_FAIL__:" + JSON.stringify({'
+        f"name: {case_path}, "
+        "error: String(error)"
+        "})); "
+        "}"
+    )
     try:
-        send_js_command(
-            session,
-            (
-                "try { "
-                f"load({case_path}); "
-                "} catch (error) { "
-                'print("__TEST_FAIL__:" + JSON.stringify({'
-                f"name: {case_path}, "
-                "error: String(error)"
-                "})); "
-                "}"
-            ),
-        )
+        send_js_command(session, command)
     except OSError as exc:
         message = f"unable to send command to monitor session ({exc})"
         print(f"FAIL {case.path}: {message}", flush=True)
         return JsCaseResult(case=case, case_name=case.path, status="failed", error=message)
 
-    deadline = time.monotonic() + case.timeout_seconds
+    started_at = time.monotonic()
+    deadline = started_at + case.timeout_seconds
+    retry_deadline = started_at + JS_TEST_CASE_START_RETRY_SECONDS
     quiet_deadline: float | None = None
     output = ""
     result_line: str | None = None
+    case_started = False
+    command_retried = False
 
     while True:
         now = time.monotonic()
@@ -2297,6 +2313,12 @@ def run_js_test_case(session: MonitorSession, case: JsTestCase) -> JsCaseResult:
         if chunk:
             output += chunk.decode("utf-8", errors="replace")
             normalized = normalize_serial_output(output)
+            if find_last_output_line_with_prefix(
+                normalized,
+                case_start_marker,
+                complete_only=True,
+            ) is not None:
+                case_started = True
             for line in normalized.splitlines():
                 if (
                     line.startswith(JS_TEST_PASS_PREFIX) or
@@ -2305,6 +2327,25 @@ def run_js_test_case(session: MonitorSession, case: JsTestCase) -> JsCaseResult:
                 ):
                     result_line = line
                     quiet_deadline = time.monotonic() + 0.2
+            continue
+
+        if not case_started and not command_retried and now >= retry_deadline:
+            print(
+                f"Retrying JS test command for {case.path} after no start marker",
+                flush=True,
+            )
+            try:
+                send_js_command(session, command)
+            except OSError as exc:
+                message = f"unable to retry command to monitor session ({exc})"
+                print(f"FAIL {case.path}: {message}", flush=True)
+                return JsCaseResult(
+                    case=case,
+                    case_name=case.path,
+                    status="failed",
+                    error=message,
+                )
+            command_retried = True
             continue
 
         if session.process.poll() is not None:

@@ -42,6 +42,37 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertNotIn("esp32_mquickjs_event_queue_send(", callback)
         self.assertNotIn("vTaskDelay", callback)
 
+    def test_indexed_properties_do_not_allocate_in_the_setter_arguments(self):
+        source = (MODULE / "esp32_mquickjs_wifi_csi.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotRegex(
+            source,
+            r"JS_SetPropertyUint32\(\s*ctx,\s*\*[A-Za-z_][A-Za-z0-9_]*,"
+            r"\s*[^,]+,\s*JS_New[A-Za-z0-9_]+\(",
+        )
+
+    def test_option_parsers_root_values_across_allocating_lookups(self):
+        source = (MODULE / "esp32_mquickjs_wifi_csi.c").read_text(
+            encoding="utf-8"
+        )
+        for name in (
+            "wifi_csi_parse_mac_values",
+            "wifi_csi_parse_filter",
+            "wifi_csi_parse_legacy_capture",
+            "wifi_csi_parse_he_capture",
+            "wifi_csi_parse_open_options",
+        ):
+            start = source.index(f"static bool {name}(")
+            end = source.index("\n}\n", start) + 3
+            parser = source[start:end]
+
+            with self.subTest(name=name):
+                self.assertIn("JSGCRef value_ref;", parser)
+                self.assertIn("*rooted_value = value;", parser)
+                self.assertIn("JS_PopGCRef(ctx, &value_ref);", parser)
+
     def test_publish_path_filters_before_fixed_pool_copy_and_never_allocates(self):
         source = (MODULE / "esp32_mquickjs_wifi_csi_resources.c").read_text(
             encoding="utf-8"

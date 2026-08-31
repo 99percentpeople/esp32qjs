@@ -83,7 +83,7 @@ test("rpc/offline", function () {
 
   decoderStatus = decoder.status();
   test.equal(decoderStatus.open, true, "decoder status should report an open handle");
-  test.equal(decoderStatus.messages, 1, "decoder status should count messages");
+  test.equal(decoderStatus.messages, 2, "decoder status should count messages");
   test.equal(decoderStatus.errors, 0, "decoder status should count errors");
   test.equal(decoder.reset(), true, "decoder reset should preserve its handle");
   test.equal(decoder.close(), true, "decoder close should release its slot");
