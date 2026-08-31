@@ -49,8 +49,9 @@ class CiBuildContextTests(unittest.TestCase):
 
     def test_ci_build_ignores_user_global_esptool_configuration(self):
         source = (ROOT / "scripts" / "ci_build.py").read_text(encoding="utf-8")
-        self.assertIn("from remote import write_esptool_config", source)
-        self.assertIn("write_esptool_config()", source)
+        self.assertIn("from esp32qjs.build import esptool_environment", source)
+        self.assertIn("environment = esptool_environment()", source)
+        self.assertIn("env=environment", source)
 
     def test_s3_camera_dependency_does_not_depend_on_late_kconfig_resolution(self):
         manifest = (

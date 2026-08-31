@@ -289,8 +289,18 @@ tests/build-contexts/       complete test-only Build Context fixtures
 tests/c/                    host-native C tests
 tests/js/                   device-backed JavaScript tests
 tests/python/               repository tooling tests
-scripts/remote.py           build, flash, monitor, and test helper
+scripts/remote.py           compatibility entrypoint for development commands
+scripts/esp32qjs/           profile, build, flash, serial, test, and CLI modules
 ```
+
+The development CLI keeps its implementation under `scripts/esp32qjs/` by
+stable responsibility: `profiles.py`, `build.py`, `flash.py`, `server.py`,
+`device_tests.py`, and `cli.py`. Existing `python scripts/remote.py ...`
+commands remain the supported entrypoint.
+
+Generated esptool overrides stay under `build/tooling/esptool.cfg`. The CLI
+passes that path only in the environment of its build, flash, monitor, and
+RFC2217 child processes; it does not read or overwrite `~/esptool.cfg`.
 
 Start with [API index](docs/api.md), [Native Host API](docs/c-api.md),
 [JavaScript Library boundary](docs/js-api.md), and

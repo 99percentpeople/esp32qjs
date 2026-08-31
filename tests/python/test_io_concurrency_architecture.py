@@ -1393,7 +1393,9 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         copy_start = future.index("static void future_copy_terminal(")
         copy_end = future.index("\nstatic void future_advance_all(", copy_start)
         copy_terminal = future[copy_start:copy_end]
-        runner = (ROOT / "scripts/remote.py").read_text(encoding="utf-8")
+        runner = (
+            ROOT / "scripts/esp32qjs/device_tests.py"
+        ).read_text(encoding="utf-8")
         runtime_test = (
             ROOT / "tests/js/flash_data/modules/timers/runtime.js"
         ).read_text(encoding="utf-8")

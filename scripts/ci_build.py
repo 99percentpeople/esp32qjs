@@ -14,7 +14,7 @@ from prepare_ci_build_context import (
     SUPPORTED_TARGETS,
     generate_context,
 )
-from remote import write_esptool_config
+from esp32qjs.build import esptool_environment
 
 
 def main() -> int:
@@ -27,7 +27,7 @@ def main() -> int:
     build_dir = ROOT / "build" / "ci" / slug
     context_dir = ROOT / "build" / "ci-contexts" / slug
     generate_context(args.target, args.profile, context_dir)
-    write_esptool_config()
+    environment = esptool_environment()
     idf_py = Path(os.environ["IDF_PATH"]) / "tools" / "idf.py"
     defaults = ";".join(
         (
@@ -47,7 +47,7 @@ def main() -> int:
         f"-DSDKCONFIG_DEFAULTS={defaults}",
         "build",
     ]
-    subprocess.run(command, cwd=ROOT, check=True)
+    subprocess.run(command, cwd=ROOT, check=True, env=environment)
     return 0
 
 

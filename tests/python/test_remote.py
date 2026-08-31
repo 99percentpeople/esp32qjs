@@ -19,11 +19,41 @@ assert SPEC.loader is not None
 sys.modules[SPEC.name] = REMOTE
 SPEC.loader.exec_module(REMOTE)
 
+import esp32qjs.build as REMOTE_BUILD
+import esp32qjs.device_tests as REMOTE_DEVICE_TESTS
+import esp32qjs.flash as REMOTE_FLASH
+import esp32qjs.server as REMOTE_SERVER
+
 
 class RemoteConfigTests(unittest.TestCase):
     def config(self):
         args, mcu, context = REMOTE.parse_args(["show-config"])
         return REMOTE.build_project_config(args, mcu, context)
+
+    def test_remote_entrypoint_delegates_to_stable_responsibility_modules(self):
+        entrypoint = REMOTE_PATH.read_text(encoding="utf-8")
+        module_dir = ROOT / "scripts" / "esp32qjs"
+        expected_modules = (
+            "profiles",
+            "build",
+            "flash",
+            "server",
+            "device_tests",
+            "cli",
+        )
+
+        self.assertLess(len(entrypoint.encode("utf-8")), 2048)
+        for module in expected_modules:
+            with self.subTest(module=module):
+                self.assertTrue((module_dir / f"{module}.py").is_file())
+                self.assertIn(f"from esp32qjs.{module} import *", entrypoint)
+
+        self.assertNotIn("from .build import", (module_dir / "profiles.py").read_text())
+        self.assertNotIn("from .server import", (module_dir / "build.py").read_text())
+        self.assertNotIn("from .flash import", (module_dir / "server.py").read_text())
+        self.assertNotIn(
+            "from .device_tests import", (module_dir / "flash.py").read_text()
+        )
 
     def test_component_dependency_locks_are_target_specific(self):
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
@@ -95,24 +125,56 @@ class RemoteConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_name:
             config_path = Path(temp_name) / "tooling" / "esptool.cfg"
             with (
-                patch.object(REMOTE, "ESPTOOL_CONFIG_PATH", config_path),
+                patch.object(REMOTE_BUILD, "ESPTOOL_CONFIG_PATH", config_path),
                 patch.dict(os.environ, {}, clear=False),
             ):
-                os.environ.pop("ESPTOOL_CFGFILE", None)
-                written = REMOTE.write_esptool_config()
+                os.environ["ESPTOOL_CFGFILE"] = "user-owned.cfg"
+                written = REMOTE_BUILD.write_esptool_config()
+                environment = REMOTE_BUILD.esptool_environment(written)
                 self.assertEqual(written, config_path)
-                self.assertEqual(os.environ["ESPTOOL_CFGFILE"], str(config_path))
-                self.assertEqual(config_path.read_text(encoding="ascii"), REMOTE.ESPTOOL_CONFIG_TEXT)
+                self.assertEqual(os.environ["ESPTOOL_CFGFILE"], "user-owned.cfg")
+                self.assertEqual(environment["ESPTOOL_CFGFILE"], str(config_path))
+                self.assertEqual(config_path.read_text(encoding="ascii"), REMOTE_BUILD.ESPTOOL_CONFIG_TEXT)
+
+        self.assertEqual(
+            REMOTE_BUILD.esptool_config_path(),
+            ROOT / "build" / "tooling" / "esptool.cfg",
+        )
+        self.assertNotEqual(
+            REMOTE_BUILD.esptool_config_path(),
+            Path.home() / "esptool.cfg",
+        )
 
     def test_idf_actions_install_the_project_local_esptool_config(self):
-        source = REMOTE_PATH.read_text(encoding="utf-8")
+        source = (ROOT / "scripts" / "esp32qjs" / "build.py").read_text(
+            encoding="utf-8"
+        )
         action_start = source.index("def run_idf_action_with_stale_build_recovery(")
         action_end = source.index("\ndef build(", action_start)
 
-        self.assertIn("write_esptool_config()", source[action_start:action_end])
+        self.assertIn("environment = esptool_environment()", source[action_start:action_end])
+        self.assertIn("env=environment", source[action_start:action_end])
+
+    def test_serial_tools_scope_esptool_configuration_to_child_processes(self):
+        build_source = (
+            ROOT / "scripts" / "esp32qjs" / "build.py"
+        ).read_text(encoding="utf-8")
+        flash_source = (
+            ROOT / "scripts" / "esp32qjs" / "flash.py"
+        ).read_text(encoding="utf-8")
+        server_source = (
+            ROOT / "scripts" / "esp32qjs" / "server.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn('os.environ["ESPTOOL_CFGFILE"] =', build_source)
+        self.assertEqual(flash_source.count("env=esptool_environment(),"), 2)
+        self.assertIn('"env": esptool_environment(esptool_cfg)', server_source)
+        self.assertEqual(server_source.count("env=esptool_environment(),"), 2)
 
     def test_rfc2217_stop_is_pid_scoped(self):
-        source = REMOTE_PATH.read_text(encoding="utf-8")
+        source = (ROOT / "scripts" / "esp32qjs" / "server.py").read_text(
+            encoding="utf-8"
+        )
         stop_start = source.index("def stop_server_processes()")
         stop_end = source.index("\ndef start_server(", stop_start)
         stop = source[stop_start:stop_end]
@@ -137,7 +199,9 @@ class RemoteConfigTests(unittest.TestCase):
 
     def test_check_js_includes_the_context_flash_tree(self):
         selected = ROOT / "tests" / "build-contexts" / "esp32s3" / "flash_data"
-        with patch.object(REMOTE, "run_streaming", return_value=(0, "")) as streaming:
+        with patch.object(
+            REMOTE_DEVICE_TESTS, "run_streaming", return_value=(0, "")
+        ) as streaming:
             REMOTE.run_js_syntax_check(selected)
         command = streaming.call_args.args[0]
         self.assertEqual(command[-2:], ["--extra-path", str(selected)])
@@ -292,9 +356,9 @@ class RemoteConfigTests(unittest.TestCase):
         )
 
         with (
-            patch.object(REMOTE, "send_js_command"),
-            patch.object(REMOTE, "read_monitor_chunk", return_value=payload),
-            patch.object(REMOTE.time, "monotonic", side_effect=(0.0, 0.0, 0.0, 0.3)),
+            patch.object(REMOTE_DEVICE_TESTS, "send_js_command"),
+            patch.object(REMOTE_DEVICE_TESTS, "read_monitor_chunk", return_value=payload),
+            patch.object(REMOTE_DEVICE_TESTS.time, "monotonic", side_effect=(0.0, 0.0, 0.0, 0.3)),
             redirect_stdout(output),
         ):
             result = REMOTE.run_js_test_case(session, case)
@@ -323,10 +387,10 @@ class RemoteConfigTests(unittest.TestCase):
         payload = b'__TEST_PASS__:{"name":"core/eval"}\n'
 
         with (
-            patch.object(REMOTE, "send_js_command") as send,
-            patch.object(REMOTE, "read_monitor_chunk", side_effect=(b"", payload)),
+            patch.object(REMOTE_DEVICE_TESTS, "send_js_command") as send,
+            patch.object(REMOTE_DEVICE_TESTS, "read_monitor_chunk", side_effect=(b"", payload)),
             patch.object(
-                REMOTE.time,
+                REMOTE_DEVICE_TESTS.time,
                 "monotonic",
                 side_effect=(0.0, 2.1, 2.1, 2.1, 2.4),
             ),
@@ -469,13 +533,17 @@ class RemoteConfigTests(unittest.TestCase):
         config = self.config()
         session = object()
         with (
-            patch.object(REMOTE, "flash") as flash,
-            patch.object(REMOTE, "start_monitor_session", return_value=session) as start,
-            patch.object(REMOTE, "read_monitor_until_text", return_value="ready"),
-            patch.object(REMOTE, "wait_for_optional_js_repl_banner"),
-            patch.object(REMOTE, "ensure_js_test_runtime"),
-            patch.object(REMOTE, "probe_js_runtime_features", return_value={"fs": True}),
-            patch.object(REMOTE, "close_monitor_session") as close,
+            patch.object(REMOTE_DEVICE_TESTS, "flash") as flash,
+            patch.object(
+                REMOTE_DEVICE_TESTS,
+                "start_monitor_session",
+                return_value=session,
+            ) as start,
+            patch.object(REMOTE_DEVICE_TESTS, "read_monitor_until_text", return_value="ready"),
+            patch.object(REMOTE_DEVICE_TESTS, "wait_for_optional_js_repl_banner"),
+            patch.object(REMOTE_DEVICE_TESTS, "ensure_js_test_runtime"),
+            patch.object(REMOTE_DEVICE_TESTS, "probe_js_runtime_features", return_value={"fs": True}),
+            patch.object(REMOTE_DEVICE_TESTS, "close_monitor_session") as close,
         ):
             REMOTE.run_js_tests(config, (), False, set(), True, False)
         flashed = flash.call_args.args[0]
@@ -487,9 +555,9 @@ class RemoteConfigTests(unittest.TestCase):
         config = self.config()
         config = REMOTE.replace(config, target="/dev/ttyACM0")
         with (
-            patch.object(REMOTE, "write_monitor_config"),
+            patch.object(REMOTE_SERVER, "write_monitor_config"),
             patch.object(
-                REMOTE,
+                REMOTE_SERVER,
                 "idf_py_cmd",
                 side_effect=lambda project_args, _config: project_args,
             ),
@@ -499,15 +567,38 @@ class RemoteConfigTests(unittest.TestCase):
                 " ".join(REMOTE.monitor_cmd(config, no_reset=True)),
             )
         with (
-            patch.object(REMOTE, "write_esptool_config"),
-            patch.object(REMOTE, "load_flasher_args", return_value={}),
-            patch.object(REMOTE, "resolve_flash_pairs", return_value=["0x0", "app.bin"]) as resolve,
-            patch.object(REMOTE, "write_flash"),
+            patch.object(REMOTE_FLASH, "load_flasher_args", return_value={}),
+            patch.object(REMOTE_FLASH, "resolve_flash_pairs", return_value=["0x0", "app.bin"]) as resolve,
+            patch.object(REMOTE_FLASH, "write_flash"),
         ):
             REMOTE.flash(config, build_first=False)
             self.assertEqual(resolve.call_args.kwargs["exclude_entries"], ("workspace",))
             REMOTE.flash(config, build_first=False, initialize_workspace=True)
             self.assertEqual(resolve.call_args.kwargs["exclude_entries"], ())
+
+    def test_flash_subprocess_receives_only_the_project_tool_environment(self):
+        config = REMOTE.replace(self.config(), target="/dev/ttyACM0")
+        environment = {"ESPTOOL_CFGFILE": "/project/build/tooling/esptool.cfg"}
+        with (
+            patch.object(
+                REMOTE_FLASH,
+                "esptool_environment",
+                return_value=environment,
+            ),
+            patch.object(REMOTE_FLASH, "resolve_esptool_cmd", return_value=["esptool"]),
+            patch.object(REMOTE_FLASH, "command_port", return_value="/dev/ttyACM0"),
+            patch.object(REMOTE_FLASH.subprocess, "run") as run,
+        ):
+            REMOTE_FLASH.write_flash(
+                config,
+                ["--flash-size", "detect"],
+                ["0x10000", "app.bin"],
+                chip="esp32s3",
+                before="default-reset",
+                after="hard-reset",
+            )
+
+        self.assertIs(run.call_args.kwargs["env"], environment)
 
     def test_future_case_and_serial_helpers_keep_their_contracts(self):
         case = REMOTE.JS_TEST_MODULE_MAP["future"].cases[0]
