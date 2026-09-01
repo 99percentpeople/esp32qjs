@@ -12,6 +12,7 @@ typedef enum {
 
 typedef struct {
     esp32_mquickjs_memory_dma_reservation_state_t state;
+    const char *owner;
     size_t pending_bytes;
     size_t pending_largest_bytes;
     size_t driver_pinned_bytes;

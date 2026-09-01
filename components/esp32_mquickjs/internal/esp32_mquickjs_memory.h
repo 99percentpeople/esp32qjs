@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "esp32_mquickjs_memory_dma_accounting.h"
+#include "esp32_mquickjs_memory_owner_accounting.h"
 
 typedef enum {
     ESP32_MQUICKJS_MEMORY_DEFAULT,
@@ -27,6 +28,11 @@ typedef enum {
     ESP32_MQUICKJS_MEMORY_PRESSURE_CRITICAL,
 } esp32_mquickjs_memory_pressure_t;
 
+typedef enum {
+    ESP32_MQUICKJS_MEMORY_REGION_INTERNAL,
+    ESP32_MQUICKJS_MEMORY_REGION_PSRAM,
+} esp32_mquickjs_memory_region_t;
+
 typedef struct esp32_mquickjs_memory_block esp32_mquickjs_memory_block_t;
 
 typedef void (*esp32_mquickjs_memory_relocated_fn)(void *opaque,
@@ -39,7 +45,7 @@ typedef struct {
     size_t dma_largest_reserve_bytes;
     size_t managed_internal_bytes;
     size_t managed_psram_bytes;
-    /* Stable managed blocks plus registered driver DMA and staging payloads. */
+    /* Internal fixed/stable payloads plus registered driver DMA and staging. */
     size_t pinned_bytes;
     size_t driver_pinned_bytes;
     size_t staging_pinned_bytes;
@@ -50,6 +56,9 @@ typedef struct {
     size_t migration_bytes;
     uint32_t eviction_count;
     uint32_t allocation_failures;
+    size_t allocation_count;
+    esp32_mquickjs_memory_owner_entry_t
+        allocations[ESP32_MQUICKJS_MEMORY_MAX_OWNER_ENTRIES];
 } esp32_mquickjs_memory_status_t;
 
 /* Initialize the boot-scoped policy from the current capability heaps. */
@@ -73,6 +82,7 @@ void esp32_mquickjs_memory_release_generation(void);
  */
 bool esp32_mquickjs_memory_reserve_internal_dma(
     esp32_mquickjs_memory_dma_reservation_t *reservation,
+    const char *owner,
     size_t total_bytes,
     size_t largest_block_bytes);
 bool esp32_mquickjs_memory_commit_driver_pinned(
@@ -88,29 +98,36 @@ bool esp32_mquickjs_memory_release_driver_pinned(
 void esp32_mquickjs_memory_get_status(esp32_mquickjs_memory_status_t *out);
 const char *esp32_mquickjs_memory_pressure_name(
     esp32_mquickjs_memory_pressure_t pressure);
+const char *esp32_mquickjs_memory_class_name(
+    esp32_mquickjs_memory_class_t memory_class);
+const char *esp32_mquickjs_memory_region_name(uint8_t region);
 
 /*
- * Allocate a transferable payload. The returned pointer is an ordinary
- * heap_caps pointer and remains compatible with heap_caps_free(). This is for
- * payloads whose ownership is handed to an existing framework object.
+ * Allocate a transferable fixed payload. Its owner accounting follows the raw
+ * pointer across handoff, but it must be released with payload_free().
  */
 void *esp32_mquickjs_memory_payload_alloc(
+    const char *owner,
     size_t size,
     esp32_mquickjs_memory_class_t memory_class);
 void *esp32_mquickjs_memory_payload_calloc(
+    const char *owner,
     size_t count,
     size_t size,
     esp32_mquickjs_memory_class_t memory_class);
 void *esp32_mquickjs_memory_payload_realloc(
+    const char *owner,
     void *data,
     size_t size,
     esp32_mquickjs_memory_class_t memory_class);
+void esp32_mquickjs_memory_payload_free(void *data);
 
 /*
  * Movable blocks expose a stable handle. Raw data may only be retained while
  * a borrow is active; relocation callbacks update owner-side cached pointers.
  */
 esp32_mquickjs_memory_block_t *esp32_mquickjs_memory_block_alloc(
+    const char *owner,
     size_t size,
     esp32_mquickjs_memory_class_t memory_class,
     esp32_mquickjs_memory_relocated_fn relocated,

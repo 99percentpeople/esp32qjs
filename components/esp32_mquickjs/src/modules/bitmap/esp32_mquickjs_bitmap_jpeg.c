@@ -143,7 +143,8 @@ static bool jpeg_copy_direct_source(
         state->input = owned;
     } else {
         state->input = esp32_mquickjs_memory_payload_alloc(
-            source.length, ESP32_MQUICKJS_MEMORY_DEFAULT);
+            "bitmap.jpeg.input", source.length,
+            ESP32_MQUICKJS_MEMORY_DEFAULT);
         if (state->input == NULL) {
             JS_ThrowOutOfMemory(ctx);
             return false;
@@ -194,7 +195,8 @@ static bool jpeg_copy_segmented_source(
         goto done;
     }
     state->input = esp32_mquickjs_memory_payload_alloc(
-        byte_length, ESP32_MQUICKJS_MEMORY_DEFAULT);
+        "bitmap.jpeg.input", byte_length,
+        ESP32_MQUICKJS_MEMORY_DEFAULT);
     if (state->input == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto done;
@@ -358,8 +360,8 @@ static void bitmap_jpeg_decode_destroy_unstarted(
     if (state->target_rooted) {
         JS_DeleteGCRef(state->ctx, &state->target_ref);
     }
-    heap_caps_free(state->decoded);
-    heap_caps_free(state->input);
+    esp32_mquickjs_memory_payload_free(state->decoded);
+    esp32_mquickjs_memory_payload_free(state->input);
     heap_caps_free(state);
 }
 
@@ -441,7 +443,8 @@ static bool bitmap_jpeg_decode_prepare(
         return false;
     }
     state->decoded = esp32_mquickjs_memory_payload_alloc(
-        decoded_length, ESP32_MQUICKJS_MEMORY_DEFAULT);
+        "bitmap.jpeg.decoded", decoded_length,
+        ESP32_MQUICKJS_MEMORY_DEFAULT);
     if (state->decoded == NULL ||
         !jpeg_root_value(ctx, &state->target_ref, &state->target_rooted,
                          this_ref->val) ||

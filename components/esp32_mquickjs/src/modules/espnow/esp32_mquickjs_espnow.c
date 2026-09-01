@@ -6,6 +6,7 @@
 #include "esp32_mquickjs_event_queue.h"
 #include "esp32_mquickjs_espnow_tx_queue.h"
 #include "esp32_mquickjs_future.h"
+#include "esp32_mquickjs_memory.h"
 #include "esp32_mquickjs_options.h"
 #include "esp32_mquickjs_wifi_radio.h"
 #include "esp32_mquickjs_wireless_core.h"
@@ -32,6 +33,7 @@
 #define ESPNOW_DEFAULT_CHANNEL 0U
 #define ESPNOW_REOPEN_QUIESCE_MS 50U
 #define ESPNOW_CLOSE_TIMEOUT_MS 1000U
+#define ESPNOW_TX_TASK_STACK_BYTES 4096U
 static const char *TAG = "esp32qjs_espnow";
 #if defined(CONFIG_ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD) && \
     CONFIG_ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD
@@ -145,10 +147,14 @@ typedef struct {
     esp32_mquickjs_espnow_tx_slot_link_t *tx_links;
     espnow_tx_packet_t *tx_packets;
     uint8_t *tx_payloads;
+    uint8_t *tx_staging;
     uint16_t tx_queue_capacity;
     esp32_mquickjs_espnow_tx_overflow_t tx_overflow;
     _Atomic(TaskHandle_t) tx_task;
     _Atomic bool tx_task_stop;
+    _Atomic bool tx_task_exited;
+    StackType_t *tx_task_stack;
+    StaticTask_t tx_task_buffer;
     _Atomic uint32_t active_queued_slot;
     _Atomic bool queued_send_completed;
     _Atomic bool queued_send_delivered;
@@ -712,7 +718,9 @@ static JSValue espnow_receive_event_to_js(JSContext *ctx,
     rssi = slot->rssi;
     channel = slot->channel;
     if (payload_length > 0) {
-        payload = heap_caps_malloc(payload_length, MALLOC_CAP_8BIT);
+        payload = esp32_mquickjs_memory_payload_alloc(
+            "espnow.rx-copy", payload_length,
+            ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (payload == NULL) {
             espnow_release_rx_slot(session, receive_event->slot_index);
             JS_ThrowOutOfMemory(ctx);
@@ -755,7 +763,7 @@ static JSValue espnow_receive_event_to_js(JSContext *ctx,
     return JS_PopGCRef(ctx, &object_ref);
 
 fail:
-    heap_caps_free(payload);
+    esp32_mquickjs_memory_payload_free(payload);
     JS_PopGCRef(ctx, &data_ref);
     JS_PopGCRef(ctx, &object_ref);
     return JS_EXCEPTION;
@@ -1059,7 +1067,11 @@ static bool espnow_start_tracked_send(espnow_session_t *session)
         &session->pending_tracked_send, &expected, NULL,
         memory_order_acq_rel, memory_order_acquire);
     portEXIT_CRITICAL(&session->lock);
-    state->err = esp_now_send(state->address, state->payload,
+    if (state->payload_length > 0) {
+        memcpy(session->tx_staging, state->payload,
+               state->payload_length);
+    }
+    state->err = esp_now_send(state->address, session->tx_staging,
                               state->payload_length);
     if (state->err == ESP_OK) {
         atomic_fetch_add_explicit(&session->sent_packets, 1,
@@ -1102,9 +1114,14 @@ static bool espnow_start_queued_send(espnow_session_t *session)
                           memory_order_release);
     atomic_store_explicit(&session->queued_send_started_us,
                           esp_timer_get_time(), memory_order_release);
+    if (packet->length > 0) {
+        memcpy(session->tx_staging,
+               session->tx_payloads +
+                   ((size_t)slot * session->max_payload_bytes),
+               packet->length);
+    }
     err = esp_now_send(
-        packet->address,
-        session->tx_payloads + ((size_t)slot * session->max_payload_bytes),
+        packet->address, session->tx_staging,
         packet->length);
     if (err == ESP_OK) {
         atomic_fetch_add_explicit(&session->sent_packets, 1,
@@ -1185,13 +1202,13 @@ static void espnow_tx_worker(void *opaque)
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     }
     if (session != NULL) {
-        atomic_store_explicit(&session->tx_task, NULL,
+        atomic_store_explicit(&session->tx_task_exited, true,
                               memory_order_release);
         if (session->runtime != NULL) {
             esp32_mquickjs_notify_activity(session->runtime);
         }
     }
-    vTaskDelete(NULL);
+    vTaskSuspend(NULL);
 }
 
 static void espnow_reset_session_storage(espnow_session_t *session)
@@ -1204,12 +1221,16 @@ static void espnow_reset_session_storage(espnow_session_t *session)
     if (session->event_queue != NULL) {
         (void)esp32_mquickjs_event_queue_discard_all(session->event_queue);
     }
-    heap_caps_free(session->rx_payloads);
+    esp32_mquickjs_memory_payload_free(session->rx_payloads);
     session->rx_payloads = NULL;
-    heap_caps_free(session->rx_slots);
+    esp32_mquickjs_memory_payload_free(session->rx_slots);
     session->rx_slots = NULL;
-    heap_caps_free(session->tx_payloads);
+    esp32_mquickjs_memory_payload_free(session->tx_payloads);
     session->tx_payloads = NULL;
+    esp32_mquickjs_memory_payload_free(session->tx_staging);
+    session->tx_staging = NULL;
+    esp32_mquickjs_memory_payload_free(session->tx_task_stack);
+    session->tx_task_stack = NULL;
     heap_caps_free(session->tx_packets);
     session->tx_packets = NULL;
     heap_caps_free(session->tx_links);
@@ -1281,11 +1302,22 @@ static bool espnow_finish_close(espnow_session_t *session)
 {
     esp32_mquickjs_event_queue_t *event_queue;
     bool event_queue_retained;
+    TaskHandle_t tx_task;
 
-    if (session == NULL ||
-        atomic_load_explicit(&session->tx_task,
-                             memory_order_acquire) != NULL) {
+    if (session == NULL) {
         return false;
+    }
+    tx_task = atomic_load_explicit(&session->tx_task,
+                                   memory_order_acquire);
+    if (tx_task != NULL &&
+        !atomic_load_explicit(&session->tx_task_exited,
+                              memory_order_acquire)) {
+        return false;
+    }
+    if (tx_task != NULL) {
+        vTaskDelete(tx_task);
+        atomic_store_explicit(&session->tx_task, NULL,
+                              memory_order_release);
     }
     if (session->send_callback_registered) {
         (void)esp_now_unregister_send_cb();
@@ -1333,8 +1365,8 @@ static void espnow_close_worker(void *opaque)
         return;
     }
     espnow_begin_close(session);
-    while (atomic_load_explicit(&session->tx_task,
-                                memory_order_acquire) != NULL ||
+    while (!atomic_load_explicit(&session->tx_task_exited,
+                                 memory_order_acquire) ||
            atomic_load_explicit(&session->callbacks_active,
                                 memory_order_acquire) != 0) {
         vTaskDelay(1);
@@ -1435,10 +1467,12 @@ static bool espnow_allocate_receive_pool(JSContext *ctx,
 {
     uint32_t i;
 
-    session->rx_slots = heap_caps_calloc(
-        capacity, sizeof(*session->rx_slots), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    session->rx_payloads = heap_caps_calloc(
-        capacity, max_payload_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    session->rx_slots = esp32_mquickjs_memory_payload_calloc(
+        "espnow.rx-pool", capacity, sizeof(*session->rx_slots),
+        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL);
+    session->rx_payloads = esp32_mquickjs_memory_payload_calloc(
+        "espnow.rx-pool", capacity, max_payload_bytes,
+        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL);
     if (session->rx_slots == NULL || session->rx_payloads == NULL ||
         !esp32_mquickjs_native_pool_init(&session->rx_free, capacity)) {
         JS_ThrowOutOfMemory(ctx);
@@ -1461,6 +1495,16 @@ static bool espnow_allocate_tx_queue(
     esp32_mquickjs_espnow_tx_overflow_t overflow)
 {
     if (capacity == 0) {
+        session->tx_staging = esp32_mquickjs_memory_payload_alloc(
+            "espnow.tx-staging", max_payload_bytes,
+            ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL);
+        session->tx_task_stack = esp32_mquickjs_memory_payload_alloc(
+            "espnow.tx-task-stack", ESPNOW_TX_TASK_STACK_BYTES,
+            ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL);
+        if (session->tx_staging == NULL || session->tx_task_stack == NULL) {
+            JS_ThrowOutOfMemory(ctx);
+            return false;
+        }
         return true;
     }
     session->tx_links = heap_caps_calloc(
@@ -1469,11 +1513,18 @@ static bool espnow_allocate_tx_queue(
     session->tx_packets = heap_caps_calloc(
         capacity, sizeof(*session->tx_packets),
         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    session->tx_payloads = heap_caps_malloc(
-        (size_t)capacity * max_payload_bytes,
-        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    session->tx_payloads = esp32_mquickjs_memory_payload_alloc(
+        "espnow.tx-queue", (size_t)capacity * max_payload_bytes,
+        ESP32_MQUICKJS_MEMORY_EXTERNAL);
+    session->tx_staging = esp32_mquickjs_memory_payload_alloc(
+        "espnow.tx-staging", max_payload_bytes,
+        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL);
+    session->tx_task_stack = esp32_mquickjs_memory_payload_alloc(
+        "espnow.tx-task-stack", ESPNOW_TX_TASK_STACK_BYTES,
+        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL);
     if (session->tx_links == NULL || session->tx_packets == NULL ||
-        session->tx_payloads == NULL ||
+        session->tx_payloads == NULL || session->tx_staging == NULL ||
+        session->tx_task_stack == NULL ||
         !esp32_mquickjs_espnow_tx_queue_init(
             &session->tx_queue, session->tx_links, capacity)) {
         JS_ThrowOutOfMemory(ctx);
@@ -1857,6 +1908,7 @@ static bool espnow_open_capture(
     atomic_init(&session->pending_tracked_send, NULL);
     atomic_init(&session->pending_sends, 0);
     atomic_init(&session->tx_task_stop, false);
+    atomic_init(&session->tx_task_exited, true);
     atomic_init(&session->tx_task, NULL);
     atomic_init(&session->active_queued_slot,
                 ESP32_MQUICKJS_ESPNOW_TX_SLOT_NONE);
@@ -2025,8 +2077,15 @@ static void espnow_open_initialize(
         TaskHandle_t tx_task = NULL;
 
         state->failed_step = "espnow_tx_worker";
-        if (xTaskCreate(espnow_tx_worker, "espnow_tx", 4096, session,
-                        tskIDLE_PRIORITY + 2, &tx_task) != pdPASS) {
+        atomic_store_explicit(&session->tx_task_exited, false,
+                              memory_order_release);
+        tx_task = xTaskCreateStatic(
+            espnow_tx_worker, "espnow_tx", ESPNOW_TX_TASK_STACK_BYTES,
+            session, tskIDLE_PRIORITY + 2, session->tx_task_stack,
+            &session->tx_task_buffer);
+        if (tx_task == NULL) {
+            atomic_store_explicit(&session->tx_task_exited, true,
+                                  memory_order_release);
             state->err = ESP_ERR_NO_MEM;
         } else {
             atomic_store_explicit(&session->tx_task, tx_task,
@@ -3221,8 +3280,9 @@ static bool espnow_send_capture(
                            session->channel);
         goto fail;
     }
-    state->payload = heap_caps_malloc(
-        source.length > 0 ? source.length : 1U, MALLOC_CAP_8BIT);
+    state->payload = esp32_mquickjs_memory_payload_alloc(
+        "espnow.tx-tracked", source.length > 0 ? source.length : 1U,
+        ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (state->payload == NULL) {
         esp32_mquickjs_release_byte_source(owned);
         owned = NULL;
@@ -3255,7 +3315,7 @@ static bool espnow_send_capture(
 
 fail:
     esp32_mquickjs_release_byte_source(owned);
-    heap_caps_free(state->payload);
+    esp32_mquickjs_memory_payload_free(state->payload);
     heap_caps_free(state);
     return false;
 }
@@ -3594,7 +3654,7 @@ static void espnow_send_destroy(
     if (state->owner_rooted) {
         JS_DeleteGCRef(state->ctx, &state->owner_ref);
     }
-    heap_caps_free(state->payload);
+    esp32_mquickjs_memory_payload_free(state->payload);
     heap_caps_free(state);
 }
 

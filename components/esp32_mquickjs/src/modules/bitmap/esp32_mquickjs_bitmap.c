@@ -295,7 +295,7 @@ static esp32_mquickjs_memory_class_t bitmap_memory_class(uint8_t storage)
 static uint8_t *alloc_export_bytes(size_t length)
 {
     return esp32_mquickjs_memory_payload_alloc(
-        length, ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL);
+        "bitmap.export", length, ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL);
 }
 
 void bitmap_free(esp32_mquickjs_bitmap_t *buffer)
@@ -303,7 +303,7 @@ void bitmap_free(esp32_mquickjs_bitmap_t *buffer)
     if (buffer == NULL) {
         return;
     }
-    heap_caps_free(buffer->data);
+    esp32_mquickjs_memory_payload_free(buffer->data);
     heap_caps_free(buffer);
 }
 
@@ -348,14 +348,14 @@ esp32_mquickjs_bitmap_t *bitmap_allocate(JSContext *ctx,
         return NULL;
     }
     data = esp32_mquickjs_memory_payload_alloc(
-        byte_length, bitmap_memory_class(storage));
+        "bitmap.pixels", byte_length, bitmap_memory_class(storage));
     if (data == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return NULL;
     }
     buffer = heap_caps_calloc(1, sizeof(*buffer), MALLOC_CAP_8BIT);
     if (buffer == NULL) {
-        heap_caps_free(data);
+        esp32_mquickjs_memory_payload_free(data);
         JS_ThrowOutOfMemory(ctx);
         return NULL;
     }
@@ -1713,14 +1713,14 @@ JSValue js_bitmap_create(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
     }
 
     data = esp32_mquickjs_memory_payload_alloc(
-        byte_length, bitmap_memory_class(storage));
+        "bitmap.pixels", byte_length, bitmap_memory_class(storage));
     if (data == NULL) {
         return JS_ThrowOutOfMemory(ctx);
     }
 
     buffer = heap_caps_malloc(sizeof(*buffer), MALLOC_CAP_8BIT);
     if (buffer == NULL) {
-        heap_caps_free(data);
+        esp32_mquickjs_memory_payload_free(data);
         return JS_ThrowOutOfMemory(ctx);
     }
     memset(buffer, 0, sizeof(*buffer));
@@ -1744,7 +1744,7 @@ JSValue js_bitmap_create(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_BITMAP);
     if (JS_IsException(*object)) {
         JS_PopGCRef(ctx, &object_ref);
-        heap_caps_free(buffer->data);
+        esp32_mquickjs_memory_payload_free(buffer->data);
         heap_caps_free(buffer);
         return JS_EXCEPTION;
     }
@@ -1844,7 +1844,7 @@ JSValue js_bitmap_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *ar
         if (!bitmap_require_writable(ctx, buffer, "Bitmap.close()")) {
             return JS_EXCEPTION;
         }
-        heap_caps_free(buffer->data);
+        esp32_mquickjs_memory_payload_free(buffer->data);
         buffer->data = NULL;
         buffer->closed = 1;
     }

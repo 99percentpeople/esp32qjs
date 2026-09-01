@@ -348,18 +348,19 @@ static JSValue net_make_status(JSContext *ctx)
     JSValue result;
 
     snapshot = esp32_mquickjs_memory_payload_calloc(
-        1, sizeof(*snapshot), ESP32_MQUICKJS_MEMORY_EXTERNAL);
+        "net.snapshot", 1, sizeof(*snapshot),
+        ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (snapshot == NULL) {
         return JS_ThrowOutOfMemory(ctx);
     }
     err = net_collect_snapshot(snapshot);
     if (err != ESP_OK) {
-        heap_caps_free(snapshot);
+        esp32_mquickjs_memory_payload_free(snapshot);
         return JS_ThrowInternalError(ctx, "net.status() failed: %s",
                                      esp_err_to_name(err));
     }
     result = net_snapshot_to_js(ctx, snapshot);
-    heap_caps_free(snapshot);
+    esp32_mquickjs_memory_payload_free(snapshot);
     return result;
 }
 

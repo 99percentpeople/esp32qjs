@@ -37,7 +37,8 @@ static char *display_font_copy_name(const char *name)
     }
     length = strlen(name);
     copy = esp32_mquickjs_memory_payload_alloc(
-        length + 1, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+        "bitmap.font.name", length + 1,
+        ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (copy == NULL) {
         return NULL;
     }
@@ -53,7 +54,7 @@ static void display_font_free(esp32_mquickjs_display_font_t *font)
     (void)esp32_mquickjs_memory_block_free(font->glyphs_block);
     font->glyphs_block = NULL;
     font->glyphs = NULL;
-    heap_caps_free(font->name);
+    esp32_mquickjs_memory_payload_free(font->name);
     heap_caps_free(font);
 }
 
@@ -146,6 +147,7 @@ static JSValue display_font_make(JSContext *ctx,
     memset(font, 0, sizeof(*font));
     font->name = display_font_copy_name(name);
     font->glyphs_block = esp32_mquickjs_memory_block_alloc(
+        "bitmap.font.glyphs",
         glyph_length == 0 ? 1U : (size_t)glyph_length,
         ESP32_MQUICKJS_MEMORY_COLD_MOVABLE,
         display_font_glyphs_relocated,
@@ -229,7 +231,8 @@ static uint8_t *display_font_read_file(JSContext *ctx,
     }
 
     bytes = esp32_mquickjs_memory_payload_alloc(
-        (size_t)file_size, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+        "bitmap.font.file", (size_t)file_size,
+        ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (bytes == NULL) {
         fclose(file);
         JS_ThrowOutOfMemory(ctx);
@@ -238,7 +241,7 @@ static uint8_t *display_font_read_file(JSContext *ctx,
     read_len = fread(bytes, 1, (size_t)file_size, file);
     fclose(file);
     if (read_len != (size_t)file_size) {
-        heap_caps_free(bytes);
+        esp32_mquickjs_memory_payload_free(bytes);
         JS_ThrowInternalError(ctx, "bitmap.loadFont(path) failed to read %s", resolved_path);
         return NULL;
     }
@@ -341,7 +344,7 @@ JSValue js_bitmap_load_font(JSContext *ctx, JSValue *this_val, int argc, JSValue
             return JS_EXCEPTION;
         }
         result = display_font_make(ctx, bytes, length, esp32_mquickjs_fs_path_basename(resolved_path));
-        heap_caps_free(bytes);
+        esp32_mquickjs_memory_payload_free(bytes);
         return result;
     }
 #else

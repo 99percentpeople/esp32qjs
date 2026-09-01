@@ -277,7 +277,7 @@ void esp32_mquickjs_http_free_request(esp32_mquickjs_http_request_t *request)
 
     heap_caps_free(request->url);
     heap_caps_free(request->method);
-    heap_caps_free(request->body);
+    esp32_mquickjs_memory_payload_free(request->body);
     esp32_mquickjs_http_free_headers(request->headers, request->header_count);
     memset(request, 0, sizeof(*request));
 }
@@ -312,7 +312,8 @@ int esp32_mquickjs_http_clone_request(const esp32_mquickjs_http_request_t *sourc
     }
     if (source->body_len > 0) {
         target->body = esp32_mquickjs_memory_payload_alloc(
-            source->body_len, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+            "http.body", source->body_len,
+            ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (target->body == NULL) {
             goto fail;
         }
@@ -349,7 +350,7 @@ void esp32_mquickjs_http_free_response(esp32_mquickjs_http_response_t *response)
 
     heap_caps_free(response->url);
     heap_caps_free(response->status_text);
-    heap_caps_free(response->body);
+    esp32_mquickjs_memory_payload_free(response->body);
     esp32_mquickjs_http_free_headers(response->headers, response->header_count);
     heap_caps_free(response);
 }
@@ -486,7 +487,7 @@ static int http_materialize_stream_body(JSContext *ctx,
         &body, &body_len);
     if (esp32_mquickjs_stream_close_value(ctx, stream_value) != ESP_OK &&
         result == 0) {
-        heap_caps_free(body);
+        esp32_mquickjs_memory_payload_free(body);
         JS_ThrowInternalError(ctx, "%s failed while closing the body stream",
                               api_name);
         return -1;
@@ -528,7 +529,7 @@ static int http_materialize_body(JSContext *ctx,
         }
         if (body_len > 0) {
             request->body = esp32_mquickjs_memory_payload_alloc(
-                body_len, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+                "http.body", body_len, ESP32_MQUICKJS_MEMORY_EXTERNAL);
             if (request->body == NULL) {
                 JS_ThrowOutOfMemory(ctx);
                 return -1;
@@ -563,7 +564,8 @@ static int http_materialize_body(JSContext *ctx,
         }
         if (source.length > 0) {
             request->body = esp32_mquickjs_memory_payload_alloc(
-                source.length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+                "http.body", source.length,
+                ESP32_MQUICKJS_MEMORY_EXTERNAL);
             if (request->body == NULL) {
                 esp32_mquickjs_release_byte_source(converted);
                 JS_ThrowOutOfMemory(ctx);
@@ -684,7 +686,7 @@ static esp_err_t http_capture_append_body(esp32_mquickjs_http_capture_t *capture
         }
 
         body = esp32_mquickjs_memory_payload_realloc(
-            capture->response->body,
+            "http.body", capture->response->body,
             new_cap,
             ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (body == NULL) {

@@ -188,6 +188,7 @@ static bool reserve_commands(JSContext *ctx, display_command_buffer_t *command_b
     }
     if (command_buffer->commands_block == NULL) {
         command_buffer->commands_block = esp32_mquickjs_memory_block_alloc(
+            "bitmap.command-buffer.commands",
             next_capacity * sizeof(*next),
             ESP32_MQUICKJS_MEMORY_HOT_MOVABLE,
             display_commands_relocated,
@@ -233,6 +234,7 @@ static bool reserve_text(JSContext *ctx, display_command_buffer_t *command_buffe
     }
     if (command_buffer->text_block == NULL) {
         command_buffer->text_block = esp32_mquickjs_memory_block_alloc(
+            "bitmap.command-buffer.text",
             next_capacity,
             ESP32_MQUICKJS_MEMORY_HOT_MOVABLE,
             display_text_relocated,

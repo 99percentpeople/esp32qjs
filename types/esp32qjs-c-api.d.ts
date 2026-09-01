@@ -1298,6 +1298,23 @@ namespace ESP32QJS {
 
   type SysMemoryPressure = "normal" | "guarded" | "critical";
 
+  type SysMemoryAllocationClass =
+    | "pinned-internal"
+    | "dma-internal"
+    | "dma-external"
+    | "external"
+    | "hot-movable"
+    | "cold-movable"
+    | "cache-evictable";
+
+  interface SysMemoryAllocationStatus {
+    owner: string;
+    class: SysMemoryAllocationClass;
+    region: "internal" | "psram";
+    bytes: number;
+    blocks: number;
+  }
+
   interface SysMemoryManagerStatus {
     pressure: SysMemoryPressure;
     internalReserveBytes: number;
@@ -1319,6 +1336,7 @@ namespace ESP32QJS {
     migrationBytes: number;
     evictionCount: number;
     allocationFailures: number;
+    allocations: SysMemoryAllocationStatus[];
   }
 
   interface SysMemoryStatus {

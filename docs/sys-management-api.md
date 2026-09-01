@@ -264,13 +264,30 @@ declare namespace ESP32QJS {
 
   type SysMemoryPressure = "normal" | "guarded" | "critical";
 
+  type SysMemoryAllocationClass =
+    | "pinned-internal"
+    | "dma-internal"
+    | "dma-external"
+    | "external"
+    | "hot-movable"
+    | "cold-movable"
+    | "cache-evictable";
+
+  interface SysMemoryAllocationStatus {
+    owner: string;
+    class: SysMemoryAllocationClass;
+    region: "internal" | "psram";
+    bytes: number;
+    blocks: number;
+  }
+
   interface SysMemoryManagerStatus {
     pressure: SysMemoryPressure;
     internalReserveBytes: number;
     dmaLargestReserveBytes: number;
     managedInternalBytes: number;
     managedPsramBytes: number;
-    /** Managed pinned blocks plus driver DMA payloads and staging pools. */
+    /** Internal fixed/stable payloads plus driver DMA and staging pools. */
     pinnedBytes: number;
     driverPinnedBytes: number;
     stagingPinnedBytes: number;
@@ -281,6 +298,7 @@ declare namespace ESP32QJS {
     migrationBytes: number;
     evictionCount: number;
     allocationFailures: number;
+    allocations: SysMemoryAllocationStatus[];
   }
 
   interface SysMemoryStatus {
@@ -664,19 +682,21 @@ below half its startup-derived value. The policy uses internal/DMA metrics and
 never treats aggregate `freeHeap()` as proof that a driver allocation can
 succeed.
 
-Framework payloads declare their memory class. File, network, serial, font,
-bitmap, and media payloads prefer PSRAM when it is available. ISR state, task
-state, I2S DMA descriptors, and driver-owned objects remain pinned in internal
-memory. Movable buffers use stable native handles and are relocated only at a
-runtime safe point while no borrow is active. Generation teardown releases any
-stable blocks left after JavaScript finalizers, so a runtime restart cannot
-retain ownerless buffers from the previous generation. The managed-byte and
-`movableIdleBytes` counters cover stable managed blocks; allocation-failure
-counts cover classified payload, block, and DMA reservation requests. Driver
-integrations may register an exact, public payload size after ESP-IDF
-initialization. I2S does this for its persistent PCM DMA buffers; opaque
-ESP-IDF metadata and unregistered third-party allocations remain outside the
-counters.
+Framework payloads declare a stable owner and memory class. File, network,
+serial, font, bitmap, and media payloads prefer PSRAM when it is available.
+Callback pools, worker stacks, I2S DMA descriptors, and driver-owned objects
+remain pinned in internal memory. Movable buffers use stable native handles and
+are relocated only at a runtime safe point while no borrow is active.
+Generation teardown releases any stable blocks left after JavaScript
+finalizers, so a runtime restart cannot retain ownerless buffers from the
+previous generation. Fixed payload owners release their records with the same
+native lifetime that releases the payload. The managed-byte and
+`movableIdleBytes` counters cover fixed payloads and stable managed blocks;
+allocation-failure counts cover classified payload, block, and DMA reservation
+requests. Driver integrations may register an exact, public payload size after
+ESP-IDF initialization. I2S does this for its persistent PCM DMA buffers;
+opaque ESP-IDF metadata and unregistered third-party allocations remain outside
+the counters.
 
 The internal `DMA_EXTERNAL` class means "prefer external DMA". If the target SoC
 supports DMA access to initialized PSRAM, allocation and reallocation try PSRAM
@@ -691,16 +711,19 @@ manager never alternates repeatedly between heaps, and records one
 allocation failure only after both permitted attempts fail. Code that always
 requires internal DMA uses `DMA_INTERNAL` explicitly.
 
-`pinnedBytes` counts every internal stable managed block whose class is
-non-movable, including `DMA_EXTERNAL` blocks that fell back to internal RAM,
-plus registered driver DMA payloads and committed staging pools.
+`pinnedBytes` counts every internal fixed payload or stable managed block whose
+class is non-movable, including `DMA_EXTERNAL` allocations that fell back to
+internal RAM, plus registered driver DMA payloads and committed staging pools.
 `driverPinnedBytes` isolates persistent driver payloads;
 `stagingPinnedBytes` and `dmaStagingPools` isolate reusable internal DMA
 staging workspaces. `pendingDmaReservationBytes` reports allocations admitted
-by policy but not yet committed by the driver. Movable-class blocks are excluded even while
-temporarily borrowed; `movableIdleBytes` separately reports movable blocks
-that are currently idle. Raw payload helpers and opaque driver metadata remain
-outside these values.
+by policy but not yet committed by the driver. Movable-class blocks are
+excluded even while temporarily borrowed; `movableIdleBytes` separately
+reports movable blocks that are currently idle. `allocations` aggregates every known fixed payload,
+stable block, driver payload, and staging pool by `owner`, `class`, and actual
+`region`; it is sorted by those fields and never exposes addresses. Opaque
+third-party driver metadata remains outside these values rather than being
+estimated from heap deltas.
 
 On targets without PSRAM the same classification and reserve checks remain in
 force, but migration is disabled. Pressure maintenance runs only after active

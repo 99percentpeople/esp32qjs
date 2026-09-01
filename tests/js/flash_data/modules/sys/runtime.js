@@ -9,6 +9,7 @@ test("sys/runtime", function () {
   var internalHeap = status.memory.internal;
   var internalHeapAgain = status.memory.internal;
   var memoryManager = status.memory.manager;
+  var memoryAllocationIndex;
   var runtimeStatus = status.runtime;
   var resources = runtimeStatus.resources;
   var watchdogStatus = runtimeStatus.watchdog;
@@ -217,6 +218,21 @@ test("sys/runtime", function () {
       memoryManager.evictionCount >= 0 &&
       memoryManager.allocationFailures >= 0,
     "memory manager operation counters should be non-negative");
+  test.ok(memoryManager.allocations instanceof Array,
+    "memory manager owner allocations should be an array");
+  for (memoryAllocationIndex = 0;
+       memoryAllocationIndex < memoryManager.allocations.length;
+       memoryAllocationIndex++) {
+    var memoryAllocation = memoryManager.allocations[memoryAllocationIndex];
+    test.ok(typeof memoryAllocation.owner === "string" &&
+        memoryAllocation.owner.length > 0,
+      "memory allocation owners should be non-empty strings");
+    test.ok(typeof memoryAllocation.class === "string" &&
+        (memoryAllocation.region === "internal" ||
+         memoryAllocation.region === "psram") &&
+        memoryAllocation.bytes >= 0 && memoryAllocation.blocks > 0,
+      "memory allocation entries should expose class, region, bytes, and blocks");
+  }
   test.ok(typeof heap === "number" && heap >= 0, "sys.freeHeap() should be numeric");
   test.equal(rtos.name, "FreeRTOS", "RTOS name should be stable");
   test.equal(rtos.schedulerState, "running", "scheduler should be running in a JS test");

@@ -255,6 +255,7 @@ set(ESP32_MQUICKJS_SRCS
     "src/core/esp32_mquickjs_options.c"
     "src/core/esp32_mquickjs_memory.c"
     "src/core/esp32_mquickjs_memory_dma_accounting.c"
+    "src/core/esp32_mquickjs_memory_owner_accounting.c"
     "src/core/esp32_mquickjs_dma_transfer.c"
     "src/core/esp32_mquickjs_peripheral_lease.c"
     "src/core/esp32_mquickjs_native_pool.c"

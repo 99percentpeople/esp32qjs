@@ -396,13 +396,14 @@ static bool i2s_to_u32(JSContext *ctx, JSValue value, uint32_t *out)
 static void *i2s_operation_buffer_malloc(size_t size)
 {
     return esp32_mquickjs_memory_payload_alloc(
-        size, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+        "i2s.operation", size, ESP32_MQUICKJS_MEMORY_EXTERNAL);
 }
 
 static void *i2s_operation_buffer_realloc(void *buffer, size_t size)
 {
     return esp32_mquickjs_memory_payload_realloc(
-        buffer, size, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+        "i2s.operation", buffer, size,
+        ESP32_MQUICKJS_MEMORY_EXTERNAL);
 }
 
 static JSValue i2s_throw_no_memory(JSContext *ctx, const char *operation)
@@ -1038,7 +1039,7 @@ static void i2s_read_destroy(esp32_mquickjs_future_driver_state_t *state)
     if (state->owner_retained) {
         JS_DeleteGCRef(state->ctx, &state->owner_ref);
     }
-    heap_caps_free(state->data);
+    esp32_mquickjs_memory_payload_free(state->data);
     if (slot != NULL && state->reservation_held) {
         if (slot->future_reservations > 0) {
             slot->future_reservations--;
@@ -1137,7 +1138,7 @@ static bool i2s_load_write_data(JSContext *ctx, JSValue value,
             if (!esp32_mquickjs_byte_span_source_next(ctx, &source, &span)) {
                 if (JS_HasException(ctx)) {
                     esp32_mquickjs_byte_span_source_close(ctx, &source);
-                    heap_caps_free(data);
+                    esp32_mquickjs_memory_payload_free(data);
                     return false;
                 }
                 break;
@@ -1145,7 +1146,7 @@ static bool i2s_load_write_data(JSContext *ctx, JSValue value,
             if (!i2s_append_write_bytes(ctx, &data, &length, &capacity,
                                         span.data, span.length)) {
                 esp32_mquickjs_byte_span_source_close(ctx, &source);
-                heap_caps_free(data);
+                esp32_mquickjs_memory_payload_free(data);
                 return false;
             }
         }
@@ -1163,7 +1164,7 @@ static bool i2s_load_write_data(JSContext *ctx, JSValue value,
         if (!i2s_append_write_bytes(ctx, &data, &length, &capacity,
                                     source.data, source.length)) {
             esp32_mquickjs_release_byte_source(owned);
-            heap_caps_free(data);
+            esp32_mquickjs_memory_payload_free(data);
             return false;
         }
         esp32_mquickjs_release_byte_source(owned);
@@ -1222,7 +1223,7 @@ static bool i2s_write_prepare(
     }
     bytes_per_frame = ((size_t)slot->slot_bits / 8U) * slot->channels;
     if (state->requested_bytes % bytes_per_frame != 0) {
-        heap_caps_free(state->data);
+        esp32_mquickjs_memory_payload_free(state->data);
         heap_caps_free(state);
         JS_ThrowRangeError(
             ctx, "I2SChannel.write() byte length must align to a PCM frame");
@@ -1416,7 +1417,7 @@ static void i2s_write_destroy(
     if (state->owner_retained) {
         JS_DeleteGCRef(state->ctx, &state->owner_ref);
     }
-    heap_caps_free(state->data);
+    esp32_mquickjs_memory_payload_free(state->data);
     if (slot != NULL && state->reservation_held) {
         if (slot->future_reservations > 0) {
             slot->future_reservations--;
@@ -2171,7 +2172,7 @@ parsed:
     slot->dma_buffer_bytes = dma_buffer_bytes;
     slot->timeout_ms = timeout_ms;
     if (!esp32_mquickjs_memory_reserve_internal_dma(
-            &slot->dma_reservation, dma_request,
+            &slot->dma_reservation, "i2s.driver", dma_request,
             dma_largest_block_bytes)) {
         i2s_cleanup_slot(slot);
         return i2s_throw_no_memory(ctx, "i2s.open()");

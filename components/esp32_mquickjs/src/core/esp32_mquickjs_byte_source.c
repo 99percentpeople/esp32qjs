@@ -1,4 +1,5 @@
 #include "utils/esp32_mquickjs_byte_source.h"
+#include "esp32_mquickjs_memory.h"
 
 #include <limits.h>
 #include <math.h>
@@ -552,7 +553,7 @@ JSValue esp32_mquickjs_new_owned_byte_view(JSContext *ctx,
         return JS_ThrowInternalError(ctx, "ByteView data pointer is null");
     }
     return byte_view_make(ctx, data, length,
-                          (esp32_mquickjs_byte_view_release_fn)heap_caps_free,
+                          esp32_mquickjs_memory_payload_free,
                           data);
 }
 

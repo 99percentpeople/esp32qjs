@@ -257,7 +257,7 @@ static void http_server_cleanup_request(esp32_mquickjs_http_server_request_t *re
     heap_caps_free(request->method);
     heap_caps_free(request->path);
     heap_caps_free(request->query_string);
-    heap_caps_free(request->body);
+    esp32_mquickjs_memory_payload_free(request->body);
     http_server_free_headers(request->headers, request->header_count);
     http_server_lock();
     memset(request, 0, sizeof(*request));
@@ -698,7 +698,8 @@ static uint8_t *http_server_recv_body(httpd_req_t *req,
     }
 
     body = esp32_mquickjs_memory_payload_alloc(
-        req->content_len, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+        "http-server.body", req->content_len,
+        ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (body == NULL) {
         *out_err = ESP_ERR_NO_MEM;
         return NULL;
@@ -709,7 +710,7 @@ static uint8_t *http_server_recv_body(httpd_req_t *req,
         int received = httpd_req_recv(req, (char *)(body + offset), remaining);
 
         if (received <= 0) {
-            heap_caps_free(body);
+            esp32_mquickjs_memory_payload_free(body);
             *out_err = received == HTTPD_SOCK_ERR_TIMEOUT ? ESP_ERR_TIMEOUT : ESP_FAIL;
             return NULL;
         }
@@ -1467,6 +1468,7 @@ static esp_err_t http_server_send_known_length_response(
     }
 
     chunk_buffer = esp32_mquickjs_memory_payload_alloc(
+        "http-server.stream",
         ESP32_MQUICKJS_HTTP_SERVER_STREAM_CHUNK_SIZE,
         ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (chunk_buffer == NULL) {
@@ -1480,14 +1482,14 @@ static esp_err_t http_server_send_known_length_response(
             ESP32_MQUICKJS_HTTP_SERVER_STREAM_CHUNK_SIZE, &read_len);
         if (err != ESP_OK || read_len == 0 ||
             read_len > response->known_length - sent_body) {
-            heap_caps_free(chunk_buffer);
+            esp32_mquickjs_memory_payload_free(chunk_buffer);
             (void)http_server_close_response_body(response);
             return err != ESP_OK ? err : ESP_ERR_INVALID_SIZE;
         }
         err = http_server_raw_send_all(req, (const char *)chunk_buffer,
                                        read_len);
         if (err != ESP_OK) {
-            heap_caps_free(chunk_buffer);
+            esp32_mquickjs_memory_payload_free(chunk_buffer);
             (void)http_server_close_response_body(response);
             return err;
         }
@@ -1500,12 +1502,12 @@ static esp_err_t http_server_send_known_length_response(
         err = esp32_mquickjs_fs_stream_read(
             &response->body_stream_ref, &trailing_byte, 1, &trailing_len);
         if (err != ESP_OK || trailing_len != 0) {
-            heap_caps_free(chunk_buffer);
+            esp32_mquickjs_memory_payload_free(chunk_buffer);
             (void)http_server_close_response_body(response);
             return err != ESP_OK ? err : ESP_ERR_INVALID_SIZE;
         }
     }
-    heap_caps_free(chunk_buffer);
+    esp32_mquickjs_memory_payload_free(chunk_buffer);
     return http_server_close_response_body(response);
 }
 
@@ -1556,6 +1558,7 @@ static esp_err_t http_server_send_response(httpd_req_t *req,
             return httpd_resp_send_chunk(req, NULL, 0);
         }
         chunk_buffer = esp32_mquickjs_memory_payload_alloc(
+            "http-server.stream",
             ESP32_MQUICKJS_HTTP_SERVER_STREAM_CHUNK_SIZE,
             ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (chunk_buffer == NULL) {
@@ -1567,20 +1570,20 @@ static esp_err_t http_server_send_response(httpd_req_t *req,
                                                 ESP32_MQUICKJS_HTTP_SERVER_STREAM_CHUNK_SIZE,
                                                 &read_len);
             if (err != ESP_OK) {
-                heap_caps_free(chunk_buffer);
+                esp32_mquickjs_memory_payload_free(chunk_buffer);
                 (void)http_server_close_response_body(response);
                 return err;
             }
             if (read_len > 0) {
                 err = httpd_resp_send_chunk(req, (const char *)chunk_buffer, read_len);
                 if (err != ESP_OK) {
-                    heap_caps_free(chunk_buffer);
+                    esp32_mquickjs_memory_payload_free(chunk_buffer);
                     (void)http_server_close_response_body(response);
                     return err;
                 }
             }
         } while (read_len > 0);
-        heap_caps_free(chunk_buffer);
+        esp32_mquickjs_memory_payload_free(chunk_buffer);
         err = http_server_close_response_body(response);
         if (err != ESP_OK) {
             return err;

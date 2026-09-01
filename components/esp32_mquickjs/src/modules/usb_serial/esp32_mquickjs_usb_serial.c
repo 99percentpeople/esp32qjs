@@ -189,7 +189,7 @@ static void usb_serial_notify_from_isr(usj_select_notif_t notification,
 
 static void usb_serial_release_line_buffer(void)
 {
-    heap_caps_free(s_usb_serial_state.line_buffer);
+    esp32_mquickjs_memory_payload_free(s_usb_serial_state.line_buffer);
     s_usb_serial_state.line_buffer = NULL;
     s_usb_serial_state.release_buffer = false;
     esp32_mquickjs_line_framer_init(&s_usb_serial_state.framer, NULL, 0);
@@ -224,7 +224,7 @@ static void usb_serial_drop_event(void *data, void *opaque)
 
     (void)opaque;
     if (event != NULL) {
-        heap_caps_free(event->data);
+        esp32_mquickjs_memory_payload_free(event->data);
         event->data = NULL;
     }
 }
@@ -245,7 +245,7 @@ static JSValue usb_serial_event_to_js(JSContext *ctx, const void *data, void *op
         result = JS_NewStringLen(ctx,
                                  event->data != NULL ? (const char *)event->data : "",
                                  event->length);
-        heap_caps_free(event->data);
+        esp32_mquickjs_memory_payload_free(event->data);
         event->data = NULL;
     }
     return result;
@@ -274,7 +274,8 @@ static void usb_serial_emit_frame(void *opaque,
 
     if (frame_len > 0) {
         event.data = esp32_mquickjs_memory_payload_alloc(
-            frame_len, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+            "usb-serial.rx-event", frame_len,
+            ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (event.data == NULL) {
             s_usb_serial_state.overflow_frames++;
             return;
@@ -283,7 +284,7 @@ static void usb_serial_emit_frame(void *opaque,
     }
     s_usb_serial_state.received_frames++;
     if (!esp32_mquickjs_event_queue_send(s_usb_serial_state.event_queue, &event)) {
-        heap_caps_free(event.data);
+        esp32_mquickjs_memory_payload_free(event.data);
     } else {
         emit->handled = true;
     }
@@ -652,7 +653,8 @@ JSValue js_usb_serial_open(JSContext *ctx,
     if (!binary) {
         s_usb_serial_state.line_buffer =
             esp32_mquickjs_memory_payload_alloc(
-                max_frame_bytes, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+                "usb-serial.line-buffer", max_frame_bytes,
+                ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (s_usb_serial_state.line_buffer == NULL) {
             return JS_ThrowOutOfMemory(ctx);
         }
@@ -853,7 +855,8 @@ JSValue js_usb_serial_send(JSContext *ctx,
 
     {
         uint8_t *frame = esp32_mquickjs_memory_payload_alloc(
-            text_len + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+            "usb-serial.tx-frame", text_len + 1U,
+            ESP32_MQUICKJS_MEMORY_EXTERNAL);
 
         if (frame == NULL) {
             return JS_ThrowOutOfMemory(ctx);
@@ -865,7 +868,7 @@ JSValue js_usb_serial_send(JSContext *ctx,
         write_result = usb_serial_write_binary(ctx, frame, text_len + 1U);
         funlockfile(stdout);
         s_usb_serial_state.sending = false;
-        heap_caps_free(frame);
+        esp32_mquickjs_memory_payload_free(frame);
     }
     if (write_result != USB_SERIAL_WRITE_OK) {
         return usb_serial_write_error(ctx, write_result);
@@ -988,7 +991,7 @@ static void usb_serial_future_release(
         JS_DeleteGCRef(state->ctx, &state->value_ref);
         state->value_retained = false;
     }
-    heap_caps_free(state->owned);
+    esp32_mquickjs_memory_payload_free(state->owned);
     heap_caps_free(state);
 }
 
@@ -1098,7 +1101,8 @@ static bool usb_serial_future_prepare(
             return false;
         }
         state->owned = esp32_mquickjs_memory_payload_alloc(
-            text_length + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+            "usb-serial.write", text_length + 1U,
+            ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (state->owned == NULL) {
             usb_serial_future_release(state);
             JS_ThrowOutOfMemory(ctx);

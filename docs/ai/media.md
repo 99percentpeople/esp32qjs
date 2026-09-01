@@ -55,6 +55,11 @@ memory manager even though ESP-IDF performs the physical allocations. Compare
 `.pendingDmaReservationBytes`, plus `sys.status.memory.internal`, `.dma`, and
 `.psram`
 `largestFreeBlockBytes` / `minimumFreeBytes` when diagnosing fragmentation.
+The manager's `allocations` list attributes live PCM operation buffers to I2S,
+camera frame copies to camera, and bitmap/JPEG pixels and decode buffers to
+their native owners. Sensor-driver framebuffers and opaque DMA descriptors are
+reported only when the driver exposes an exact size; the framework does not
+estimate them from heap deltas.
 
 PDM always yields signed 16-bit little-endian mono PCM:
 

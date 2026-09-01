@@ -780,7 +780,8 @@ static bool parse_point_list(JSContext *ctx,
             goto fail;
         }
         points = esp32_mquickjs_memory_payload_alloc(
-            (size_t)count * sizeof(*points), ESP32_MQUICKJS_MEMORY_EXTERNAL);
+            "bitmap.draw.points", (size_t)count * sizeof(*points),
+            ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (points == NULL) {
             JS_ThrowOutOfMemory(ctx);
             goto fail;
@@ -855,7 +856,7 @@ fail_exception:
     }
 fail:
     if (*out_owned && points != NULL) {
-        heap_caps_free(points);
+        esp32_mquickjs_memory_payload_free(points);
     }
     *out_points = NULL;
     *out_count = 0;
@@ -894,6 +895,7 @@ static bool fill_polygon_raw(esp32_mquickjs_bitmap_t *buffer,
             return false;
         }
         intersections = esp32_mquickjs_memory_payload_alloc(
+            "bitmap.draw.intersections",
             (size_t)count * sizeof(*intersections),
             ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (intersections == NULL) {
@@ -914,7 +916,7 @@ static bool fill_polygon_raw(esp32_mquickjs_bitmap_t *buffer,
     }
     if (max_y < 0 || min_y >= buffer->height) {
         if (owns_intersections) {
-            heap_caps_free(intersections);
+            esp32_mquickjs_memory_payload_free(intersections);
         }
         return true;
     }
@@ -974,7 +976,7 @@ static bool fill_polygon_raw(esp32_mquickjs_bitmap_t *buffer,
         mark_dirty(buffer, dirty_x0, dirty_y0, dirty_x1 - dirty_x0 + 1, dirty_y1 - dirty_y0 + 1);
     }
     if (owns_intersections) {
-        heap_caps_free(intersections);
+        esp32_mquickjs_memory_payload_free(intersections);
     }
     return true;
 }
@@ -1314,13 +1316,13 @@ static JSValue draw_point_list(JSContext *ctx,
     color = normalize_color(ctx, buffer->format, argc >= 2 ? argv[1] : JS_UNDEFINED, buffer->foreground, &ok);
     if (!ok) {
         if (owns_points) {
-            heap_caps_free(points);
+            esp32_mquickjs_memory_payload_free(points);
         }
         return JS_ThrowTypeError(ctx, "%s expects a valid color", api_name);
     }
     draw_polyline_raw(buffer, points, count, closed, color);
     if (owns_points) {
-        heap_caps_free(points);
+        esp32_mquickjs_memory_payload_free(points);
     }
     return *this_val;
 }
@@ -1364,13 +1366,13 @@ JSValue js_bitmap_fill_polygon(JSContext *ctx, JSValue *this_val, int argc, JSVa
     color = normalize_color(ctx, buffer->format, argc >= 2 ? argv[1] : JS_UNDEFINED, buffer->foreground, &ok);
     if (!ok) {
         if (owns_points) {
-            heap_caps_free(points);
+            esp32_mquickjs_memory_payload_free(points);
         }
         return JS_ThrowTypeError(ctx, "Bitmap.fillPolygon(points, color) expects a valid color");
     }
     filled = fill_polygon_raw(buffer, points, count, color, stack_intersections, BITMAP_STACK_POINTS);
     if (owns_points) {
-        heap_caps_free(points);
+        esp32_mquickjs_memory_payload_free(points);
     }
     if (!filled) {
         return JS_ThrowOutOfMemory(ctx);

@@ -1762,6 +1762,9 @@ if (ref) {
   `pinnedBytes` includes managed pinned blocks, registered driver DMA payloads,
   and reusable staging; `stagingPinnedBytes` and `dmaStagingPools` isolate the
   staging contribution.
+  `allocations` is a stable, sorted list aggregated by owner, memory class,
+  and actual `internal`/`psram` region. Each entry reports `bytes` and
+  `blocks`; individual addresses are never exposed.
   Driver-owned DMA descriptors and other opaque ESP-IDF allocations are not
   included in the managed byte counters.
 - `sys.randomHex(byteLength)`
@@ -2084,7 +2087,10 @@ Mesh behavior, provisioning, or a product message schema.
   and maximum payload. Set `maxPayloadBytes: 250` only for explicit v1 peer
   compatibility. The fixed internal receive pool reserves
   `receiveCapacity * maxPayloadBytes` payload bytes, so applications should
-  choose the queue capacity with that allocation in mind.
+  choose the queue capacity with that allocation in mind. The transmit worker
+  uses one reserve-checked internal staging packet; queued transmit payloads
+  are PSRAM-backed when PSRAM is available and use a reserve-checked internal
+  fallback otherwise.
   The broadcast rate is applied to the native broadcast peer after open and
   restored after explicit timeout recovery. It changes PHY transmission only;
   broadcast remains fire-and-forget without application ACK or retry semantics.
@@ -2105,7 +2111,7 @@ Mesh behavior, provisioning, or a product message schema.
   `session.enqueueBroadcastBatch(packets)` are synchronous fire-and-forget
   admission calls available only when `txQueue` was configured. A packet is
   `{ data: ByteSource | ByteSpanSource }` or `{ parts: [...] }`; bytes are
-  copied into fixed internal slots before the call returns, so sources may be
+  copied into fixed native slots before the call returns, so sources may be
   closed or reused immediately. Batch admission is all-or-none, packets from
   one batch remain contiguous, and `drop-oldest-batch` evicts only whole
   batches that have not started. These calls add no acknowledgement, retry, or

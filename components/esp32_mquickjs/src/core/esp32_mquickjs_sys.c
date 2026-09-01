@@ -1063,14 +1063,60 @@ JSValue js_sys_memory_manager(JSContext *ctx,
 {
     esp32_mquickjs_memory_status_t status;
     JSGCRef object_ref;
+    JSGCRef allocations_ref;
     JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    JSValue *allocations = JS_PushGCRef(ctx, &allocations_ref);
+    size_t index;
 
     (void)this_val;
     (void)argc;
     (void)argv;
     esp32_mquickjs_memory_get_status(&status);
     *object = JS_NewObject(ctx);
-    if (JS_IsException(*object) ||
+    *allocations = JS_NewArray(ctx, 0);
+    if (JS_IsException(*object) || JS_IsException(*allocations)) {
+        goto fail;
+    }
+    for (index = 0; index < status.allocation_count; ++index) {
+        const esp32_mquickjs_memory_owner_entry_t *allocation =
+            &status.allocations[index];
+        JSGCRef allocation_ref;
+        JSValue *allocation_object = JS_PushGCRef(ctx, &allocation_ref);
+
+        *allocation_object = JS_NewObject(ctx);
+        if (JS_IsException(*allocation_object) ||
+            !esp32_mquickjs_set_property_ref(
+                ctx, allocation_object, "owner",
+                JS_NewString(ctx, allocation->owner)) ||
+            !esp32_mquickjs_set_property_ref(
+                ctx, allocation_object, "class",
+                JS_NewString(
+                    ctx, esp32_mquickjs_memory_class_name(
+                             (esp32_mquickjs_memory_class_t)
+                                 allocation->memory_class))) ||
+            !esp32_mquickjs_set_property_ref(
+                ctx, allocation_object, "region",
+                JS_NewString(
+                    ctx, esp32_mquickjs_memory_region_name(
+                             allocation->region))) ||
+            !esp32_mquickjs_set_property_ref(
+                ctx, allocation_object, "bytes",
+                JS_NewUint32(ctx, (uint32_t)allocation->bytes)) ||
+            !esp32_mquickjs_set_property_ref(
+                ctx, allocation_object, "blocks",
+                JS_NewUint32(ctx, allocation->blocks))) {
+            JS_PopGCRef(ctx, &allocation_ref);
+            goto fail;
+        }
+        if (JS_IsException(JS_SetPropertyUint32(
+                ctx, *allocations, (uint32_t)index,
+                *allocation_object))) {
+            JS_PopGCRef(ctx, &allocation_ref);
+            goto fail;
+        }
+        JS_PopGCRef(ctx, &allocation_ref);
+    }
+    if (
         !esp32_mquickjs_set_property_ref(
             ctx, object, "pressure",
             JS_NewString(ctx,
@@ -1117,11 +1163,18 @@ JSValue js_sys_memory_manager(JSContext *ctx,
             JS_NewUint32(ctx, status.eviction_count)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, object, "allocationFailures",
-            JS_NewUint32(ctx, status.allocation_failures))) {
-        JS_PopGCRef(ctx, &object_ref);
-        return JS_EXCEPTION;
+            JS_NewUint32(ctx, status.allocation_failures)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, object, "allocations", *allocations)) {
+        goto fail;
     }
+    JS_PopGCRef(ctx, &allocations_ref);
     return JS_PopGCRef(ctx, &object_ref);
+
+fail:
+    JS_PopGCRef(ctx, &allocations_ref);
+    JS_PopGCRef(ctx, &object_ref);
+    return JS_EXCEPTION;
 }
 
 JSValue js_sys_rtos_get(JSContext *ctx,

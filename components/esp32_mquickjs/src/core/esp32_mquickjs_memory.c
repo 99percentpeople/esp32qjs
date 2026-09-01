@@ -22,6 +22,7 @@ struct esp32_mquickjs_memory_block {
     struct esp32_mquickjs_memory_block *next;
     void *data;
     size_t size;
+    const char *owner;
     esp32_mquickjs_memory_class_t memory_class;
     esp32_mquickjs_memory_relocated_fn relocated;
     void *opaque;
@@ -31,14 +32,26 @@ struct esp32_mquickjs_memory_block {
     bool transitioning;
 };
 
+typedef struct esp32_mquickjs_memory_payload {
+    struct esp32_mquickjs_memory_payload *next;
+    void *data;
+    size_t size;
+    const char *owner;
+    esp32_mquickjs_memory_class_t memory_class;
+    bool external;
+    bool transitioning;
+} esp32_mquickjs_memory_payload_t;
+
 typedef struct {
     portMUX_TYPE lock;
     esp32_mquickjs_memory_block_t *blocks;
+    esp32_mquickjs_memory_payload_t *payloads;
     size_t internal_reserve_bytes;
     size_t dma_largest_reserve_bytes;
     size_t managed_internal_bytes;
     size_t managed_psram_bytes;
     size_t managed_pinned_bytes;
+    esp32_mquickjs_memory_owner_accounting_t owner_accounting;
     esp32_mquickjs_memory_dma_accounting_t dma_accounting;
     uint64_t use_sequence;
     uint32_t migration_count;
@@ -88,6 +101,26 @@ static bool memory_has_external_dma(void)
 static bool memory_is_external(const void *data)
 {
     return data != NULL && esp_ptr_external_ram(data);
+}
+
+static uint8_t memory_region_for_external(bool external)
+{
+    return external ? ESP32_MQUICKJS_MEMORY_REGION_PSRAM
+                    : ESP32_MQUICKJS_MEMORY_REGION_INTERNAL;
+}
+
+static esp32_mquickjs_memory_class_t memory_owner_class(
+    esp32_mquickjs_memory_class_t memory_class,
+    bool external)
+{
+    if (memory_class == ESP32_MQUICKJS_MEMORY_DEFAULT) {
+        return external ? ESP32_MQUICKJS_MEMORY_EXTERNAL
+                        : ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL;
+    }
+    if (memory_class == ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL && !external) {
+        return ESP32_MQUICKJS_MEMORY_DMA_INTERNAL;
+    }
+    return memory_class;
 }
 
 static void memory_note_failure(void)
@@ -160,6 +193,28 @@ static bool memory_internal_dma_can_fit(size_t request_bytes)
            internal.total_free_bytes - required_bytes >= reserve / 2U;
 }
 
+static bool memory_internal_can_fit(size_t request_bytes)
+{
+    multi_heap_info_t internal;
+    multi_heap_info_t dma;
+    size_t reserve;
+    size_t pending_bytes;
+    size_t required_bytes;
+
+    memory_heap_info(&internal, &dma);
+    taskENTER_CRITICAL(&s_memory.lock);
+    reserve = s_memory.internal_reserve_bytes;
+    pending_bytes = s_memory.dma_accounting.pending_bytes;
+    taskEXIT_CRITICAL(&s_memory.lock);
+    if (request_bytes > SIZE_MAX - pending_bytes) {
+        return false;
+    }
+    required_bytes = request_bytes + pending_bytes;
+    return internal.largest_free_block >= request_bytes &&
+           internal.total_free_bytes >= required_bytes &&
+           internal.total_free_bytes - required_bytes >= reserve / 2U;
+}
+
 void esp32_mquickjs_memory_init(void)
 {
     multi_heap_info_t internal;
@@ -198,7 +253,10 @@ static void *memory_alloc_once(size_t size,
     }
     switch (memory_class) {
     case ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL:
-        data = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (memory_internal_can_fit(size)) {
+            data = heap_caps_malloc(size,
+                                    MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        }
         break;
     case ESP32_MQUICKJS_MEMORY_DMA_INTERNAL:
         if (memory_internal_dma_can_fit(size)) {
@@ -226,7 +284,7 @@ static void *memory_alloc_once(size_t size,
         if (has_psram) {
             data = heap_caps_malloc(size,
                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        } else {
+        } else if (memory_internal_can_fit(size)) {
             data = heap_caps_malloc(size, MALLOC_CAP_8BIT);
         }
         break;
@@ -275,25 +333,6 @@ static void *memory_alloc_classified(size_t size,
     return data;
 }
 
-void *esp32_mquickjs_memory_payload_alloc(
-    size_t size,
-    esp32_mquickjs_memory_class_t memory_class)
-{
-    return memory_alloc_classified(size, memory_class, false);
-}
-
-void *esp32_mquickjs_memory_payload_calloc(
-    size_t count,
-    size_t size,
-    esp32_mquickjs_memory_class_t memory_class)
-{
-    if (size != 0 && count > SIZE_MAX / size) {
-        memory_note_failure();
-        return NULL;
-    }
-    return memory_alloc_classified(count * size, memory_class, true);
-}
-
 static uint32_t memory_realloc_caps(
     esp32_mquickjs_memory_class_t memory_class,
     size_t size)
@@ -327,7 +366,7 @@ static uint32_t memory_realloc_caps(
     }
 }
 
-void *esp32_mquickjs_memory_payload_realloc(
+static void *memory_realloc_classified(
     void *data,
     size_t size,
     esp32_mquickjs_memory_class_t memory_class)
@@ -341,6 +380,16 @@ void *esp32_mquickjs_memory_payload_realloc(
     external_dma_class =
         memory_class == ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL;
     retry_internal_dma = external_dma_class && memory_has_external_dma();
+    if (memory_class == ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL &&
+        size != 0 && !memory_internal_can_fit(size)) {
+        memory_note_failure();
+        return NULL;
+    }
+    if (memory_class == ESP32_MQUICKJS_MEMORY_DMA_INTERNAL &&
+        size != 0 && !memory_internal_dma_can_fit(size)) {
+        memory_note_failure();
+        return NULL;
+    }
     if (external_dma_class && !retry_internal_dma && size != 0 &&
         !memory_internal_dma_can_fit(size)) {
         memory_note_failure();
@@ -358,6 +407,235 @@ void *esp32_mquickjs_memory_payload_realloc(
         memory_note_failure();
     }
     return next;
+}
+
+static bool memory_account_add_locked(
+    const char *owner,
+    esp32_mquickjs_memory_class_t memory_class,
+    bool external,
+    size_t size)
+{
+    esp32_mquickjs_memory_class_t owner_class =
+        memory_owner_class(memory_class, external);
+
+    if (!esp32_mquickjs_memory_owner_add(
+            &s_memory.owner_accounting, owner, (uint8_t)owner_class,
+            memory_region_for_external(external), size, 1)) {
+        return false;
+    }
+    if (external) {
+        s_memory.managed_psram_bytes += size;
+    } else {
+        s_memory.managed_internal_bytes += size;
+        if (owner_class != ESP32_MQUICKJS_MEMORY_HOT_MOVABLE &&
+            owner_class != ESP32_MQUICKJS_MEMORY_COLD_MOVABLE &&
+            owner_class != ESP32_MQUICKJS_MEMORY_CACHE_EVICTABLE) {
+            s_memory.managed_pinned_bytes += size;
+        }
+    }
+    return true;
+}
+
+static bool memory_account_remove_locked(
+    const char *owner,
+    esp32_mquickjs_memory_class_t memory_class,
+    bool external,
+    size_t size)
+{
+    esp32_mquickjs_memory_class_t owner_class =
+        memory_owner_class(memory_class, external);
+
+    if (!esp32_mquickjs_memory_owner_remove(
+            &s_memory.owner_accounting, owner, (uint8_t)owner_class,
+            memory_region_for_external(external), size, 1)) {
+        return false;
+    }
+    if (external) {
+        s_memory.managed_psram_bytes -= size;
+    } else {
+        s_memory.managed_internal_bytes -= size;
+        if (owner_class != ESP32_MQUICKJS_MEMORY_HOT_MOVABLE &&
+            owner_class != ESP32_MQUICKJS_MEMORY_COLD_MOVABLE &&
+            owner_class != ESP32_MQUICKJS_MEMORY_CACHE_EVICTABLE) {
+            s_memory.managed_pinned_bytes -= size;
+        }
+    }
+    return true;
+}
+
+static esp32_mquickjs_memory_payload_t *memory_payload_metadata_alloc(void)
+{
+    esp32_mquickjs_memory_payload_t *payload = NULL;
+
+    if (memory_has_psram()) {
+        payload = heap_caps_calloc(
+            1, sizeof(*payload), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (payload == NULL) {
+        payload = heap_caps_calloc(
+            1, sizeof(*payload), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    return payload;
+}
+
+static void *memory_payload_alloc_tracked(
+    const char *owner,
+    size_t size,
+    esp32_mquickjs_memory_class_t memory_class,
+    bool zero)
+{
+    esp32_mquickjs_memory_payload_t *payload;
+    void *data;
+    size_t actual_size = size == 0 ? 1U : size;
+    bool external;
+
+    if (owner == NULL || owner[0] == '\0') {
+        memory_note_failure();
+        return NULL;
+    }
+    data = memory_alloc_classified(actual_size, memory_class, zero);
+    if (data == NULL) {
+        return NULL;
+    }
+    payload = memory_payload_metadata_alloc();
+    if (payload == NULL) {
+        heap_caps_free(data);
+        memory_note_failure();
+        return NULL;
+    }
+    external = memory_is_external(data);
+    taskENTER_CRITICAL(&s_memory.lock);
+    if (!memory_account_add_locked(owner, memory_class, external,
+                                   actual_size)) {
+        taskEXIT_CRITICAL(&s_memory.lock);
+        heap_caps_free(payload);
+        heap_caps_free(data);
+        memory_note_failure();
+        return NULL;
+    }
+    payload->next = s_memory.payloads;
+    payload->data = data;
+    payload->size = actual_size;
+    payload->owner = owner;
+    payload->memory_class = memory_class;
+    payload->external = external;
+    s_memory.payloads = payload;
+    taskEXIT_CRITICAL(&s_memory.lock);
+    return data;
+}
+
+void *esp32_mquickjs_memory_payload_alloc(
+    const char *owner,
+    size_t size,
+    esp32_mquickjs_memory_class_t memory_class)
+{
+    return memory_payload_alloc_tracked(owner, size, memory_class, false);
+}
+
+void *esp32_mquickjs_memory_payload_calloc(
+    const char *owner,
+    size_t count,
+    size_t size,
+    esp32_mquickjs_memory_class_t memory_class)
+{
+    if (size != 0 && count > SIZE_MAX / size) {
+        memory_note_failure();
+        return NULL;
+    }
+    return memory_payload_alloc_tracked(
+        owner, count * size, memory_class, true);
+}
+
+void *esp32_mquickjs_memory_payload_realloc(
+    const char *owner,
+    void *data,
+    size_t size,
+    esp32_mquickjs_memory_class_t memory_class)
+{
+    esp32_mquickjs_memory_payload_t *payload;
+    void *next;
+    size_t old_size;
+    bool old_external;
+    bool next_external;
+
+    if (data == NULL) {
+        return esp32_mquickjs_memory_payload_alloc(
+            owner, size, memory_class);
+    }
+    if (size == 0) {
+        esp32_mquickjs_memory_payload_free(data);
+        return NULL;
+    }
+    taskENTER_CRITICAL(&s_memory.lock);
+    for (payload = s_memory.payloads; payload != NULL;
+         payload = payload->next) {
+        if (payload->data == data) {
+            break;
+        }
+    }
+    if (payload == NULL || payload->transitioning || owner == NULL ||
+        strcmp(payload->owner, owner) != 0) {
+        taskEXIT_CRITICAL(&s_memory.lock);
+        memory_note_failure();
+        return NULL;
+    }
+    payload->transitioning = true;
+    old_size = payload->size;
+    old_external = payload->external;
+    taskEXIT_CRITICAL(&s_memory.lock);
+
+    next = memory_realloc_classified(data, size, memory_class);
+    if (next == NULL) {
+        taskENTER_CRITICAL(&s_memory.lock);
+        payload->transitioning = false;
+        taskEXIT_CRITICAL(&s_memory.lock);
+        return NULL;
+    }
+    next_external = memory_is_external(next);
+    taskENTER_CRITICAL(&s_memory.lock);
+    (void)memory_account_remove_locked(
+        payload->owner, payload->memory_class, old_external, old_size);
+    (void)memory_account_add_locked(payload->owner, memory_class,
+                                    next_external, size);
+    payload->data = next;
+    payload->size = size;
+    payload->memory_class = memory_class;
+    payload->external = next_external;
+    payload->transitioning = false;
+    taskEXIT_CRITICAL(&s_memory.lock);
+    return next;
+}
+
+void esp32_mquickjs_memory_payload_free(void *data)
+{
+    esp32_mquickjs_memory_payload_t **cursor;
+    esp32_mquickjs_memory_payload_t *payload;
+
+    if (data == NULL) {
+        return;
+    }
+    taskENTER_CRITICAL(&s_memory.lock);
+    cursor = &s_memory.payloads;
+    while (*cursor != NULL && (*cursor)->data != data) {
+        cursor = &(*cursor)->next;
+    }
+    payload = *cursor;
+    if (payload == NULL) {
+        taskEXIT_CRITICAL(&s_memory.lock);
+        heap_caps_free(data);
+        return;
+    }
+    if (payload->transitioning) {
+        taskEXIT_CRITICAL(&s_memory.lock);
+        return;
+    }
+    *cursor = payload->next;
+    (void)memory_account_remove_locked(
+        payload->owner, payload->memory_class, payload->external,
+        payload->size);
+    taskEXIT_CRITICAL(&s_memory.lock);
+    heap_caps_free(payload->data);
+    heap_caps_free(payload);
 }
 
 static esp32_mquickjs_memory_block_t *memory_block_metadata_alloc(void)
@@ -389,30 +667,26 @@ static bool memory_class_is_movable(esp32_mquickjs_memory_class_t memory_class)
            memory_class == ESP32_MQUICKJS_MEMORY_CACHE_EVICTABLE;
 }
 
-static bool memory_class_counts_as_pinned(
-    esp32_mquickjs_memory_class_t memory_class)
+static bool memory_add_block(esp32_mquickjs_memory_block_t *block)
 {
-    return !memory_class_is_movable(memory_class);
-}
+    bool added;
 
-static void memory_add_block(esp32_mquickjs_memory_block_t *block)
-{
     taskENTER_CRITICAL(&s_memory.lock);
+    added = memory_account_add_locked(
+        block->owner, block->memory_class, block->external, block->size);
+    if (!added) {
+        taskEXIT_CRITICAL(&s_memory.lock);
+        return false;
+    }
     block->last_used = ++s_memory.use_sequence;
     block->next = s_memory.blocks;
     s_memory.blocks = block;
-    if (block->external) {
-        s_memory.managed_psram_bytes += block->size;
-    } else {
-        s_memory.managed_internal_bytes += block->size;
-        if (memory_class_counts_as_pinned(block->memory_class)) {
-            s_memory.managed_pinned_bytes += block->size;
-        }
-    }
     taskEXIT_CRITICAL(&s_memory.lock);
+    return true;
 }
 
 esp32_mquickjs_memory_block_t *esp32_mquickjs_memory_block_alloc(
+    const char *owner,
     size_t size,
     esp32_mquickjs_memory_class_t memory_class,
     esp32_mquickjs_memory_relocated_fn relocated,
@@ -421,11 +695,12 @@ esp32_mquickjs_memory_block_t *esp32_mquickjs_memory_block_alloc(
     esp32_mquickjs_memory_block_t *block;
     void *data;
 
-    if (!memory_class_is_movable(memory_class) &&
+    if (owner == NULL || owner[0] == '\0' ||
+        (!memory_class_is_movable(memory_class) &&
         !memory_class_is_explicitly_pinned(memory_class) &&
         memory_class != ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL &&
         memory_class != ESP32_MQUICKJS_MEMORY_EXTERNAL &&
-        memory_class != ESP32_MQUICKJS_MEMORY_DEFAULT) {
+        memory_class != ESP32_MQUICKJS_MEMORY_DEFAULT)) {
         return NULL;
     }
     data = memory_alloc_classified(size, memory_class, false);
@@ -440,11 +715,17 @@ esp32_mquickjs_memory_block_t *esp32_mquickjs_memory_block_alloc(
     }
     block->data = data;
     block->size = size == 0 ? 1U : size;
+    block->owner = owner;
     block->memory_class = memory_class;
     block->relocated = relocated;
     block->opaque = opaque;
     block->external = memory_is_external(data);
-    memory_add_block(block);
+    if (!memory_add_block(block)) {
+        heap_caps_free(data);
+        heap_caps_free(block);
+        memory_note_failure();
+        return NULL;
+    }
     if (relocated != NULL) {
         relocated(opaque, data, block->size);
     }
@@ -471,7 +752,7 @@ bool esp32_mquickjs_memory_block_resize(esp32_mquickjs_memory_block_t *block,
     old_external = block->external;
     taskEXIT_CRITICAL(&s_memory.lock);
 
-    next = esp32_mquickjs_memory_payload_realloc(
+    next = memory_realloc_classified(
         block->data,
         size,
         old_external && memory_class_is_movable(block->memory_class)
@@ -484,25 +765,13 @@ bool esp32_mquickjs_memory_block_resize(esp32_mquickjs_memory_block_t *block,
         return false;
     }
     taskENTER_CRITICAL(&s_memory.lock);
-    if (old_external) {
-        s_memory.managed_psram_bytes -= old_size;
-    } else {
-        s_memory.managed_internal_bytes -= old_size;
-        if (memory_class_counts_as_pinned(block->memory_class)) {
-            s_memory.managed_pinned_bytes -= old_size;
-        }
-    }
+    (void)memory_account_remove_locked(
+        block->owner, block->memory_class, old_external, old_size);
     block->data = next;
     block->size = size;
     block->external = memory_is_external(next);
-    if (block->external) {
-        s_memory.managed_psram_bytes += block->size;
-    } else {
-        s_memory.managed_internal_bytes += block->size;
-        if (memory_class_counts_as_pinned(block->memory_class)) {
-            s_memory.managed_pinned_bytes += block->size;
-        }
-    }
+    (void)memory_account_add_locked(
+        block->owner, block->memory_class, block->external, block->size);
     block->last_used = ++s_memory.use_sequence;
     taskEXIT_CRITICAL(&s_memory.lock);
     if (block->relocated != NULL) {
@@ -582,14 +851,8 @@ bool esp32_mquickjs_memory_block_free(esp32_mquickjs_memory_block_t *block)
         return false;
     }
     *cursor = block->next;
-    if (block->external) {
-        s_memory.managed_psram_bytes -= block->size;
-    } else {
-        s_memory.managed_internal_bytes -= block->size;
-        if (memory_class_counts_as_pinned(block->memory_class)) {
-            s_memory.managed_pinned_bytes -= block->size;
-        }
-    }
+    (void)memory_account_remove_locked(
+        block->owner, block->memory_class, block->external, block->size);
     taskEXIT_CRITICAL(&s_memory.lock);
     heap_caps_free(block->data);
     heap_caps_free(block);
@@ -640,8 +903,10 @@ static bool memory_migrate_one(void)
                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     taskENTER_CRITICAL(&s_memory.lock);
     if (next != NULL) {
-        s_memory.managed_internal_bytes -= size;
-        s_memory.managed_psram_bytes += size;
+        (void)memory_account_remove_locked(
+            block->owner, block->memory_class, false, size);
+        (void)memory_account_add_locked(
+            block->owner, block->memory_class, true, size);
         block->data = next;
         block->external = true;
         block->last_used = ++s_memory.use_sequence;
@@ -674,11 +939,8 @@ static bool memory_evict_one(void)
     taskENTER_CRITICAL(&s_memory.lock);
     block->data = NULL;
     block->size = 0;
-    if (block->external) {
-        s_memory.managed_psram_bytes -= size;
-    } else {
-        s_memory.managed_internal_bytes -= size;
-    }
+    (void)memory_account_remove_locked(
+        block->owner, block->memory_class, block->external, size);
     block->external = false;
     block->last_used = ++s_memory.use_sequence;
     if (s_memory.eviction_count != UINT32_MAX) {
@@ -733,13 +995,18 @@ void esp32_mquickjs_memory_maintain(void)
 void esp32_mquickjs_memory_release_generation(void)
 {
     esp32_mquickjs_memory_block_t *blocks;
+    esp32_mquickjs_memory_block_t *block;
 
     taskENTER_CRITICAL(&s_memory.lock);
     blocks = s_memory.blocks;
     s_memory.blocks = NULL;
-    s_memory.managed_internal_bytes = 0;
-    s_memory.managed_psram_bytes = 0;
-    s_memory.managed_pinned_bytes = 0;
+    for (block = blocks; block != NULL; block = block->next) {
+        if (block->data != NULL) {
+            (void)memory_account_remove_locked(
+                block->owner, block->memory_class, block->external,
+                block->size);
+        }
+    }
     taskEXIT_CRITICAL(&s_memory.lock);
 
     /*
@@ -759,6 +1026,7 @@ void esp32_mquickjs_memory_release_generation(void)
 
 bool esp32_mquickjs_memory_reserve_internal_dma(
     esp32_mquickjs_memory_dma_reservation_t *reservation,
+    const char *owner,
     size_t total_bytes,
     size_t largest_block_bytes)
 {
@@ -770,7 +1038,8 @@ bool esp32_mquickjs_memory_reserve_internal_dma(
     bool accepted = false;
 
     esp32_mquickjs_memory_init();
-    if (reservation == NULL || total_bytes == 0 || largest_block_bytes == 0 ||
+    if (reservation == NULL || owner == NULL || owner[0] == '\0' ||
+        total_bytes == 0 || largest_block_bytes == 0 ||
         largest_block_bytes > total_bytes) {
         return false;
     }
@@ -789,6 +1058,9 @@ bool esp32_mquickjs_memory_reserve_internal_dma(
             accepted = esp32_mquickjs_memory_dma_accounting_reserve(
                 &s_memory.dma_accounting, reservation, total_bytes,
                 largest_block_bytes);
+            if (accepted) {
+                reservation->owner = owner;
+            }
         }
     }
     taskEXIT_CRITICAL(&s_memory.lock);
@@ -806,8 +1078,23 @@ bool esp32_mquickjs_memory_commit_driver_pinned(
     bool committed;
 
     taskENTER_CRITICAL(&s_memory.lock);
-    committed = esp32_mquickjs_memory_dma_accounting_commit(
-        &s_memory.dma_accounting, reservation, driver_pinned_bytes);
+    committed = reservation != NULL && reservation->owner != NULL &&
+        esp32_mquickjs_memory_owner_add(
+            &s_memory.owner_accounting, reservation->owner,
+            ESP32_MQUICKJS_MEMORY_DMA_INTERNAL,
+            ESP32_MQUICKJS_MEMORY_REGION_INTERNAL,
+            driver_pinned_bytes, 1);
+    if (committed) {
+        committed = esp32_mquickjs_memory_dma_accounting_commit(
+            &s_memory.dma_accounting, reservation, driver_pinned_bytes);
+        if (!committed) {
+            (void)esp32_mquickjs_memory_owner_remove(
+                &s_memory.owner_accounting, reservation->owner,
+                ESP32_MQUICKJS_MEMORY_DMA_INTERNAL,
+                ESP32_MQUICKJS_MEMORY_REGION_INTERNAL,
+                driver_pinned_bytes, 1);
+        }
+    }
     taskEXIT_CRITICAL(&s_memory.lock);
     return committed;
 }
@@ -820,9 +1107,24 @@ bool esp32_mquickjs_memory_commit_staging_pinned(
     bool committed;
 
     taskENTER_CRITICAL(&s_memory.lock);
-    committed = esp32_mquickjs_memory_dma_accounting_commit_staging(
-        &s_memory.dma_accounting, reservation, staging_pinned_bytes,
-        dma_staging_pools);
+    committed = reservation != NULL && reservation->owner != NULL &&
+        esp32_mquickjs_memory_owner_add(
+            &s_memory.owner_accounting, reservation->owner,
+            ESP32_MQUICKJS_MEMORY_DMA_INTERNAL,
+            ESP32_MQUICKJS_MEMORY_REGION_INTERNAL,
+            staging_pinned_bytes, dma_staging_pools);
+    if (committed) {
+        committed = esp32_mquickjs_memory_dma_accounting_commit_staging(
+            &s_memory.dma_accounting, reservation, staging_pinned_bytes,
+            dma_staging_pools);
+        if (!committed) {
+            (void)esp32_mquickjs_memory_owner_remove(
+                &s_memory.owner_accounting, reservation->owner,
+                ESP32_MQUICKJS_MEMORY_DMA_INTERNAL,
+                ESP32_MQUICKJS_MEMORY_REGION_INTERNAL,
+                staging_pinned_bytes, dma_staging_pools);
+        }
+    }
     taskEXIT_CRITICAL(&s_memory.lock);
     return committed;
 }
@@ -831,10 +1133,26 @@ bool esp32_mquickjs_memory_release_driver_pinned(
     esp32_mquickjs_memory_dma_reservation_t *reservation)
 {
     bool released;
+    const char *owner;
+    size_t bytes;
+    uint32_t blocks;
 
     taskENTER_CRITICAL(&s_memory.lock);
+    owner = reservation == NULL ? NULL : reservation->owner;
+    bytes = reservation == NULL ? 0 :
+        reservation->driver_pinned_bytes +
+        reservation->staging_pinned_bytes;
+    blocks = reservation == NULL ? 0 :
+        (reservation->driver_pinned_bytes != 0 ? 1U : 0U) +
+        reservation->dma_staging_pools;
     released = esp32_mquickjs_memory_dma_accounting_release(
         &s_memory.dma_accounting, reservation);
+    if (released && bytes != 0) {
+        released = esp32_mquickjs_memory_owner_remove(
+            &s_memory.owner_accounting, owner,
+            ESP32_MQUICKJS_MEMORY_DMA_INTERNAL,
+            ESP32_MQUICKJS_MEMORY_REGION_INTERNAL, bytes, blocks);
+    }
     taskEXIT_CRITICAL(&s_memory.lock);
     return released;
 }
@@ -866,6 +1184,9 @@ void esp32_mquickjs_memory_get_status(esp32_mquickjs_memory_status_t *out)
     out->migration_bytes = s_memory.migration_bytes;
     out->eviction_count = s_memory.eviction_count;
     out->allocation_failures = s_memory.allocation_failures;
+    out->allocation_count = esp32_mquickjs_memory_owner_snapshot(
+        &s_memory.owner_accounting, out->allocations,
+        ESP32_MQUICKJS_MEMORY_MAX_OWNER_ENTRIES);
     for (block = s_memory.blocks; block != NULL; block = block->next) {
         if (!block->transitioning && block->borrows == 0 &&
             block->data != NULL && memory_class_is_movable(block->memory_class)) {
@@ -873,6 +1194,37 @@ void esp32_mquickjs_memory_get_status(esp32_mquickjs_memory_status_t *out)
         }
     }
     taskEXIT_CRITICAL(&s_memory.lock);
+}
+
+const char *esp32_mquickjs_memory_class_name(
+    esp32_mquickjs_memory_class_t memory_class)
+{
+    switch (memory_class) {
+    case ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL:
+        return "pinned-internal";
+    case ESP32_MQUICKJS_MEMORY_DMA_INTERNAL:
+        return "dma-internal";
+    case ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL:
+        return "dma-external";
+    case ESP32_MQUICKJS_MEMORY_EXTERNAL:
+        return "external";
+    case ESP32_MQUICKJS_MEMORY_HOT_MOVABLE:
+        return "hot-movable";
+    case ESP32_MQUICKJS_MEMORY_COLD_MOVABLE:
+        return "cold-movable";
+    case ESP32_MQUICKJS_MEMORY_CACHE_EVICTABLE:
+        return "cache-evictable";
+    case ESP32_MQUICKJS_MEMORY_DEFAULT:
+    default:
+        return "pinned-internal";
+    }
+}
+
+const char *esp32_mquickjs_memory_region_name(uint8_t region)
+{
+    return region == ESP32_MQUICKJS_MEMORY_REGION_PSRAM
+               ? "psram"
+               : "internal";
 }
 
 const char *esp32_mquickjs_memory_pressure_name(

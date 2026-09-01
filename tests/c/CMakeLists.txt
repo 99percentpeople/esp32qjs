@@ -292,6 +292,13 @@ add_executable(test_memory_dma_accounting
 target_include_directories(test_memory_dma_accounting PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_memory_dma_accounting COMMAND test_memory_dma_accounting)
 
+add_executable(test_memory_owner_accounting
+    test_memory_owner_accounting.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_memory_owner_accounting.c
+)
+target_include_directories(test_memory_owner_accounting PRIVATE ../../components/esp32_mquickjs/internal)
+add_test(NAME test_memory_owner_accounting COMMAND test_memory_owner_accounting)
+
 add_executable(test_dma_transfer
     test_dma_transfer.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_dma_transfer.c

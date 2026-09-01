@@ -1902,8 +1902,8 @@ static void uart_future_release(esp32_mquickjs_future_driver_state_t *state)
     if (state->value_retained) {
         JS_DeleteGCRef(state->ctx, &state->value_ref);
     }
-    heap_caps_free(state->data);
-    heap_caps_free(state->write_owned);
+    esp32_mquickjs_memory_payload_free(state->data);
+    esp32_mquickjs_memory_payload_free(state->write_owned);
     slot = state->reservation_held ? uart_get_slot(&state->port_ref) : NULL;
     if (slot != NULL) {
         if (slot->future_reservations > 0) {
@@ -2060,7 +2060,7 @@ static bool uart_read_future_prepare(
     }
     if (state->length > 0) {
         state->data = esp32_mquickjs_memory_payload_alloc(
-            state->length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+            "uart.rx", state->length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (state->data == NULL) {
             uart_future_release(state);
             JS_ThrowOutOfMemory(ctx);

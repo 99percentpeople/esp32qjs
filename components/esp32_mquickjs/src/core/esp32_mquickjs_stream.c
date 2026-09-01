@@ -143,7 +143,7 @@ static void stream_cleanup_slot(esp32_mquickjs_stream_slot_t *slot)
                 ESP32_MQUICKJS_FS_CHANGE_WRITE, slot->path, NULL);
         }
     } else if (slot->kind == ESP32_MQUICKJS_STREAM_KIND_MEMORY && slot->handle.memory.owned) {
-        heap_caps_free(slot->handle.memory.data);
+        esp32_mquickjs_memory_payload_free(slot->handle.memory.data);
         slot->handle.memory.data = NULL;
     } else if (slot->kind == ESP32_MQUICKJS_STREAM_KIND_SOURCE) {
         esp32_mquickjs_byte_span_source_close(slot->handle.source.ctx,
@@ -604,7 +604,7 @@ JSValue esp32_mquickjs_stream_open_memory_owned(JSContext *ctx,
         return JS_ThrowInternalError(ctx, "memory stream requires valid data");
     }
     if (stream_open_memory_owned_slot((uint8_t *)data, data_len, false, &slot) != 0) {
-        heap_caps_free(data);
+        esp32_mquickjs_memory_payload_free(data);
         return JS_ThrowInternalError(ctx, "too many open streams");
     }
 
@@ -627,7 +627,7 @@ JSValue esp32_mquickjs_stream_open_memory_owned_binary(JSContext *ctx,
         return JS_ThrowInternalError(ctx, "binary memory stream requires valid data");
     }
     if (stream_open_memory_owned_slot(data, data_len, true, &slot) != 0) {
-        heap_caps_free(data);
+        esp32_mquickjs_memory_payload_free(data);
         return JS_ThrowInternalError(ctx, "too many open streams");
     }
     result = stream_make_object(ctx, global_obj, slot);
@@ -653,7 +653,8 @@ JSValue esp32_mquickjs_stream_open_bytes_copy(JSContext *ctx,
     }
     if (source.length > 0) {
         copy = esp32_mquickjs_memory_payload_alloc(
-            source.length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+            "stream.copy", source.length,
+            ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (copy == NULL) {
             esp32_mquickjs_release_byte_source(converted);
             return JS_ThrowOutOfMemory(ctx);
@@ -795,7 +796,8 @@ int esp32_mquickjs_stream_read_all_text(JSContext *ctx,
                 new_capacity *= 2U;
             }
             grown = esp32_mquickjs_memory_payload_realloc(
-                buffer, new_capacity, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+                "stream.read", buffer, new_capacity,
+                ESP32_MQUICKJS_MEMORY_EXTERNAL);
             if (grown == NULL) {
                 JS_ThrowOutOfMemory(ctx);
                 goto done;
@@ -809,7 +811,7 @@ int esp32_mquickjs_stream_read_all_text(JSContext *ctx,
 
     if (buffer == NULL) {
         buffer = esp32_mquickjs_memory_payload_alloc(
-            1, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+            "stream.read", 1, ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (buffer == NULL) {
             JS_ThrowOutOfMemory(ctx);
             goto done;
@@ -822,7 +824,7 @@ int esp32_mquickjs_stream_read_all_text(JSContext *ctx,
     result = 0;
 
 done:
-    heap_caps_free(buffer);
+    esp32_mquickjs_memory_payload_free(buffer);
     return result;
 }
 
@@ -881,7 +883,8 @@ int esp32_mquickjs_stream_read_all_bytes(JSContext *ctx,
                 new_capacity = doubled > max_bytes ? max_bytes : doubled;
             }
             grown = esp32_mquickjs_memory_payload_realloc(
-                buffer, new_capacity, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+                "stream.read", buffer, new_capacity,
+                ESP32_MQUICKJS_MEMORY_EXTERNAL);
             if (grown == NULL) {
                 JS_ThrowOutOfMemory(ctx);
                 goto fail;
@@ -898,7 +901,7 @@ int esp32_mquickjs_stream_read_all_bytes(JSContext *ctx,
     return 0;
 
 fail:
-    heap_caps_free(buffer);
+    esp32_mquickjs_memory_payload_free(buffer);
     return -1;
 }
 
@@ -1052,7 +1055,7 @@ static void stream_future_release(
     if (state == NULL) {
         return;
     }
-    heap_caps_free(state->data);
+    esp32_mquickjs_memory_payload_free(state->data);
     if (state->span_source_opened) {
         esp32_mquickjs_byte_span_source_close(state->ctx,
                                                &state->span_source);
@@ -1146,6 +1149,7 @@ static bool stream_future_prepare_common(
         }
         state->data_length = (size_t)chunk_size;
         state->data = esp32_mquickjs_memory_payload_alloc(
+            "stream.read",
             state->data_length + (state->binary ? 0U : 1U),
             ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (state->data == NULL) {
@@ -1190,7 +1194,8 @@ static bool stream_future_prepare_common(
                 state->data_length = source.length;
                 if (source.length > 0) {
                     state->data = esp32_mquickjs_memory_payload_alloc(
-                        source.length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+                        "stream.write", source.length,
+                        ESP32_MQUICKJS_MEMORY_EXTERNAL);
                     if (state->data != NULL) {
                         memcpy(state->data, source.data, source.length);
                     }
@@ -1217,7 +1222,8 @@ static bool stream_future_prepare_common(
             }
             if (state->data_length > 0) {
                 state->data = esp32_mquickjs_memory_payload_alloc(
-                    state->data_length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+                    "stream.write", state->data_length,
+                    ESP32_MQUICKJS_MEMORY_EXTERNAL);
                 if (state->data == NULL) {
                     JS_ThrowOutOfMemory(ctx);
                     goto fail;

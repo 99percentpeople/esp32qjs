@@ -1106,7 +1106,8 @@ static bool socket_future_copy_source(JSContext *ctx,
     }
     if (source.length > 0) {
         state->data = esp32_mquickjs_memory_payload_alloc(
-            source.length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+            "socket.write", source.length,
+            ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (state->data == NULL) {
             esp32_mquickjs_release_byte_source(owned);
             JS_ThrowOutOfMemory(ctx);
@@ -1401,7 +1402,7 @@ static bool socket_receive_future_prepare(
     }
     state->length = (size_t)max_bytes;
     state->data = esp32_mquickjs_memory_payload_alloc(
-        state->length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+        "socket.read", state->length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (state->data == NULL) {
         socket_future_destroy(state);
         JS_ThrowOutOfMemory(ctx);
@@ -1572,7 +1573,7 @@ static void socket_dns_request_release(socket_dns_request_t *request)
         atomic_fetch_sub_explicit(&request->references,
                                   1,
                                   memory_order_acq_rel) == 1) {
-        heap_caps_free(request->host);
+        esp32_mquickjs_memory_payload_free(request->host);
         heap_caps_free(request);
     }
 }
@@ -1662,7 +1663,8 @@ static bool socket_future_begin_resolution(
         return false;
     }
     request->host = esp32_mquickjs_memory_payload_alloc(
-        strlen(state->host) + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+        "socket.connect-host", strlen(state->host) + 1U,
+        ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (request->host == NULL) {
         heap_caps_free(request);
         JS_ThrowOutOfMemory(ctx);
@@ -2641,7 +2643,7 @@ static void socket_future_destroy(esp32_mquickjs_future_driver_state_t *state)
     if (state->owner_retained) {
         JS_DeleteGCRef(state->ctx, &state->owner_ref);
     }
-    heap_caps_free(state->data);
+    esp32_mquickjs_memory_payload_free(state->data);
     if (entry != NULL && state->reservation_held) {
         if (entry->future_reservations > 0) {
             entry->future_reservations--;

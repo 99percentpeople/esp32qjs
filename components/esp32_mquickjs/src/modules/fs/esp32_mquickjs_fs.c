@@ -402,7 +402,8 @@ static uint8_t *load_script_file(const char *path, size_t *out_len)
     }
 
     buf = esp32_mquickjs_memory_payload_alloc(
-        (size_t)file_size + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+        "fs.read-file", (size_t)file_size + 1U,
+        ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (buf == NULL) {
         fclose(file);
         return NULL;
@@ -411,7 +412,7 @@ static uint8_t *load_script_file(const char *path, size_t *out_len)
     read_len = fread(buf, 1, (size_t)file_size, file);
     fclose(file);
     if (read_len != (size_t)file_size) {
-        heap_caps_free(buf);
+        esp32_mquickjs_memory_payload_free(buf);
         return NULL;
     }
 
@@ -1125,8 +1126,8 @@ static void fs_future_release(esp32_mquickjs_future_driver_state_t *state)
     if (state == NULL) {
         return;
     }
-    heap_caps_free(state->data);
-    heap_caps_free(state->entries);
+    esp32_mquickjs_memory_payload_free(state->data);
+    esp32_mquickjs_memory_payload_free(state->entries);
     if (state->file != NULL) {
         fclose(state->file);
     }
@@ -1251,7 +1252,8 @@ static bool fs_future_prepare_common(
             return false;
         }
         state->data = esp32_mquickjs_memory_payload_alloc(
-            state->data_length + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+            "fs.write-file", state->data_length + 1U,
+            ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (state->data == NULL) {
             fs_future_release(state);
             JS_ThrowOutOfMemory(ctx);
@@ -1318,7 +1320,8 @@ static int fs_read_text_bounded(
         capacity = 1U;
     }
     data = esp32_mquickjs_memory_payload_alloc(
-        capacity + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+        "fs.read-text", capacity + 1U,
+        ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (data == NULL) {
         result = ENOMEM;
         goto done;
@@ -1345,7 +1348,7 @@ static int fs_read_text_bounded(
                                            ? state->max_bytes
                                            : capacity * 2U;
                 char *grown = esp32_mquickjs_memory_payload_realloc(
-                    data, next_capacity + 1U,
+                    "fs.read-text", data, next_capacity + 1U,
                     ESP32_MQUICKJS_MEMORY_EXTERNAL);
 
                 if (grown == NULL) {
@@ -1375,7 +1378,7 @@ static int fs_read_text_bounded(
         state->actual_bytes = length;
         data = NULL;
     }
-    heap_caps_free(data);
+    esp32_mquickjs_memory_payload_free(data);
 
 done:
     if (fclose(file) != 0 && result == 0) {
@@ -1572,7 +1575,7 @@ static void fs_future_worker(void *opaque)
                     break;
                 }
                 grown = esp32_mquickjs_memory_payload_realloc(
-                    state->entries,
+                    "fs.read-dir", state->entries,
                     (state->entry_count + 1U) * sizeof(*state->entries),
                     ESP32_MQUICKJS_MEMORY_EXTERNAL);
                 if (grown == NULL) {

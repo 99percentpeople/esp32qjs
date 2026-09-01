@@ -1342,7 +1342,8 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("atomic_init(&request->references, 2)", socket)
         self.assertIn("socket_dns_request_release(state->resolver);", socket)
         self.assertIn("MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT", socket)
-        self.assertIn("strlen(state->host) + 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL", socket)
+        self.assertIn('"socket.connect-host", strlen(state->host) + 1U', socket)
+        self.assertIn("ESP32_MQUICKJS_MEMORY_EXTERNAL", socket)
         timer_start = socket.index("esp32_mquickjs_timer_resource_init(")
         resolver_start = socket.index(
             "socket_future_begin_resolution(ctx, state)", timer_start

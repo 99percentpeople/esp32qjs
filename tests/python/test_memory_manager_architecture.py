@@ -23,8 +23,8 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
         self.assertIn("MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT", source)
         self.assertIn("memory_migrate_one", source)
         self.assertIn("memory_evict_one", source)
-        self.assertIn("memory_class_counts_as_pinned", source)
-        self.assertIn("return !memory_class_is_movable(memory_class);", source)
+        self.assertIn("memory_account_add_locked", source)
+        self.assertIn("memory_account_remove_locked", source)
         self.assertIn("esp32_mquickjs_memory_maintain();", runtime)
         self.assertIn("if (!esp32_mquickjs_execution_active(runtime))", runtime)
         self.assertIn("JS_FreeContext(ctx);\n        esp32_mquickjs_memory_release_generation();", runtime)
@@ -54,6 +54,42 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
             with self.subTest(source=relative):
                 source = (MQUICKJS / relative).read_text(encoding="utf-8")
                 self.assertIn("esp32_mquickjs_memory_payload_", source)
+
+    def test_payloads_and_stable_blocks_publish_owner_accounting(self):
+        declarations = (
+            MQUICKJS / "internal/esp32_mquickjs_memory.h"
+        ).read_text(encoding="utf-8")
+        source = (MQUICKJS / "src/core/esp32_mquickjs_memory.c").read_text(
+            encoding="utf-8"
+        )
+        sys_source = (MQUICKJS / "src/core/esp32_mquickjs_sys.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("ESP32_MQUICKJS_MEMORY_MAX_OWNER_ENTRIES", declarations)
+        self.assertIn("esp32_mquickjs_memory_payload_free", declarations)
+        self.assertIn("const char *owner", declarations)
+        self.assertIn("memory_owner_accounting", source)
+        self.assertIn('"allocations"', sys_source)
+        self.assertIn('"owner"', sys_source)
+        self.assertIn('"class"', sys_source)
+        self.assertIn('"region"', sys_source)
+        self.assertIn('"bytes"', sys_source)
+        self.assertIn('"blocks"', sys_source)
+
+    def test_espnow_uses_managed_rx_and_external_tx_payloads(self):
+        source = (
+            MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('"espnow.rx-pool"', source)
+        self.assertIn('"espnow.rx-copy"', source)
+        self.assertIn('"espnow.tx-queue"', source)
+        self.assertIn('"espnow.tx-staging"', source)
+        self.assertIn("ESP32_MQUICKJS_MEMORY_EXTERNAL", source)
+        self.assertIn("ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL", source)
+        self.assertIn("tx_staging", source)
+        self.assertIn("esp32_mquickjs_memory_payload_free", source)
 
         i2s = (MQUICKJS / "src/modules/i2s/esp32_mquickjs_i2s.c").read_text(
             encoding="utf-8"
@@ -93,9 +129,9 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
             "void *esp32_mquickjs_memory_payload_realloc", 1
         )[0]
         realloc_body = source.split(
-            "void *esp32_mquickjs_memory_payload_realloc", 1
+            "static void *memory_realloc_classified", 1
         )[1].split(
-            "static esp32_mquickjs_memory_block_t", 1
+            "static bool memory_account_add_locked", 1
         )[0]
 
         self.assertIn("ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL,", declarations)
@@ -114,7 +150,7 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
         self.assertIn('`DMA_EXTERNAL` class means "prefer external DMA"', docs)
         self.assertIn("records one\nallocation failure", docs)
         self.assertIn(
-            "`DMA_EXTERNAL` blocks that fell back to internal RAM",
+            "`DMA_EXTERNAL` allocations that fell back to\ninternal RAM",
             docs,
         )
 
@@ -178,7 +214,8 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
         self.assertEqual(
             source.count(
                 "esp32_mquickjs_memory_payload_alloc(\n"
-                "        byte_length, bitmap_memory_class(storage))"
+                '        "bitmap.pixels", byte_length, '
+                "bitmap_memory_class(storage))"
             ),
             2,
         )

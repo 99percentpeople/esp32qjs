@@ -218,7 +218,7 @@ static void websocket_free_callback_event(
         websocket_release_receive_slot(event->slot_index);
         event->slot_index = WEBSOCKET_INVALID_SLOT;
     } else {
-        heap_caps_free(event->data);
+        esp32_mquickjs_memory_payload_free(event->data);
     }
     event->data = NULL;
 }
@@ -249,11 +249,13 @@ static bool websocket_allocate_receive_pool(
     }
     s_websocket_state.receive_payloads =
         esp32_mquickjs_memory_payload_alloc(
-            capacity * stride, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+            "websocket.rx-pool", capacity * stride,
+            ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (s_websocket_state.receive_payloads == NULL ||
         !esp32_mquickjs_native_pool_init(
             &s_websocket_state.receive_free, (uint32_t)capacity)) {
-        heap_caps_free(s_websocket_state.receive_payloads);
+        esp32_mquickjs_memory_payload_free(
+            s_websocket_state.receive_payloads);
         s_websocket_state.receive_payloads = NULL;
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -266,7 +268,7 @@ static bool websocket_allocate_receive_pool(
 
 static void websocket_free_receive_pool(void)
 {
-    heap_caps_free(s_websocket_state.receive_payloads);
+    esp32_mquickjs_memory_payload_free(s_websocket_state.receive_payloads);
     s_websocket_state.receive_payloads = NULL;
     s_websocket_state.receive_stride = 0;
     s_websocket_state.receive_capacity = 0;
@@ -844,6 +846,7 @@ static bool websocket_materialize_callback_event(
     }
     allocation_size = event->data_len + (event->binary ? 0U : 1U);
     owned = esp32_mquickjs_memory_payload_alloc(
+        "websocket.rx-copy",
         allocation_size > 0U ? allocation_size : 1U,
         ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (owned == NULL) {
@@ -1419,7 +1422,8 @@ static bool websocket_copy_send_payload(JSContext *ctx,
             return false;
         }
         *out_data = esp32_mquickjs_memory_payload_alloc(
-            length > 0 ? length : 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+            "websocket.tx", length > 0 ? length : 1U,
+            ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (*out_data == NULL) {
             JS_ThrowOutOfMemory(ctx);
             return false;
@@ -1479,7 +1483,7 @@ static bool websocket_copy_send_payload(JSContext *ctx,
                     next_capacity *= 2U;
                 }
                 next = esp32_mquickjs_memory_payload_realloc(
-                    *out_data, next_capacity,
+                    "websocket.tx", *out_data, next_capacity,
                     ESP32_MQUICKJS_MEMORY_EXTERNAL);
                 if (next == NULL) {
                     JS_ThrowOutOfMemory(ctx);
@@ -1495,13 +1499,13 @@ static bool websocket_copy_send_payload(JSContext *ctx,
             esp32_mquickjs_byte_span_source_close(ctx, &source);
         }
         if (!ok) {
-            heap_caps_free(*out_data);
+            esp32_mquickjs_memory_payload_free(*out_data);
             *out_data = NULL;
             return false;
         }
         if (*out_data == NULL) {
             *out_data = esp32_mquickjs_memory_payload_alloc(
-                1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+                "websocket.tx", 1U, ESP32_MQUICKJS_MEMORY_EXTERNAL);
             if (*out_data == NULL) {
                 JS_ThrowOutOfMemory(ctx);
                 return false;
@@ -1531,6 +1535,7 @@ static bool websocket_copy_send_payload(JSContext *ctx,
             return false;
         }
         *out_data = esp32_mquickjs_memory_payload_alloc(
+            "websocket.tx",
             source.length > 0 ? source.length : 1U,
             ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (*out_data == NULL) {
@@ -1588,7 +1593,7 @@ JSValue js_websocket_send(JSContext *ctx,
                      s_websocket_state.client, data, (int)length,
                      pdMS_TO_TICKS(s_websocket_state.send_timeout_ms));
     s_websocket_state.sending = false;
-    heap_caps_free(data);
+    esp32_mquickjs_memory_payload_free(data);
     if (s_websocket_state.close_pending) {
         (void)websocket_schedule_close_worker();
     }
@@ -1618,7 +1623,7 @@ static void websocket_send_future_release(
     if (state == NULL) {
         return;
     }
-    heap_caps_free(state->data);
+    esp32_mquickjs_memory_payload_free(state->data);
     heap_caps_free(state);
 }
 

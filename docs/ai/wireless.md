@@ -71,9 +71,14 @@ Mesh behavior, provisioning, or a product message schema.
   ESP32-C3/C5/S3 builds enable ESP-NOW v2 by default, so the default and maximum
   payload are 1470 bytes. Pass `maxPayloadBytes: 250` only when an application
   explicitly needs ESP-NOW v1 peer compatibility. Receive-pool internal memory
-  scales with `receiveCapacity * maxPayloadBytes`; size both together.
+  scales with `receiveCapacity * maxPayloadBytes`; size both together. The
+  callback-facing receive pool and one active transmit staging packet remain
+  reserve-checked internal memory, while received JavaScript copies and queued
+  transmit payloads use PSRAM when available. The transmit worker stack is
+  likewise registered as pinned internal memory.
   `{ txQueue: { capacityPackets, overflow? } }` optionally allocates a fixed
-  internal transmit pool. `overflow` is `"reject-newest"` or
+  PSRAM-backed transmit pool. Targets without PSRAM use the same queue contract
+  with a reserve-checked internal fallback. `overflow` is `"reject-newest"` or
   `"drop-oldest-batch"`; omitting `txQueue` allocates no transmit slots.
 - `session.receive(timeoutMs?)` consumes a bounded receive queue; each event
   includes source/destination addresses, channel, RSSI, timestamp, sequence,

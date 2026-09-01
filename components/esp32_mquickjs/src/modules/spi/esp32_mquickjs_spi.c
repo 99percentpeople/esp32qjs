@@ -1042,7 +1042,8 @@ static bool spi_allocate_staging_workspace(
     total_bytes = (size_t)staging_bytes *
                   ESP32_MQUICKJS_SPI_STAGING_BUFFER_COUNT;
     if (!esp32_mquickjs_memory_reserve_internal_dma(
-            &slot->staging_reservation, total_bytes, staging_bytes)) {
+            &slot->staging_reservation, "spi.staging",
+            total_bytes, staging_bytes)) {
         return false;
     }
     if (!esp32_mquickjs_dma_workspace_allocate_buffers(
@@ -1899,7 +1900,7 @@ static void spi_future_release(esp32_mquickjs_future_driver_state_t *state)
     }
     esp32_mquickjs_release_byte_source(state->single_owned);
     state->single_owned = NULL;
-    heap_caps_free(state->rx_data);
+    esp32_mquickjs_memory_payload_free(state->rx_data);
     if (bus != NULL) {
         for (index = 0;
              index < (int32_t)ESP32_MQUICKJS_SPI_DEVICE_SLOT_COUNT;
@@ -1980,7 +1981,7 @@ static bool spi_future_allocate_rx_buffer(
         return true;
     }
     state->rx_data = esp32_mquickjs_memory_payload_alloc(
-        length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+        "spi.rx", length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (state->rx_data == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;

@@ -1568,7 +1568,7 @@ JSValue js_camera_frame_read(JSContext *ctx, JSValue *this_val,
     }
     if (length > 0) {
         copy = esp32_mquickjs_memory_payload_alloc(
-            length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
+            "camera.frame-copy", length, ESP32_MQUICKJS_MEMORY_EXTERNAL);
         if (copy == NULL) {
             return JS_ThrowOutOfMemory(ctx);
         }
