@@ -422,9 +422,40 @@ config ESP32_MQUICKJS_FEATURE_BITMAP
     bool "Enable bitmap module"
     default n
     help
-        Enable the native bitmap module for C-backed mono1, gray8, rgb565,
-        and rgb888 buffers, worker-backed crop/rotate/resize/color transforms,
-        drawing primitives, dirty bounds, and byte-view/span exports.
+        Enable the native bitmap module for C-backed mono1, gray4, gray8,
+        rgb565, and rgb888 buffers, worker-backed
+        crop/rotate/resize/color transforms, drawing primitives, dirty
+        bounds, and byte-view/span exports.
+
+config ESP32_MQUICKJS_FEATURE_BITMAP_JPEG
+    bool "Enable JPEG decoding for bitmap"
+    default n
+    depends on ESP32_MQUICKJS_FEATURE_BITMAP
+    help
+        Enable the optional baseline JPEG decoder exposed as Bitmap.decode().
+        The decoder runs on a native Future worker and publishes RGB565 pixels
+        atomically into the destination Bitmap. Leave this disabled when a
+        product only needs raw Bitmap formats or sends camera JPEG frames
+        without decoding them locally.
+
+config ESP32_MQUICKJS_BITMAP_JPEG_MAX_INPUT_BYTES
+    int "Maximum compressed JPEG bytes accepted by Bitmap.decode()"
+    range 1024 262144
+    default 32768
+    depends on ESP32_MQUICKJS_FEATURE_BITMAP_JPEG
+    help
+        Bound the contiguous native staging copy used by Bitmap.decode().
+        Segmented sources must declare an exact byteLength no larger than
+        this value.
+
+config ESP32_MQUICKJS_BITMAP_JPEG_MAX_OUTPUT_BYTES
+    int "Maximum decoded JPEG bytes accepted by Bitmap.decode()"
+    range 2048 8388608
+    default 524288
+    depends on ESP32_MQUICKJS_FEATURE_BITMAP_JPEG
+    help
+        Bound the temporary RGB565 buffer used before an atomic publish into
+        the destination Bitmap.
 
 config ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
     bool "Capture Agent standard output for host diagnostics"

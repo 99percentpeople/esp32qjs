@@ -19,6 +19,8 @@ test("camera/offline", function () {
     "JPEG should be supported");
   test.ok(capabilities.frameSizes.indexOf("qvga") >= 0,
     "QVGA should be supported");
+  test.ok(capabilities.frameSizes.indexOf("128x128") >= 0,
+    "native 128x128 should be supported");
 
   try {
     camera.open([]);

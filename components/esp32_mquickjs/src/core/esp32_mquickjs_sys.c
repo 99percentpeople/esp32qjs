@@ -394,6 +394,11 @@ JSValue js_sys_feature_get(JSContext *ctx,
 #else
         false,
 #endif
+#if defined(CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG) && CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG
+        true,
+#else
+        false,
+#endif
     };
 
     (void)this_val;

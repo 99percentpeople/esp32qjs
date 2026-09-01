@@ -259,6 +259,9 @@ static const JSPropDef js_bitmap_proto[] = {
     JS_CFUNC_DEF("drawMask", 4, js_bitmap_draw_mask),
     JS_CFUNC_DEF("blit", 2, js_bitmap_blit),
     JS_CFUNC_DEF("blitBatch", 1, js_bitmap_blit_batch),
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG
+    JS_CFUNC_DEF("decode", 2, js_bitmap_decode),
+#endif
     JS_CFUNC_DEF("drawText", 5, js_bitmap_draw_text),
     JS_CFUNC_DEF("measureText", 2, js_bitmap_measure_text),
     JS_CFUNC_DEF("getDirty", 0, js_bitmap_get_dirty),
@@ -509,6 +512,7 @@ static const JSPropDef js_sys_info_features[] = {
     JS_CGETSET_MAGIC_DEF("espNow", js_sys_feature_get, NULL, 23),
     JS_CGETSET_MAGIC_DEF("ble", js_sys_feature_get, NULL, 24),
     JS_CGETSET_MAGIC_DEF("wifiCsi", js_sys_feature_get, NULL, 25),
+    JS_CGETSET_MAGIC_DEF("bitmapJpeg", js_sys_feature_get, NULL, 26),
     JS_PROP_END,
 };
 

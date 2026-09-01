@@ -91,6 +91,9 @@ JSValue js_bitmap_draw_cubic_bezier(JSContext *ctx, JSValue *this_val, int argc,
 JSValue js_bitmap_draw_mask(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_bitmap_blit(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_bitmap_blit_batch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG
+JSValue js_bitmap_decode(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+#endif
 JSValue js_bitmap_draw_text(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_bitmap_measure_text(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_bitmap_get_dirty(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
@@ -100,6 +103,13 @@ JSValue js_bitmap_read_rect(JSContext *ctx, JSValue *this_val, int argc, JSValue
 JSValue js_bitmap_read_rect_chunks(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_bitmap_create_span_source(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_bitmap_create_command_buffer(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG
+bool esp32_mquickjs_register_bitmap_jpeg_driver(
+    JSContext *ctx,
+    esp32_mquickjs_runtime_t *runtime,
+    JSValue decode_function);
+#endif
 
 JSValue js_display_command_buffer_reset(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_display_command_buffer_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

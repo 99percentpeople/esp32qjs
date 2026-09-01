@@ -947,12 +947,15 @@ capture only: no background video, codecs, MJPEG, RTSP, or upload policy.
 
 - `camera.capabilities()`
   Return target, PSRAM status/size, compiled sensor drivers, pixel formats, and
-  frame sizes. Version 1 probes OV2640, OV3660, or OV5640 after initialization; callers
-  do not select a sensor model.
+  frame sizes, including the native square `128x128` mode. Version 1 probes
+  OV2640, OV3660, or OV5640 after initialization; callers do not select a
+  sensor model.
 - `camera.open(options?)`
   Open the singleton camera. Options include `pixelFormat`, `frameSize`,
   `jpegQuality`, `frameBuffers`, `grabMode`, `bufferLocation`, `xclkFreqHz`,
-  `timeoutMs`, and `pins`. Explicit pins override selected hardware constants;
+  `psramDma`, `timeoutMs`, and `pins`. `psramDma: false` keeps DMA staging in
+  internal memory before complete chunks are copied to PSRAM. Explicit pins
+  override selected hardware constants;
   the resolved XCLK, SCCB, D0-D7, VSYNC, HREF, and PCLK map must be complete.
 
 The safe defaults are JPEG, QVGA, quality 12, one PSRAM framebuffer, and
@@ -1075,7 +1078,7 @@ boot text as protocol data.
 
 ## `bitmap` Module
 
-This module exposes native Bitmaps for heavy pixel work. It is registered only when `sys.info.features.bitmap` is enabled. The JS `Surface` owns rendering, `PanelDriver` owns controller sequencing, and `DisplayTransport` owns SPI/I2C/GPIO operations; `bitmap` only owns pixels, transforms, and exported bytes.
+This module exposes native Bitmaps for heavy pixel work. It is registered only when `sys.info.features.bitmap` is enabled. Compressed JPEG decoding is a separate optional `bitmap_jpeg` subfeature reported by `sys.info.features.bitmapJpeg`; disabling it leaves the raw Bitmap formats and transforms available without installing `Bitmap.prototype.decode`. The JS `Surface` owns rendering, `PanelDriver` owns controller sequencing, and `DisplayTransport` owns SPI/I2C/GPIO operations; `bitmap` only owns pixels, transforms, and exported bytes.
 
 - `bitmap.MONO1`
   Pixel format string `"mono1"`.
@@ -1177,6 +1180,19 @@ Formats and layouts:
   completed or wrote partial rows before cancellation. This API is intended
   for tiled or striped sources that should not pay one Future dispatch per
   region.
+- `decode(source, { codec: "jpeg", destinationRect? })`
+  Available only when the Build Context selects `bitmap_jpeg` and
+  `sys.info.features.bitmapJpeg` is `true`.
+  Decode baseline JPEG into this linear RGB565 Bitmap. `source` may be one
+  `ByteSource` or `{ chunks, lengths, byteLength }`, where each length selects
+  the useful prefix of its corresponding transport chunk. Input staging is
+  bounded by `CONFIG_ESP32_MQUICKJS_BITMAP_JPEG_MAX_INPUT_BYTES`; temporary
+  RGB565 output is bounded by
+  `CONFIG_ESP32_MQUICKJS_BITMAP_JPEG_MAX_OUTPUT_BYTES`. The target is
+  write-leased until the native Future worker publishes the complete image.
+  The result reports `{ codec, engine, width, height, inputBytes,
+  outputBytes }`; `engine` is `"rom-tjpgd"` on supported ROM targets and
+  `"software-tjpgd"` otherwise. Scaling and progressive JPEG are not accepted.
 - `drawText(x, y, text, options?)`
   Draw text with `options.color` and `options.font`, a `DisplayFont` returned by `bitmap.loadFont(...)`. `options.spacing` controls extra inter-character pixels. Text background is transparent by default; pass `options.background` to fill each glyph cell before drawing, or `null` to keep it transparent explicitly.
 - `measureText(text, options?)`

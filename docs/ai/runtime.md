@@ -28,6 +28,14 @@ Node `Buffer`, DOM APIs, or other assumed host globals. Use ESP32QJS APIs such
 as `ByteView`, `Future`, `EventQueue`, `load`, and `framework.load` only when
 their documented feature is present.
 
+## `ByteView`
+
+Native binary APIs return an owned, immutable `ByteView`. Read `length` or
+`byteLength`, use `getUint8(offset)` to inspect a small in-range protocol field
+without allocating, and use `toArray()` only when a full JavaScript copy is
+actually required. Call idempotent `close()` after the last consumer; native
+operations retain their own read lease while in flight.
+
 ### Catch bindings are function-wide
 
 MQuickJS does not give catch parameters the independent block binding expected

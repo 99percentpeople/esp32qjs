@@ -34,6 +34,7 @@ set(ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS
     CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL
     CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET
     CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP
+    CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG
     CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS
 )
 
@@ -571,6 +572,14 @@ esp32_mquickjs_append_feature_component(
     "src/modules/bitmap/esp32_mquickjs_bitmap_image_core.c"
     "src/modules/bitmap/esp32_mquickjs_bitmap_font.c"
     "src/modules/bitmap/esp32_mquickjs_bitmap_text.c"
+)
+
+esp32_mquickjs_append_feature_component(
+    CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG
+    "src/modules/bitmap/esp32_mquickjs_bitmap_jpeg.c"
+    "src/modules/bitmap/esp32_mquickjs_bitmap_jpeg_core.c"
+    PRIV_REQUIRES
+        espressif__esp_jpeg
 )
 
 esp32_mquickjs_append_feature_component(

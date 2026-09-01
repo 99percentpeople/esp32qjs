@@ -297,6 +297,7 @@ def config_default_inputs(config: ProjectConfig) -> list[Path]:
     """Return tracked inputs that define the MCU and Build Context configuration."""
     return [
         *config.sdkconfig_defaults,
+        ROOT_DIR / "components/esp32_mquickjs/Kconfig.projbuild",
         config.mcu_file,
         config.build_context_manifest,
         config.partition_table,

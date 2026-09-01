@@ -69,6 +69,8 @@ jobs:
           - target: esp32s3
             profile: minimal
           - target: esp32s3
+            profile: bitmap
+          - target: esp32s3
             profile: representative
           - target: esp32s3
             profile: representative-psram

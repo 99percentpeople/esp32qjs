@@ -1961,6 +1961,32 @@
       }
     },
     {
+      "qualifiedName": "Bitmap.prototype.decode",
+      "surface": "Bitmap.prototype",
+      "name": "decode",
+      "arity": 2,
+      "implementation": "js_bitmap_decode",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_bitmap_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "Bitmap"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "Bitmap"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/bitmap/esp32_mquickjs_bitmap_image.c",
+        "function": "esp32_mquickjs_init_bitmap_runtime"
+      }
+    },
+    {
       "qualifiedName": "Bitmap.prototype.drawCircle",
       "surface": "Bitmap.prototype",
       "name": "drawCircle",

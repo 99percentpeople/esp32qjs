@@ -102,6 +102,7 @@ typedef struct {
     size_t frame_buffers;
     camera_grab_mode_t grab_mode;
     camera_fb_location_t buffer_location;
+    bool psram_dma;
     sensor_t *sensor;
     camera_fb_t *leased_fb;
     bool frame_revoked;
@@ -271,6 +272,7 @@ typedef struct {
 static const camera_frame_size_entry_t s_frame_sizes[] = {
     {"96x96", FRAMESIZE_96X96},
     {"qqvga", FRAMESIZE_QQVGA},
+    {"128x128", FRAMESIZE_128X128},
     {"qcif", FRAMESIZE_QCIF},
     {"hqvga", FRAMESIZE_HQVGA},
     {"qvga", FRAMESIZE_QVGA},
@@ -1303,6 +1305,8 @@ static JSValue camera_make_status(JSContext *ctx)
             ctx, result, "bufferLocation",
             JS_NewString(ctx, s_camera.buffer_location == CAMERA_FB_IN_PSRAM
                                   ? "psram" : "dram")) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "psramDma",
+                                         JS_NewBool(s_camera.psram_dma)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, sensor, "model",
             JS_NewString(ctx, camera_sensor_model(s_camera.sensor))) ||
@@ -1719,6 +1723,15 @@ static bool camera_read_optional_i32(JSContext *ctx, JSValue object,
            (JS_IsUndefined(property) || camera_to_i32(ctx, property, value));
 }
 
+static bool camera_read_optional_bool(JSContext *ctx, JSValue object,
+                                      const char *name, bool *value)
+{
+    JSValue property = JS_GetPropertyStr(ctx, object, name);
+
+    return !JS_IsException(property) &&
+           (JS_IsUndefined(property) || camera_to_bool(ctx, property, value));
+}
+
 JSValue js_camera_open(JSContext *ctx, JSValue *this_val,
                        int argc, JSValue *argv)
 {
@@ -1751,6 +1764,11 @@ JSValue js_camera_open(JSContext *ctx, JSValue *this_val,
     };
     uint32_t timeout_ms = CAMERA_DEFAULT_TIMEOUT_MS;
     int frame_buffers = 1;
+#ifdef CONFIG_CAMERA_PSRAM_DMA
+    bool psram_dma = true;
+#else
+    bool psram_dma = false;
+#endif
     esp_err_t err;
     JSValue result;
     int pins[] = {config.pin_xclk, config.pin_sccb_sda, config.pin_sccb_scl,
@@ -1813,6 +1831,8 @@ JSValue js_camera_open(JSContext *ctx, JSValue *this_val,
             config.jpeg_quality < 0 || config.jpeg_quality > 63 ||
             !camera_read_optional_i32(ctx, argv[0], "frameBuffers",
                                       &frame_buffers) ||
+            !camera_read_optional_bool(ctx, argv[0], "psramDma",
+                                       &psram_dma) ||
             frame_buffers < 1 || frame_buffers > 2) {
             JS_ThrowRangeError(ctx, "camera.open() received invalid JPEG/DMA options");
             goto parse_fail;
@@ -1984,6 +2004,16 @@ parsed:
         return JS_ThrowInternalError(ctx, "camera.open() failed: %s",
                                      esp_err_to_name(err));
     }
+    if (esp_camera_get_psram_mode() != psram_dma) {
+        err = esp_camera_set_psram_mode(psram_dma);
+        if (err != ESP_OK) {
+            (void)esp_camera_deinit();
+            camera_release_leases();
+            return JS_ThrowInternalError(
+                ctx, "camera.open() could not configure PSRAM DMA: %s",
+                esp_err_to_name(err));
+        }
+    }
     s_camera.allocated = true;
     s_camera.initialized = true;
     s_camera.sensor = esp_camera_sensor_get();
@@ -2007,6 +2037,7 @@ parsed:
     s_camera.frame_buffers = config.fb_count;
     s_camera.grab_mode = config.grab_mode;
     s_camera.buffer_location = config.fb_location;
+    s_camera.psram_dma = esp_camera_get_psram_mode();
     result = camera_make_object(ctx);
     if (JS_IsException(result)) {
         s_camera.release_pending = true;

@@ -38,8 +38,8 @@
       "evidence": "Long-duration DMA, frame lease, close/reopen, and mixed media/TLS pressure beyond completed I2S TX/RX channel construction, directional start/stop/delete retry retention, timeout-timer allocation rollback, and Camera driver-deinit failure retention with explicit close retry"
     },
     {
-      "features": ["bitmap"],
-      "area": "`bitmap` and JS display layer",
+      "features": ["bitmap", "bitmap_jpeg"],
+      "area": "`bitmap`, optional JPEG decoding, and JS display layer",
       "status": "Candidate",
       "evidence": "More board/display combinations and repeated source/presentation lifecycle testing"
     },

@@ -1335,12 +1335,18 @@ bool esp32_mquickjs_init_bitmap_runtime(
     JSGCRef object_ref;
     JSGCRef blit_ref;
     JSGCRef blit_batch_ref;
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG
+    JSGCRef decode_ref;
+#endif
     JSValue *global = JS_PushGCRef(ctx, &global_ref);
     JSValue *module = JS_PushGCRef(ctx, &module_ref);
     JSValue *convert = JS_PushGCRef(ctx, &convert_ref);
     JSValue *object = JS_PushGCRef(ctx, &object_ref);
     JSValue *blit = JS_PushGCRef(ctx, &blit_ref);
     JSValue *blit_batch = JS_PushGCRef(ctx, &blit_batch_ref);
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG
+    JSValue *decode = JS_PushGCRef(ctx, &decode_ref);
+#endif
     bool result;
 
     *global = JS_GetGlobalObject(ctx);
@@ -1357,6 +1363,11 @@ bool esp32_mquickjs_init_bitmap_runtime(
     *blit_batch = JS_IsException(*object)
                       ? JS_EXCEPTION
                       : JS_GetPropertyStr(ctx, *object, "blitBatch");
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG
+    *decode = JS_IsException(*object)
+                  ? JS_EXCEPTION
+                  : JS_GetPropertyStr(ctx, *object, "decode");
+#endif
     result = !JS_IsException(*convert) && !JS_IsException(*blit) &&
              !JS_IsException(*blit_batch) &&
              esp32_mquickjs_future_register_driver(
@@ -1365,9 +1376,17 @@ bool esp32_mquickjs_init_bitmap_runtime(
                  ctx, runtime, *blit, &s_bitmap_blit_driver) &&
              esp32_mquickjs_future_register_driver(
                  ctx, runtime, *blit_batch, &s_bitmap_blit_batch_driver);
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG
+    result = result && !JS_IsException(*decode) &&
+             esp32_mquickjs_register_bitmap_jpeg_driver(
+                 ctx, runtime, *decode);
+#endif
     if (!result && !JS_HasException(ctx)) {
         JS_ThrowInternalError(ctx, "failed to register Bitmap Future drivers");
     }
+#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG
+    JS_PopGCRef(ctx, &decode_ref);
+#endif
     JS_PopGCRef(ctx, &blit_batch_ref);
     JS_PopGCRef(ctx, &blit_ref);
     JS_PopGCRef(ctx, &object_ref);

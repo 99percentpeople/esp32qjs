@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 
@@ -54,6 +55,36 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn(
             "offset_e = cam_verify_jpeg_eoi(dma_buffer->buf,", patch
         )
+
+    def test_s3_camera_reserves_a_bounded_low_resolution_jpeg_buffer(self):
+        defaults = (ROOT / "configs/mcus/esp32s3/sdkconfig.defaults").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("# CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE_AUTO is not set", defaults)
+        self.assertIn("CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE_CUSTOM=y", defaults)
+        self.assertIn("CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE=32768", defaults)
+
+    def test_camera_psram_dma_is_an_explicit_runtime_option(self):
+        source = (MQUICKJS / "src/modules/camera/esp32_mquickjs_camera.c").read_text(
+            encoding="utf-8"
+        )
+        types = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(encoding="utf-8")
+
+        self.assertIn('camera_read_optional_bool(ctx, argv[0], "psramDma"', source)
+        self.assertIn("esp_camera_set_psram_mode(psram_dma)", source)
+        self.assertIn('result, "psramDma"', source)
+        self.assertIn("psramDma?: boolean", types)
+        self.assertIn("psramDma: boolean", types)
+
+    def test_camera_exposes_native_128_square_frame_size(self):
+        source = (MQUICKJS / "src/modules/camera/esp32_mquickjs_camera.c").read_text(
+            encoding="utf-8"
+        )
+        types = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(encoding="utf-8")
+
+        self.assertIn('{"128x128", FRAMESIZE_128X128}', source)
+        self.assertIn('| "128x128"', types)
 
     def test_s3_build_guards_upstream_camera_probe_when_no_sensor_is_enabled(self):
         patch = (ROOT / "scripts/patch_esp32_camera_2_1_7.cmake").read_text(
@@ -395,6 +426,108 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn("sample_bilinear", core)
         self.assertIn("s_bayer_4x4", core)
         self.assertIn("inverse_rotate", core)
+
+    def test_bitmap_formats_share_metadata_and_gray4_conversion(self):
+        header = (
+            MQUICKJS / "internal/esp32_mquickjs_bitmap_image.h"
+        ).read_text(encoding="utf-8")
+        bitmap = (
+            MQUICKJS / "src/modules/bitmap/esp32_mquickjs_bitmap.c"
+        ).read_text(encoding="utf-8")
+        image = (
+            MQUICKJS / "src/modules/bitmap/esp32_mquickjs_bitmap_image.c"
+        ).read_text(encoding="utf-8")
+        core = (
+            MQUICKJS
+            / "src/modules/bitmap/esp32_mquickjs_bitmap_image_core.c"
+        ).read_text(encoding="utf-8")
+        stdlib = (
+            MQUICKJS / "src/core/mqjs_stdlib_esp32.c"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("ESP32_MQUICKJS_BITMAP_FORMAT_GRAY4", header)
+        self.assertIn("esp32_mquickjs_bitmap_format_info_t", header)
+        self.assertIn("static const esp32_mquickjs_bitmap_format_info_t", core)
+        self.assertIn("esp32_mquickjs_bitmap_storage_geometry", bitmap)
+        self.assertIn("display_span_source_known_length", bitmap)
+        self.assertIn(
+            ".known_length = display_span_source_known_length", bitmap
+        )
+        self.assertIn("esp32_mquickjs_bitmap_parse_format(name, out)", image)
+        self.assertIn("transform_gray_identity", core)
+        self.assertIn("transform_gray_to_rgb565_identity", core)
+        self.assertIn("transform_rgb565_to_gray_identity", core)
+        self.assertIn('JS_PROP_STRING_DEF("GRAY4", "gray4", 0)', stdlib)
+
+    def test_bitmap_batch_blit_uses_one_bounded_future_worker(self):
+        image = (
+            MQUICKJS
+            / "src/modules/bitmap/esp32_mquickjs_bitmap_image.c"
+        ).read_text(encoding="utf-8")
+        stdlib = (
+            MQUICKJS / "src/core/mqjs_stdlib_esp32.c"
+        ).read_text(encoding="utf-8")
+        declarations = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("BITMAP_BLIT_BATCH_MAX_OPERATIONS 16U", image)
+        self.assertIn("bitmap_blit_batch_prepare", image)
+        self.assertIn("bitmap_transform_batch_worker", image)
+        self.assertIn("s_bitmap_blit_batch_driver", image)
+        self.assertIn('JS_CFUNC_DEF("blitBatch", 1, js_bitmap_blit_batch)', stdlib)
+        self.assertIn("blitBatch(operations: readonly BitmapBlitOperation[])", declarations)
+
+    def test_bitmap_jpeg_decode_is_a_bounded_native_future(self):
+        kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
+        cmake = (MQUICKJS / "CMakeLists.txt").read_text(encoding="utf-8")
+        catalog = json.loads(
+            (MQUICKJS / "runtime-features.json").read_text(encoding="utf-8")
+        )
+        manifest = (MQUICKJS / "idf_component.yml").read_text(encoding="utf-8")
+        jpeg = (
+            MQUICKJS / "src/modules/bitmap/esp32_mquickjs_bitmap_jpeg.c"
+        ).read_text(encoding="utf-8")
+        stdlib = (
+            MQUICKJS / "src/core/mqjs_stdlib_esp32.c"
+        ).read_text(encoding="utf-8")
+        declarations = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("config ESP32_MQUICKJS_FEATURE_BITMAP_JPEG", kconfig)
+        self.assertRegex(
+            kconfig,
+            r"(?s)config ESP32_MQUICKJS_FEATURE_BITMAP_JPEG\n.*?default n\n.*?depends on ESP32_MQUICKJS_FEATURE_BITMAP",
+        )
+        self.assertIn("config ESP32_MQUICKJS_BITMAP_JPEG_MAX_INPUT_BYTES", kconfig)
+        jpeg_feature = next(
+            feature for feature in catalog["features"]
+            if feature["id"] == "bitmap_jpeg"
+        )
+        self.assertEqual(jpeg_feature["requires"], ["bitmap"])
+        self.assertEqual(
+            jpeg_feature["kconfig"],
+            "CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG",
+        )
+        self.assertIn("src/modules/bitmap/esp32_mquickjs_bitmap_jpeg_core.c", cmake)
+        self.assertRegex(
+            cmake,
+            r"(?s)esp32_mquickjs_append_feature_component\(\s*CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG.*?esp32_mquickjs_bitmap_jpeg_core\.c.*?espressif__esp_jpeg\s*\)",
+        )
+        self.assertIn("esp_jpeg", cmake)
+        self.assertIn("espressif/esp_jpeg", manifest)
+        self.assertIn("esp_jpeg_decode", jpeg)
+        self.assertIn("bitmap_jpeg_decode_worker", jpeg)
+        self.assertIn("s_bitmap_decode_driver", jpeg)
+        self.assertIn("#if CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG", stdlib)
+        self.assertIn('JS_CFUNC_DEF("decode", 2, js_bitmap_decode)', stdlib)
+        self.assertIn('JS_CGETSET_MAGIC_DEF("bitmapJpeg"', stdlib)
+        self.assertIn("decode(source: EncodedImageSource", declarations)
+        self.assertIn("readonly bitmapJpeg: boolean", declarations)
+        self.assertIn('codec: "jpeg"', declarations)
+        self.assertIn("lengths: ArrayLike<number>", declarations)
+        self.assertNotIn('readonly JPEG: "jpeg"', declarations)
 
     def test_media_uses_shared_generation_checked_peripheral_leases(self):
         lease = (

@@ -27,6 +27,7 @@
     { "id": "usb_serial", "label": "USB Serial", "category": "network", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_USB_SERIAL", "sdkconfig": [], "estimatedBytes": 24576, "targets": ["esp32c3", "esp32c5", "esp32s3"], "requires": [] },
     { "id": "websocket_client", "label": "WebSocket", "category": "network", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_WEBSOCKET", "sdkconfig": [], "estimatedBytes": 49152, "targets": ["esp32c3", "esp32c5", "esp32s3"], "requires": ["net", "tls"] },
     { "id": "bitmap", "label": "Bitmap", "category": "graphics", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP", "sdkconfig": [], "estimatedBytes": 56320, "targets": ["esp32c3", "esp32c5", "esp32s3"], "requires": [] },
+    { "id": "bitmap_jpeg", "label": "Bitmap JPEG decoder", "category": "graphics", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG", "sdkconfig": [], "estimatedBytes": 32768, "targets": ["esp32c3", "esp32c5", "esp32s3"], "requires": ["bitmap"] },
     { "id": "runtime_logs", "label": "Runtime logs", "category": "diagnostics", "kconfig": "CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS", "sdkconfig": [], "estimatedBytes": 16384, "targets": ["esp32c3", "esp32c5", "esp32s3"], "requires": [] }
   ]
 }

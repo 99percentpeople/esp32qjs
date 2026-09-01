@@ -26,6 +26,7 @@ class CiBuildContextTests(unittest.TestCase):
             ("esp32c5", "minimal"),
             ("esp32c5", "representative"),
             ("esp32s3", "minimal"),
+            ("esp32s3", "bitmap"),
             ("esp32s3", "representative"),
             ("esp32s3", "representative-psram"),
             ("esp32s3", "disabled"),
@@ -53,6 +54,12 @@ class CiBuildContextTests(unittest.TestCase):
         self.assertIn("environment = esptool_environment()", source)
         self.assertIn("env=environment", source)
 
+    def test_ci_build_recreates_generated_sdkconfig_from_current_defaults(self):
+        source = (ROOT / "scripts" / "ci_build.py").read_text(encoding="utf-8")
+
+        self.assertIn("sdkconfig.unlink(missing_ok=True)", source)
+        self.assertIn("sdkconfig_old.unlink(missing_ok=True)", source)
+
     def test_s3_camera_dependency_does_not_depend_on_late_kconfig_resolution(self):
         manifest = (
             ROOT / "components" / "esp32_mquickjs" / "idf_component.yml"
@@ -72,6 +79,7 @@ class CiBuildContextTests(unittest.TestCase):
             ("esp32c5", "minimal"),
             ("esp32c5", "representative"),
             ("esp32s3", "minimal"),
+            ("esp32s3", "bitmap"),
             ("esp32s3", "representative"),
             ("esp32s3", "representative-psram"),
             ("esp32s3", "disabled"),
@@ -111,3 +119,14 @@ class CiBuildContextTests(unittest.TestCase):
 
         self.assertIn("CONFIG_SPIRAM=n", defaults)
         self.assertIn("CONFIG_ESP32QJS_JS_HEAP_SIZE=106496", defaults)
+
+    def test_bitmap_profile_excludes_optional_jpeg_decoder(self):
+        with tempfile.TemporaryDirectory() as name:
+            output = CI_CONTEXT.generate_context("esp32s3", "bitmap", Path(name))
+            defaults = (output / "sdkconfig.defaults").read_text(encoding="utf-8")
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP=y", defaults)
+        self.assertIn("CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG=n", defaults)
+        self.assertIn("bitmap", manifest["nativeFeatures"])
+        self.assertNotIn("bitmap_jpeg", manifest["nativeFeatures"])

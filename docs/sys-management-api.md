@@ -120,6 +120,7 @@ declare namespace ESP32QJS {
     readonly socket: boolean;
     readonly websocket: boolean;
     readonly bitmap: boolean;
+    readonly bitmapJpeg: boolean;
     readonly wifi: boolean;
     readonly tls: boolean;
     readonly http: boolean;

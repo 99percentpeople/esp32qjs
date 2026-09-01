@@ -44,6 +44,7 @@ FEATURES = {
     "httpServer": "CONFIG_ESP32_MQUICKJS_FEATURE_HTTP_SERVER",
     "runtimeLogs": "CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS",
     "bitmap": "CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP",
+    "bitmapJpeg": "CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG",
 }
 
 # table: (surface, TypeScript declaration, feature, documentation owner token)
@@ -274,6 +275,7 @@ METHOD_FEATURES = {
     ("sys.time", "sync"): "net",
     ("http", "server"): "httpServer",
     ("global", "fetch"): "http",
+    ("Bitmap.prototype", "decode"): "bitmapJpeg",
 }
 
 INTERNAL_METHODS = {("sys", "_deferIdle")}
@@ -365,7 +367,7 @@ register_future(
     "esp32_mquickjs_init_bitmap_runtime",
 )
 register_future(
-    "Bitmap.prototype", ("blit", "blitBatch"),
+    "Bitmap.prototype", ("blit", "blitBatch", "decode"),
     "components/esp32_mquickjs/src/modules/bitmap/esp32_mquickjs_bitmap_image.c",
     "esp32_mquickjs_init_bitmap_runtime",
 )

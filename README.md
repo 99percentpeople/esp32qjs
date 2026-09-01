@@ -143,6 +143,7 @@ and Libraries. Typical entries include:
 | `usb_serial` | USB Serial | esp32c3, esp32c5, esp32s3 | none |
 | `websocket_client` | WebSocket | esp32c3, esp32c5, esp32s3 | `net`, `tls` |
 | `bitmap` | Bitmap | esp32c3, esp32c5, esp32s3 | none |
+| `bitmap_jpeg` | Bitmap JPEG decoder | esp32c3, esp32c5, esp32s3 | `bitmap` |
 | `runtime_logs` | Runtime logs | esp32c3, esp32c5, esp32s3 | none |
 <!-- END GENERATED FEATURE CATALOG -->
 

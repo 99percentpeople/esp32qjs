@@ -300,6 +300,9 @@ test("sys/runtime", function () {
     typeof globalThis.socket.openUDP === "function");
   expectFeature("websocket", hasObject("websocketClient"));
   expectFeature("bitmap", hasObject("bitmap"));
+  expectFeature("bitmapJpeg", hasObject("bitmap") &&
+    typeof globalThis.Bitmap === "function" &&
+    typeof globalThis.Bitmap.prototype.decode === "function");
   expectFeature("wifi", hasObject("wifi"));
   test.equal(typeof features.tls, "boolean",
     "sys.info.features.tls should report the build capability");

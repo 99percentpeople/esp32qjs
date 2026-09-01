@@ -57,6 +57,13 @@ add_executable(test_bitmap_image
 target_include_directories(test_bitmap_image PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_bitmap_image COMMAND test_bitmap_image)
 
+add_executable(test_bitmap_jpeg
+    test_bitmap_jpeg.c
+    ../../components/esp32_mquickjs/src/modules/bitmap/esp32_mquickjs_bitmap_jpeg_core.c
+)
+target_include_directories(test_bitmap_jpeg PRIVATE ../../components/esp32_mquickjs/internal)
+add_test(NAME test_bitmap_jpeg COMMAND test_bitmap_jpeg)
+
 add_executable(test_peripheral_lease
     test_peripheral_lease.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_peripheral_lease.c

@@ -27,6 +27,10 @@ def main() -> int:
     build_dir = ROOT / "build" / "ci" / slug
     context_dir = ROOT / "build" / "ci-contexts" / slug
     generate_context(args.target, args.profile, context_dir)
+    sdkconfig = build_dir / f"sdkconfig.{slug}"
+    sdkconfig_old = build_dir / f"sdkconfig.{slug}.old"
+    sdkconfig.unlink(missing_ok=True)
+    sdkconfig_old.unlink(missing_ok=True)
     environment = esptool_environment()
     idf_py = Path(os.environ["IDF_PATH"]) / "tools" / "idf.py"
     defaults = ";".join(
@@ -40,7 +44,7 @@ def main() -> int:
         "-B",
         str(build_dir),
         f"-DIDF_TARGET={args.target}",
-        f"-DSDKCONFIG={build_dir / ('sdkconfig.' + slug)}",
+        f"-DSDKCONFIG={sdkconfig}",
         f"-DESP32QJS_MCU={args.target}",
         f"-DESP32QJS_MCU_SDKCONFIG_DEFAULTS={ROOT / 'configs' / 'mcus' / args.target / 'sdkconfig.defaults'}",
         f"-DESP32QJS_BUILD_CONTEXT_DIR={context_dir}",

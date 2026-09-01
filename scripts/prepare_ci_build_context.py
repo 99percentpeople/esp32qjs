@@ -13,7 +13,13 @@ ROOT = Path(__file__).resolve().parents[1]
 FEATURE_CATALOG = ROOT / "components" / "esp32_mquickjs" / "runtime-features.json"
 TEMPLATE_CONTEXT = ROOT / "tests" / "build-contexts" / "esp32s3"
 SUPPORTED_TARGETS = ("esp32c3", "esp32c5", "esp32s3")
-SUPPORTED_PROFILES = ("minimal", "representative", "representative-psram", "disabled")
+SUPPORTED_PROFILES = (
+    "minimal",
+    "bitmap",
+    "representative",
+    "representative-psram",
+    "disabled",
+)
 
 
 def load_features() -> list[dict[str, object]]:
@@ -35,6 +41,8 @@ def selected_feature_ids(
         return set()
     if profile == "minimal":
         return {"fs"}
+    if profile == "bitmap":
+        return {"fs", "bitmap"}
     return supported
 
 

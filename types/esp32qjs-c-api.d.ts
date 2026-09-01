@@ -164,6 +164,33 @@ namespace ESP32QJS {
 
   type BitmapSource = Bitmap | CameraFrame | BitmapDescriptor;
 
+  interface EncodedImageChunks {
+    /** Byte sources whose useful bytes form one compressed image in order. */
+    chunks: ArrayLike<ByteSource>;
+    /** Useful leading bytes in each source; trailing transport metadata is ignored. */
+    lengths: ArrayLike<number>;
+    /** Exact sum of `lengths`. */
+    byteLength: number;
+  }
+
+  type EncodedImageSource = ByteSource | EncodedImageChunks;
+
+  interface BitmapDecodeOptions {
+    /** Requires the optional `bitmap_jpeg` native feature. */
+    codec: "jpeg";
+    /** Defaults to `(0, 0)` at the JPEG's natural dimensions. */
+    destinationRect?: BitmapRect;
+  }
+
+  interface BitmapDecodeResult {
+    codec: "jpeg";
+    engine: "rom-tjpgd" | "software-tjpgd";
+    width: number;
+    height: number;
+    inputBytes: number;
+    outputBytes: number;
+  }
+
   interface BitmapTransformOptions {
     /** Crop first. Defaults to the complete source. */
     sourceRect?: BitmapRect;
@@ -1032,6 +1059,8 @@ namespace ESP32QJS {
     blit(source: BitmapSource, options?: BitmapBlitOptions): this;
     /** Apply 1..16 ordered transforms through one native worker operation. */
     blitBatch(operations: readonly BitmapBlitOperation[]): this;
+    /** Decode one baseline JPEG when `sys.info.features.bitmapJpeg` is true. */
+    decode(source: EncodedImageSource, options: BitmapDecodeOptions): BitmapDecodeResult;
     drawText(
       x: number,
       y: number,
@@ -1121,6 +1150,7 @@ namespace ESP32QJS {
     readonly socket: boolean;
     readonly websocket: boolean;
     readonly bitmap: boolean;
+    readonly bitmapJpeg: boolean;
     readonly wifi: boolean;
     readonly wifiCsi: boolean;
     readonly espNow: boolean;
@@ -2122,6 +2152,7 @@ namespace ESP32QJS {
   type CameraFrameSize =
     | "96x96"
     | "qqvga"
+    | "128x128"
     | "qcif"
     | "hqvga"
     | "qvga"
@@ -2161,6 +2192,8 @@ namespace ESP32QJS {
     frameBuffers?: 1 | 2;
     grabMode?: CameraGrabMode;
     bufferLocation?: CameraBufferLocation;
+    /** Enables direct camera DMA into PSRAM instead of internal DMA staging. */
+    psramDma?: boolean;
     xclkFreqHz?: number;
     timeoutMs?: number;
     /** Overrides selected hardware constants; the resolved map must be complete. */
@@ -2186,6 +2219,7 @@ namespace ESP32QJS {
     frameBuffers: 1 | 2;
     grabMode: CameraGrabMode;
     bufferLocation: CameraBufferLocation;
+    psramDma: boolean;
     sensor: {
       model: CameraSensorModel;
       pid: number;

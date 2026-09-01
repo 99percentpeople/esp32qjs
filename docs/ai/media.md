@@ -92,10 +92,13 @@ PDM always yields signed 16-bit little-endian mono PCM:
 ## Camera capture
 
 - `camera.capabilities()` reports target, PSRAM, and the compiled OV2640/OV3660/OV5640
-  drivers, formats, and frame sizes.
+  drivers, formats, and frame sizes. The generic frame-size vocabulary includes
+  the sensor driver's native square `128x128` mode.
 - `camera.open(options?)` uses explicit pins over selected hardware constants.
   The resolved map must contain every required signal. It probes the sensor;
-  callers never choose a sensor model.
+  callers never choose a sensor model. `psramDma` controls direct DMA into
+  PSRAM independently from `bufferLocation`; `false` keeps DMA staging in
+  internal memory before complete chunks are copied to PSRAM.
 - `cam.capture(timeoutMs?)` returns one `CameraFrame` or `null`. Only one capture
   may be pending and only one framebuffer may be leased. A normal timeout
   returns `null` and leaves the camera open. Cancellation or exec interruption
@@ -112,10 +115,24 @@ PDM always yields signed 16-bit little-endian mono PCM:
 - `bitmap.convert(frame, options?)` and `Bitmap.blit(frame, options?)` accept a
   live raw grayscale, RGB565, or RGB888 frame without copying it into a
   JavaScript array. They can crop, rotate, flip, resize with `"nearest"` or
-  `"bilinear"`, normalize contrast, and apply `"bayer4x4"` dithering to a
-  `mono1` target. Conversion does not consume or close the frame.
-- JPEG and BMP are compressed formats. Decode them with an independent decoder
-  before using the raw bitmap pipeline.
+  `"bilinear"`, normalize contrast, convert through packed high-nibble-first
+  `gray4`, and apply `"bayer4x4"` dithering to a `mono1` target. Conversion
+  does not consume or close the frame.
+- `Bitmap.blitBatch(operations)` applies `1..16` ordered
+  `{ source, options? }` transforms through one native worker submission. It
+  retains every source until completion, write-leases the target once, and is
+  the bounded path for efficiently composing striped or tiled inputs.
+- `Bitmap.decode(source, { codec: "jpeg", destinationRect? })` is installed
+  only by the optional `bitmap_jpeg` native feature, reported as
+  `sys.info.features.bitmapJpeg`; it decodes a baseline JPEG into a linear
+  RGB565 target on the native Future worker. On
+  SoCs with ROM TJpgDec, including ESP32-S3/C3/C5, the framework uses that ROM
+  implementation. `source` may be one byte source or
+  `{ chunks, lengths, byteLength }`; `lengths` makes it possible to ignore
+  trailing transport headers without constructing a JavaScript byte array.
+  Input and temporary RGB565 output are bounded by Build Context settings.
+- JPEG remains a compressed codec, not a raw Bitmap format. BMP is not decoded
+  by the current framework.
 - `frame.close()` returns the framebuffer and rejects while its source is
   active. `cam.close()` irreversibly cancels active capture and immediately
   revokes derived frame and unopened source handles. Revoked frame operations
