@@ -339,7 +339,8 @@ must configure ESP-IDF encrypted NVS and their device key lifecycle explicitly.
 
 `fs.open()` returns a `Stream`. `Response.body`, `Request.body`, and
 `Response.stream(...)` also use the same stream interface. A `ByteView` is a
-read-only native byte view; `toArray()` makes an explicit JavaScript copy. A
+read-only native byte view; `getUint8(offset)` reads one byte without copying
+the view and `toArray()` makes an explicit JavaScript copy. A
 `ByteSpanSource` is a retained, one-shot producer of native spans. Its read-only
 `byteLength` is the total number of bytes the producer will yield; `close()` is
 idempotent and releases producer-owned resources. Owned
@@ -1078,6 +1079,8 @@ This module exposes native Bitmaps for heavy pixel work. It is registered only w
 
 - `bitmap.MONO1`
   Pixel format string `"mono1"`.
+- `bitmap.GRAY4`
+  Pixel format string `"gray4"`.
 - `bitmap.GRAY8`
   Pixel format string `"gray8"`.
 - `bitmap.RGB565`
@@ -1095,6 +1098,12 @@ Formats and layouts:
 
 - `format: "mono1"`
   One bit per pixel. Default layout is `"page-y8"` for SSD1306-style vertical pages. `"linear"` is also supported. Colors are packed numeric values `0` or `1`; booleans are not accepted.
+- `format: "gray4"`
+  Two 4-bit luminance pixels per byte in linear layout. Even `x` uses the high
+  nibble and odd `x` uses the low nibble; stride defaults to
+  `ceil(width / 2)`. Colors are numeric values from `0` through `15`. Native
+  conversion expands a level with `level * 17` and quantizes gray8 with
+  `value >> 4`.
 - `format: "rgb565"`
   16-bit big-endian RGB565 pixels. Layout must be `"linear"`.
 - `format: "gray8"`
@@ -1142,15 +1151,16 @@ Formats and layouts:
 - `blit(source, options?)`
   Transform into this Bitmap. `source` may be a Bitmap, an open raw
   `CameraFrame`, or `{ width, height, format, pixels, stride?, layout?,
-  byteOrder?, bitOrder? }`. Raw formats are `"mono1"`, `"gray8"`, `"rgb565"`,
-  and `"rgb888"`. RGB565 descriptors accept `byteOrder: "be" | "le"`; mono1
+  byteOrder?, bitOrder? }`. Raw formats are `"mono1"`, `"gray4"`, `"gray8"`,
+  `"rgb565"`, and `"rgb888"`. RGB565 descriptors accept
+  `byteOrder: "be" | "le"`; mono1
   descriptors accept `layout: "linear" | "page-y8"` and
   `bitOrder: "lsb" | "msb"`.
 
   Options are `{ sourceRect?, destinationRect?, rotation?, flipX?, flipY?,
   filter?, normalize?, threshold?, dither? }`. Rotation is clockwise
   `0`, `90`, `180`, or `270`. Processing order is crop, rotate, flip, resize,
-  and encode. `normalize` applies only to gray8/mono1 output; `threshold` and
+  and encode. `normalize` applies only to grayscale output; `threshold` and
   `dither: "bayer4x4"` apply only to mono1. The Bayer matrix is anchored to
   absolute destination coordinates so tiled blits have no seams.
 
@@ -1159,6 +1169,14 @@ Formats and layouts:
   clearly. Array-like pixels are copied to native staging memory before work.
   In-place or aliased blits are rejected. Cancellation may preserve completed
   rows and conservatively marks the full clipped destination dirty.
+- `blitBatch(operations)`
+  Apply `1..16` ordered `{ source, options? }` blits through one native worker
+  submission and return the same target Bitmap. Sources and the target retain
+  the same checked leases as `blit()`. Later operations observe and may
+  overwrite earlier results; dirty bounds include every operation that
+  completed or wrote partial rows before cancellation. This API is intended
+  for tiled or striped sources that should not pay one Future dispatch per
+  region.
 - `drawText(x, y, text, options?)`
   Draw text with `options.color` and `options.font`, a `DisplayFont` returned by `bitmap.loadFont(...)`. `options.spacing` controls extra inter-character pixels. Text background is transparent by default; pass `options.background` to fill each glyph cell before drawing, or `null` to keep it transparent explicitly.
 - `measureText(text, options?)`
@@ -1173,14 +1191,21 @@ Formats and layouts:
   Return an array of stable owned `ByteView` snapshots split by
   `options.chunkBytes` or the buffer's `chunkBytes`.
 - `createSpanSource(options?)`
-  Return a retained native `BitmapSpanSource` bound to the buffer. Pass it to `SPIDevice.writeSource(source, options?)` to flush without allocating JS chunk arrays or ByteView wrappers in the loop.
+  Return a retained native `BitmapSpanSource` bound to the buffer. Its exact
+  `byteLength` follows the current clamped rectangle, so bounded transports
+  such as ESP-NOW can validate it before opening the source. Pass it to
+  `SPIDevice.writeSource(source, options?)` to flush without allocating JS
+  chunk arrays or ByteView wrappers in the loop.
 - `createCommandBuffer(options?)`
   Return a retained native `DisplayCommandBuffer` for recording drawing commands and replaying them into a `Bitmap`. Options are `{ commandCapacity, textBytes }`.
 
 `BitmapSpanSource` methods:
 
 - `source.setRect(x, y, width, height)`
-  Update the clamped export rectangle and return the same source for reuse in display flush loops. This method belongs to Bitmap-created sources, not to the generic `ByteSpanSource` transport capability.
+  Update the clamped export rectangle and `byteLength`, then return the same
+  source for reuse in display or packet loops. This method belongs to
+  Bitmap-created sources, not to the generic `ByteSpanSource` transport
+  capability.
 
 `DisplayCommandBuffer` methods:
 
@@ -1270,7 +1295,9 @@ Export options:
   `"be"` for high byte first or `"le"` for low byte first. This affects `rgb565` exports.
 - `chunkBytes`
   Positive preferred chunk size for `readRectChunks(...)` and `createSpanSource(...)`.
-Native byte views expose `length`, `byteLength`, and `toArray()`. Every
+Native byte views expose `length`, `byteLength`, `getUint8(offset)`, and
+`toArray()`. `getUint8(...)` requires an in-range non-negative integer and is
+suited to inspecting a small protocol header without allocating an array. Every
 `ByteView` owns a stable immutable snapshot until it is closed or collected.
 They can be passed directly to `spi`, `i2c`, and `uart` writes without
 converting to a JavaScript array.

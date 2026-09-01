@@ -1,6 +1,7 @@
 #include "utils/esp32_mquickjs_byte_source.h"
 
 #include <limits.h>
+#include <math.h>
 #include <string.h>
 
 #include "esp_heap_caps.h"
@@ -770,6 +771,29 @@ JSValue js_byte_view_get_length(JSContext *ctx, JSValue *this_val, int argc, JSV
         return JS_EXCEPTION;
     }
     return JS_NewUint32(ctx, (uint32_t)view->length);
+}
+
+JSValue js_byte_view_get_uint8(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    esp32_mquickjs_byte_view_t *view;
+    double raw_offset;
+    uint32_t offset;
+
+    view = byte_view_from_value(ctx, *this_val, "ByteView.getUint8()");
+    if (view == NULL) {
+        return JS_EXCEPTION;
+    }
+    if (argc != 1 || JS_ToNumber(ctx, &raw_offset, argv[0]) != 0 ||
+        !isfinite(raw_offset) || raw_offset < 0 || raw_offset > UINT32_MAX ||
+        (double)(uint32_t)raw_offset != raw_offset) {
+        return JS_ThrowTypeError(ctx,
+                                 "ByteView.getUint8(offset) expects a non-negative integer");
+    }
+    offset = (uint32_t)raw_offset;
+    if ((size_t)offset >= view->length) {
+        return JS_ThrowRangeError(ctx, "ByteView.getUint8() offset is out of range");
+    }
+    return JS_NewInt32(ctx, view->data[offset]);
 }
 
 JSValue js_byte_view_to_array(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

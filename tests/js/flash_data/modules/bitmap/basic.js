@@ -13,6 +13,7 @@ test("bitmap/basic", function () {
   var leasedPixels;
   var rgb888Target;
   var rgb888Commands;
+  var gray4;
   var busySourceError = "";
   var busyTargetError = "";
   var busyPixelsError = "";
@@ -33,6 +34,75 @@ test("bitmap/basic", function () {
   test.equal(mono.stride, 8, "mono page-y8 stride should be width");
   test.equal(mono.pageHeight, 8, "mono page height should be 8");
   test.equal(mono.byteLength, 8, "mono byteLength should match one 8-pixel page");
+
+  test.equal(bitmap.GRAY4, "gray4", "bitmap should expose the gray4 format constant");
+  gray4 = bitmap.create({
+    width: 3,
+    height: 2,
+    format: bitmap.GRAY4,
+    chunkBytes: 2
+  });
+  test.equal(gray4.format, "gray4", "gray4 format should be exposed");
+  test.equal(gray4.layout, "linear", "gray4 should use linear layout");
+  test.equal(gray4.stride, 2, "gray4 stride should round odd widths up");
+  test.equal(gray4.byteLength, 4, "gray4 should store two pixels per byte");
+  gray4.clear(0).setPixel(0, 0, 1).setPixel(1, 0, 7).setPixel(2, 0, 15);
+  bytes = gray4.readRect(0, 0, 3, 1).toArray();
+  test.equal(bytes[0], 0x17, "gray4 should place the even pixel in the high nibble");
+  test.equal(bytes[1], 0xf0, "gray4 odd-width exports should zero the padding nibble");
+  stagedView = gray4.readRect(0, 0, 3, 1);
+  test.equal(stagedView.getUint8(0), 0x17,
+    "ByteView.getUint8 should inspect one byte without an array copy");
+  stagedView.close();
+  bytes = gray4.readRect(1, 0, 2, 1).toArray();
+  test.equal(bytes[0], 0x7f, "gray4 cropped exports should repack from the high nibble");
+  gray4.clear(10).blit({
+    width: 1,
+    height: 1,
+    format: "gray8",
+    pixels: [0]
+  }, { destinationRect: { x: 1, y: 0, width: 1, height: 1 } });
+  test.equal(gray4.getPixel(0, 0), 10,
+    "gray4 partial blits should preserve the neighboring high nibble");
+  test.equal(gray4.getPixel(1, 0), 0,
+    "gray4 partial blits should update the selected low nibble");
+  converted = bitmap.convert({
+    width: 3,
+    height: 1,
+    format: "gray8",
+    pixels: [0, 127, 255]
+  }, { format: "gray4" });
+  bytes = converted.readRect(0, 0, 3, 1).toArray();
+  test.equal(bytes[0], 0x07, "gray8 to gray4 should use high-nibble quantization");
+  test.equal(bytes[1], 0xf0, "gray8 to gray4 should retain the brightest level");
+  converted.close();
+  converted = bitmap.convert({
+    width: 2,
+    height: 1,
+    format: "gray8",
+    pixels: [100, 200]
+  }, { format: "gray4", normalize: true });
+  test.equal(converted.readRect(0, 0, 2, 1).toArray()[0], 0x0f,
+    "gray4 output should support grayscale normalization");
+  converted.close();
+  converted = bitmap.convert({
+    width: 3,
+    height: 1,
+    format: "gray4",
+    pixels: [0x07, 0xf0]
+  }, { format: "gray8" });
+  test.equal(converted.getPixel(0, 0), 0,
+    "gray4 to gray8 should expand zero exactly");
+  test.equal(converted.getPixel(1, 0), 119,
+    "gray4 to gray8 should replicate the four-bit level");
+  test.equal(converted.getPixel(2, 0), 255,
+    "gray4 to gray8 should expand the brightest level exactly");
+  converted.close();
+  chunks = gray4.readRectChunks(0, 0, 3, 2);
+  test.equal(chunks.length, 2,
+    "gray4 chunking should use its packed row length");
+  test.equal(chunks[0].byteLength, 2,
+    "gray4 chunks should keep complete packed rows");
 
   mono.clear(0).clearDirty().setPixel(0, 0, 1).setPixel(1, 7, 1);
   test.equal(mono.getPixel(0, 0), 1, "mono getPixel should read set pixels");
@@ -173,6 +243,50 @@ test("bitmap/basic", function () {
   dirty = mono.getDirty();
   test.equal(dirty.width, 4, "blit should mark the destination width dirty");
   test.equal(dirty.height, 4, "blit should mark the destination height dirty");
+  mono.clear(0).clearDirty();
+  test.equal(mono.blitBatch([
+    {
+      source: {
+        width: 2,
+        height: 1,
+        format: "gray8",
+        pixels: [255, 0]
+      },
+      options: {
+        destinationRect: { x: 0, y: 1, width: 2, height: 1 }
+      }
+    },
+    {
+      source: {
+        width: 1,
+        height: 2,
+        format: "gray8",
+        pixels: [0, 255]
+      },
+      options: {
+        destinationRect: { x: 1, y: 1, width: 1, height: 2 }
+      }
+    }
+  ]), mono, "blitBatch should be chainable");
+  test.equal(mono.getPixel(0, 1), 1,
+    "blitBatch should apply the first operation");
+  test.equal(mono.getPixel(1, 1), 0,
+    "blitBatch should apply overlapping operations in array order");
+  test.equal(mono.getPixel(1, 2), 1,
+    "blitBatch should apply later destination rows");
+  dirty = mono.getDirty();
+  test.equal(dirty.x, 0, "blitBatch should union dirty x bounds");
+  test.equal(dirty.y, 1, "blitBatch should union dirty y bounds");
+  test.equal(dirty.width, 2, "blitBatch should union dirty widths");
+  test.equal(dirty.height, 2, "blitBatch should union dirty heights");
+  try {
+    mono.blitBatch([]);
+  } catch (emptyBatchError) {
+    closeError = String(emptyBatchError);
+  }
+  test.ok(closeError.indexOf("1..16") >= 0,
+    "blitBatch should reject empty batches with the bounded operation range");
+  closeError = "";
   mono.clear(0).blit({
     width: 4,
     height: 4,
@@ -267,6 +381,16 @@ test("bitmap/basic", function () {
   closeError = "";
 
   rgb = bitmap.create({ width: 2, height: 2, format: "rgb565", chunkBytes: 4 });
+  test.equal(typeof rgb.decode, "function",
+    "rgb565 Bitmap should expose the compressed-image decoder");
+  try {
+    rgb.decode([0xff, 0xd8], { codec: "jpeg" });
+  } catch (jpegError) {
+    closeError = String(jpegError);
+  }
+  test.ok(closeError.indexOf("malformed or truncated JPEG") >= 0,
+    "decode should reject truncated JPEG before starting native work");
+  closeError = "";
   test.equal(rgb.layout, "linear", "rgb565 default layout should be linear");
   test.equal(rgb.stride, 4, "rgb565 stride should be width * 2");
   test.equal(rgb.byteLength, 8, "rgb565 byteLength should be width * height * 2");
@@ -382,9 +506,12 @@ test("bitmap/basic", function () {
   test.equal(typeof _ByteSpanSource.prototype.setRect, "undefined", "generic ByteSpanSource should stay opaque");
   test.ok(source instanceof _ByteSpanSource, "BitmapSpanSource should be accepted as a ByteSpanSource");
   test.ok(source instanceof _BitmapSpanSource, "createSpanSource should return a BitmapSpanSource");
+  test.equal(source.byteLength, 8, "BitmapSpanSource should report its full rectangle byteLength");
   test.ok(source && typeof source.setRect === "function", "BitmapSpanSource should expose setRect");
   test.equal(source.setRect(-1, -1, 2, 2), source, "BitmapSpanSource setRect should return the source");
+  test.equal(source.byteLength, 2, "BitmapSpanSource byteLength should follow its clamped rectangle");
   test.equal(source.setRect(0, 0, 2, 2), source, "BitmapSpanSource setRect should allow repeated updates");
+  test.equal(source.byteLength, 8, "BitmapSpanSource byteLength should update after setRect");
   var snapshotChunks = rgb.readRectChunks(0, 0, 2, 2, { byteOrder: "be" });
   var snapshotFirst = snapshotChunks[0];
 
@@ -439,6 +566,7 @@ test("bitmap/basic", function () {
   }
   test.ok(closeError.indexOf("closed") >= 0, "methods should fail clearly after close");
   wide.close();
+  gray4.close();
   mono.close();
 
   return {

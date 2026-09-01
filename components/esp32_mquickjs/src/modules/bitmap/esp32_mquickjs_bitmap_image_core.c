@@ -3,6 +3,9 @@
 #include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
+
+#define BITMAP_LAYOUT_MASK(layout) (1U << (layout))
 
 typedef struct {
     uint8_t r;
@@ -17,6 +20,133 @@ static const uint8_t s_bayer_4x4[] = {
     15, 7, 13, 5,
 };
 
+static const esp32_mquickjs_bitmap_format_info_t s_format_info[] = {
+    {
+        .format = ESP32_MQUICKJS_BITMAP_FORMAT_MONO1,
+        .name = "mono1",
+        .bits_per_pixel = 1,
+        .maximum_color = 1U,
+        .default_layout = ESP32_MQUICKJS_BITMAP_LAYOUT_PAGE_Y8,
+        .allowed_layouts = BITMAP_LAYOUT_MASK(ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR) |
+                           BITMAP_LAYOUT_MASK(ESP32_MQUICKJS_BITMAP_LAYOUT_PAGE_Y8),
+        .grayscale = true,
+    },
+    {
+        .format = ESP32_MQUICKJS_BITMAP_FORMAT_GRAY4,
+        .name = "gray4",
+        .bits_per_pixel = 4,
+        .maximum_color = 0x0fU,
+        .default_layout = ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR,
+        .allowed_layouts = BITMAP_LAYOUT_MASK(ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR),
+        .grayscale = true,
+    },
+    {
+        .format = ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8,
+        .name = "gray8",
+        .bits_per_pixel = 8,
+        .maximum_color = 0xffU,
+        .default_layout = ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR,
+        .allowed_layouts = BITMAP_LAYOUT_MASK(ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR),
+        .grayscale = true,
+    },
+    {
+        .format = ESP32_MQUICKJS_BITMAP_FORMAT_RGB565,
+        .name = "rgb565",
+        .bits_per_pixel = 16,
+        .maximum_color = 0xffffU,
+        .default_layout = ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR,
+        .allowed_layouts = BITMAP_LAYOUT_MASK(ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR),
+        .grayscale = false,
+    },
+    {
+        .format = ESP32_MQUICKJS_BITMAP_FORMAT_RGB888,
+        .name = "rgb888",
+        .bits_per_pixel = 24,
+        .maximum_color = 0xffffffU,
+        .default_layout = ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR,
+        .allowed_layouts = BITMAP_LAYOUT_MASK(ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR),
+        .grayscale = false,
+    },
+};
+
+const esp32_mquickjs_bitmap_format_info_t *esp32_mquickjs_bitmap_format_info(
+    esp32_mquickjs_bitmap_pixel_format_t format)
+{
+    size_t index;
+
+    for (index = 0; index < sizeof(s_format_info) / sizeof(s_format_info[0]);
+         ++index) {
+        if (s_format_info[index].format == format) {
+            return &s_format_info[index];
+        }
+    }
+    return NULL;
+}
+
+bool esp32_mquickjs_bitmap_parse_format(
+    const char *name,
+    esp32_mquickjs_bitmap_pixel_format_t *out_format)
+{
+    size_t index;
+
+    if (name == NULL || out_format == NULL) {
+        return false;
+    }
+    for (index = 0; index < sizeof(s_format_info) / sizeof(s_format_info[0]);
+         ++index) {
+        if (strcmp(name, s_format_info[index].name) == 0) {
+            *out_format = s_format_info[index].format;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool esp32_mquickjs_bitmap_storage_geometry(
+    uint32_t width,
+    uint32_t height,
+    esp32_mquickjs_bitmap_pixel_format_t format,
+    esp32_mquickjs_bitmap_layout_t layout,
+    uint32_t *out_row_bytes,
+    uint32_t *out_rows)
+{
+    const esp32_mquickjs_bitmap_format_info_t *info =
+        esp32_mquickjs_bitmap_format_info(format);
+    uint64_t packed_bits;
+    uint64_t packed_row_bytes;
+    uint32_t row_bytes;
+    uint32_t rows;
+
+    if (width == 0 || height == 0 || info == NULL || out_row_bytes == NULL ||
+        out_rows == NULL || layout > 7 ||
+        (info->allowed_layouts & BITMAP_LAYOUT_MASK(layout)) == 0) {
+        return false;
+    }
+    if (layout == ESP32_MQUICKJS_BITMAP_LAYOUT_PAGE_Y8) {
+        row_bytes = width;
+        rows = height / 8U + (height % 8U != 0);
+    } else if (info->bits_per_pixel < 8U) {
+        packed_bits = (uint64_t)width * info->bits_per_pixel;
+        packed_row_bytes = packed_bits / 8U + (packed_bits % 8U != 0);
+        if (packed_row_bytes > UINT32_MAX) {
+            return false;
+        }
+        row_bytes = (uint32_t)packed_row_bytes;
+        rows = height;
+    } else {
+        uint32_t bytes_per_pixel = info->bits_per_pixel / 8U;
+
+        if (width > UINT32_MAX / bytes_per_pixel) {
+            return false;
+        }
+        row_bytes = width * bytes_per_pixel;
+        rows = height;
+    }
+    *out_row_bytes = row_bytes;
+    *out_rows = rows;
+    return true;
+}
+
 bool esp32_mquickjs_bitmap_compute_storage(
     uint32_t width,
     uint32_t height,
@@ -30,46 +160,10 @@ bool esp32_mquickjs_bitmap_compute_storage(
     uint32_t row_bytes;
     uint32_t stride;
 
-    if (width == 0 || height == 0 || out_stride == NULL || out_length == NULL) {
+    if (out_stride == NULL || out_length == NULL ||
+        !esp32_mquickjs_bitmap_storage_geometry(
+            width, height, format, layout, &row_bytes, &rows)) {
         return false;
-    }
-    switch (format) {
-        case ESP32_MQUICKJS_BITMAP_FORMAT_MONO1:
-            if (layout == ESP32_MQUICKJS_BITMAP_LAYOUT_PAGE_Y8) {
-                rows = (height + 7U) / 8U;
-                row_bytes = width;
-            } else if (layout == ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR) {
-                rows = height;
-                row_bytes = (width + 7U) / 8U;
-            } else {
-                return false;
-            }
-            break;
-        case ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8:
-            if (layout != ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR) {
-                return false;
-            }
-            rows = height;
-            row_bytes = width;
-            break;
-        case ESP32_MQUICKJS_BITMAP_FORMAT_RGB565:
-            if (layout != ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR ||
-                width > UINT32_MAX / 2U) {
-                return false;
-            }
-            rows = height;
-            row_bytes = width * 2U;
-            break;
-        case ESP32_MQUICKJS_BITMAP_FORMAT_RGB888:
-            if (layout != ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR ||
-                width > UINT32_MAX / 3U) {
-                return false;
-            }
-            rows = height;
-            row_bytes = width * 3U;
-            break;
-        default:
-            return false;
     }
     stride = requested_stride == 0 ? row_bytes : requested_stride;
     if (stride < row_bytes || (size_t)(rows - 1U) >
@@ -161,6 +255,16 @@ static bitmap_rgb_t read_pixel(const esp32_mquickjs_bitmap_view_t *source,
             result.g = result.r;
             result.b = result.r;
             break;
+        case ESP32_MQUICKJS_BITMAP_FORMAT_GRAY4: {
+            uint8_t packed =
+                source->data[(size_t)y * source->stride + (x >> 1U)];
+            uint8_t gray4 = (x & 1U) == 0 ? packed >> 4U : packed & 0x0fU;
+
+            result.r = (uint8_t)(gray4 * 17U);
+            result.g = result.r;
+            result.b = result.r;
+            break;
+        }
         case ESP32_MQUICKJS_BITMAP_FORMAT_RGB565: {
             uint32_t color;
 
@@ -626,6 +730,18 @@ static void write_pixel(const esp32_mquickjs_bitmap_target_t *target,
         case ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8:
             target->data[(size_t)y * target->stride + x] = gray;
             break;
+        case ESP32_MQUICKJS_BITMAP_FORMAT_GRAY4: {
+            uint8_t *packed =
+                &target->data[(size_t)y * target->stride + (x >> 1U)];
+            uint8_t gray4 = gray >> 4U;
+
+            if ((x & 1U) == 0) {
+                *packed = (uint8_t)((*packed & 0x0fU) | (gray4 << 4U));
+            } else {
+                *packed = (uint8_t)((*packed & 0xf0U) | gray4);
+            }
+            break;
+        }
         case ESP32_MQUICKJS_BITMAP_FORMAT_RGB565: {
             uint16_t packed = (uint16_t)(((uint16_t)(color.r >> 3U) << 11U) |
                                          ((uint16_t)(color.g >> 2U) << 5U) |
@@ -672,10 +788,13 @@ static bool options_are_valid(
          options->dither != ESP32_MQUICKJS_BITMAP_DITHER_BAYER_4X4)) {
         return false;
     }
-    if (options->normalize &&
-        target->format != ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8 &&
-        target->format != ESP32_MQUICKJS_BITMAP_FORMAT_MONO1) {
-        return false;
+    if (options->normalize) {
+        const esp32_mquickjs_bitmap_format_info_t *info =
+            esp32_mquickjs_bitmap_format_info(target->format);
+
+        if (info == NULL || !info->grayscale) {
+            return false;
+        }
     }
     if ((options->dither != ESP32_MQUICKJS_BITMAP_DITHER_NONE ||
          options->threshold != 128U) &&
@@ -683,6 +802,286 @@ static bool options_are_valid(
         return false;
     }
     return true;
+}
+
+static bool transform_is_unscaled_identity(
+    const esp32_mquickjs_bitmap_transform_options_t *options)
+{
+    return options->rotation == 0 && !options->flip_x && !options->flip_y &&
+           options->filter == ESP32_MQUICKJS_BITMAP_FILTER_NEAREST &&
+           options->dither == ESP32_MQUICKJS_BITMAP_DITHER_NONE &&
+           options->threshold == 128U && !options->normalize &&
+           options->source_width == options->destination_width &&
+           options->source_height == options->destination_height;
+}
+
+static void set_transform_dirty(
+    int32_t clipped_x0,
+    int32_t clipped_y0,
+    int32_t clipped_x1,
+    int32_t clipped_y1,
+    esp32_mquickjs_bitmap_dirty_rect_t *out_dirty)
+{
+    if (out_dirty == NULL) {
+        return;
+    }
+    out_dirty->x = clipped_x0;
+    out_dirty->y = clipped_y0;
+    out_dirty->width = (uint32_t)(clipped_x1 - clipped_x0);
+    out_dirty->height = (uint32_t)(clipped_y1 - clipped_y0);
+}
+
+static esp32_mquickjs_bitmap_transform_result_t transform_copy_linear_rows(
+    const esp32_mquickjs_bitmap_view_t *source,
+    const esp32_mquickjs_bitmap_target_t *target,
+    const esp32_mquickjs_bitmap_transform_options_t *options,
+    int32_t clipped_x0,
+    int32_t clipped_y0,
+    int32_t clipped_x1,
+    int32_t clipped_y1,
+    uint32_t bytes_per_pixel,
+    esp32_mquickjs_bitmap_cancel_fn_t cancel,
+    void *cancel_opaque,
+    uint32_t *out_rows_completed,
+    esp32_mquickjs_bitmap_dirty_rect_t *out_dirty)
+{
+    uint32_t source_x = options->source_x +
+                        (uint32_t)(clipped_x0 - options->destination_x);
+    uint32_t source_y = options->source_y +
+                        (uint32_t)(clipped_y0 - options->destination_y);
+    size_t row_bytes = (size_t)(clipped_x1 - clipped_x0) * bytes_per_pixel;
+    int32_t y;
+
+    for (y = clipped_y0; y < clipped_y1; ++y) {
+        const uint8_t *source_row;
+        uint8_t *target_row;
+
+        if (cancel != NULL && cancel(cancel_opaque)) {
+            return ESP32_MQUICKJS_BITMAP_TRANSFORM_CANCELLED;
+        }
+        source_row = source->data +
+                     (size_t)(source_y + (uint32_t)(y - clipped_y0)) *
+                         source->stride +
+                     (size_t)source_x * bytes_per_pixel;
+        target_row = target->data + (size_t)y * target->stride +
+                     (size_t)clipped_x0 * bytes_per_pixel;
+        memmove(target_row, source_row, row_bytes);
+        if (out_rows_completed != NULL) {
+            ++*out_rows_completed;
+        }
+    }
+    set_transform_dirty(clipped_x0, clipped_y0, clipped_x1, clipped_y1,
+                        out_dirty);
+    return ESP32_MQUICKJS_BITMAP_TRANSFORM_OK;
+}
+
+static uint8_t read_gray_pixel(
+    const esp32_mquickjs_bitmap_view_t *source,
+    uint32_t x,
+    uint32_t y)
+{
+    if (source->format == ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8) {
+        return source->data[(size_t)y * source->stride + x];
+    }
+    {
+        uint8_t packed =
+            source->data[(size_t)y * source->stride + (x >> 1U)];
+        uint8_t gray4 = (x & 1U) == 0 ? packed >> 4U : packed & 0x0fU;
+
+        return (uint8_t)(gray4 * 17U);
+    }
+}
+
+static void write_gray_pixel(
+    const esp32_mquickjs_bitmap_target_t *target,
+    uint32_t x,
+    uint32_t y,
+    uint8_t gray)
+{
+    if (target->format == ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8) {
+        target->data[(size_t)y * target->stride + x] = gray;
+        return;
+    }
+    {
+        uint8_t *packed =
+            &target->data[(size_t)y * target->stride + (x >> 1U)];
+        uint8_t gray4 = gray >> 4U;
+
+        if ((x & 1U) == 0) {
+            *packed = (uint8_t)((*packed & 0x0fU) | (gray4 << 4U));
+        } else {
+            *packed = (uint8_t)((*packed & 0xf0U) | gray4);
+        }
+    }
+}
+
+static esp32_mquickjs_bitmap_transform_result_t transform_gray_identity(
+    const esp32_mquickjs_bitmap_view_t *source,
+    const esp32_mquickjs_bitmap_target_t *target,
+    const esp32_mquickjs_bitmap_transform_options_t *options,
+    int32_t clipped_x0,
+    int32_t clipped_y0,
+    int32_t clipped_x1,
+    int32_t clipped_y1,
+    esp32_mquickjs_bitmap_cancel_fn_t cancel,
+    void *cancel_opaque,
+    uint32_t *out_rows_completed,
+    esp32_mquickjs_bitmap_dirty_rect_t *out_dirty)
+{
+    uint32_t source_x0 = options->source_x +
+                         (uint32_t)(clipped_x0 - options->destination_x);
+    uint32_t source_y0 = options->source_y +
+                         (uint32_t)(clipped_y0 - options->destination_y);
+    int32_t y;
+
+    for (y = clipped_y0; y < clipped_y1; ++y) {
+        uint32_t source_y = source_y0 + (uint32_t)(y - clipped_y0);
+        int32_t x;
+
+        if (cancel != NULL && cancel(cancel_opaque)) {
+            return ESP32_MQUICKJS_BITMAP_TRANSFORM_CANCELLED;
+        }
+        for (x = clipped_x0; x < clipped_x1; ++x) {
+            uint32_t source_x = source_x0 + (uint32_t)(x - clipped_x0);
+
+            write_gray_pixel(target, (uint32_t)x, (uint32_t)y,
+                             read_gray_pixel(source, source_x, source_y));
+        }
+        if (out_rows_completed != NULL) {
+            ++*out_rows_completed;
+        }
+    }
+    set_transform_dirty(clipped_x0, clipped_y0, clipped_x1, clipped_y1,
+                        out_dirty);
+    return ESP32_MQUICKJS_BITMAP_TRANSFORM_OK;
+}
+
+static void write_rgb565_gray(const esp32_mquickjs_bitmap_target_t *target,
+                              uint8_t *destination,
+                              uint8_t gray)
+{
+    uint16_t packed = (uint16_t)(((uint16_t)(gray >> 3U) << 11U) |
+                                 ((uint16_t)(gray >> 2U) << 5U) |
+                                 (uint16_t)(gray >> 3U));
+
+    if (target->byte_order == ESP32_MQUICKJS_BITMAP_BYTE_ORDER_LE) {
+        destination[0] = (uint8_t)packed;
+        destination[1] = (uint8_t)(packed >> 8U);
+    } else {
+        destination[0] = (uint8_t)(packed >> 8U);
+        destination[1] = (uint8_t)packed;
+    }
+}
+
+static esp32_mquickjs_bitmap_transform_result_t
+transform_gray_to_rgb565_identity(
+    const esp32_mquickjs_bitmap_view_t *source,
+    const esp32_mquickjs_bitmap_target_t *target,
+    const esp32_mquickjs_bitmap_transform_options_t *options,
+    int32_t clipped_x0,
+    int32_t clipped_y0,
+    int32_t clipped_x1,
+    int32_t clipped_y1,
+    esp32_mquickjs_bitmap_cancel_fn_t cancel,
+    void *cancel_opaque,
+    uint32_t *out_rows_completed,
+    esp32_mquickjs_bitmap_dirty_rect_t *out_dirty)
+{
+    uint32_t source_x0 = options->source_x +
+                         (uint32_t)(clipped_x0 - options->destination_x);
+    uint32_t source_y0 = options->source_y +
+                         (uint32_t)(clipped_y0 - options->destination_y);
+    int32_t y;
+
+    for (y = clipped_y0; y < clipped_y1; ++y) {
+        uint32_t source_y = source_y0 + (uint32_t)(y - clipped_y0);
+        const uint8_t *source_row =
+            source->data + (size_t)source_y * source->stride;
+        uint8_t *target_row = target->data + (size_t)y * target->stride;
+        int32_t x;
+
+        if (cancel != NULL && cancel(cancel_opaque)) {
+            return ESP32_MQUICKJS_BITMAP_TRANSFORM_CANCELLED;
+        }
+        for (x = clipped_x0; x < clipped_x1; ++x) {
+            uint32_t source_x = source_x0 + (uint32_t)(x - clipped_x0);
+            uint8_t gray;
+
+            if (source->format == ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8) {
+                gray = source_row[source_x];
+            } else {
+                uint8_t packed = source_row[source_x >> 1U];
+                uint8_t gray4 = (source_x & 1U) == 0
+                                    ? packed >> 4U
+                                    : packed & 0x0fU;
+
+                gray = (uint8_t)(gray4 * 17U);
+            }
+            write_rgb565_gray(target, target_row + (size_t)x * 2U, gray);
+        }
+        if (out_rows_completed != NULL) {
+            ++*out_rows_completed;
+        }
+    }
+    set_transform_dirty(clipped_x0, clipped_y0, clipped_x1, clipped_y1,
+                        out_dirty);
+    return ESP32_MQUICKJS_BITMAP_TRANSFORM_OK;
+}
+
+static esp32_mquickjs_bitmap_transform_result_t
+transform_rgb565_to_gray_identity(
+    const esp32_mquickjs_bitmap_view_t *source,
+    const esp32_mquickjs_bitmap_target_t *target,
+    const esp32_mquickjs_bitmap_transform_options_t *options,
+    int32_t clipped_x0,
+    int32_t clipped_y0,
+    int32_t clipped_x1,
+    int32_t clipped_y1,
+    esp32_mquickjs_bitmap_cancel_fn_t cancel,
+    void *cancel_opaque,
+    uint32_t *out_rows_completed,
+    esp32_mquickjs_bitmap_dirty_rect_t *out_dirty)
+{
+    uint32_t source_x0 = options->source_x +
+                         (uint32_t)(clipped_x0 - options->destination_x);
+    uint32_t source_y0 = options->source_y +
+                         (uint32_t)(clipped_y0 - options->destination_y);
+    int32_t y;
+
+    for (y = clipped_y0; y < clipped_y1; ++y) {
+        uint32_t source_y = source_y0 + (uint32_t)(y - clipped_y0);
+        const uint8_t *source_row =
+            source->data + (size_t)source_y * source->stride;
+        int32_t x;
+
+        if (cancel != NULL && cancel(cancel_opaque)) {
+            return ESP32_MQUICKJS_BITMAP_TRANSFORM_CANCELLED;
+        }
+        for (x = clipped_x0; x < clipped_x1; ++x) {
+            uint32_t source_x = source_x0 + (uint32_t)(x - clipped_x0);
+            const uint8_t *pixel = source_row + (size_t)source_x * 2U;
+            uint16_t packed;
+            bitmap_rgb_t color;
+
+            if (source->byte_order == ESP32_MQUICKJS_BITMAP_BYTE_ORDER_LE) {
+                packed = (uint16_t)pixel[0] |
+                         (uint16_t)((uint16_t)pixel[1] << 8U);
+            } else {
+                packed = (uint16_t)((uint16_t)pixel[0] << 8U) | pixel[1];
+            }
+            color.r = expand5((uint16_t)((packed >> 11U) & 0x1fU));
+            color.g = expand6((uint16_t)((packed >> 5U) & 0x3fU));
+            color.b = expand5((uint16_t)(packed & 0x1fU));
+            write_gray_pixel(target, (uint32_t)x, (uint32_t)y,
+                             luminance(color));
+        }
+        if (out_rows_completed != NULL) {
+            ++*out_rows_completed;
+        }
+    }
+    set_transform_dirty(clipped_x0, clipped_y0, clipped_x1, clipped_y1,
+                        out_dirty);
+    return ESP32_MQUICKJS_BITMAP_TRANSFORM_OK;
 }
 
 esp32_mquickjs_bitmap_transform_result_t esp32_mquickjs_bitmap_transform(
@@ -748,6 +1147,51 @@ esp32_mquickjs_bitmap_transform_result_t esp32_mquickjs_bitmap_transform(
                                     &minimum, &maximum)) {
             return ESP32_MQUICKJS_BITMAP_TRANSFORM_CANCELLED;
         }
+    }
+    if (transform_is_unscaled_identity(options) &&
+        source->format == target->format &&
+        source->layout == ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR &&
+        target->layout == ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR &&
+        (source->format != ESP32_MQUICKJS_BITMAP_FORMAT_RGB565 ||
+         source->byte_order == target->byte_order)) {
+        const esp32_mquickjs_bitmap_format_info_t *info =
+            esp32_mquickjs_bitmap_format_info(source->format);
+
+        if (info != NULL && info->bits_per_pixel >= 8U) {
+            return transform_copy_linear_rows(
+                source, target, options, clipped_x0, clipped_y0, clipped_x1,
+                clipped_y1, info->bits_per_pixel / 8U, cancel,
+                cancel_opaque, out_rows_completed, out_dirty);
+        }
+    }
+    if (transform_is_unscaled_identity(options) &&
+        (source->format == ESP32_MQUICKJS_BITMAP_FORMAT_GRAY4 ||
+         source->format == ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8) &&
+        target->format == ESP32_MQUICKJS_BITMAP_FORMAT_RGB565 &&
+        source->layout == ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR &&
+        target->layout == ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR) {
+        return transform_gray_to_rgb565_identity(
+            source, target, options, clipped_x0, clipped_y0, clipped_x1,
+            clipped_y1, cancel, cancel_opaque, out_rows_completed, out_dirty);
+    }
+    if (transform_is_unscaled_identity(options) &&
+        source->format == ESP32_MQUICKJS_BITMAP_FORMAT_RGB565 &&
+        (target->format == ESP32_MQUICKJS_BITMAP_FORMAT_GRAY4 ||
+         target->format == ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8) &&
+        source->layout == ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR &&
+        target->layout == ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR) {
+        return transform_rgb565_to_gray_identity(
+            source, target, options, clipped_x0, clipped_y0, clipped_x1,
+            clipped_y1, cancel, cancel_opaque, out_rows_completed, out_dirty);
+    }
+    if (transform_is_unscaled_identity(options) &&
+        (source->format == ESP32_MQUICKJS_BITMAP_FORMAT_GRAY4 ||
+         source->format == ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8) &&
+        (target->format == ESP32_MQUICKJS_BITMAP_FORMAT_GRAY4 ||
+         target->format == ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8)) {
+        return transform_gray_identity(
+            source, target, options, clipped_x0, clipped_y0, clipped_x1,
+            clipped_y1, cancel, cancel_opaque, out_rows_completed, out_dirty);
     }
     if (source->format == ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8 &&
         source->layout == ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR &&

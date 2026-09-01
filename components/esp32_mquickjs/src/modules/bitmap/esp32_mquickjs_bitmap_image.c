@@ -19,6 +19,8 @@
 
 #define BITMAP_CONVERT_API "bitmap.convert()"
 #define BITMAP_BLIT_API "Bitmap.blit()"
+#define BITMAP_BLIT_BATCH_API "Bitmap.blitBatch()"
+#define BITMAP_BLIT_BATCH_MAX_OPERATIONS 16U
 
 typedef enum {
     BITMAP_SOURCE_NONE = 0,
@@ -38,7 +40,9 @@ struct esp32_mquickjs_future_driver_state {
     bool source_rooted;
     bool pixels_rooted;
     bool target_rooted;
+    bool target_write_acquired;
     bool convert;
+    bool batch;
     bool started;
     _Atomic bool completed;
     _Atomic bool cancelled;
@@ -56,6 +60,8 @@ struct esp32_mquickjs_future_driver_state {
     uint32_t rows_completed;
     esp32_mquickjs_bitmap_dirty_rect_t dirty;
     esp32_mquickjs_bitmap_transform_result_t result;
+    struct esp32_mquickjs_future_driver_state *operations;
+    uint32_t operation_count;
 };
 
 static bool value_is_object(JSContext *ctx, JSValue value)
@@ -183,23 +189,7 @@ static bool read_string_property(JSContext *ctx,
 static bool parse_format(const char *name,
                          esp32_mquickjs_bitmap_pixel_format_t *out)
 {
-    if (name != NULL && strcmp(name, "mono1") == 0) {
-        *out = ESP32_MQUICKJS_BITMAP_FORMAT_MONO1;
-        return true;
-    }
-    if (name != NULL && strcmp(name, "gray8") == 0) {
-        *out = ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8;
-        return true;
-    }
-    if (name != NULL && strcmp(name, "rgb565") == 0) {
-        *out = ESP32_MQUICKJS_BITMAP_FORMAT_RGB565;
-        return true;
-    }
-    if (name != NULL && strcmp(name, "rgb888") == 0) {
-        *out = ESP32_MQUICKJS_BITMAP_FORMAT_RGB888;
-        return true;
-    }
-    return false;
+    return esp32_mquickjs_bitmap_parse_format(name, out);
 }
 
 static bool parse_layout(const char *name,
@@ -207,22 +197,28 @@ static bool parse_layout(const char *name,
                          bool descriptor,
                          esp32_mquickjs_bitmap_layout_t *out)
 {
+    const esp32_mquickjs_bitmap_format_info_t *info =
+        esp32_mquickjs_bitmap_format_info(format);
+    esp32_mquickjs_bitmap_layout_t layout;
+
+    if (info == NULL || out == NULL) {
+        return false;
+    }
     if (name == NULL) {
-        *out = format == ESP32_MQUICKJS_BITMAP_FORMAT_MONO1 && !descriptor
-                   ? ESP32_MQUICKJS_BITMAP_LAYOUT_PAGE_Y8
-                   : ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR;
-        return true;
+        layout = descriptor ? ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR
+                            : info->default_layout;
+    } else if (strcmp(name, "linear") == 0) {
+        layout = ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR;
+    } else if (strcmp(name, "page-y8") == 0) {
+        layout = ESP32_MQUICKJS_BITMAP_LAYOUT_PAGE_Y8;
+    } else {
+        return false;
     }
-    if (strcmp(name, "linear") == 0) {
-        *out = ESP32_MQUICKJS_BITMAP_LAYOUT_LINEAR;
-        return true;
+    if ((info->allowed_layouts & (1U << layout)) == 0) {
+        return false;
     }
-    if (strcmp(name, "page-y8") == 0 &&
-        format == ESP32_MQUICKJS_BITMAP_FORMAT_MONO1) {
-        *out = ESP32_MQUICKJS_BITMAP_LAYOUT_PAGE_Y8;
-        return true;
-    }
-    return false;
+    *out = layout;
+    return true;
 }
 
 static bool parse_byte_order(const char *name,
@@ -653,11 +649,10 @@ static bool parse_transform_options(
         ((threshold_present || dither_present) &&
          target_format != ESP32_MQUICKJS_BITMAP_FORMAT_MONO1) ||
         (out->normalize &&
-         target_format != ESP32_MQUICKJS_BITMAP_FORMAT_MONO1 &&
-         target_format != ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8)) {
+         !esp32_mquickjs_bitmap_format_info(target_format)->grayscale)) {
         JS_ThrowTypeError(
             ctx,
-            "%s normalize is gray8/mono1-only and threshold/dither are mono1-only",
+            "%s normalize is grayscale-only and threshold/dither are mono1-only",
             api_name);
         return false;
     }
@@ -720,11 +715,21 @@ static bool ranges_overlap(const uint8_t *first,
 static void release_state_resources(
     esp32_mquickjs_future_driver_state_t *state)
 {
+    uint32_t operation_index;
+
     if (state == NULL) {
         return;
     }
-    if (state->target_bitmap != NULL && state->target_bitmap->write_lease) {
+    for (operation_index = 0; operation_index < state->operation_count;
+         ++operation_index) {
+        release_state_resources(&state->operations[operation_index]);
+    }
+    heap_caps_free(state->operations);
+    state->operations = NULL;
+    state->operation_count = 0;
+    if (state->target_write_acquired && state->target_bitmap != NULL) {
         bitmap_release_write(state->target_bitmap);
+        state->target_write_acquired = false;
     }
     if (state->result_bitmap != NULL && state->result_bitmap->write_lease) {
         bitmap_release_write(state->result_bitmap);
@@ -833,13 +838,7 @@ static bool prepare_convert(
         destroy_unstarted_state(state);
         return false;
     }
-    foreground = target_format == ESP32_MQUICKJS_BITMAP_FORMAT_MONO1
-                     ? 1U
-                     : (target_format == ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8
-                            ? 0xffU
-                            : (target_format == ESP32_MQUICKJS_BITMAP_FORMAT_RGB565
-                                   ? 0xffffU
-                                   : 0xffffffU));
+    foreground = esp32_mquickjs_bitmap_format_info(target_format)->maximum_color;
     state->result_bitmap = bitmap_allocate(
         ctx, width, height, (uint8_t)target_format, (uint8_t)target_layout,
         storage_value, stride_present ? stride : 0, BITMAP_DEFAULT_CHUNK_BYTES,
@@ -862,6 +861,40 @@ static bool prepare_convert(
     return true;
 }
 
+static bool parse_blit_operation_options(
+    JSContext *ctx,
+    JSValue options,
+    const char *api_name,
+    esp32_mquickjs_future_driver_state_t *operation,
+    esp32_mquickjs_bitmap_pixel_format_t target_format)
+{
+    uint32_t ignored_width = 0;
+    uint32_t ignored_height = 0;
+
+    if (JS_IsUndefined(options)) {
+        JSGCRef empty_ref;
+        JSValue *empty = JS_PushGCRef(ctx, &empty_ref);
+        bool result;
+
+        *empty = JS_NewObject(ctx);
+        result = !JS_IsException(*empty) &&
+                 parse_transform_options(
+                     ctx, *empty, api_name, &operation->source,
+                     target_format, false, &operation->options,
+                     &ignored_width, &ignored_height);
+        JS_PopGCRef(ctx, &empty_ref);
+        return result;
+    }
+    if (!value_is_object(ctx, options)) {
+        JS_ThrowTypeError(ctx, "%s operation options must be an object",
+                          api_name);
+        return false;
+    }
+    return parse_transform_options(
+        ctx, options, api_name, &operation->source, target_format, false,
+        &operation->options, &ignored_width, &ignored_height);
+}
+
 static bool prepare_blit(
     JSContext *ctx,
     JSGCRef *this_ref,
@@ -872,8 +905,6 @@ static bool prepare_blit(
     esp32_mquickjs_future_driver_state_t *state;
     esp32_mquickjs_bitmap_t *target;
     JSValue options = argc >= 2 ? argv[1].val : JS_UNDEFINED;
-    uint32_t ignored_width = 0;
-    uint32_t ignored_height = 0;
 
     if (out_state == NULL || argc < 1 || argc > 2 ||
         (!JS_IsUndefined(options) && !value_is_object(ctx, options))) {
@@ -899,8 +930,7 @@ static bool prepare_blit(
         ranges_overlap(state->source.data, state->source.length, target->data,
                        target->byte_length) ||
         !root_value(ctx, &state->target_ref, &state->target_rooted,
-                    this_ref->val) ||
-        !bitmap_acquire_write(ctx, target, BITMAP_BLIT_API)) {
+                    this_ref->val)) {
         if (!JS_HasException(ctx)) {
             JS_ThrowTypeError(ctx,
                               "%s does not allow aliased or in-place input",
@@ -909,6 +939,11 @@ static bool prepare_blit(
         destroy_unstarted_state(state);
         return false;
     }
+    if (!bitmap_acquire_write(ctx, target, BITMAP_BLIT_API)) {
+        destroy_unstarted_state(state);
+        return false;
+    }
+    state->target_write_acquired = true;
     state->target.data = target->data;
     state->target.length = target->byte_length;
     state->target.width = target->width;
@@ -919,28 +954,158 @@ static bool prepare_blit(
     state->target.layout = (esp32_mquickjs_bitmap_layout_t)target->layout;
     state->target.byte_order = ESP32_MQUICKJS_BITMAP_BYTE_ORDER_BE;
     state->target.bit_order = ESP32_MQUICKJS_BITMAP_BIT_ORDER_LSB;
-    if (JS_IsUndefined(options)) {
-        JSGCRef empty_ref;
-        JSValue *empty = JS_PushGCRef(ctx, &empty_ref);
-
-        *empty = JS_NewObject(ctx);
-        if (JS_IsException(*empty) ||
-            !parse_transform_options(ctx, *empty, BITMAP_BLIT_API,
-                                     &state->source, state->target.format,
-                                     false, &state->options, &ignored_width,
-                                     &ignored_height)) {
-            JS_PopGCRef(ctx, &empty_ref);
-            destroy_unstarted_state(state);
-            return false;
-        }
-        JS_PopGCRef(ctx, &empty_ref);
-    } else if (!parse_transform_options(
-                   ctx, options, BITMAP_BLIT_API, &state->source,
-                   state->target.format, false, &state->options,
-                   &ignored_width, &ignored_height)) {
+    if (!parse_blit_operation_options(
+            ctx, options, BITMAP_BLIT_API, state, state->target.format)) {
         destroy_unstarted_state(state);
         return false;
     }
+    *out_state = state;
+    return true;
+}
+
+static bool bitmap_array_length(JSContext *ctx,
+                                JSValue value,
+                                uint32_t *out_length)
+{
+    JSGCRef length_ref;
+    JSValue *length = JS_PushGCRef(ctx, &length_ref);
+    int raw_length;
+    bool result = false;
+
+    if (out_length == NULL || !JS_IsArray(ctx, value)) {
+        JS_ThrowTypeError(ctx, "%s expects one operation array",
+                          BITMAP_BLIT_BATCH_API);
+        goto done;
+    }
+    *length = JS_GetPropertyStr(ctx, value, "length");
+    if (JS_IsException(*length) ||
+        JS_ToInt32(ctx, &raw_length, *length) != 0 || raw_length < 0) {
+        if (!JS_HasException(ctx)) {
+            JS_ThrowRangeError(ctx, "%s operation array length is invalid",
+                               BITMAP_BLIT_BATCH_API);
+        }
+        goto done;
+    }
+    *out_length = (uint32_t)raw_length;
+    result = true;
+
+done:
+    JS_PopGCRef(ctx, &length_ref);
+    return result;
+}
+
+static bool prepare_blit_batch(
+    JSContext *ctx,
+    JSGCRef *this_ref,
+    int argc,
+    JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+    esp32_mquickjs_bitmap_t *target;
+    uint32_t operation_count;
+    uint32_t operation_index;
+
+    if (out_state == NULL || argc != 1 ||
+        !bitmap_array_length(ctx, argc == 1 ? argv[0].val : JS_UNDEFINED,
+                             &operation_count)) {
+        return false;
+    }
+    if (operation_count == 0 ||
+        operation_count > BITMAP_BLIT_BATCH_MAX_OPERATIONS) {
+        JS_ThrowRangeError(ctx, "%s expects 1..16 operations",
+                           BITMAP_BLIT_BATCH_API);
+        return false;
+    }
+    target = bitmap_from_value(ctx, this_ref->val, BITMAP_BLIT_BATCH_API);
+    if (target == NULL) {
+        return false;
+    }
+    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    if (state == NULL) {
+        JS_ThrowOutOfMemory(ctx);
+        return false;
+    }
+    state->operations = heap_caps_calloc(
+        operation_count, sizeof(*state->operations), MALLOC_CAP_8BIT);
+    if (state->operations == NULL) {
+        heap_caps_free(state);
+        JS_ThrowOutOfMemory(ctx);
+        return false;
+    }
+    atomic_init(&state->completed, false);
+    atomic_init(&state->cancelled, false);
+    state->ctx = ctx;
+    state->batch = true;
+    state->target_bitmap = target;
+    state->operation_count = operation_count;
+    state->target.data = target->data;
+    state->target.length = target->byte_length;
+    state->target.width = target->width;
+    state->target.height = target->height;
+    state->target.stride = target->stride;
+    state->target.format =
+        (esp32_mquickjs_bitmap_pixel_format_t)target->format;
+    state->target.layout = (esp32_mquickjs_bitmap_layout_t)target->layout;
+    state->target.byte_order = ESP32_MQUICKJS_BITMAP_BYTE_ORDER_BE;
+    state->target.bit_order = ESP32_MQUICKJS_BITMAP_BIT_ORDER_LSB;
+    if (!root_value(ctx, &state->target_ref, &state->target_rooted,
+                    this_ref->val)) {
+        destroy_unstarted_state(state);
+        return false;
+    }
+    for (operation_index = 0; operation_index < operation_count;
+         ++operation_index) {
+        esp32_mquickjs_future_driver_state_t *operation =
+            &state->operations[operation_index];
+        JSGCRef item_ref;
+        JSGCRef source_ref;
+        JSGCRef options_ref;
+        JSValue *item = JS_PushGCRef(ctx, &item_ref);
+        JSValue *source = JS_PushGCRef(ctx, &source_ref);
+        JSValue *options = JS_PushGCRef(ctx, &options_ref);
+        bool ok;
+
+        operation->ctx = ctx;
+        operation->target = state->target;
+        *item = JS_GetPropertyUint32(ctx, argv[0].val, operation_index);
+        *source = JS_IsException(*item)
+                      ? JS_EXCEPTION
+                      : JS_GetPropertyStr(ctx, *item, "source");
+        *options = JS_IsException(*item)
+                       ? JS_EXCEPTION
+                       : JS_GetPropertyStr(ctx, *item, "options");
+        ok = !JS_IsException(*item) && value_is_object(ctx, *item) &&
+             !JS_IsException(*source) && !JS_IsUndefined(*source) &&
+             !JS_IsNull(*source) && !JS_IsException(*options) &&
+             source_from_value(ctx, *source, BITMAP_BLIT_BATCH_API,
+                               operation) &&
+             operation->source_bitmap != target &&
+             !ranges_overlap(operation->source.data,
+                             operation->source.length, target->data,
+                             target->byte_length) &&
+             parse_blit_operation_options(
+                 ctx, *options, BITMAP_BLIT_BATCH_API, operation,
+                 state->target.format);
+        JS_PopGCRef(ctx, &options_ref);
+        JS_PopGCRef(ctx, &source_ref);
+        JS_PopGCRef(ctx, &item_ref);
+        if (!ok) {
+            if (!JS_HasException(ctx)) {
+                JS_ThrowTypeError(
+                    ctx,
+                    "%s operation %u requires non-aliased source and optional options",
+                    BITMAP_BLIT_BATCH_API, (unsigned)operation_index);
+            }
+            destroy_unstarted_state(state);
+            return false;
+        }
+    }
+    if (!bitmap_acquire_write(ctx, target, BITMAP_BLIT_BATCH_API)) {
+        destroy_unstarted_state(state);
+        return false;
+    }
+    state->target_write_acquired = true;
     *out_state = state;
     return true;
 }
@@ -966,6 +1131,16 @@ static bool bitmap_blit_prepare(
     return prepare_blit(ctx, this_ref, argc, argv, out_state);
 }
 
+static bool bitmap_blit_batch_prepare(
+    JSContext *ctx,
+    JSGCRef *this_ref,
+    int argc,
+    JSGCRef *argv,
+    esp32_mquickjs_future_driver_state_t **out_state)
+{
+    return prepare_blit_batch(ctx, this_ref, argc, argv, out_state);
+}
+
 static bool transform_cancelled(void *opaque)
 {
     esp32_mquickjs_future_driver_state_t *state = opaque;
@@ -987,6 +1162,33 @@ static void bitmap_transform_worker(void *opaque)
     atomic_store_explicit(&state->completed, true, memory_order_release);
 }
 
+static void bitmap_transform_batch_worker(void *opaque)
+{
+    esp32_mquickjs_future_driver_state_t *state = opaque;
+    uint32_t operation_index;
+
+    if (state == NULL) {
+        return;
+    }
+    state->result = ESP32_MQUICKJS_BITMAP_TRANSFORM_OK;
+    for (operation_index = 0; operation_index < state->operation_count;
+         ++operation_index) {
+        esp32_mquickjs_future_driver_state_t *operation =
+            &state->operations[operation_index];
+
+        operation->started = true;
+        operation->result = esp32_mquickjs_bitmap_transform(
+            &operation->source, &operation->target, &operation->options,
+            transform_cancelled, state, &operation->rows_completed,
+            &operation->dirty);
+        if (operation->result != ESP32_MQUICKJS_BITMAP_TRANSFORM_OK) {
+            state->result = operation->result;
+            break;
+        }
+    }
+    atomic_store_explicit(&state->completed, true, memory_order_release);
+}
+
 static bool bitmap_transform_start(
     JSContext *ctx,
     esp32_mquickjs_runtime_t *runtime,
@@ -1001,7 +1203,10 @@ static bool bitmap_transform_start(
     state->token = token;
     state->started = true;
     if (!esp32_mquickjs_future_submit_worker(
-            runtime, token, bitmap_transform_worker, state)) {
+            runtime, token,
+            state->batch ? bitmap_transform_batch_worker
+                         : bitmap_transform_worker,
+            state)) {
         JS_ThrowInternalError(ctx, "Bitmap transform worker queue is full");
         return false;
     }
@@ -1026,7 +1231,25 @@ static JSValue bitmap_transform_finish(
     if (state == NULL || state->result == ESP32_MQUICKJS_BITMAP_TRANSFORM_INVALID) {
         return JS_ThrowInternalError(ctx, "Bitmap transform failed");
     }
-    if (!state->convert && state->target_bitmap != NULL &&
+    if (state->batch && state->target_bitmap != NULL) {
+        uint32_t operation_index;
+
+        for (operation_index = 0; operation_index < state->operation_count;
+             ++operation_index) {
+            esp32_mquickjs_future_driver_state_t *operation =
+                &state->operations[operation_index];
+
+            if (operation->started &&
+                (operation->result == ESP32_MQUICKJS_BITMAP_TRANSFORM_OK ||
+                 operation->rows_completed != 0)) {
+                mark_dirty(state->target_bitmap,
+                           operation->options.destination_x,
+                           operation->options.destination_y,
+                           (int)operation->options.destination_width,
+                           (int)operation->options.destination_height);
+            }
+        }
+    } else if (!state->convert && state->target_bitmap != NULL &&
         (state->result == ESP32_MQUICKJS_BITMAP_TRANSFORM_OK ||
          state->rows_completed != 0)) {
         mark_dirty(state->target_bitmap, state->options.destination_x,
@@ -1093,6 +1316,15 @@ static const esp32_mquickjs_future_driver_t s_bitmap_blit_driver = {
     .destroy = bitmap_transform_destroy,
 };
 
+static const esp32_mquickjs_future_driver_t s_bitmap_blit_batch_driver = {
+    .capture = bitmap_blit_batch_prepare,
+    .start = bitmap_transform_start,
+    .poll = bitmap_transform_poll,
+    .finish = bitmap_transform_finish,
+    .cancel = bitmap_transform_cancel,
+    .destroy = bitmap_transform_destroy,
+};
+
 bool esp32_mquickjs_init_bitmap_runtime(
     JSContext *ctx,
     esp32_mquickjs_runtime_t *runtime)
@@ -1102,11 +1334,13 @@ bool esp32_mquickjs_init_bitmap_runtime(
     JSGCRef convert_ref;
     JSGCRef object_ref;
     JSGCRef blit_ref;
+    JSGCRef blit_batch_ref;
     JSValue *global = JS_PushGCRef(ctx, &global_ref);
     JSValue *module = JS_PushGCRef(ctx, &module_ref);
     JSValue *convert = JS_PushGCRef(ctx, &convert_ref);
     JSValue *object = JS_PushGCRef(ctx, &object_ref);
     JSValue *blit = JS_PushGCRef(ctx, &blit_ref);
+    JSValue *blit_batch = JS_PushGCRef(ctx, &blit_batch_ref);
     bool result;
 
     *global = JS_GetGlobalObject(ctx);
@@ -1120,14 +1354,21 @@ bool esp32_mquickjs_init_bitmap_runtime(
     *blit = JS_IsException(*object)
                 ? JS_EXCEPTION
                 : JS_GetPropertyStr(ctx, *object, "blit");
+    *blit_batch = JS_IsException(*object)
+                      ? JS_EXCEPTION
+                      : JS_GetPropertyStr(ctx, *object, "blitBatch");
     result = !JS_IsException(*convert) && !JS_IsException(*blit) &&
+             !JS_IsException(*blit_batch) &&
              esp32_mquickjs_future_register_driver(
                  ctx, runtime, *convert, &s_bitmap_convert_driver) &&
              esp32_mquickjs_future_register_driver(
-                 ctx, runtime, *blit, &s_bitmap_blit_driver);
+                 ctx, runtime, *blit, &s_bitmap_blit_driver) &&
+             esp32_mquickjs_future_register_driver(
+                 ctx, runtime, *blit_batch, &s_bitmap_blit_batch_driver);
     if (!result && !JS_HasException(ctx)) {
         JS_ThrowInternalError(ctx, "failed to register Bitmap Future drivers");
     }
+    JS_PopGCRef(ctx, &blit_batch_ref);
     JS_PopGCRef(ctx, &blit_ref);
     JS_PopGCRef(ctx, &object_ref);
     JS_PopGCRef(ctx, &convert_ref);
@@ -1166,6 +1407,23 @@ JSValue js_bitmap_blit(JSContext *ctx, JSValue *this_val,
     JSValue result;
 
     *method = JS_GetPropertyStr(ctx, *this_val, "blit");
+    result = JS_IsException(*method)
+                 ? JS_EXCEPTION
+                 : esp32_mquickjs_future_call_and_wait(
+                       ctx, esp32_mquickjs_get_active_runtime(), *method,
+                       *this_val, argc, argv);
+    JS_PopGCRef(ctx, &method_ref);
+    return result;
+}
+
+JSValue js_bitmap_blit_batch(JSContext *ctx, JSValue *this_val,
+                             int argc, JSValue *argv)
+{
+    JSGCRef method_ref;
+    JSValue *method = JS_PushGCRef(ctx, &method_ref);
+    JSValue result;
+
+    *method = JS_GetPropertyStr(ctx, *this_val, "blitBatch");
     result = JS_IsException(*method)
                  ? JS_EXCEPTION
                  : esp32_mquickjs_future_call_and_wait(

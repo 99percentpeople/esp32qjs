@@ -154,6 +154,7 @@ static const JSClassDef js_stream_class =
 static const JSPropDef js_byte_view_proto[] = {
     JS_CGETSET_DEF("length", js_byte_view_get_length, NULL),
     JS_CGETSET_DEF("byteLength", js_byte_view_get_length, NULL),
+    JS_CFUNC_DEF("getUint8", 1, js_byte_view_get_uint8),
     JS_CFUNC_DEF("toArray", 0, js_byte_view_to_array),
     JS_CFUNC_DEF("close", 0, js_byte_view_close),
     JS_PROP_END,
@@ -257,6 +258,7 @@ static const JSPropDef js_bitmap_proto[] = {
     JS_CFUNC_DEF("drawCubicBezier", 10, js_bitmap_draw_cubic_bezier),
     JS_CFUNC_DEF("drawMask", 4, js_bitmap_draw_mask),
     JS_CFUNC_DEF("blit", 2, js_bitmap_blit),
+    JS_CFUNC_DEF("blitBatch", 1, js_bitmap_blit_batch),
     JS_CFUNC_DEF("drawText", 5, js_bitmap_draw_text),
     JS_CFUNC_DEF("measureText", 2, js_bitmap_measure_text),
     JS_CFUNC_DEF("getDirty", 0, js_bitmap_get_dirty),
@@ -274,6 +276,7 @@ static const JSClassDef js_bitmap_class =
 
 static const JSPropDef js_bitmap[] = {
     JS_PROP_STRING_DEF("MONO1", "mono1", 0),
+    JS_PROP_STRING_DEF("GRAY4", "gray4", 0),
     JS_PROP_STRING_DEF("GRAY8", "gray8", 0),
     JS_PROP_STRING_DEF("RGB565", "rgb565", 0),
     JS_PROP_STRING_DEF("RGB888", "rgb888", 0),

@@ -365,7 +365,7 @@ register_future(
     "esp32_mquickjs_init_bitmap_runtime",
 )
 register_future(
-    "Bitmap.prototype", ("blit",),
+    "Bitmap.prototype", ("blit", "blitBatch"),
     "components/esp32_mquickjs/src/modules/bitmap/esp32_mquickjs_bitmap_image.c",
     "esp32_mquickjs_init_bitmap_runtime",
 )

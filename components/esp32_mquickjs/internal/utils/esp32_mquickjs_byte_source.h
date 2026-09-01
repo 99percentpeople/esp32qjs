@@ -110,6 +110,7 @@ JSValue js_byte_view_constructor(JSContext *ctx, JSValue *this_val, int argc, JS
 void js_byte_view_finalizer(JSContext *ctx, void *opaque);
 JSValue js_byte_view_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_byte_view_get_length(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_byte_view_get_uint8(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_byte_view_to_array(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 
 JSValue js_byte_span_source_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

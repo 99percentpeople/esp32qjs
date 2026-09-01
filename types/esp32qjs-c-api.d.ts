@@ -77,6 +77,7 @@ namespace ESP32QJS {
   interface ByteView {
     readonly length: number;
     readonly byteLength: number;
+    getUint8(offset: number): number;
     toArray(): number[];
     close(): boolean;
   }
@@ -101,7 +102,7 @@ namespace ESP32QJS {
     setRect(x: number, y: number, width: number, height: number): this;
   }
 
-  type BitmapFormat = "mono1" | "gray8" | "rgb565" | "rgb888";
+  type BitmapFormat = "mono1" | "gray4" | "gray8" | "rgb565" | "rgb888";
   type BitmapLayout = "linear" | "page-y8";
   type BitmapStorage = "auto" | "internal" | "psram" | "dma";
   type BitmapByteOrder = "be" | "le";
@@ -173,7 +174,7 @@ namespace ESP32QJS {
     /** Applied in the rotated coordinate system. */
     flipY?: boolean;
     filter?: BitmapFilter;
-    /** Available only for `gray8` and `mono1` outputs. */
+    /** Available only for grayscale outputs. */
     normalize?: boolean;
     /** Available only for `mono1` outputs. Defaults to 128. */
     threshold?: number;
@@ -195,6 +196,11 @@ namespace ESP32QJS {
   interface BitmapBlitOptions extends BitmapTransformOptions {
     /** Defaults to `(0, 0)` with the rotated natural dimensions. */
     destinationRect?: BitmapRect;
+  }
+
+  interface BitmapBlitOperation {
+    source: BitmapSource;
+    options?: BitmapBlitOptions;
   }
 
   interface BitmapReadRectOptions {
@@ -891,8 +897,9 @@ namespace ESP32QJS {
   /**
    * Native pixel buffer for raw image transforms and low-level display drivers.
    *
-   * Pixel colors are packed numeric values: mono1 uses 0/1, gray8 uses 8-bit
-   * intensity, rgb565 uses 16-bit RGB565, and rgb888 uses 0xRRGGBB. Drawing
+   * Pixel colors are packed numeric values: mono1 uses 0/1, gray4 uses 4-bit
+   * intensity, gray8 uses 8-bit intensity, rgb565 uses 16-bit RGB565, and
+   * rgb888 uses 0xRRGGBB. Drawing
    * methods mutate the buffer, mark dirty bounds, and return the same Bitmap.
    */
   class Bitmap {
@@ -1023,6 +1030,8 @@ namespace ESP32QJS {
       options?: DisplayMaskOptions,
     ): this;
     blit(source: BitmapSource, options?: BitmapBlitOptions): this;
+    /** Apply 1..16 ordered transforms through one native worker operation. */
+    blitBatch(operations: readonly BitmapBlitOperation[]): this;
     drawText(
       x: number,
       y: number,
@@ -1057,6 +1066,7 @@ namespace ESP32QJS {
    */
   interface BitmapModule {
     readonly MONO1: "mono1";
+    readonly GRAY4: "gray4";
     readonly GRAY8: "gray8";
     readonly RGB565: "rgb565";
     readonly RGB888: "rgb888";

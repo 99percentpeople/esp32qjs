@@ -30,16 +30,11 @@ typedef struct {
 
 static const char *format_name(uint8_t format)
 {
-    switch (format) {
-        case BITMAP_FORMAT_GRAY8:
-            return "gray8";
-        case BITMAP_FORMAT_RGB565:
-            return "rgb565";
-        case BITMAP_FORMAT_RGB888:
-            return "rgb888";
-        default:
-            return "mono1";
-    }
+    const esp32_mquickjs_bitmap_format_info_t *info =
+        esp32_mquickjs_bitmap_format_info(
+            (esp32_mquickjs_bitmap_pixel_format_t)format);
+
+    return info == NULL ? "unknown" : info->name;
 }
 
 static const char *layout_name(uint8_t layout)
@@ -80,6 +75,9 @@ uint32_t normalize_color(JSContext *ctx,
                          uint32_t fallback,
                          bool *ok)
 {
+    const esp32_mquickjs_bitmap_format_info_t *info =
+        esp32_mquickjs_bitmap_format_info(
+            (esp32_mquickjs_bitmap_pixel_format_t)format);
     uint32_t raw = fallback;
 
     if (ok != NULL) {
@@ -88,19 +86,8 @@ uint32_t normalize_color(JSContext *ctx,
     if (JS_IsUndefined(value) || JS_IsNull(value)) {
         return fallback;
     }
-    if (format == BITMAP_FORMAT_MONO1) {
-        if (JS_IsBool(value) || !value_to_u32(ctx, value, &raw) || raw > 1U) {
-            if (ok != NULL) {
-                *ok = false;
-            }
-            return 0;
-        }
-        return raw;
-    }
-    if (!value_to_u32(ctx, value, &raw) ||
-        (format == BITMAP_FORMAT_GRAY8 && raw > 0xffU) ||
-        (format == BITMAP_FORMAT_RGB565 && raw > 0xffffU) ||
-        (format == BITMAP_FORMAT_RGB888 && raw > 0xffffffU)) {
+    if (info == NULL || (format == BITMAP_FORMAT_MONO1 && JS_IsBool(value)) ||
+        !value_to_u32(ctx, value, &raw) || raw > info->maximum_color) {
         if (ok != NULL) {
             *ok = false;
         }
@@ -177,41 +164,40 @@ static bool get_string_option(JSContext *ctx,
 
 static bool parse_format(const char *name, uint8_t *out_format)
 {
-    if (string_equals(name, "mono1")) {
-        *out_format = BITMAP_FORMAT_MONO1;
-        return true;
+    esp32_mquickjs_bitmap_pixel_format_t format;
+
+    if (out_format == NULL ||
+        !esp32_mquickjs_bitmap_parse_format(name, &format)) {
+        return false;
     }
-    if (string_equals(name, "gray8")) {
-        *out_format = BITMAP_FORMAT_GRAY8;
-        return true;
-    }
-    if (string_equals(name, "rgb565")) {
-        *out_format = BITMAP_FORMAT_RGB565;
-        return true;
-    }
-    if (string_equals(name, "rgb888")) {
-        *out_format = BITMAP_FORMAT_RGB888;
-        return true;
-    }
-    return false;
+    *out_format = (uint8_t)format;
+    return true;
 }
 
 static bool parse_layout(const char *name, uint8_t format, uint8_t *out_layout)
 {
+    const esp32_mquickjs_bitmap_format_info_t *info =
+        esp32_mquickjs_bitmap_format_info(
+            (esp32_mquickjs_bitmap_pixel_format_t)format);
+    uint8_t layout;
+
+    if (info == NULL || out_layout == NULL) {
+        return false;
+    }
     if (name == NULL) {
-        *out_layout = format == BITMAP_FORMAT_MONO1 ? BITMAP_LAYOUT_PAGE_Y8
-                                                            : BITMAP_LAYOUT_LINEAR;
-        return true;
+        layout = (uint8_t)info->default_layout;
+    } else if (string_equals(name, "linear")) {
+        layout = BITMAP_LAYOUT_LINEAR;
+    } else if (string_equals(name, "page-y8")) {
+        layout = BITMAP_LAYOUT_PAGE_Y8;
+    } else {
+        return false;
     }
-    if (string_equals(name, "linear")) {
-        *out_layout = BITMAP_LAYOUT_LINEAR;
-        return true;
+    if ((info->allowed_layouts & (1U << layout)) == 0) {
+        return false;
     }
-    if (string_equals(name, "page-y8")) {
-        *out_layout = BITMAP_LAYOUT_PAGE_Y8;
-        return true;
-    }
-    return false;
+    *out_layout = layout;
+    return true;
 }
 
 static bool parse_storage(const char *name, uint8_t *out_storage)
@@ -247,6 +233,7 @@ static bool compute_layout(uint32_t width,
 {
     uint32_t min_stride = 0;
     uint32_t page_height = 1;
+    uint32_t storage_rows;
     size_t rows = height;
     size_t byte_length;
 
@@ -255,38 +242,20 @@ static bool compute_layout(uint32_t width,
         return false;
     }
 
-    if (format == BITMAP_FORMAT_RGB565) {
-        if (layout != BITMAP_LAYOUT_LINEAR) {
-            return false;
-        }
-        min_stride = width * 2U;
-        page_height = 1;
-        rows = height;
-    } else if (format == BITMAP_FORMAT_RGB888) {
-        if (layout != BITMAP_LAYOUT_LINEAR) {
-            return false;
-        }
-        min_stride = width * 3U;
-        page_height = 1;
-        rows = height;
-    } else if (format == BITMAP_FORMAT_GRAY8) {
-        if (layout != BITMAP_LAYOUT_LINEAR) {
-            return false;
-        }
-        min_stride = width;
-        page_height = 1;
-        rows = height;
-    } else if (layout == BITMAP_LAYOUT_PAGE_Y8) {
-        min_stride = width;
+    if (!esp32_mquickjs_bitmap_storage_geometry(
+            width, height, (esp32_mquickjs_bitmap_pixel_format_t)format,
+            (esp32_mquickjs_bitmap_layout_t)layout, &min_stride,
+            &storage_rows)) {
+        return false;
+    }
+    rows = storage_rows;
+    if (layout == BITMAP_LAYOUT_PAGE_Y8) {
         page_height = requested_page_height == 0 ? 8U : requested_page_height;
         if (page_height != 8U) {
             return false;
         }
-        rows = (height + 7U) / 8U;
     } else {
-        min_stride = (width + 7U) / 8U;
         page_height = 1;
-        rows = height;
     }
 
     if (requested_stride != 0) {
@@ -403,9 +372,8 @@ esp32_mquickjs_bitmap_t *bitmap_allocate(JSContext *ctx,
                                           : chunk_bytes;
     buffer->foreground = foreground;
     buffer->background = background;
-    if (background == 0) {
-        memset(buffer->data, 0, buffer->byte_length);
-    } else {
+    memset(buffer->data, 0, buffer->byte_length);
+    if (background != 0) {
         fill_rect_raw(buffer, 0, 0, buffer->width, buffer->height, background,
                       false);
     }
@@ -581,6 +549,9 @@ static size_t pixel_offset(const esp32_mquickjs_bitmap_t *buffer, int x, int y)
     if (buffer->format == BITMAP_FORMAT_GRAY8) {
         return (size_t)y * buffer->stride + (size_t)x;
     }
+    if (buffer->format == BITMAP_FORMAT_GRAY4) {
+        return (size_t)y * buffer->stride + ((size_t)x >> 1U);
+    }
     if (buffer->layout == BITMAP_LAYOUT_PAGE_Y8) {
         return ((size_t)y >> 3U) * buffer->stride + (size_t)x;
     }
@@ -610,6 +581,16 @@ void set_pixel_raw(esp32_mquickjs_bitmap_t *buffer, int x, int y, uint32_t color
     }
     if (buffer->format == BITMAP_FORMAT_GRAY8) {
         buffer->data[offset] = (uint8_t)color;
+        return;
+    }
+    if (buffer->format == BITMAP_FORMAT_GRAY4) {
+        if ((x & 1) == 0) {
+            buffer->data[offset] =
+                (uint8_t)((buffer->data[offset] & 0x0fU) | (color << 4U));
+        } else {
+            buffer->data[offset] =
+                (uint8_t)((buffer->data[offset] & 0xf0U) | color);
+        }
         return;
     }
 
@@ -684,6 +665,10 @@ static uint32_t get_pixel_raw(const esp32_mquickjs_bitmap_t *buffer, int x, int 
     if (buffer->format == BITMAP_FORMAT_GRAY8) {
         return buffer->data[offset];
     }
+    if (buffer->format == BITMAP_FORMAT_GRAY4) {
+        return (x & 1) == 0 ? buffer->data[offset] >> 4U
+                            : buffer->data[offset] & 0x0fU;
+    }
 
     mask = buffer->layout == BITMAP_LAYOUT_PAGE_Y8 ? (uint8_t)(1U << (y & 7))
                                                            : (uint8_t)(1U << (x & 7));
@@ -741,6 +726,18 @@ void fill_rect_raw(esp32_mquickjs_bitmap_t *buffer,
                (size_t)(x1 - x0) == buffer->stride) {
         memset(buffer->data + pixel_offset(buffer, x0, y0), (uint8_t)color,
                (size_t)(y1 - y0) * buffer->stride);
+    } else if (buffer->format == BITMAP_FORMAT_GRAY4 && x0 == 0 &&
+               (size_t)((x1 + 1) / 2) == buffer->stride) {
+        uint8_t packed = (uint8_t)((color << 4U) | color);
+
+        memset(buffer->data + pixel_offset(buffer, x0, y0), packed,
+               (size_t)(y1 - y0) * buffer->stride);
+        if ((buffer->width & 1U) != 0) {
+            for (yy = y0; yy < y1; ++yy) {
+                buffer->data[(size_t)yy * buffer->stride +
+                             buffer->stride - 1U] &= 0xf0U;
+            }
+        }
     } else {
         int xx;
 
@@ -946,19 +943,18 @@ done:
 
 static size_t read_rect_length(const esp32_mquickjs_bitmap_t *buffer, int width, int height)
 {
-    if (buffer->format == BITMAP_FORMAT_RGB565) {
-        return (size_t)width * (size_t)height * 2U;
+    uint32_t row_bytes;
+    uint32_t rows;
+
+    if (width <= 0 || height <= 0 ||
+        !esp32_mquickjs_bitmap_storage_geometry(
+            (uint32_t)width, (uint32_t)height,
+            (esp32_mquickjs_bitmap_pixel_format_t)buffer->format,
+            (esp32_mquickjs_bitmap_layout_t)buffer->layout, &row_bytes,
+            &rows)) {
+        return 0;
     }
-    if (buffer->format == BITMAP_FORMAT_RGB888) {
-        return (size_t)width * (size_t)height * 3U;
-    }
-    if (buffer->format == BITMAP_FORMAT_GRAY8) {
-        return (size_t)width * (size_t)height;
-    }
-    if (buffer->layout == BITMAP_LAYOUT_PAGE_Y8) {
-        return (((size_t)height + 7U) / 8U) * (size_t)width;
-    }
-    return (((size_t)width + 7U) / 8U) * (size_t)height;
+    return (size_t)row_bytes * rows;
 }
 
 static void read_rect_fill(const esp32_mquickjs_bitmap_t *buffer,
@@ -1016,6 +1012,31 @@ static void read_rect_fill(const esp32_mquickjs_bitmap_t *buffer,
             memcpy(out + out_offset,
                    buffer->data + pixel_offset(buffer, x, yy), row_bytes);
             out_offset += row_bytes;
+        }
+        return;
+    }
+
+    if (buffer->format == BITMAP_FORMAT_GRAY4) {
+        size_t row_bytes = ((size_t)width + 1U) / 2U;
+        size_t length = row_bytes * (size_t)height;
+        int local_y;
+
+        memset(out, 0, length);
+        for (local_y = 0; local_y < height; ++local_y) {
+            int local_x;
+
+            for (local_x = 0; local_x < width; ++local_x) {
+                uint8_t gray4 = (uint8_t)get_pixel_raw(
+                    buffer, x + local_x, y + local_y);
+                size_t offset = (size_t)local_y * row_bytes +
+                                ((size_t)local_x >> 1U);
+
+                if ((local_x & 1) == 0) {
+                    out[offset] |= (uint8_t)(gray4 << 4U);
+                } else {
+                    out[offset] |= gray4;
+                }
+            }
         }
         return;
     }
@@ -1082,6 +1103,18 @@ static bool direct_read_rect_data(const esp32_mquickjs_bitmap_t *buffer,
 
         if ((buffer->format == BITMAP_FORMAT_RGB565 && little_endian) ||
             row_length != buffer->stride) {
+            return false;
+        }
+        *out_data = buffer->data + pixel_offset(buffer, x, y);
+        *out_length = row_length * (size_t)height;
+        return true;
+    }
+
+    if (buffer->format == BITMAP_FORMAT_GRAY4 &&
+        buffer->layout == BITMAP_LAYOUT_LINEAR && width == buffer->width) {
+        size_t row_length = ((size_t)width + 1U) / 2U;
+
+        if (row_length != buffer->stride) {
             return false;
         }
         *out_data = buffer->data + pixel_offset(buffer, x, y);
@@ -1360,6 +1393,19 @@ static bool display_span_source_open(JSContext *ctx,
     return true;
 }
 
+static size_t display_span_source_known_length(void *opaque)
+{
+    bitmap_span_source_t *source = opaque;
+
+    if (source == NULL || source->destroy_requested ||
+        source->buffer == NULL || source->buffer->closed ||
+        source->rect.width <= 0 || source->rect.height <= 0) {
+        return 0;
+    }
+    return esp32_mquickjs_bitmap_rect_length(
+        source->buffer, source->rect.width, source->rect.height);
+}
+
 static bool display_span_source_next(JSContext *ctx, void *opaque, esp32_mquickjs_byte_span_t *out)
 {
     bitmap_span_source_t *source = opaque;
@@ -1462,6 +1508,7 @@ static void display_span_source_destroy(JSContext *ctx, void *opaque)
 static const esp32_mquickjs_byte_span_source_object_ops_t display_span_source_ops = {
     .class_id = JS_CLASS_BITMAP_SPAN_SOURCE,
     .open = display_span_source_open,
+    .known_length = display_span_source_known_length,
     .set_rect = display_span_source_set_rect,
     .destroy = display_span_source_destroy,
 };
@@ -1600,7 +1647,7 @@ JSValue js_bitmap_create(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
         return JS_EXCEPTION;
     }
     if (!parse_format(format_name_value, &format)) {
-        return JS_ThrowTypeError(ctx, "bitmap.create({ format }) expects 'mono1', 'gray8', 'rgb565', or 'rgb888'");
+        return JS_ThrowTypeError(ctx, "bitmap.create({ format }) expects 'mono1', 'gray4', 'gray8', 'rgb565', or 'rgb888'");
     }
     if (!get_string_option(ctx, argv[0], "layout", &layout_name_value, &layout_buf, false, "bitmap.create()")) {
         return JS_EXCEPTION;
@@ -1634,13 +1681,9 @@ JSValue js_bitmap_create(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
         return JS_ThrowRangeError(ctx, "bitmap.create() received invalid dimensions, layout, pageHeight, or stride");
     }
 
-    foreground = format == BITMAP_FORMAT_MONO1
-                     ? 1U
-                     : (format == BITMAP_FORMAT_GRAY8
-                            ? 0xffU
-                            : (format == BITMAP_FORMAT_RGB565
-                                   ? 0xffffU
-                                   : 0xffffffU));
+    foreground = esp32_mquickjs_bitmap_format_info(
+                     (esp32_mquickjs_bitmap_pixel_format_t)format)
+                     ->maximum_color;
     background = 0U;
     {
         JSGCRef property_ref;
@@ -1694,6 +1737,7 @@ JSValue js_bitmap_create(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
     buffer->foreground = foreground;
     buffer->background = background;
     clear_dirty(buffer);
+    memset(buffer->data, 0, buffer->byte_length);
     fill_rect_raw(buffer, 0, 0, buffer->width, buffer->height, background, false);
 
     object = JS_PushGCRef(ctx, &object_ref);
@@ -2062,10 +2106,7 @@ JSValue js_bitmap_read_rect_chunks(JSContext *ctx, JSValue *this_val, int argc, 
     if (chunk_bytes == 0) {
         chunk_bytes = buffer->chunk_size > 0 ? (uint32_t)buffer->chunk_size : BITMAP_DEFAULT_CHUNK_BYTES;
     }
-    row_bytes = buffer->format == BITMAP_FORMAT_RGB565 ? (size_t)width * 2U
-                                                               : (buffer->layout == BITMAP_LAYOUT_PAGE_Y8
-                                                                      ? (size_t)width
-                                                                      : (((size_t)width + 7U) / 8U));
+    row_bytes = esp32_mquickjs_bitmap_row_length(buffer, width);
     rows_per_chunk = row_bytes == 0 ? 1 : (int)(chunk_bytes / row_bytes);
     if (rows_per_chunk < 1) {
         rows_per_chunk = 1;

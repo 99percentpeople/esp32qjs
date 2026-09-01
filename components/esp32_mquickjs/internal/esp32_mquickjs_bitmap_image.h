@@ -9,6 +9,7 @@ typedef enum {
     ESP32_MQUICKJS_BITMAP_FORMAT_GRAY8 = 2,
     ESP32_MQUICKJS_BITMAP_FORMAT_RGB565 = 3,
     ESP32_MQUICKJS_BITMAP_FORMAT_RGB888 = 4,
+    ESP32_MQUICKJS_BITMAP_FORMAT_GRAY4 = 5,
 } esp32_mquickjs_bitmap_pixel_format_t;
 
 typedef enum {
@@ -35,6 +36,16 @@ typedef enum {
     ESP32_MQUICKJS_BITMAP_DITHER_NONE = 0,
     ESP32_MQUICKJS_BITMAP_DITHER_BAYER_4X4 = 1,
 } esp32_mquickjs_bitmap_dither_t;
+
+typedef struct {
+    esp32_mquickjs_bitmap_pixel_format_t format;
+    const char *name;
+    uint8_t bits_per_pixel;
+    uint32_t maximum_color;
+    esp32_mquickjs_bitmap_layout_t default_layout;
+    uint8_t allowed_layouts;
+    bool grayscale;
+} esp32_mquickjs_bitmap_format_info_t;
 
 typedef struct {
     const uint8_t *data;
@@ -92,6 +103,21 @@ typedef enum {
     ESP32_MQUICKJS_BITMAP_TRANSFORM_CANCELLED = 1,
     ESP32_MQUICKJS_BITMAP_TRANSFORM_INVALID = 2,
 } esp32_mquickjs_bitmap_transform_result_t;
+
+const esp32_mquickjs_bitmap_format_info_t *esp32_mquickjs_bitmap_format_info(
+    esp32_mquickjs_bitmap_pixel_format_t format);
+
+bool esp32_mquickjs_bitmap_parse_format(
+    const char *name,
+    esp32_mquickjs_bitmap_pixel_format_t *out_format);
+
+bool esp32_mquickjs_bitmap_storage_geometry(
+    uint32_t width,
+    uint32_t height,
+    esp32_mquickjs_bitmap_pixel_format_t format,
+    esp32_mquickjs_bitmap_layout_t layout,
+    uint32_t *out_row_bytes,
+    uint32_t *out_rows);
 
 bool esp32_mquickjs_bitmap_compute_storage(
     uint32_t width,

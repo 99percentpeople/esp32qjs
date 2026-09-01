@@ -90,6 +90,7 @@ JSValue js_bitmap_draw_quadratic_bezier(JSContext *ctx, JSValue *this_val, int a
 JSValue js_bitmap_draw_cubic_bezier(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_bitmap_draw_mask(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_bitmap_blit(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_bitmap_blit_batch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_bitmap_draw_text(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_bitmap_measure_text(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_bitmap_get_dirty(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

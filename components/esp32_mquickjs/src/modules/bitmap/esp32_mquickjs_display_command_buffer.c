@@ -455,16 +455,11 @@ static bool text_background_from_options(JSContext *ctx,
 
 static bool packed_color_is_valid(uint8_t format, uint32_t color)
 {
-    if (format == BITMAP_FORMAT_MONO1) {
-        return color <= 1U;
-    }
-    if (format == BITMAP_FORMAT_GRAY8) {
-        return color <= 0xffU;
-    }
-    if (format == BITMAP_FORMAT_RGB565) {
-        return color <= 0xffffU;
-    }
-    return format == BITMAP_FORMAT_RGB888 && color <= 0xffffffU;
+    const esp32_mquickjs_bitmap_format_info_t *info =
+        esp32_mquickjs_bitmap_format_info(
+            (esp32_mquickjs_bitmap_pixel_format_t)format);
+
+    return info != NULL && color <= info->maximum_color;
 }
 
 static bool packed_skip_command(const uint8_t *data, uint8_t op)

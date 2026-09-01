@@ -1825,6 +1825,32 @@
       }
     },
     {
+      "qualifiedName": "Bitmap.prototype.blitBatch",
+      "surface": "Bitmap.prototype",
+      "name": "blitBatch",
+      "arity": 1,
+      "implementation": "js_bitmap_blit_batch",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_bitmap_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "Bitmap"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "Bitmap"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/bitmap/esp32_mquickjs_bitmap_image.c",
+        "function": "esp32_mquickjs_init_bitmap_runtime"
+      }
+    },
+    {
       "qualifiedName": "Bitmap.prototype.clear",
       "surface": "Bitmap.prototype",
       "name": "clear",
@@ -2556,6 +2582,28 @@
       "name": "close",
       "arity": 0,
       "implementation": "js_byte_view_close",
+      "visibility": "public",
+      "feature": "core",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_byte_view_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "ByteView"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "ByteView"
+      }
+    },
+    {
+      "qualifiedName": "ByteView.prototype.getUint8",
+      "surface": "ByteView.prototype",
+      "name": "getUint8",
+      "arity": 1,
+      "implementation": "js_byte_view_get_uint8",
       "visibility": "public",
       "feature": "core",
       "execution": "immediate",
