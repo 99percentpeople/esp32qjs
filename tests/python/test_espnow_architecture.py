@@ -8,6 +8,33 @@ MQUICKJS = ROOT / "components" / "esp32_mquickjs"
 
 
 class EspNowArchitectureTests(unittest.TestCase):
+    def test_supported_targets_default_to_v2_payloads(self):
+        kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
+        v2 = kconfig[
+            kconfig.index("config ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD") :
+            kconfig.index("config ESP32_MQUICKJS_ESPNOW_DEFAULT_SEND_TIMEOUT_MS")
+        ]
+
+        self.assertIn(
+            "default y if IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32C5 || IDF_TARGET_ESP32S3",
+            v2,
+        )
+        self.assertIn("default 1470 if ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD", v2)
+        self.assertIn("default 250", v2)
+        self.assertLess(
+            v2.index("config ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD"),
+            v2.index("config ESP32_MQUICKJS_ESPNOW_DEFAULT_MAX_PAYLOAD_BYTES"),
+        )
+
+    def test_kconfig_changes_refresh_generated_sdkconfig(self):
+        build = (ROOT / "scripts/esp32qjs/build.py").read_text(encoding="utf-8")
+        defaults = build[
+            build.index("def config_default_inputs") :
+            build.index("def refresh_generated_sdkconfig")
+        ]
+
+        self.assertIn('"components/esp32_mquickjs/Kconfig.projbuild"', defaults)
+
     def test_feature_is_public_and_uses_internal_wifi_radio(self):
         catalog = json.loads(
             (MQUICKJS / "runtime-features.json").read_text(encoding="utf-8")
@@ -86,16 +113,47 @@ class EspNowArchitectureTests(unittest.TestCase):
         ]
 
         self.assertIn("esp_now_unregister_recv_cb", begin)
-        self.assertIn("esp_now_unregister_send_cb", begin)
+        self.assertNotIn("esp_now_unregister_send_cb", begin)
         self.assertNotIn("espnow_reset_session_storage", begin)
+        self.assertIn("tx_task_stop", begin)
+        self.assertIn("tx_task", worker)
         self.assertIn("callbacks_active", worker)
         self.assertIn("espnow_finish_close(session)", worker)
         self.assertIn("callbacks_active", finish)
+        self.assertIn("esp_now_unregister_send_cb", finish)
         self.assertIn("espnow_reset_session_storage", finish)
         self.assertIn("esp32_mquickjs_event_queue_retain", source)
         self.assertIn("esp32_mquickjs_event_queue_release", finish)
         self.assertIn("ESPNOW_CLEANUP_PENDING", source)
         self.assertIn(".on_timeout = espnow_close_on_timeout", source)
+
+    def test_fire_and_forget_tx_uses_fixed_native_batch_queue(self):
+        source = (
+            MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
+        ).read_text(encoding="utf-8")
+        queue = (
+            MQUICKJS
+            / "src/modules/espnow/esp32_mquickjs_espnow_tx_queue.c"
+        ).read_text(encoding="utf-8")
+        kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
+
+        self.assertIn("config ESP32_MQUICKJS_ESPNOW_TX_MAX_QUEUE_LEN", kconfig)
+        self.assertIn("espnow_allocate_tx_queue", source)
+        self.assertIn("MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT", source)
+        self.assertIn("espnow_tx_worker", source)
+        self.assertIn("espnow_notify_tx_worker", source)
+        self.assertIn("enqueueBroadcastBatch", source)
+        self.assertIn("drop-oldest-batch", source)
+        self.assertIn("esp32_mquickjs_espnow_tx_queue_reserve_batch", source)
+        self.assertIn("active_batch_sequence", queue)
+        self.assertIn("evict_oldest_pending_batch", queue)
+        callback_start = source.index("static void espnow_send_callback")
+        callback = source[
+            callback_start :
+            source.index("static void espnow_notify_tx_worker", callback_start)
+        ]
+        self.assertNotIn("heap_caps_malloc", callback)
+        self.assertNotIn("JS_New", callback)
 
     def test_send_timeout_recovery_retains_future_until_callbacks_are_quiescent(self):
         source = (
@@ -358,6 +416,51 @@ class EspNowArchitectureTests(unittest.TestCase):
         self.assertIn("espnow_apply_peer_rate_config(peer)", update)
         self.assertIn("peerRateConfig` is `true`", c_api)
         self.assertIn("peerRateConfig` is `true`", wireless)
+
+    def test_broadcast_rate_configuration_is_public_and_restored(self):
+        source = (
+            MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
+        ).read_text(encoding="utf-8")
+        types = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
+            encoding="utf-8"
+        )
+        c_api = (ROOT / "docs/c-api.md").read_text(encoding="utf-8")
+        wireless = (ROOT / "docs/ai/wireless.md").read_text(encoding="utf-8")
+
+        capabilities = source[
+            source.index("JSValue js_espnow_capabilities") :
+            source.index("JSValue js_espnow_open")
+        ]
+        open_initialize = source[
+            source.index("static void espnow_open_initialize") :
+            source.index("static bool espnow_open_start")
+        ]
+        restore = source[
+            source.index("static esp_err_t espnow_restore_native_session") :
+            source.index("static esp_err_t espnow_begin_timeout_recovery")
+        ]
+
+        self.assertIn('"broadcastRateConfig",\n                                         JS_TRUE', capabilities)
+        self.assertIn("readonly broadcastRateConfig: true", types)
+        self.assertIn(
+            "broadcastRateConfig?: EspNowPeerRateConfig",
+            types,
+        )
+        self.assertIn(
+            "broadcastRateConfig: EspNowPeerRateConfig | null",
+            types,
+        )
+        self.assertIn('"broadcastRateConfig"', source)
+        self.assertIn(
+            "espnow_apply_rate_config(\n            s_broadcast_address",
+            open_initialize,
+        )
+        self.assertIn(
+            "espnow_apply_rate_config(\n        s_broadcast_address",
+            restore,
+        )
+        self.assertIn("broadcastRateConfig` is `true`", c_api)
+        self.assertIn("broadcastRateConfig` is `true`", wireless)
 
     def test_peer_slots_are_generation_checked_and_keys_are_scrubbed(self):
         source = (

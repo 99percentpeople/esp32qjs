@@ -223,21 +223,29 @@ config ESP32_MQUICKJS_ESPNOW_RX_MAX_QUEUE_LEN
     default 16
     depends on ESP32_MQUICKJS_FEATURE_ESPNOW
 
+config ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD
+    bool "Allow ESP-NOW v2 payloads"
+    default y if IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32C5 || IDF_TARGET_ESP32S3
+    default n
+    depends on ESP32_MQUICKJS_FEATURE_ESPNOW
+    help
+        Enable payloads up to the ESP-NOW v2 limit on supported targets.
+        Disable this only when interoperating with ESP-NOW v1 devices.
+
 config ESP32_MQUICKJS_ESPNOW_DEFAULT_MAX_PAYLOAD_BYTES
     int "Default ESP-NOW payload limit"
-    range 1 1470
+    range 1 1470 if ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD
+    range 1 250 if !ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD
+    default 1470 if ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD
     default 250
     depends on ESP32_MQUICKJS_FEATURE_ESPNOW
 
 config ESP32_MQUICKJS_ESPNOW_MAX_PAYLOAD_BYTES
     int "Maximum ESP-NOW payload limit"
-    range 1 1470
+    range 1 1470 if ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD
+    range 1 250 if !ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD
+    default 1470 if ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD
     default 250
-    depends on ESP32_MQUICKJS_FEATURE_ESPNOW
-
-config ESP32_MQUICKJS_ESPNOW_ALLOW_V2_PAYLOAD
-    bool "Allow ESP-NOW v2 payloads"
-    default n
     depends on ESP32_MQUICKJS_FEATURE_ESPNOW
 
 config ESP32_MQUICKJS_ESPNOW_DEFAULT_SEND_TIMEOUT_MS
@@ -245,6 +253,15 @@ config ESP32_MQUICKJS_ESPNOW_DEFAULT_SEND_TIMEOUT_MS
     range 1 60000
     default 1000
     depends on ESP32_MQUICKJS_FEATURE_ESPNOW
+
+config ESP32_MQUICKJS_ESPNOW_TX_MAX_QUEUE_LEN
+    int "Maximum ESP-NOW fire-and-forget transmit queue capacity"
+    range 1 32
+    default 16
+    depends on ESP32_MQUICKJS_FEATURE_ESPNOW
+    help
+        Build-time upper bound for the optional fixed-capacity transmit queue.
+        No queue storage is allocated unless espNow.open({ txQueue }) is used.
 
 config ESP32_MQUICKJS_ESPNOW_MAX_PEERS
     int "Maximum application ESP-NOW peers"

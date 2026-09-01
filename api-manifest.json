@@ -3139,6 +3139,50 @@
       }
     },
     {
+      "qualifiedName": "EspNowPeer.prototype.enqueue",
+      "surface": "EspNowPeer.prototype",
+      "name": "enqueue",
+      "arity": 1,
+      "implementation": "js_espnow_peer_enqueue",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_peer_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowPeer"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowPeer"
+      }
+    },
+    {
+      "qualifiedName": "EspNowPeer.prototype.enqueueBatch",
+      "surface": "EspNowPeer.prototype",
+      "name": "enqueueBatch",
+      "arity": 1,
+      "implementation": "js_espnow_peer_enqueue_batch",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_peer_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowPeer"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowPeer"
+      }
+    },
+    {
       "qualifiedName": "EspNowPeer.prototype.remove",
       "surface": "EspNowPeer.prototype",
       "name": "remove",
@@ -3310,6 +3354,72 @@
       "futureRegistration": {
         "file": "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c",
         "function": "espnow_register_future_drivers"
+      }
+    },
+    {
+      "qualifiedName": "EspNowSession.prototype.enqueueBroadcast",
+      "surface": "EspNowSession.prototype",
+      "name": "enqueueBroadcast",
+      "arity": 1,
+      "implementation": "js_espnow_session_enqueue_broadcast",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowSession"
+      }
+    },
+    {
+      "qualifiedName": "EspNowSession.prototype.enqueueBroadcastBatch",
+      "surface": "EspNowSession.prototype",
+      "name": "enqueueBroadcastBatch",
+      "arity": 1,
+      "implementation": "js_espnow_session_enqueue_broadcast_batch",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowSession"
+      }
+    },
+    {
+      "qualifiedName": "EspNowSession.prototype.flushTx",
+      "surface": "EspNowSession.prototype",
+      "name": "flushTx",
+      "arity": 1,
+      "implementation": "js_espnow_session_flush_tx",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_espnow_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "EspNowSession"
+      },
+      "documentation": {
+        "file": "docs/c-api.md",
+        "ownerToken": "EspNowSession"
       }
     },
     {

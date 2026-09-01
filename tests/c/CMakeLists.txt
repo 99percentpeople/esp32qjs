@@ -307,6 +307,13 @@ add_executable(test_wireless_core
 target_include_directories(test_wireless_core PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_wireless_core COMMAND test_wireless_core)
 
+add_executable(test_espnow_tx_queue
+    test_espnow_tx_queue.c
+    ../../components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow_tx_queue.c
+)
+target_include_directories(test_espnow_tx_queue PRIVATE ../../components/esp32_mquickjs/internal)
+add_test(NAME test_espnow_tx_queue COMMAND test_espnow_tx_queue)
+
 set(WIFI_CSI_RESOURCE_SOURCES
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_native_pool.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_native_lease.c

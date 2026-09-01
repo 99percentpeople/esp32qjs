@@ -27,6 +27,12 @@ JSValue js_espnow_session_peers(JSContext *ctx, JSValue *this_val,
                                 int argc, JSValue *argv);
 JSValue js_espnow_session_broadcast(JSContext *ctx, JSValue *this_val,
                                     int argc, JSValue *argv);
+JSValue js_espnow_session_enqueue_broadcast(
+    JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_espnow_session_enqueue_broadcast_batch(
+    JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_espnow_session_flush_tx(JSContext *ctx, JSValue *this_val,
+                                   int argc, JSValue *argv);
 JSValue js_espnow_session_set_power_save(JSContext *ctx, JSValue *this_val,
                                          int argc, JSValue *argv);
 JSValue js_espnow_session_recover(JSContext *ctx, JSValue *this_val,
@@ -41,6 +47,10 @@ JSValue js_espnow_peer_status(JSContext *ctx, JSValue *this_val,
                               int argc, JSValue *argv);
 JSValue js_espnow_peer_send(JSContext *ctx, JSValue *this_val,
                             int argc, JSValue *argv);
+JSValue js_espnow_peer_enqueue(JSContext *ctx, JSValue *this_val,
+                               int argc, JSValue *argv);
+JSValue js_espnow_peer_enqueue_batch(JSContext *ctx, JSValue *this_val,
+                                     int argc, JSValue *argv);
 JSValue js_espnow_peer_update(JSContext *ctx, JSValue *this_val,
                               int argc, JSValue *argv);
 JSValue js_espnow_peer_remove(JSContext *ctx, JSValue *this_val,

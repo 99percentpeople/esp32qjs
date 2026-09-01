@@ -18,10 +18,16 @@ test("espnow/offline", function () {
     "ESP-NOW v1 should use the station interface");
   test.equal(capabilities.softApInterface, false,
     "ESP-NOW v1 should reject the soft-AP interface");
-  test.ok(capabilities.maxPayloadBytes >= 250,
-    "ESP-NOW should support v1 payloads");
+  test.equal(capabilities.maxPayloadBytes, espNow.MAX_PAYLOAD_V2,
+    "supported targets should expose the v2 payload boundary by default");
+  test.equal(capabilities.v2Payloads, true,
+    "supported targets should enable ESP-NOW v2 payloads by default");
   test.equal(capabilities.peerRateConfig, true,
     "ESP-NOW should expose explicit per-peer PHY rate control");
+  test.equal(capabilities.broadcastRateConfig, true,
+    "ESP-NOW should expose explicit broadcast PHY rate control");
+  test.equal(capabilities.txQueue, true,
+    "ESP-NOW should expose the fixed native transmit queue");
 
   invalidOpen = Future.call(espNow.open, espNow, [{ unknown: true }]);
   test.equal(invalidOpen.status(), "rejected",
@@ -51,16 +57,41 @@ test("espnow/offline", function () {
     Object.keys = originalObjectKeys;
   }
 
-  session = espNow.open({ receiveCapacity: 2, sendTimeoutMs: 250 });
+  session = espNow.open({
+    receiveCapacity: 2,
+    sendTimeoutMs: 250,
+    broadcastRateConfig: {
+      phyMode: "ht20",
+      mcs: 0,
+      guardInterval: "long"
+    },
+    txQueue: { capacityPackets: 2, overflow: "drop-oldest-batch" }
+  });
   try {
     status = session.status();
     test.equal(status.open, true, "a new ESP-NOW session should be open");
     test.equal(status.interface, "station", "session interface should be station");
-    test.equal(status.maxPayloadBytes, 250,
-      "the default session payload should stay v1 compatible");
+    test.equal(status.maxPayloadBytes, espNow.MAX_PAYLOAD_V2,
+      "the default session should use the v2 payload boundary");
+    test.equal(status.v1Compatible, false,
+      "a default v2 session should report that large packets are not v1 compatible");
     test.equal(status.peerCount, 0, "a new session should have no application peers");
     test.equal(status.pendingSends, 0, "a new session should have no pending sends");
     test.equal(status.txRecovering, false, "a new session should not be recovering");
+    test.equal(status.broadcastRateConfig.phyMode, "ht20",
+      "session status should preserve the broadcast PHY mode");
+    test.equal(status.broadcastRateConfig.mcs, 0,
+      "session status should preserve the broadcast MCS");
+    test.equal(status.txQueue.enabled, true,
+      "an explicitly configured transmit queue should be enabled");
+    test.equal(status.txQueue.capacityPackets, 2,
+      "transmit queue capacity should match open options");
+    test.equal(status.txQueue.overflow, "drop-oldest-batch",
+      "transmit queue overflow policy should be visible");
+    test.equal(status.txQueue.queuedPackets, 0,
+      "a new transmit queue should be empty");
+    test.equal(session.flushTx(0), true,
+      "flushing an empty transmit queue should complete immediately");
     test.equal(session.receive(0), null,
       "an empty receive queue should return null without blocking");
     test.equal(session.peers().length, 0,
@@ -119,6 +150,21 @@ test("espnow/offline", function () {
     if (session && session.status) {
       session.close();
     }
+  }
+
+  session = espNow.open({
+    maxPayloadBytes: espNow.MAX_PAYLOAD_V1,
+    receiveCapacity: 1,
+    sendTimeoutMs: 250
+  });
+  try {
+    status = session.status();
+    test.equal(status.maxPayloadBytes, espNow.MAX_PAYLOAD_V1,
+      "applications should be able to opt down to the v1 payload boundary");
+    test.equal(status.v1Compatible, true,
+      "an explicitly bounded v1 session should report peer compatibility");
+  } finally {
+    session.close();
   }
 
   return {

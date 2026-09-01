@@ -59,12 +59,22 @@ application acknowledgements, retries, deduplication, fragmentation, routing,
 Mesh behavior, provisioning, or a product message schema.
 
 - `espNow.capabilities()` reports compile-time peer and payload limits.
-  `peerRateConfig` is `true`; `session.addPeer()` optionally accepts explicit
-  `{ phyMode, mcs, guardInterval, ersu?, dcm? }` rate control. HT accepts MCS
+  `peerRateConfig` is `true` and `broadcastRateConfig` is `true`;
+  `session.addPeer()` and `espNow.open({ broadcastRateConfig })` optionally
+  accept explicit `{ phyMode, mcs, guardInterval, ersu?, dcm? }` rate control.
+  HT accepts MCS
   0..7; HE20 is target-gated and accepts MCS 0..9. ERSU/DCM are HE20-only. The
   immutable peer rate is retained by `peer.update()` and timeout rebuild, then
-  cleared by peer removal or session close.
+  cleared by peer removal or session close. The broadcast rate is likewise
+  restored after explicit timeout recovery and cleared on session close.
 - `espNow.open(options?)` creates the only session in the current runtime.
+  ESP32-C3/C5/S3 builds enable ESP-NOW v2 by default, so the default and maximum
+  payload are 1470 bytes. Pass `maxPayloadBytes: 250` only when an application
+  explicitly needs ESP-NOW v1 peer compatibility. Receive-pool internal memory
+  scales with `receiveCapacity * maxPayloadBytes`; size both together.
+  `{ txQueue: { capacityPackets, overflow? } }` optionally allocates a fixed
+  internal transmit pool. `overflow` is `"reject-newest"` or
+  `"drop-oldest-batch"`; omitting `txQueue` allocates no transmit slots.
 - `session.receive(timeoutMs?)` consumes a bounded receive queue; each event
   includes source/destination addresses, channel, RSSI, timestamp, sequence,
   broadcast state, and an owned `ByteView`.
@@ -76,6 +86,14 @@ Mesh behavior, provisioning, or a product message schema.
 - `peer.send(data, options?)` and `session.broadcast(data, options?)` share one
   FIFO transmit lane. `macDelivered` is only the ESP-NOW MAC result, not an
   application acknowledgement.
+- Fire-and-forget callers use `peer.enqueue(packet)`,
+  `peer.enqueueBatch(packets)`, `session.enqueueBroadcast(packet)`, or
+  `session.enqueueBroadcastBatch(packets)`. Each packet is `{ data }` or
+  `{ parts: [...] }`, where each payload is a `ByteSource` or
+  `ByteSpanSource`. The native queue copies all bytes before returning, admits
+  batches atomically, sends a batch contiguously, and can evict only complete
+  not-yet-started batches. It deliberately provides no ACK, retry, or delivery
+  guarantee. `session.flushTx(timeoutMs?)` waits for queued work to drain.
 - `session.status()` exposes channel synchronization, bounded counters, peer
   counts, pending sends, timeout recovery, and power-save configuration.
 - `session.setPowerSave(options)` updates the wake window and interval. Pass
@@ -99,7 +117,8 @@ temporary buffers, and never returned by status, peer snapshots, or errors.
 var session = espNow.open({
   channel: "current",
   receiveCapacity: 8,
-  sendTimeoutMs: 1000
+  sendTimeoutMs: 1000,
+  txQueue: { capacityPackets: 8, overflow: "drop-oldest-batch" }
 });
 
 try {
@@ -107,7 +126,7 @@ try {
     address: "02:00:00:00:00:01",
     channel: "current"
   });
-  var result = peer.send([1, 2, 3]);
+  var result = peer.enqueue({ parts: [[1], [2, 3]] });
   var incoming = session.receive(1000);
   if (incoming) {
     try {
@@ -116,7 +135,8 @@ try {
       incoming.data.close();
     }
   }
-  print(result.macDelivered);
+  print(result.accepted);
+  session.flushTx(1000);
   peer.remove();
 } finally {
   session.close();
@@ -125,9 +145,9 @@ try {
 
 Closing a session invalidates every peer handle. A transmit callback timeout
 reports `ESPNOW_RECOVERY_PENDING` while the native Future state and FIFO lane
-remain retained. A worker waits for callbacks to become quiescent and rebuilds
-the native ESP-NOW session before releasing either; recovery failure leaves the
-session unavailable until it is closed and reopened.
+remain retained. A worker waits for callbacks to become quiescent and
+deinitializes ESP-NOW before releasing either. The session remains faulted
+until policy calls `session.recover()` or closes it; no message is resent.
 Closing an enabled power-save session restores the native defaults before
 ESP-NOW is deinitialized, so a later session never inherits hidden radio state.
 

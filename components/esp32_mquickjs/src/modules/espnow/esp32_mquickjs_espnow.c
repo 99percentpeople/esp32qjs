@@ -4,6 +4,7 @@
 
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_event_queue.h"
+#include "esp32_mquickjs_espnow_tx_queue.h"
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_options.h"
 #include "esp32_mquickjs_wifi_radio.h"
@@ -95,6 +96,11 @@ typedef struct {
     espnow_peer_rate_config_t rate_config;
 } espnow_peer_slot_t;
 
+typedef struct {
+    uint8_t address[ESPNOW_ADDRESS_BYTES];
+    uint16_t length;
+} espnow_tx_packet_t;
+
 typedef enum {
     ESPNOW_OPERATION_OPEN = 0,
     ESPNOW_OPERATION_ADD_PEER,
@@ -127,12 +133,39 @@ typedef struct {
     bool receive_callback_registered;
     bool send_callback_registered;
     bool broadcast_peer_added;
+    espnow_peer_rate_config_t broadcast_rate_config;
     espnow_peer_slot_t peers[CONFIG_ESP32_MQUICKJS_ESPNOW_MAX_PEERS];
     uint32_t peer_count;
     uint32_t encrypted_peer_count;
     _Atomic(esp32_mquickjs_future_driver_state_t *) active_send;
+    _Atomic(esp32_mquickjs_future_driver_state_t *) pending_tracked_send;
     _Atomic uint32_t pending_sends;
     esp32_mquickjs_wireless_tx_state_t tx_state;
+    esp32_mquickjs_espnow_tx_queue_t tx_queue;
+    esp32_mquickjs_espnow_tx_slot_link_t *tx_links;
+    espnow_tx_packet_t *tx_packets;
+    uint8_t *tx_payloads;
+    uint16_t tx_queue_capacity;
+    esp32_mquickjs_espnow_tx_overflow_t tx_overflow;
+    _Atomic(TaskHandle_t) tx_task;
+    _Atomic bool tx_task_stop;
+    _Atomic uint32_t active_queued_slot;
+    _Atomic bool queued_send_completed;
+    _Atomic bool queued_send_delivered;
+    _Atomic int queued_send_error;
+    _Atomic int64_t queued_send_started_us;
+    _Atomic uint32_t next_batch_sequence;
+    _Atomic uint32_t tx_accepted_batches;
+    _Atomic uint32_t tx_accepted_packets;
+    _Atomic uint32_t tx_rejected_batches;
+    _Atomic uint32_t tx_rejected_packets;
+    _Atomic uint32_t tx_evicted_batches;
+    _Atomic uint32_t tx_evicted_packets;
+    _Atomic uint32_t tx_completed_batches;
+    _Atomic uint32_t tx_completed_packets;
+    _Atomic uint32_t tx_failed_packets;
+    _Atomic uint32_t tx_high_water_packets;
+    _Atomic int tx_last_error;
     bool has_pmk;
     uint8_t pmk[ESP_NOW_KEY_LEN];
     bool power_save_enabled;
@@ -170,11 +203,14 @@ struct esp32_mquickjs_future_driver_state {
     bool has_lmk;
     uint8_t lmk[ESP_NOW_KEY_LEN];
     espnow_peer_rate_config_t peer_rate_config;
+    espnow_peer_rate_config_t broadcast_rate_config;
     uint8_t *payload;
     size_t payload_length;
     uint32_t max_payload_bytes;
     uint32_t receive_capacity;
     uint32_t send_timeout_ms;
+    uint16_t tx_queue_capacity;
+    esp32_mquickjs_espnow_tx_overflow_t tx_overflow;
     uint8_t channel;
     bool channel_fixed;
     bool has_pmk;
@@ -195,6 +231,7 @@ struct esp32_mquickjs_future_driver_state {
     bool peer_reserved;
     bool send_reserved;
     bool started;
+    _Atomic bool submitted;
     bool open_initialization_started;
     bool transferred;
     bool cancelled;
@@ -219,10 +256,15 @@ static const uint8_t s_espnow_tx_lane_key;
 static const uint8_t s_espnow_control_lane_key;
 
 static JSValue espnow_status_to_js(JSContext *ctx,
-                                   const espnow_session_t *session);
+                                   espnow_session_t *session);
+static bool espnow_parse_rate_config(
+    JSContext *ctx, JSValue value, const char *operation,
+    espnow_peer_rate_config_t *out_config);
 static void espnow_close_native(espnow_session_t *session);
 static void espnow_close_worker(void *opaque);
 static void espnow_request_reap(espnow_session_t *session);
+static void espnow_tx_worker(void *opaque);
+static void espnow_notify_tx_worker(espnow_session_t *session);
 
 static void espnow_note_native_deinit(void)
 {
@@ -446,20 +488,30 @@ static const char *espnow_phy_mode_name(wifi_phy_mode_t phy_mode)
     }
 }
 
-static esp_err_t espnow_apply_peer_rate_config(
-    const espnow_peer_slot_t *peer)
+static esp_err_t espnow_apply_rate_config(
+    const uint8_t address[ESPNOW_ADDRESS_BYTES],
+    const espnow_peer_rate_config_t *config)
 {
     esp_now_rate_config_t native_config;
 
-    if (peer == NULL || !peer->rate_config.configured) {
+    if (address == NULL || config == NULL || !config->configured) {
         return ESP_OK;
     }
     memset(&native_config, 0, sizeof(native_config));
-    native_config.phymode = peer->rate_config.phy_mode;
-    native_config.rate = peer->rate_config.phy_rate;
-    native_config.ersu = peer->rate_config.ersu;
-    native_config.dcm = peer->rate_config.dcm;
-    return esp_now_set_peer_rate_config(peer->address, &native_config);
+    native_config.phymode = config->phy_mode;
+    native_config.rate = config->phy_rate;
+    native_config.ersu = config->ersu;
+    native_config.dcm = config->dcm;
+    return esp_now_set_peer_rate_config(address, &native_config);
+}
+
+static esp_err_t espnow_apply_peer_rate_config(
+    const espnow_peer_slot_t *peer)
+{
+    if (peer == NULL) {
+        return ESP_OK;
+    }
+    return espnow_apply_rate_config(peer->address, &peer->rate_config);
 }
 
 static JSValue espnow_peer_rate_config_to_js(
@@ -799,12 +851,14 @@ static void espnow_send_callback(const esp_now_send_info_t *send_info,
 {
     espnow_session_t *session = &s_espnow_session;
     esp32_mquickjs_future_driver_state_t *state;
+    uint32_t queued_slot;
+    bool handled = false;
 
     atomic_fetch_add_explicit(&session->callbacks_active, 1,
                               memory_order_acq_rel);
     state = atomic_load_explicit(&session->active_send,
                                  memory_order_acquire);
-    if (session->lifecycle == ESPNOW_LIFECYCLE_ACTIVE && send_info != NULL &&
+    if (send_info != NULL &&
         state != NULL && state->generation == session->generation &&
         state->operation == ESPNOW_OPERATION_SEND &&
         !atomic_load_explicit(&state->completed, memory_order_acquire) &&
@@ -823,9 +877,321 @@ static void espnow_send_callback(const esp_now_send_info_t *send_info,
                               memory_order_release);
         atomic_store_explicit(&state->completed, true, memory_order_release);
         (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+        handled = true;
+        espnow_notify_tx_worker(session);
+    }
+    queued_slot = atomic_load_explicit(&session->active_queued_slot,
+                                       memory_order_acquire);
+    if (!handled && send_info != NULL && session->tx_packets != NULL &&
+        queued_slot < session->tx_queue_capacity &&
+        memcmp(session->tx_packets[queued_slot].address,
+               send_info->des_addr, ESPNOW_ADDRESS_BYTES) == 0) {
+        atomic_store_explicit(&session->queued_send_delivered,
+                              status == ESP_NOW_SEND_SUCCESS,
+                              memory_order_release);
+        atomic_store_explicit(&session->queued_send_error, ESP_OK,
+                              memory_order_release);
+        atomic_store_explicit(&session->queued_send_completed, true,
+                              memory_order_release);
+        if (status == ESP_NOW_SEND_SUCCESS) {
+            atomic_fetch_add_explicit(&session->send_successes, 1,
+                                      memory_order_relaxed);
+        } else {
+            atomic_fetch_add_explicit(&session->send_failures, 1,
+                                      memory_order_relaxed);
+        }
+        TaskHandle_t tx_task = atomic_load_explicit(
+            &session->tx_task, memory_order_acquire);
+
+        if (tx_task != NULL) {
+            xTaskNotifyGive(tx_task);
+        }
+        if (session->runtime != NULL) {
+            esp32_mquickjs_notify_activity(session->runtime);
+        }
     }
     atomic_fetch_sub_explicit(&session->callbacks_active, 1,
                               memory_order_release);
+}
+
+static void espnow_notify_tx_worker(espnow_session_t *session)
+{
+    TaskHandle_t task;
+
+    if (session == NULL) {
+        return;
+    }
+    task = atomic_load_explicit(&session->tx_task, memory_order_acquire);
+    if (task != NULL) {
+        xTaskNotifyGive(task);
+    }
+}
+
+static void espnow_update_tx_high_water(espnow_session_t *session,
+                                        uint32_t queued_packets)
+{
+    uint32_t high_water = atomic_load_explicit(
+        &session->tx_high_water_packets, memory_order_relaxed);
+
+    while (queued_packets > high_water &&
+           !atomic_compare_exchange_weak_explicit(
+               &session->tx_high_water_packets, &high_water,
+               queued_packets, memory_order_relaxed,
+               memory_order_relaxed)) {
+    }
+}
+
+static void espnow_complete_queued_send(espnow_session_t *session)
+{
+    bool batch_completed = false;
+    bool delivered;
+    int err;
+
+    if (session == NULL ||
+        !atomic_load_explicit(&session->queued_send_completed,
+                              memory_order_acquire)) {
+        return;
+    }
+    delivered = atomic_load_explicit(&session->queued_send_delivered,
+                                     memory_order_acquire);
+    err = atomic_load_explicit(&session->queued_send_error,
+                               memory_order_acquire);
+    portENTER_CRITICAL(&session->lock);
+    (void)esp32_mquickjs_espnow_tx_queue_complete_active(
+        &session->tx_queue, &batch_completed);
+    portEXIT_CRITICAL(&session->lock);
+    atomic_store_explicit(&session->active_queued_slot,
+                          ESP32_MQUICKJS_ESPNOW_TX_SLOT_NONE,
+                          memory_order_release);
+    atomic_store_explicit(&session->queued_send_completed, false,
+                          memory_order_release);
+    atomic_fetch_add_explicit(&session->tx_completed_packets, 1,
+                              memory_order_relaxed);
+    if (batch_completed) {
+        atomic_fetch_add_explicit(&session->tx_completed_batches, 1,
+                                  memory_order_relaxed);
+    }
+    if (err != ESP_OK || !delivered) {
+        atomic_fetch_add_explicit(&session->tx_failed_packets, 1,
+                                  memory_order_relaxed);
+        atomic_store_explicit(&session->tx_last_error,
+                              err != ESP_OK ? err : ESP_FAIL,
+                              memory_order_relaxed);
+    }
+    if (session->runtime != NULL) {
+        esp32_mquickjs_notify_activity(session->runtime);
+    }
+}
+
+static void espnow_fail_queued_timeout(espnow_session_t *session)
+{
+    uint32_t discarded_batches = 0;
+
+    if (session == NULL) {
+        return;
+    }
+    (void)esp32_mquickjs_wireless_tx_timeout(&session->tx_state);
+    (void)esp32_mquickjs_wireless_tx_begin_recovery(&session->tx_state);
+    atomic_store_explicit(&session->lifecycle, ESPNOW_LIFECYCLE_FAILED,
+                          memory_order_release);
+    if (session->receive_callback_registered) {
+        (void)esp_now_unregister_recv_cb();
+        session->receive_callback_registered = false;
+    }
+    if (session->send_callback_registered) {
+        (void)esp_now_unregister_send_cb();
+        session->send_callback_registered = false;
+    }
+    while (atomic_load_explicit(&session->callbacks_active,
+                                memory_order_acquire) != 0) {
+        vTaskDelay(1);
+    }
+    if (session->now_initialized) {
+        if (esp_now_deinit() == ESP_OK) {
+            espnow_note_native_deinit();
+        }
+        session->now_initialized = false;
+        session->broadcast_peer_added = false;
+    }
+    portENTER_CRITICAL(&session->lock);
+    (void)esp32_mquickjs_espnow_tx_queue_complete_active(
+        &session->tx_queue, NULL);
+    (void)esp32_mquickjs_espnow_tx_queue_discard_pending(
+        &session->tx_queue, &discarded_batches);
+    portEXIT_CRITICAL(&session->lock);
+    atomic_store_explicit(&session->active_queued_slot,
+                          ESP32_MQUICKJS_ESPNOW_TX_SLOT_NONE,
+                          memory_order_release);
+    atomic_store_explicit(&session->queued_send_completed, false,
+                          memory_order_release);
+    atomic_fetch_add_explicit(&session->send_timeouts, 1,
+                              memory_order_relaxed);
+    atomic_fetch_add_explicit(&session->send_failures, 1,
+                              memory_order_relaxed);
+    atomic_fetch_add_explicit(&session->tx_failed_packets, 1,
+                              memory_order_relaxed);
+    atomic_store_explicit(&session->tx_last_error, ESP_ERR_TIMEOUT,
+                          memory_order_relaxed);
+    (void)esp32_mquickjs_wireless_tx_finish_recovery(&session->tx_state,
+                                                      false);
+    if (session->runtime != NULL) {
+        esp32_mquickjs_notify_activity(session->runtime);
+    }
+}
+
+static bool espnow_start_tracked_send(espnow_session_t *session)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+    esp32_mquickjs_future_driver_state_t *expected = NULL;
+
+    portENTER_CRITICAL(&session->lock);
+    state = atomic_load_explicit(&session->pending_tracked_send,
+                                 memory_order_acquire);
+    if (state == NULL || !atomic_compare_exchange_strong_explicit(
+            &session->active_send, &expected, state,
+            memory_order_acq_rel, memory_order_acquire)) {
+        portEXIT_CRITICAL(&session->lock);
+        return false;
+    }
+    atomic_store_explicit(&state->submitted, true, memory_order_release);
+    expected = state;
+    (void)atomic_compare_exchange_strong_explicit(
+        &session->pending_tracked_send, &expected, NULL,
+        memory_order_acq_rel, memory_order_acquire);
+    portEXIT_CRITICAL(&session->lock);
+    state->err = esp_now_send(state->address, state->payload,
+                              state->payload_length);
+    if (state->err == ESP_OK) {
+        atomic_fetch_add_explicit(&session->sent_packets, 1,
+                                  memory_order_relaxed);
+        atomic_fetch_add_explicit(&session->sent_bytes,
+                                  (uint32_t)state->payload_length,
+                                  memory_order_relaxed);
+        return true;
+    }
+    atomic_store_explicit(&session->active_send, NULL,
+                          memory_order_release);
+    atomic_fetch_add_explicit(&session->send_failures, 1,
+                              memory_order_relaxed);
+    state->completed_at_us = esp_timer_get_time();
+    atomic_store_explicit(&state->completed, true, memory_order_release);
+    (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+    return true;
+}
+
+static bool espnow_start_queued_send(espnow_session_t *session)
+{
+    uint16_t slot;
+    espnow_tx_packet_t *packet;
+    esp_err_t err;
+
+    portENTER_CRITICAL(&session->lock);
+    slot = esp32_mquickjs_espnow_tx_queue_start_next(&session->tx_queue);
+    portEXIT_CRITICAL(&session->lock);
+    if (slot == ESP32_MQUICKJS_ESPNOW_TX_SLOT_NONE) {
+        return false;
+    }
+    packet = &session->tx_packets[slot];
+    atomic_store_explicit(&session->active_queued_slot, slot,
+                          memory_order_release);
+    atomic_store_explicit(&session->queued_send_delivered, false,
+                          memory_order_release);
+    atomic_store_explicit(&session->queued_send_error, ESP_OK,
+                          memory_order_release);
+    atomic_store_explicit(&session->queued_send_completed, false,
+                          memory_order_release);
+    atomic_store_explicit(&session->queued_send_started_us,
+                          esp_timer_get_time(), memory_order_release);
+    err = esp_now_send(
+        packet->address,
+        session->tx_payloads + ((size_t)slot * session->max_payload_bytes),
+        packet->length);
+    if (err == ESP_OK) {
+        atomic_fetch_add_explicit(&session->sent_packets, 1,
+                                  memory_order_relaxed);
+        atomic_fetch_add_explicit(&session->sent_bytes, packet->length,
+                                  memory_order_relaxed);
+        return true;
+    }
+    atomic_fetch_add_explicit(&session->send_failures, 1,
+                              memory_order_relaxed);
+    atomic_store_explicit(&session->queued_send_error, err,
+                          memory_order_release);
+    atomic_store_explicit(&session->queued_send_completed, true,
+                          memory_order_release);
+    return true;
+}
+
+static void espnow_tx_worker(void *opaque)
+{
+    espnow_session_t *session = opaque;
+
+    while (session != NULL) {
+        uint32_t active_slot;
+        bool stop = atomic_load_explicit(&session->tx_task_stop,
+                                         memory_order_acquire);
+
+        if (atomic_load_explicit(&session->queued_send_completed,
+                                 memory_order_acquire)) {
+            espnow_complete_queued_send(session);
+            continue;
+        }
+        active_slot = atomic_load_explicit(&session->active_queued_slot,
+                                           memory_order_acquire);
+        if (stop &&
+            active_slot == ESP32_MQUICKJS_ESPNOW_TX_SLOT_NONE &&
+            atomic_load_explicit(&session->active_send,
+                                 memory_order_acquire) == NULL) {
+            break;
+        }
+        if (active_slot != ESP32_MQUICKJS_ESPNOW_TX_SLOT_NONE) {
+            int64_t started = atomic_load_explicit(
+                &session->queued_send_started_us, memory_order_acquire);
+            int64_t elapsed_ms = (esp_timer_get_time() - started) / 1000;
+
+            if (elapsed_ms >= session->send_timeout_ms) {
+                espnow_fail_queued_timeout(session);
+                continue;
+            }
+            (void)ulTaskNotifyTake(
+                pdTRUE,
+                pdMS_TO_TICKS((uint32_t)(session->send_timeout_ms -
+                                         elapsed_ms)));
+            continue;
+        }
+        if (session->lifecycle != ESPNOW_LIFECYCLE_ACTIVE ||
+            session->tx_state != ESP32_MQUICKJS_WIRELESS_TX_READY) {
+            (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20));
+            continue;
+        }
+        if (atomic_load_explicit(&session->active_send,
+                                 memory_order_acquire) != NULL) {
+            (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20));
+            continue;
+        }
+        if (!stop) {
+            bool batch_active;
+
+            portENTER_CRITICAL(&session->lock);
+            batch_active = session->tx_queue.active_batch_sequence != 0;
+            portEXIT_CRITICAL(&session->lock);
+            if (!batch_active && espnow_start_tracked_send(session)) {
+                continue;
+            }
+            if (espnow_start_queued_send(session)) {
+                continue;
+            }
+        }
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    }
+    if (session != NULL) {
+        atomic_store_explicit(&session->tx_task, NULL,
+                              memory_order_release);
+        if (session->runtime != NULL) {
+            esp32_mquickjs_notify_activity(session->runtime);
+        }
+    }
+    vTaskDelete(NULL);
 }
 
 static void espnow_reset_session_storage(espnow_session_t *session)
@@ -842,6 +1208,14 @@ static void espnow_reset_session_storage(espnow_session_t *session)
     session->rx_payloads = NULL;
     heap_caps_free(session->rx_slots);
     session->rx_slots = NULL;
+    heap_caps_free(session->tx_payloads);
+    session->tx_payloads = NULL;
+    heap_caps_free(session->tx_packets);
+    session->tx_packets = NULL;
+    heap_caps_free(session->tx_links);
+    session->tx_links = NULL;
+    memset(&session->tx_queue, 0, sizeof(session->tx_queue));
+    session->tx_queue_capacity = 0;
     for (i = 0; i < CONFIG_ESP32_MQUICKJS_ESPNOW_MAX_PEERS; ++i) {
         espnow_peer_slot_t *peer = &session->peers[i];
 
@@ -850,6 +1224,8 @@ static void espnow_reset_session_storage(espnow_session_t *session)
     session->peer_count = 0;
     session->encrypted_peer_count = 0;
     atomic_store_explicit(&session->active_send, NULL,
+                          memory_order_relaxed);
+    atomic_store_explicit(&session->pending_tracked_send, NULL,
                           memory_order_relaxed);
     session->tx_state = ESP32_MQUICKJS_WIRELESS_TX_READY;
     atomic_store_explicit(&session->pending_sends, 0,
@@ -863,6 +1239,9 @@ static void espnow_reset_session_storage(espnow_session_t *session)
 
 static void espnow_begin_close(espnow_session_t *session)
 {
+    esp32_mquickjs_future_driver_state_t *pending_send;
+    uint32_t discarded_batches = 0;
+
     if (session == NULL ||
         session->lifecycle == ESPNOW_LIFECYCLE_CLOSED ||
         session->lifecycle == ESPNOW_LIFECYCLE_CLOSING) {
@@ -877,10 +1256,25 @@ static void espnow_begin_close(espnow_session_t *session)
         (void)esp_now_unregister_recv_cb();
         session->receive_callback_registered = false;
     }
-    if (session->send_callback_registered) {
-        (void)esp_now_unregister_send_cb();
-        session->send_callback_registered = false;
+    portENTER_CRITICAL(&session->lock);
+    pending_send = atomic_exchange_explicit(
+        &session->pending_tracked_send, NULL, memory_order_acq_rel);
+    if (session->tx_queue_capacity > 0) {
+        (void)esp32_mquickjs_espnow_tx_queue_discard_pending(
+            &session->tx_queue, &discarded_batches);
     }
+    portEXIT_CRITICAL(&session->lock);
+    if (pending_send != NULL) {
+        pending_send->err = ESP_ERR_INVALID_STATE;
+        pending_send->completed_at_us = esp_timer_get_time();
+        atomic_store_explicit(&pending_send->completed, true,
+                              memory_order_release);
+        (void)esp32_mquickjs_future_wake(pending_send->runtime,
+                                         pending_send->token);
+    }
+    atomic_store_explicit(&session->tx_task_stop, true,
+                          memory_order_release);
+    espnow_notify_tx_worker(session);
 }
 
 static bool espnow_finish_close(espnow_session_t *session)
@@ -889,6 +1283,15 @@ static bool espnow_finish_close(espnow_session_t *session)
     bool event_queue_retained;
 
     if (session == NULL ||
+        atomic_load_explicit(&session->tx_task,
+                             memory_order_acquire) != NULL) {
+        return false;
+    }
+    if (session->send_callback_registered) {
+        (void)esp_now_unregister_send_cb();
+        session->send_callback_registered = false;
+    }
+    if (
         !esp32_mquickjs_wireless_close_can_release(
             atomic_load_explicit(&session->callbacks_active,
                                  memory_order_acquire),
@@ -929,7 +1332,10 @@ static void espnow_close_worker(void *opaque)
     if (session == NULL) {
         return;
     }
-    while (atomic_load_explicit(&session->callbacks_active,
+    espnow_begin_close(session);
+    while (atomic_load_explicit(&session->tx_task,
+                                memory_order_acquire) != NULL ||
+           atomic_load_explicit(&session->callbacks_active,
                                 memory_order_acquire) != 0) {
         vTaskDelay(1);
     }
@@ -1047,6 +1453,37 @@ static bool espnow_allocate_receive_pool(JSContext *ctx,
     return true;
 }
 
+static bool espnow_allocate_tx_queue(
+    JSContext *ctx,
+    espnow_session_t *session,
+    uint16_t capacity,
+    uint32_t max_payload_bytes,
+    esp32_mquickjs_espnow_tx_overflow_t overflow)
+{
+    if (capacity == 0) {
+        return true;
+    }
+    session->tx_links = heap_caps_calloc(
+        capacity, sizeof(*session->tx_links),
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    session->tx_packets = heap_caps_calloc(
+        capacity, sizeof(*session->tx_packets),
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    session->tx_payloads = heap_caps_malloc(
+        (size_t)capacity * max_payload_bytes,
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (session->tx_links == NULL || session->tx_packets == NULL ||
+        session->tx_payloads == NULL ||
+        !esp32_mquickjs_espnow_tx_queue_init(
+            &session->tx_queue, session->tx_links, capacity)) {
+        JS_ThrowOutOfMemory(ctx);
+        return false;
+    }
+    session->tx_queue_capacity = capacity;
+    session->tx_overflow = overflow;
+    return true;
+}
+
 static bool espnow_parse_power_save(
     JSContext *ctx,
     JSValue value,
@@ -1129,6 +1566,65 @@ done:
     return result;
 }
 
+static bool espnow_parse_tx_queue(
+    JSContext *ctx,
+    JSValue value,
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    static const char *const allowed[] = {
+        "capacityPackets", "overflow",
+    };
+    JSGCRef property_ref;
+    JSValue *property = JS_PushGCRef(ctx, &property_ref);
+    uint32_t capacity;
+    bool result = false;
+
+    if (state == NULL || !espnow_is_object(ctx, value) ||
+        !espnow_validate_option_keys(ctx, value, "espNow.open({ txQueue })",
+                                     allowed, 2U)) {
+        if (!JS_HasException(ctx)) {
+            JS_ThrowTypeError(ctx,
+                              "espNow.open({ txQueue }) expects an options object");
+        }
+        goto done;
+    }
+    *property = JS_GetPropertyStr(ctx, value, "capacityPackets");
+    if (JS_IsException(*property) ||
+        !espnow_to_u32(ctx, *property, &capacity) || capacity == 0 ||
+        capacity > CONFIG_ESP32_MQUICKJS_ESPNOW_TX_MAX_QUEUE_LEN) {
+        if (!JS_HasException(ctx)) {
+            JS_ThrowRangeError(
+                ctx, "txQueue.capacityPackets exceeds this Build Context");
+        }
+        goto done;
+    }
+    state->tx_queue_capacity = (uint16_t)capacity;
+    state->tx_overflow = ESP32_MQUICKJS_ESPNOW_TX_REJECT_NEWEST;
+    *property = JS_GetPropertyStr(ctx, value, "overflow");
+    if (JS_IsException(*property)) {
+        goto done;
+    }
+    if (!JS_IsUndefined(*property)) {
+        if (espnow_string_equals(ctx, *property, "reject-newest")) {
+            state->tx_overflow = ESP32_MQUICKJS_ESPNOW_TX_REJECT_NEWEST;
+        } else if (espnow_string_equals(ctx, *property,
+                                        "drop-oldest-batch")) {
+            state->tx_overflow =
+                ESP32_MQUICKJS_ESPNOW_TX_DROP_OLDEST_BATCH;
+        } else {
+            JS_ThrowTypeError(
+                ctx,
+                "txQueue.overflow must be 'reject-newest' or 'drop-oldest-batch'");
+            goto done;
+        }
+    }
+    result = true;
+
+done:
+    JS_PopGCRef(ctx, &property_ref);
+    return result;
+}
+
 static bool espnow_parse_open_options(
     JSContext *ctx,
     int argc,
@@ -1137,7 +1633,8 @@ static bool espnow_parse_open_options(
 {
     static const char *const allowed[] = {
         "interface", "channel", "maxPayloadBytes", "receiveCapacity",
-        "sendTimeoutMs", "pmk", "powerSave",
+        "sendTimeoutMs", "pmk", "powerSave", "broadcastRateConfig",
+        "txQueue",
     };
     JSGCRef property_ref;
     JSValue *property;
@@ -1161,7 +1658,7 @@ static bool espnow_parse_open_options(
         JS_ThrowTypeError(ctx, "espNow.open(options?) expects an options object");
         return false;
     }
-    if (!espnow_validate_option_keys(ctx, options, "espNow.open()", allowed, 7)) {
+    if (!espnow_validate_option_keys(ctx, options, "espNow.open()", allowed, 9)) {
         return false;
     }
 
@@ -1261,6 +1758,20 @@ static bool espnow_parse_open_options(
          !espnow_parse_power_save(ctx, *property, state))) {
         goto fail;
     }
+    *property = JS_GetPropertyStr(ctx, options, "broadcastRateConfig");
+    if (JS_IsException(*property) ||
+        (!JS_IsUndefined(*property) &&
+         !espnow_parse_rate_config(
+             ctx, *property, "espNow.open({ broadcastRateConfig })",
+             &state->broadcast_rate_config))) {
+        goto fail;
+    }
+    *property = JS_GetPropertyStr(ctx, options, "txQueue");
+    if (JS_IsException(*property) ||
+        (!JS_IsUndefined(*property) &&
+         !espnow_parse_tx_queue(ctx, *property, state))) {
+        goto fail;
+    }
     JS_PopGCRef(ctx, &property_ref);
     return true;
 
@@ -1337,12 +1848,34 @@ static bool espnow_open_capture(
     session->send_timeout_ms = state->send_timeout_ms;
     session->channel_fixed = state->channel_fixed;
     session->channel = state->channel;
+    session->broadcast_rate_config = state->broadcast_rate_config;
     session->has_pmk = state->has_pmk;
     session->power_save_enabled = state->power_save_enabled;
     session->wake_window_ms = state->wake_window_ms;
     session->wake_interval_ms = state->wake_interval_ms;
     atomic_init(&session->active_send, NULL);
+    atomic_init(&session->pending_tracked_send, NULL);
     atomic_init(&session->pending_sends, 0);
+    atomic_init(&session->tx_task_stop, false);
+    atomic_init(&session->tx_task, NULL);
+    atomic_init(&session->active_queued_slot,
+                ESP32_MQUICKJS_ESPNOW_TX_SLOT_NONE);
+    atomic_init(&session->queued_send_completed, false);
+    atomic_init(&session->queued_send_delivered, false);
+    atomic_init(&session->queued_send_error, ESP_OK);
+    atomic_init(&session->queued_send_started_us, 0);
+    atomic_init(&session->next_batch_sequence, 1);
+    atomic_init(&session->tx_accepted_batches, 0);
+    atomic_init(&session->tx_accepted_packets, 0);
+    atomic_init(&session->tx_rejected_batches, 0);
+    atomic_init(&session->tx_rejected_packets, 0);
+    atomic_init(&session->tx_evicted_batches, 0);
+    atomic_init(&session->tx_evicted_packets, 0);
+    atomic_init(&session->tx_completed_batches, 0);
+    atomic_init(&session->tx_completed_packets, 0);
+    atomic_init(&session->tx_failed_packets, 0);
+    atomic_init(&session->tx_high_water_packets, 0);
+    atomic_init(&session->tx_last_error, ESP_OK);
     atomic_init(&session->callbacks_active, 0);
     atomic_init(&session->cleanup_scheduled, false);
     atomic_init(&session->active_close, NULL);
@@ -1364,6 +1897,13 @@ static bool espnow_open_capture(
     if (!espnow_allocate_receive_pool(
             ctx, session, state->receive_capacity,
             state->max_payload_bytes)) {
+        espnow_open_release(state);
+        heap_caps_free(state);
+        return false;
+    }
+    if (!espnow_allocate_tx_queue(
+            ctx, session, state->tx_queue_capacity,
+            state->max_payload_bytes, state->tx_overflow)) {
         espnow_open_release(state);
         heap_caps_free(state);
         return false;
@@ -1467,6 +2007,11 @@ static void espnow_open_initialize(
         state->err = esp_now_add_peer(&broadcast_peer);
         session->broadcast_peer_added = state->err == ESP_OK;
     }
+    if (state->err == ESP_OK) {
+        state->failed_step = "esp_now_set_broadcast_rate_config";
+        state->err = espnow_apply_rate_config(
+            s_broadcast_address, &session->broadcast_rate_config);
+    }
     if (state->err == ESP_OK && session->power_save_enabled) {
         state->failed_step = "esp_now_set_wake_window";
         state->err = esp_now_set_wake_window(session->wake_window_ms);
@@ -1474,6 +2019,18 @@ static void espnow_open_initialize(
             state->failed_step = "esp_now_set_wake_interval";
             state->err = esp_wifi_connectionless_module_set_wake_interval(
                 session->wake_interval_ms);
+        }
+    }
+    if (state->err == ESP_OK) {
+        TaskHandle_t tx_task = NULL;
+
+        state->failed_step = "espnow_tx_worker";
+        if (xTaskCreate(espnow_tx_worker, "espnow_tx", 4096, session,
+                        tskIDLE_PRIORITY + 2, &tx_task) != pdPASS) {
+            state->err = ESP_ERR_NO_MEM;
+        } else {
+            atomic_store_explicit(&session->tx_task, tx_task,
+                                  memory_order_release);
         }
     }
     if (state->err == ESP_OK) {
@@ -1664,9 +2221,9 @@ static bool espnow_retain_owner(
     return true;
 }
 
-static bool espnow_parse_peer_rate_config(
-    JSContext *ctx, JSValue value,
-    esp32_mquickjs_future_driver_state_t *state)
+static bool espnow_parse_rate_config(
+    JSContext *ctx, JSValue value, const char *operation,
+    espnow_peer_rate_config_t *out_config)
 {
     static const char *const allowed[] = {
         "phyMode", "mcs", "guardInterval", "ersu", "dcm",
@@ -1677,10 +2234,8 @@ static bool espnow_parse_peer_rate_config(
     uint32_t mcs;
     bool result = false;
 
-    if (state == NULL || !espnow_is_object(ctx, value) ||
-        !espnow_validate_option_keys(ctx, value,
-                                     "EspNowSession.addPeer({ rateConfig })",
-                                     allowed, 5U)) {
+    if (out_config == NULL || !espnow_is_object(ctx, value) ||
+        !espnow_validate_option_keys(ctx, value, operation, allowed, 5U)) {
         if (!JS_HasException(ctx)) {
             JS_ThrowTypeError(
                 ctx, "ESPNOW_INVALID_RATE_CONFIG: rateConfig must be an object");
@@ -1780,7 +2335,7 @@ static bool espnow_parse_peer_rate_config(
     }
 
     config.configured = true;
-    state->peer_rate_config = config;
+    *out_config = config;
     result = true;
 
 done:
@@ -1912,7 +2467,10 @@ static bool espnow_parse_peer_options(
         *property = JS_GetPropertyStr(ctx, options, "rateConfig");
         if (JS_IsException(*property) ||
             (!JS_IsUndefined(*property) &&
-             !espnow_parse_peer_rate_config(ctx, *property, state))) {
+             !espnow_parse_rate_config(
+                 ctx, *property,
+                 "EspNowSession.addPeer({ rateConfig })",
+                 &state->peer_rate_config))) {
             goto done;
         }
     }
@@ -2636,6 +3194,7 @@ static bool espnow_send_capture(
     atomic_init(&state->completed, false);
     atomic_init(&state->recovery_pending, false);
     atomic_init(&state->recovery_worker_submitted, false);
+    atomic_init(&state->submitted, false);
     if (peer != NULL) {
         state->peer_index = peer_ref->peer_index;
         state->peer_generation = peer_ref->peer_generation;
@@ -2707,6 +3266,7 @@ static bool espnow_send_start(
     esp32_mquickjs_future_driver_state_t *state)
 {
     espnow_session_t *session = &s_espnow_session;
+    esp32_mquickjs_future_driver_state_t *expected = NULL;
 
     if (state == NULL || state->generation != session->generation ||
         session->lifecycle != ESPNOW_LIFECYCLE_ACTIVE) {
@@ -2715,9 +3275,7 @@ static bool espnow_send_start(
                            state != NULL ? state->address : NULL, -1);
         return false;
     }
-    if (session->tx_state != ESP32_MQUICKJS_WIRELESS_TX_READY ||
-        atomic_load_explicit(&session->active_send,
-                             memory_order_acquire) != NULL) {
+    if (session->tx_state != ESP32_MQUICKJS_WIRELESS_TX_READY) {
         espnow_throw_error(ctx, "ESPNOW_CLOSING", ESP_ERR_INVALID_STATE,
                            state->address, session->channel);
         return false;
@@ -2739,24 +3297,14 @@ static bool espnow_send_start(
     state->runtime = runtime;
     state->token = token;
     state->started = true;
-    atomic_store_explicit(&session->active_send, state,
-                          memory_order_release);
-    state->err = esp_now_send(state->address, state->payload,
-                              state->payload_length);
-    if (state->err != ESP_OK) {
-        atomic_store_explicit(&session->active_send, NULL,
-                              memory_order_release);
-        atomic_fetch_add_explicit(&session->send_failures, 1,
-                                  memory_order_relaxed);
-        espnow_throw_error(ctx, "ESPNOW_SEND_FAILED", state->err,
+    if (!atomic_compare_exchange_strong_explicit(
+            &session->pending_tracked_send, &expected, state,
+            memory_order_acq_rel, memory_order_acquire)) {
+        espnow_throw_error(ctx, "ESPNOW_CLOSING", ESP_ERR_INVALID_STATE,
                            state->address, session->channel);
         return false;
     }
-    atomic_fetch_add_explicit(&session->sent_packets, 1,
-                              memory_order_relaxed);
-    atomic_fetch_add_explicit(&session->sent_bytes,
-                              (uint32_t)state->payload_length,
-                              memory_order_relaxed);
+    espnow_notify_tx_worker(session);
     return true;
 }
 
@@ -2796,6 +3344,11 @@ static esp_err_t espnow_restore_native_session(espnow_session_t *session)
         return err;
     }
     session->broadcast_peer_added = true;
+    err = espnow_apply_rate_config(
+        s_broadcast_address, &session->broadcast_rate_config);
+    if (err != ESP_OK) {
+        return err;
+    }
     for (i = 0; i < CONFIG_ESP32_MQUICKJS_ESPNOW_MAX_PEERS; ++i) {
         espnow_peer_slot_t *peer = &session->peers[i];
 
@@ -2853,6 +3406,7 @@ static esp_err_t espnow_begin_timeout_recovery(
     session->lifecycle = ESPNOW_LIFECYCLE_FAILED;
     atomic_store_explicit(&session->active_send, NULL,
                           memory_order_release);
+    espnow_notify_tx_worker(session);
     if (session->receive_callback_registered) {
         err = esp_now_unregister_recv_cb();
         session->receive_callback_registered = false;
@@ -2912,6 +3466,7 @@ static void espnow_send_recovery_worker(void *opaque)
     atomic_store_explicit(&state->recovery_pending, false,
                           memory_order_release);
     (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+    espnow_notify_tx_worker(session);
 }
 
 static bool espnow_schedule_send_recovery(
@@ -2970,6 +3525,12 @@ static JSValue espnow_send_finish(
                                         : "ESPNOW_SEND_TIMEOUT",
             state->err, state->address, s_espnow_session.channel);
     }
+    if (state->err != ESP_OK) {
+        JS_PopGCRef(ctx, &result_ref);
+        return espnow_throw_error(ctx, "ESPNOW_SEND_FAILED", state->err,
+                                  state->address,
+                                  s_espnow_session.channel);
+    }
     espnow_format_address(state->address, address);
     *result = JS_NewObject(ctx);
     if (JS_IsException(*result) ||
@@ -3013,6 +3574,13 @@ static void espnow_send_destroy(
         atomic_store_explicit(&s_espnow_session.active_send, NULL,
                               memory_order_release);
     }
+    if (state->generation == s_espnow_session.generation) {
+        esp32_mquickjs_future_driver_state_t *expected = state;
+
+        (void)atomic_compare_exchange_strong_explicit(
+            &s_espnow_session.pending_tracked_send, &expected, NULL,
+            memory_order_acq_rel, memory_order_acquire);
+    }
     if (state->send_reserved &&
         state->generation == s_espnow_session.generation) {
         uint32_t pending = atomic_load_explicit(
@@ -3040,12 +3608,32 @@ static JSValue espnow_send_on_timeout(
     JSContext *ctx, esp32_mquickjs_future_driver_state_t *state,
     uint32_t timeout_ms)
 {
+    bool pending_removed = false;
+
     (void)timeout_ms;
     if (state == NULL || !state->started) {
         return espnow_throw_error(
             ctx, "ESPNOW_SEND_TIMEOUT", ESP_ERR_TIMEOUT,
             state != NULL ? state->address : NULL,
             s_espnow_session.channel);
+    }
+    portENTER_CRITICAL(&s_espnow_session.lock);
+    if (!atomic_load_explicit(&state->submitted, memory_order_acquire) &&
+        atomic_load_explicit(&s_espnow_session.active_send,
+                             memory_order_acquire) != state) {
+        esp32_mquickjs_future_driver_state_t *expected = state;
+
+        pending_removed = atomic_compare_exchange_strong_explicit(
+            &s_espnow_session.pending_tracked_send, &expected, NULL,
+            memory_order_acq_rel, memory_order_acquire);
+    }
+    portEXIT_CRITICAL(&s_espnow_session.lock);
+    if (pending_removed) {
+        state->timed_out = true;
+        state->err = ESP_ERR_TIMEOUT;
+        return espnow_throw_error(
+            ctx, "ESPNOW_SEND_TIMEOUT", ESP_ERR_TIMEOUT,
+            state->address, s_espnow_session.channel);
     }
     if (espnow_begin_timeout_recovery(&s_espnow_session, state) != ESP_OK &&
         !atomic_load_explicit(&state->recovery_pending,
@@ -3174,6 +3762,7 @@ static void espnow_recover_worker(void *opaque)
                                                       err == ESP_OK);
     session->lifecycle = err == ESP_OK ? ESPNOW_LIFECYCLE_ACTIVE
                                        : ESPNOW_LIFECYCLE_FAILED;
+    espnow_notify_tx_worker(session);
     atomic_store_explicit(&state->completed, true, memory_order_release);
     (void)esp32_mquickjs_future_wake(state->runtime, state->token);
 }
@@ -3478,6 +4067,567 @@ fail:
     return JS_EXCEPTION;
 }
 
+static bool espnow_array_length(JSContext *ctx, JSValue value,
+                                uint32_t *out_length)
+{
+    JSGCRef length_ref;
+    JSValue *length = JS_PushGCRef(ctx, &length_ref);
+    int raw;
+    bool result = false;
+
+    if (out_length == NULL || !JS_IsArray(ctx, value)) {
+        JS_ThrowTypeError(ctx, "expected an array");
+        goto done;
+    }
+    *length = JS_GetPropertyStr(ctx, value, "length");
+    if (JS_IsException(*length) || JS_ToInt32(ctx, &raw, *length) != 0 ||
+        raw < 0) {
+        if (!JS_HasException(ctx)) {
+            JS_ThrowRangeError(ctx, "array length is invalid");
+        }
+        goto done;
+    }
+    *out_length = (uint32_t)raw;
+    result = true;
+
+done:
+    JS_PopGCRef(ctx, &length_ref);
+    return result;
+}
+
+static bool espnow_payload_source_length(JSContext *ctx, JSValue value,
+                                         size_t *out_length)
+{
+    int class_id = JS_GetClassID(ctx, value);
+
+    if (out_length == NULL) {
+        return false;
+    }
+    if (class_id == JS_CLASS_BYTE_SPAN_SOURCE ||
+        class_id == JS_CLASS_BITMAP_SPAN_SOURCE) {
+        if (!esp32_mquickjs_byte_span_source_known_length(
+                ctx, value, out_length)) {
+            JS_ThrowTypeError(
+                ctx,
+                "ESP-NOW enqueue requires a ByteSpanSource with known byteLength");
+            return false;
+        }
+        return true;
+    }
+    {
+        esp32_mquickjs_byte_source_t source;
+        uint8_t *owned = NULL;
+        JSValue error = JS_UNDEFINED;
+
+        if (!esp32_mquickjs_get_byte_source(
+                ctx, value, "ESP-NOW enqueue payload", &source, &owned,
+                &error)) {
+            return false;
+        }
+        *out_length = source.length;
+        esp32_mquickjs_release_byte_source(owned);
+    }
+    return true;
+}
+
+static bool espnow_copy_payload_source(JSContext *ctx, JSValue value,
+                                       uint8_t *destination,
+                                       size_t expected_length)
+{
+    int class_id = JS_GetClassID(ctx, value);
+
+    if (class_id == JS_CLASS_BYTE_SPAN_SOURCE ||
+        class_id == JS_CLASS_BITMAP_SPAN_SOURCE) {
+        esp32_mquickjs_byte_span_source_t source;
+        JSValue error = JS_UNDEFINED;
+        size_t offset = 0;
+        bool result = false;
+
+        if (!esp32_mquickjs_open_byte_span_source(
+                ctx, value, "ESP-NOW enqueue payload", &source, &error)) {
+            return false;
+        }
+        while (true) {
+            esp32_mquickjs_byte_span_t span;
+
+            if (!esp32_mquickjs_byte_span_source_next(ctx, &source, &span)) {
+                if (!JS_HasException(ctx) && offset == expected_length) {
+                    result = true;
+                }
+                break;
+            }
+            if (span.length > expected_length - offset ||
+                (span.length > 0 && span.data == NULL)) {
+                JS_ThrowRangeError(
+                    ctx,
+                    "ESP-NOW ByteSpanSource length changed while enqueueing");
+                break;
+            }
+            if (span.length > 0) {
+                memcpy(destination + offset, span.data, span.length);
+                offset += span.length;
+            }
+        }
+        esp32_mquickjs_byte_span_source_close(ctx, &source);
+        if (!result && !JS_HasException(ctx)) {
+            JS_ThrowRangeError(
+                ctx,
+                "ESP-NOW ByteSpanSource length changed while enqueueing");
+        }
+        return result;
+    }
+    {
+        esp32_mquickjs_byte_source_t source;
+        uint8_t *owned = NULL;
+        JSValue error = JS_UNDEFINED;
+
+        if (!esp32_mquickjs_get_byte_source(
+                ctx, value, "ESP-NOW enqueue payload", &source, &owned,
+                &error)) {
+            return false;
+        }
+        if (source.length != expected_length) {
+            esp32_mquickjs_release_byte_source(owned);
+            JS_ThrowRangeError(
+                ctx, "ESP-NOW ByteSource length changed while enqueueing");
+            return false;
+        }
+        if (source.length > 0) {
+            memcpy(destination, source.data, source.length);
+        }
+        esp32_mquickjs_release_byte_source(owned);
+    }
+    return true;
+}
+
+static bool espnow_transfer_packet(JSContext *ctx, JSValue packet,
+                                   uint8_t *destination,
+                                   size_t capacity, size_t *out_length)
+{
+    static const char *const allowed[] = {"data", "parts"};
+    JSGCRef data_ref, parts_ref, part_ref;
+    JSValue *data = JS_PushGCRef(ctx, &data_ref);
+    JSValue *parts = JS_PushGCRef(ctx, &parts_ref);
+    JSValue *part = JS_PushGCRef(ctx, &part_ref);
+    uint32_t part_count = 0;
+    uint32_t part_index;
+    size_t total = 0;
+    bool result = false;
+
+    *data = JS_UNDEFINED;
+    *parts = JS_UNDEFINED;
+    *part = JS_UNDEFINED;
+    if (!espnow_is_object(ctx, packet) ||
+        !espnow_validate_option_keys(ctx, packet, "ESP-NOW enqueue packet",
+                                     allowed, 2U)) {
+        if (!JS_HasException(ctx)) {
+            JS_ThrowTypeError(
+                ctx, "ESP-NOW packet must be { data } or { parts }");
+        }
+        goto done;
+    }
+    *data = JS_GetPropertyStr(ctx, packet, "data");
+    *parts = JS_GetPropertyStr(ctx, packet, "parts");
+    if (JS_IsException(*data) || JS_IsException(*parts)) {
+        goto done;
+    }
+    if (JS_IsUndefined(*data) == JS_IsUndefined(*parts)) {
+        JS_ThrowTypeError(ctx,
+                          "ESP-NOW packet must contain exactly one of data or parts");
+        goto done;
+    }
+    if (!JS_IsUndefined(*data)) {
+        size_t length;
+
+        if (!espnow_payload_source_length(ctx, *data, &length) ||
+            length > capacity) {
+            if (!JS_HasException(ctx)) {
+                JS_ThrowRangeError(ctx,
+                                   "ESPNOW_PAYLOAD_TOO_LARGE: packet exceeds maxPayloadBytes");
+            }
+            goto done;
+        }
+        if (destination != NULL &&
+            !espnow_copy_payload_source(ctx, *data, destination, length)) {
+            goto done;
+        }
+        total = length;
+    } else {
+        if (!espnow_array_length(ctx, *parts, &part_count) ||
+            part_count == 0) {
+            if (!JS_HasException(ctx)) {
+                JS_ThrowRangeError(ctx,
+                                   "ESP-NOW packet parts must be a non-empty array");
+            }
+            goto done;
+        }
+        for (part_index = 0; part_index < part_count; ++part_index) {
+            size_t length;
+
+            *part = JS_GetPropertyUint32(ctx, *parts, part_index);
+            if (JS_IsException(*part) ||
+                !espnow_payload_source_length(ctx, *part, &length) ||
+                length > capacity - total) {
+                if (!JS_HasException(ctx)) {
+                    JS_ThrowRangeError(
+                        ctx,
+                        "ESPNOW_PAYLOAD_TOO_LARGE: packet parts exceed maxPayloadBytes");
+                }
+                goto done;
+            }
+            if (destination != NULL &&
+                !espnow_copy_payload_source(
+                    ctx, *part, destination + total, length)) {
+                goto done;
+            }
+            total += length;
+        }
+    }
+    *out_length = total;
+    result = true;
+
+done:
+    JS_PopGCRef(ctx, &part_ref);
+    JS_PopGCRef(ctx, &parts_ref);
+    JS_PopGCRef(ctx, &data_ref);
+    return result;
+}
+
+static void espnow_tx_queue_depth_locked(
+    const espnow_session_t *session,
+    uint32_t *out_batches,
+    uint32_t *out_packets)
+{
+    uint16_t cursor;
+    uint32_t previous_batch = 0;
+    uint32_t batches = 0;
+    uint32_t packets = 0;
+
+    if (session->tx_queue_capacity == 0) {
+        if (out_batches != NULL) {
+            *out_batches = 0;
+        }
+        if (out_packets != NULL) {
+            *out_packets = 0;
+        }
+        return;
+    }
+    if (session->tx_queue.active != ESP32_MQUICKJS_ESPNOW_TX_SLOT_NONE) {
+        previous_batch = session->tx_queue.active_batch_sequence;
+        batches = 1;
+        packets = 1;
+    }
+    cursor = session->tx_queue.pending_head;
+    while (cursor != ESP32_MQUICKJS_ESPNOW_TX_SLOT_NONE) {
+        uint32_t batch = session->tx_links[cursor].batch_sequence;
+
+        packets++;
+        if (batch != previous_batch) {
+            batches++;
+            previous_batch = batch;
+        }
+        cursor = session->tx_links[cursor].next;
+    }
+    if (out_batches != NULL) {
+        *out_batches = batches;
+    }
+    if (out_packets != NULL) {
+        *out_packets = packets;
+    }
+}
+
+static JSValue espnow_enqueue_result_to_js(
+    JSContext *ctx, bool accepted, uint32_t batch_sequence,
+    uint32_t packets, uint32_t bytes,
+    const esp32_mquickjs_espnow_tx_reserve_result_t *reserve,
+    uint32_t queued_batches, uint32_t queued_packets)
+{
+    JSGCRef result_ref;
+    JSValue *result = JS_PushGCRef(ctx, &result_ref);
+
+    *result = JS_NewObject(ctx);
+    if (JS_IsException(*result) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "accepted",
+                                         JS_NewBool(accepted)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "reason",
+            accepted ? JS_NULL : JS_NewString(ctx, "queue-full")) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "batchSequence",
+            accepted ? JS_NewUint32(ctx, batch_sequence) : JS_NULL) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "packets",
+                                         JS_NewUint32(ctx, packets)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "bytes",
+                                         JS_NewUint32(ctx, bytes)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "evictedBatches",
+            JS_NewUint32(ctx, reserve != NULL ? reserve->evicted_batches : 0)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "evictedPackets",
+            JS_NewUint32(ctx, reserve != NULL ? reserve->evicted_packets : 0)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "queuedBatches", JS_NewUint32(ctx, queued_batches)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "queuedPackets", JS_NewUint32(ctx, queued_packets))) {
+        JS_PopGCRef(ctx, &result_ref);
+        return JS_EXCEPTION;
+    }
+    return JS_PopGCRef(ctx, &result_ref);
+}
+
+static JSValue espnow_enqueue(JSContext *ctx, JSValue receiver,
+                              int argc, JSValue *argv, bool batch)
+{
+    espnow_session_t *session;
+    espnow_peer_slot_t *peer = NULL;
+    uint8_t address[ESPNOW_ADDRESS_BYTES];
+    uint16_t reserved[CONFIG_ESP32_MQUICKJS_ESPNOW_TX_MAX_QUEUE_LEN];
+    uint16_t lengths[CONFIG_ESP32_MQUICKJS_ESPNOW_TX_MAX_QUEUE_LEN];
+    esp32_mquickjs_espnow_tx_reserve_result_t reserve = {0};
+    uint32_t packet_count = 1;
+    uint32_t packet_index;
+    uint32_t total_bytes = 0;
+    uint32_t batch_sequence;
+    uint32_t queued_batches;
+    uint32_t queued_packets;
+    uint8_t actual_channel;
+    wifi_second_chan_t secondary;
+    uint32_t channel_generation;
+
+    if (argc != 1) {
+        return JS_ThrowTypeError(
+            ctx, batch
+                     ? "ESP-NOW enqueueBatch(packets) expects one packet array"
+                     : "ESP-NOW enqueue(packet) expects one packet object");
+    }
+    if (JS_GetClassID(ctx, receiver) == JS_CLASS_ESPNOW_PEER) {
+        peer = espnow_peer_from_value(ctx, receiver, NULL, true);
+        if (peer == NULL) {
+            return JS_EXCEPTION;
+        }
+        session = &s_espnow_session;
+        memcpy(address, peer->address, ESPNOW_ADDRESS_BYTES);
+    } else {
+        session = espnow_session_from_value(ctx, receiver, true);
+        if (session == NULL) {
+            return JS_EXCEPTION;
+        }
+        memcpy(address, s_broadcast_address, ESPNOW_ADDRESS_BYTES);
+    }
+    if (session->lifecycle != ESPNOW_LIFECYCLE_ACTIVE ||
+        session->tx_state != ESP32_MQUICKJS_WIRELESS_TX_READY) {
+        return espnow_throw_error(ctx, "ESPNOW_NOT_OPEN",
+                                  ESP_ERR_INVALID_STATE, address,
+                                  session->channel);
+    }
+    if (session->tx_queue_capacity == 0) {
+        return espnow_throw_error(ctx, "ESPNOW_TX_QUEUE_DISABLED",
+                                  ESP_ERR_INVALID_STATE, address,
+                                  session->channel);
+    }
+    if (batch &&
+        (!espnow_array_length(ctx, argv[0], &packet_count) ||
+         packet_count == 0)) {
+        if (!JS_HasException(ctx)) {
+            JS_ThrowRangeError(ctx, "enqueueBatch requires a non-empty array");
+        }
+        return JS_EXCEPTION;
+    }
+    if (packet_count > session->tx_queue_capacity) {
+        return JS_ThrowRangeError(
+            ctx, "enqueue batch exceeds txQueue.capacityPackets");
+    }
+    for (packet_index = 0; packet_index < packet_count; ++packet_index) {
+        JSGCRef packet_ref;
+        JSValue *packet = JS_PushGCRef(ctx, &packet_ref);
+        size_t length = 0;
+        bool valid;
+
+        *packet = batch ? JS_GetPropertyUint32(ctx, argv[0], packet_index)
+                        : argv[0];
+        valid = !JS_IsException(*packet) &&
+                espnow_transfer_packet(ctx, *packet, NULL,
+                                       session->max_payload_bytes, &length);
+        JS_PopGCRef(ctx, &packet_ref);
+        if (!valid) {
+            return JS_EXCEPTION;
+        }
+        lengths[packet_index] = (uint16_t)length;
+        total_bytes += (uint32_t)length;
+    }
+    if (esp32_mquickjs_wifi_radio_get_channel(
+            &actual_channel, &secondary, &channel_generation) != ESP_OK ||
+        actual_channel != session->channel ||
+        channel_generation != session->channel_generation ||
+        (peer != NULL && peer->channel != 0 &&
+         peer->channel != actual_channel)) {
+        return espnow_throw_error(ctx, "ESPNOW_CHANNEL_MISMATCH",
+                                  ESP_ERR_ESPNOW_CHAN, address,
+                                  session->channel);
+    }
+    do {
+        batch_sequence = atomic_fetch_add_explicit(
+            &session->next_batch_sequence, 1, memory_order_relaxed);
+    } while (batch_sequence == 0);
+    portENTER_CRITICAL(&session->lock);
+    if (!esp32_mquickjs_espnow_tx_queue_reserve_batch(
+            &session->tx_queue, (uint16_t)packet_count, batch_sequence,
+            session->tx_overflow, reserved, &reserve)) {
+        espnow_tx_queue_depth_locked(session, &queued_batches,
+                                     &queued_packets);
+        portEXIT_CRITICAL(&session->lock);
+        atomic_fetch_add_explicit(&session->tx_rejected_batches, 1,
+                                  memory_order_relaxed);
+        atomic_fetch_add_explicit(&session->tx_rejected_packets,
+                                  packet_count, memory_order_relaxed);
+        return espnow_enqueue_result_to_js(
+            ctx, false, 0, packet_count, total_bytes, &reserve,
+            queued_batches, queued_packets);
+    }
+    portEXIT_CRITICAL(&session->lock);
+    for (packet_index = 0; packet_index < packet_count; ++packet_index) {
+        JSGCRef packet_ref;
+        JSValue *packet = JS_PushGCRef(ctx, &packet_ref);
+        size_t copied = 0;
+        uint16_t slot = reserved[packet_index];
+        bool valid;
+
+        *packet = batch ? JS_GetPropertyUint32(ctx, argv[0], packet_index)
+                        : argv[0];
+        valid = !JS_IsException(*packet) &&
+                espnow_transfer_packet(
+                    ctx, *packet,
+                    session->tx_payloads +
+                        ((size_t)slot * session->max_payload_bytes),
+                    lengths[packet_index], &copied) &&
+                copied == lengths[packet_index];
+        JS_PopGCRef(ctx, &packet_ref);
+        if (!valid) {
+            portENTER_CRITICAL(&session->lock);
+            esp32_mquickjs_espnow_tx_queue_release_reserved(
+                &session->tx_queue, reserved, (uint16_t)packet_count);
+            portEXIT_CRITICAL(&session->lock);
+            return JS_EXCEPTION;
+        }
+        memcpy(session->tx_packets[slot].address, address,
+               ESPNOW_ADDRESS_BYTES);
+        session->tx_packets[slot].length = lengths[packet_index];
+    }
+    portENTER_CRITICAL(&session->lock);
+    if (!esp32_mquickjs_espnow_tx_queue_commit_batch(
+            &session->tx_queue, reserved, (uint16_t)packet_count,
+            batch_sequence)) {
+        esp32_mquickjs_espnow_tx_queue_release_reserved(
+            &session->tx_queue, reserved, (uint16_t)packet_count);
+        portEXIT_CRITICAL(&session->lock);
+        return JS_ThrowInternalError(ctx,
+                                     "ESP-NOW transmit queue commit failed");
+    }
+    espnow_tx_queue_depth_locked(session, &queued_batches,
+                                 &queued_packets);
+    portEXIT_CRITICAL(&session->lock);
+    atomic_fetch_add_explicit(&session->tx_accepted_batches, 1,
+                              memory_order_relaxed);
+    atomic_fetch_add_explicit(&session->tx_accepted_packets, packet_count,
+                              memory_order_relaxed);
+    atomic_fetch_add_explicit(&session->tx_evicted_batches,
+                              reserve.evicted_batches,
+                              memory_order_relaxed);
+    atomic_fetch_add_explicit(&session->tx_evicted_packets,
+                              reserve.evicted_packets,
+                              memory_order_relaxed);
+    espnow_update_tx_high_water(session, queued_packets);
+    espnow_notify_tx_worker(session);
+    return espnow_enqueue_result_to_js(
+        ctx, true, batch_sequence, packet_count, total_bytes, &reserve,
+        queued_batches, queued_packets);
+}
+
+JSValue js_espnow_session_enqueue_broadcast(
+    JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    if (this_val == NULL) {
+        return JS_ThrowTypeError(
+            ctx, "EspNowSession.enqueueBroadcast() has no receiver");
+    }
+    return espnow_enqueue(ctx, *this_val, argc, argv, false);
+}
+
+JSValue js_espnow_session_enqueue_broadcast_batch(
+    JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    if (this_val == NULL) {
+        return JS_ThrowTypeError(
+            ctx, "EspNowSession.enqueueBroadcastBatch() has no receiver");
+    }
+    return espnow_enqueue(ctx, *this_val, argc, argv, true);
+}
+
+JSValue js_espnow_peer_enqueue(JSContext *ctx, JSValue *this_val,
+                               int argc, JSValue *argv)
+{
+    if (this_val == NULL) {
+        return JS_ThrowTypeError(ctx,
+                                 "EspNowPeer.enqueue() has no receiver");
+    }
+    return espnow_enqueue(ctx, *this_val, argc, argv, false);
+}
+
+JSValue js_espnow_peer_enqueue_batch(JSContext *ctx, JSValue *this_val,
+                                     int argc, JSValue *argv)
+{
+    if (this_val == NULL) {
+        return JS_ThrowTypeError(ctx,
+                                 "EspNowPeer.enqueueBatch() has no receiver");
+    }
+    return espnow_enqueue(ctx, *this_val, argc, argv, true);
+}
+
+JSValue js_espnow_session_flush_tx(JSContext *ctx, JSValue *this_val,
+                                   int argc, JSValue *argv)
+{
+    espnow_session_t *session;
+    esp32_mquickjs_runtime_t *runtime;
+    uint32_t timeout_ms = UINT32_MAX;
+    int64_t deadline_us = INT64_MAX;
+
+    if (this_val == NULL || argc > 1 ||
+        (session = espnow_session_from_value(ctx, *this_val, true)) == NULL) {
+        if (!JS_HasException(ctx)) {
+            JS_ThrowTypeError(ctx,
+                              "EspNowSession.flushTx(timeoutMs?) expects at most one timeout");
+        }
+        return JS_EXCEPTION;
+    }
+    if (argc == 1 && !JS_IsUndefined(argv[0])) {
+        if (!esp32_mquickjs_value_to_bounded_u32(
+                ctx, argv[0], 0U, INT32_MAX, &timeout_ms)) {
+            return JS_ThrowRangeError(
+                ctx, "flushTx timeoutMs must be in the range 0..2147483647");
+        }
+        deadline_us = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+    }
+    runtime = esp32_mquickjs_get_active_runtime();
+    while (true) {
+        uint32_t queued_packets;
+
+        portENTER_CRITICAL(&session->lock);
+        espnow_tx_queue_depth_locked(session, NULL, &queued_packets);
+        portEXIT_CRITICAL(&session->lock);
+        if (queued_packets == 0) {
+            return JS_TRUE;
+        }
+        if (session->lifecycle != ESPNOW_LIFECYCLE_ACTIVE ||
+            esp_timer_get_time() >= deadline_us) {
+            return JS_FALSE;
+        }
+        if (!esp32_mquickjs_wait_for_activity(
+                runtime, timeout_ms == UINT32_MAX ? UINT32_MAX : 1U)) {
+            return JS_FALSE;
+        }
+    }
+}
+
 JSValue js_espnow_session_broadcast(JSContext *ctx, JSValue *this_val,
                                     int argc, JSValue *argv)
 {
@@ -3618,7 +4768,14 @@ JSValue js_espnow_capabilities(JSContext *ctx, JSValue *this_val,
                                          JS_FALSE) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "powerSave", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "peerRateConfig",
-                                         JS_TRUE)) {
+                                         JS_TRUE) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "broadcastRateConfig",
+                                         JS_TRUE) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "txQueue", JS_TRUE) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "maxTxQueuePackets",
+            JS_NewUint32(
+                ctx, CONFIG_ESP32_MQUICKJS_ESPNOW_TX_MAX_QUEUE_LEN))) {
         JS_PopGCRef(ctx, &result_ref);
         return JS_EXCEPTION;
     }
@@ -3647,25 +4804,44 @@ JSValue js_espnow_open(JSContext *ctx, JSValue *this_val,
 }
 
 static JSValue espnow_status_to_js(JSContext *ctx,
-                                   const espnow_session_t *session)
+                                   espnow_session_t *session)
 {
     JSGCRef result_ref;
     JSGCRef power_save_ref;
+    JSGCRef tx_queue_ref;
+    JSGCRef broadcast_rate_config_ref;
     JSValue *result = JS_PushGCRef(ctx, &result_ref);
     JSValue *power_save = JS_PushGCRef(ctx, &power_save_ref);
+    JSValue *tx_queue = JS_PushGCRef(ctx, &tx_queue_ref);
+    JSValue *broadcast_rate_config = JS_PushGCRef(
+        ctx, &broadcast_rate_config_ref);
     uint8_t channel = 0;
     wifi_second_chan_t secondary = WIFI_SECOND_CHAN_NONE;
     uint32_t channel_generation = 0;
     bool synchronized = false;
+    uint32_t queued_batches = 0;
+    uint32_t queued_packets = 0;
+    int tx_last_error = atomic_load_explicit(
+        &session->tx_last_error, memory_order_relaxed);
 
     *result = JS_NewObject(ctx);
     *power_save = JS_NewObject(ctx);
+    *tx_queue = JS_NewObject(ctx);
+    *broadcast_rate_config = espnow_peer_rate_config_to_js(
+        ctx, &session->broadcast_rate_config);
+    if (session->tx_queue_capacity > 0) {
+        portENTER_CRITICAL(&session->lock);
+        espnow_tx_queue_depth_locked(session, &queued_batches,
+                                     &queued_packets);
+        portEXIT_CRITICAL(&session->lock);
+    }
     if (esp32_mquickjs_wifi_radio_get_channel(
             &channel, &secondary, &channel_generation) == ESP_OK) {
         synchronized = channel == session->channel &&
                        channel_generation == session->channel_generation;
     }
     if (JS_IsException(*result) || JS_IsException(*power_save) ||
+        JS_IsException(*tx_queue) || JS_IsException(*broadcast_rate_config) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "open", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "interface",
                                          JS_NewString(ctx, "station")) ||
@@ -3682,6 +4858,8 @@ static JSValue espnow_status_to_js(JSContext *ctx,
         !esp32_mquickjs_set_property_ref(
             ctx, result, "v1Compatible",
             JS_NewBool(session->max_payload_bytes <= ESP_NOW_MAX_DATA_LEN)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, result, "broadcastRateConfig", *broadcast_rate_config) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "peerCount",
                                          JS_NewUint32(ctx, session->peer_count)) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "encryptedPeerCount",
@@ -3746,6 +4924,90 @@ static JSValue espnow_status_to_js(JSContext *ctx,
                                   &session->send_timeouts,
                                   memory_order_relaxed))) ||
         !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "enabled",
+            JS_NewBool(session->tx_queue_capacity > 0)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "capacityPackets",
+            JS_NewUint32(ctx, session->tx_queue_capacity)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "overflow",
+            session->tx_queue_capacity == 0
+                ? JS_NULL
+                : JS_NewString(
+                      ctx,
+                      session->tx_overflow ==
+                              ESP32_MQUICKJS_ESPNOW_TX_DROP_OLDEST_BATCH
+                          ? "drop-oldest-batch"
+                          : "reject-newest")) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "active",
+            JS_NewBool(atomic_load_explicit(
+                           &session->active_queued_slot,
+                           memory_order_acquire) !=
+                       ESP32_MQUICKJS_ESPNOW_TX_SLOT_NONE)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "queuedBatches",
+            JS_NewUint32(ctx, queued_batches)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "queuedPackets",
+            JS_NewUint32(ctx, queued_packets)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "highWaterPackets",
+            JS_NewUint32(ctx, atomic_load_explicit(
+                                  &session->tx_high_water_packets,
+                                  memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "acceptedBatches",
+            JS_NewUint32(ctx, atomic_load_explicit(
+                                  &session->tx_accepted_batches,
+                                  memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "acceptedPackets",
+            JS_NewUint32(ctx, atomic_load_explicit(
+                                  &session->tx_accepted_packets,
+                                  memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "rejectedBatches",
+            JS_NewUint32(ctx, atomic_load_explicit(
+                                  &session->tx_rejected_batches,
+                                  memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "rejectedPackets",
+            JS_NewUint32(ctx, atomic_load_explicit(
+                                  &session->tx_rejected_packets,
+                                  memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "evictedBatches",
+            JS_NewUint32(ctx, atomic_load_explicit(
+                                  &session->tx_evicted_batches,
+                                  memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "evictedPackets",
+            JS_NewUint32(ctx, atomic_load_explicit(
+                                  &session->tx_evicted_packets,
+                                  memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "completedBatches",
+            JS_NewUint32(ctx, atomic_load_explicit(
+                                  &session->tx_completed_batches,
+                                  memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "completedPackets",
+            JS_NewUint32(ctx, atomic_load_explicit(
+                                  &session->tx_completed_packets,
+                                  memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "failedPackets",
+            JS_NewUint32(ctx, atomic_load_explicit(
+                                  &session->tx_failed_packets,
+                                  memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, tx_queue, "lastError",
+            tx_last_error == ESP_OK ? JS_NULL
+                                    : JS_NewInt32(ctx, tx_last_error)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "txQueue",
+                                         *tx_queue) ||
+        !esp32_mquickjs_set_property_ref(
             ctx, power_save, "enabled",
             JS_NewBool(session->power_save_enabled)) ||
         !esp32_mquickjs_set_property_ref(
@@ -3756,10 +5018,14 @@ static JSValue espnow_status_to_js(JSContext *ctx,
             JS_NewUint32(ctx, session->wake_interval_ms)) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "powerSave",
                                          *power_save)) {
+        JS_PopGCRef(ctx, &broadcast_rate_config_ref);
+        JS_PopGCRef(ctx, &tx_queue_ref);
         JS_PopGCRef(ctx, &power_save_ref);
         JS_PopGCRef(ctx, &result_ref);
         return JS_EXCEPTION;
     }
+    JS_PopGCRef(ctx, &broadcast_rate_config_ref);
+    JS_PopGCRef(ctx, &tx_queue_ref);
     JS_PopGCRef(ctx, &power_save_ref);
     return JS_PopGCRef(ctx, &result_ref);
 }

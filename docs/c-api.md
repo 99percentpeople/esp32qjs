@@ -2066,7 +2066,8 @@ Mesh behavior, provisioning, or a product message schema.
 
 - `espNow.capabilities()` returns v1/target/ESP-IDF identity, the configured
   peer, encrypted-peer, and payload limits. `peerRateConfig` is `true` and
-  `session.addPeer()` accepts an optional explicit `{ phyMode, mcs,
+  `broadcastRateConfig` is `true`. `session.addPeer()` accepts an optional
+  explicit `{ phyMode, mcs,
   guardInterval, ersu?, dcm? }` rate configuration. HT accepts MCS 0..7; HE20
   is target-gated and accepts MCS 0..9. ERSU/DCM are HE20-only. The selected
   rate is immutable on the peer handle and is automatically restored after
@@ -2074,7 +2075,19 @@ Mesh behavior, provisioning, or a product message schema.
 - `espNow.open(options?)` opens the only session in the runtime through a native
   Future. Options are `interface: "station"`, `channel: "current" | 1..14`,
   `maxPayloadBytes`, `receiveCapacity`, `sendTimeoutMs`, an optional 16-byte
-  `pmk`, and optional `{ wakeWindowMs, wakeIntervalMs }` power-save settings.
+  `pmk`, optional `{ wakeWindowMs, wakeIntervalMs }` power-save settings,
+  optional `broadcastRateConfig: { phyMode, mcs, guardInterval, ersu?, dcm? }`,
+  and an optional fixed native transmit queue
+  `{ txQueue: { capacityPackets, overflow? } }`. `overflow` is
+  `"reject-newest"` by default or `"drop-oldest-batch"`.
+  ESP32-C3/C5/S3 builds enable ESP-NOW v2 by default with a 1470-byte default
+  and maximum payload. Set `maxPayloadBytes: 250` only for explicit v1 peer
+  compatibility. The fixed internal receive pool reserves
+  `receiveCapacity * maxPayloadBytes` payload bytes, so applications should
+  choose the queue capacity with that allocation in mind.
+  The broadcast rate is applied to the native broadcast peer after open and
+  restored after explicit timeout recovery. It changes PHY transmission only;
+  broadcast remains fire-and-forget without application ACK or retry semantics.
 - `session.receive(timeoutMs?)` and `session.stats()` expose its bounded
   DROP_NEWEST receive EventQueue. Each event contains normalized source and
   destination addresses, RSSI, channel, sequence, timestamp, broadcast flag,
@@ -2087,6 +2100,19 @@ Mesh behavior, provisioning, or a product message schema.
 - `peer.send(data, options?)` and `session.broadcast(data, options?)` share one
   FIFO transmit lane. `macDelivered` is the MAC result and is not an
   application acknowledgement.
+- `peer.enqueue(packet)`, `peer.enqueueBatch(packets)`,
+  `session.enqueueBroadcast(packet)`, and
+  `session.enqueueBroadcastBatch(packets)` are synchronous fire-and-forget
+  admission calls available only when `txQueue` was configured. A packet is
+  `{ data: ByteSource | ByteSpanSource }` or `{ parts: [...] }`; bytes are
+  copied into fixed internal slots before the call returns, so sources may be
+  closed or reused immediately. Batch admission is all-or-none, packets from
+  one batch remain contiguous, and `drop-oldest-batch` evicts only whole
+  batches that have not started. These calls add no acknowledgement, retry, or
+  reliability semantics. `session.flushTx(timeoutMs?)` waits only for this
+  native queue to drain. `status().txQueue` reports capacity, depth,
+  high-water, admission, eviction, completion, failure, and last ESP-IDF error
+  counters.
 - `session.setPowerSave(options)` updates the station wake window and interval;
   `{ enabled: false }` restores the ESP-IDF always-awake/default interval
   settings. Closing an enabled session also restores those defaults before
@@ -2101,7 +2127,8 @@ Mesh behavior, provisioning, or a product message schema.
 `EspNowPeer` is the generation-checked peer handle returned by `addPeer()` or
 `peer()`. Their callable surface is `receive()`, `stats()`, `status()`,
 `addPeer()`, `peer()`, `peers()`, `broadcast()`, `setPowerSave()`, `recover()`,
-`close()`, `send()`, `update()`, and `remove()` as described above.
+`close()`, `send()`, enqueue/batch/flush operations, `update()`, and `remove()`
+as described above.
 
 Use `channel: "current"` when Wi-Fi is connected. The framework rejects channel
 conflicts and does not disconnect Wi-Fi, change an AP channel, or perform

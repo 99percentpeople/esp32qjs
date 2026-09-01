@@ -2982,6 +2982,9 @@ namespace ESP32QJS {
     readonly softApInterface: false;
     readonly powerSave: boolean;
     readonly peerRateConfig: true;
+    readonly broadcastRateConfig: true;
+    readonly txQueue: true;
+    readonly maxTxQueuePackets: number;
   }
 
   type EspNowPowerSaveOptions =
@@ -3004,6 +3007,31 @@ namespace ESP32QJS {
     sendTimeoutMs?: number;
     pmk?: ByteSource;
     powerSave?: EspNowPowerSaveOptions;
+    broadcastRateConfig?: EspNowPeerRateConfig;
+    txQueue?: {
+      capacityPackets: number;
+      overflow?: "reject-newest" | "drop-oldest-batch";
+    };
+  }
+
+  interface EspNowTxQueueStatus {
+    enabled: boolean;
+    capacityPackets: number;
+    overflow: "reject-newest" | "drop-oldest-batch" | null;
+    active: boolean;
+    queuedBatches: number;
+    queuedPackets: number;
+    highWaterPackets: number;
+    acceptedBatches: number;
+    acceptedPackets: number;
+    rejectedBatches: number;
+    rejectedPackets: number;
+    evictedBatches: number;
+    evictedPackets: number;
+    completedBatches: number;
+    completedPackets: number;
+    failedPackets: number;
+    lastError: number | null;
   }
 
   interface EspNowStatus {
@@ -3014,6 +3042,7 @@ namespace ESP32QJS {
     channelSynchronized: boolean;
     maxPayloadBytes: number;
     v1Compatible: boolean;
+    broadcastRateConfig: EspNowPeerRateConfig | null;
     peerCount: number;
     encryptedPeerCount: number;
     pendingSends: number;
@@ -3028,6 +3057,7 @@ namespace ESP32QJS {
     sendSuccesses: number;
     sendFailures: number;
     sendTimeouts: number;
+    txQueue: EspNowTxQueueStatus;
     powerSave: {
       enabled: boolean;
       wakeWindowMs: number;
@@ -3088,6 +3118,24 @@ namespace ESP32QJS {
     completedAtUs: number;
   }
 
+  type EspNowTxPayload = ByteSource | ByteSpanSource;
+
+  type EspNowTxPacket =
+    | { data: EspNowTxPayload; parts?: never }
+    | { data?: never; parts: ArrayLike<EspNowTxPayload> };
+
+  interface EspNowEnqueueResult {
+    accepted: boolean;
+    reason: "queue-full" | null;
+    batchSequence: number | null;
+    packets: number;
+    bytes: number;
+    evictedBatches: number;
+    evictedPackets: number;
+    queuedBatches: number;
+    queuedPackets: number;
+  }
+
   type EspNowErrorCode =
     | "ESPNOW_NOT_SUPPORTED"
     | "ESPNOW_NOT_OPEN"
@@ -3108,6 +3156,7 @@ namespace ESP32QJS {
     | "ESPNOW_RECOVERY_PENDING"
     | "ESPNOW_RECOVERY_FAILED"
     | "ESPNOW_QUEUE_FULL"
+    | "ESPNOW_TX_QUEUE_DISABLED"
     | "ESPNOW_CLOSING"
     | "ESPNOW_CLEANUP_PENDING";
 
@@ -3125,6 +3174,8 @@ namespace ESP32QJS {
     private constructor();
     status(): EspNowPeerStatus;
     send(data: ByteSource, options?: EspNowSendOptions): EspNowSendResult;
+    enqueue(packet: EspNowTxPacket): EspNowEnqueueResult;
+    enqueueBatch(packets: ArrayLike<EspNowTxPacket>): EspNowEnqueueResult;
     update(options: EspNowPeerUpdateOptions): EspNowPeerStatus;
     remove(): boolean;
   }
@@ -3139,6 +3190,10 @@ namespace ESP32QJS {
     peers(): EspNowPeerStatus[];
     broadcast(data: ByteSource,
               options?: EspNowSendOptions): EspNowSendResult;
+    enqueueBroadcast(packet: EspNowTxPacket): EspNowEnqueueResult;
+    enqueueBroadcastBatch(
+      packets: ArrayLike<EspNowTxPacket>): EspNowEnqueueResult;
+    flushTx(timeoutMs?: number): boolean;
     setPowerSave(options: EspNowPowerSaveOptions): boolean;
     recover(): EspNowStatus;
     close(): boolean;

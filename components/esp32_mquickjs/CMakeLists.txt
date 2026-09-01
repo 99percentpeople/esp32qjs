@@ -491,6 +491,7 @@ esp32_mquickjs_append_feature_component(
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW
     "src/modules/espnow/esp32_mquickjs_espnow.c"
+    "src/modules/espnow/esp32_mquickjs_espnow_tx_queue.c"
     PRIV_REQUIRES
         esp_wifi
 )
