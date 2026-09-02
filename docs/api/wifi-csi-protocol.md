@@ -58,6 +58,5 @@ null-subcarrier indices (`i16` each), and ten reserved bytes. Used segment byte
 ranges are contiguous. Their lengths plus trailing padding equal the payload
 length, and their IQ-pair counts equal the layout total.
 
-The authoritative parser and validator is
-[`scripts/esp32qjs_csi.py`](../scripts/esp32qjs_csi.py). It rejects truncated,
+The authoritative parser and validator is `scripts/esp32qjs_csi.py`. It rejects truncated,
 non-canonical, unknown-enum, and internally inconsistent batches.

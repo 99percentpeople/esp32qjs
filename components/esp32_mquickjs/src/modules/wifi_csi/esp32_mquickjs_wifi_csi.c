@@ -379,7 +379,7 @@ static bool wifi_csi_parse_filter_rooted(JSContext *ctx, JSValue *value,
     uint32_t unsigned_value;
 
     if (!esp32_mquickjs_validate_plain_options(
-            ctx, *value, "wifiCsi.open({ filter })", allowed, 6U)) {
+            ctx, *value, "wifi.csi.open({ filter })", allowed, 6U)) {
         return false;
     }
     property = JS_GetPropertyStr(ctx, *value, "sourceMac");
@@ -455,7 +455,7 @@ static bool wifi_csi_parse_legacy_capture_rooted(
     static const char *const scale_allowed[] = {"shiftBits"};
 
     if (!esp32_mquickjs_validate_plain_options(
-            ctx, *value, "wifiCsi legacy capture", allowed, 8U)) return false;
+            ctx, *value, "wifi.csi legacy capture", allowed, 8U)) return false;
     if (!wifi_csi_get_optional_bool(ctx, *value, "lltf",
             &capture->config.legacy.lltf) ||
         !wifi_csi_get_optional_bool(ctx, *value, "htLtf",
@@ -476,7 +476,7 @@ static bool wifi_csi_parse_legacy_capture_rooted(
         return true;
     }
     if (!esp32_mquickjs_validate_plain_options(
-            ctx, property, "wifiCsi legacy scale", scale_allowed, 1U)) {
+            ctx, property, "wifi.csi legacy scale", scale_allowed, 1U)) {
         return false;
     }
     property = JS_GetPropertyStr(ctx, *value, "scale");
@@ -523,7 +523,7 @@ static bool wifi_csi_parse_he_capture_rooted(
     };
 
     if (!esp32_mquickjs_validate_plain_options(
-            ctx, *value, "wifiCsi HE capture", allowed, 14U)) return false;
+            ctx, *value, "wifi.csi HE capture", allowed, 14U)) return false;
     if (!wifi_csi_get_optional_bool(ctx, *value, "enableLegacy",
             &capture->config.he.enable_legacy) ||
         !wifi_csi_get_optional_bool(ctx, *value, "forceLegacyLtf",
@@ -605,7 +605,7 @@ static bool wifi_csi_parse_open_options_rooted(JSContext *ctx, JSValue *value,
 
     wifi_csi_default_options(options);
     if (!esp32_mquickjs_validate_plain_options(
-            ctx, *value, "wifiCsi.open(options)", allowed, 7U)) return false;
+            ctx, *value, "wifi.csi.open(options)", allowed, 7U)) return false;
     property = JS_GetPropertyStr(ctx, *value, "source");
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property)) {
@@ -668,7 +668,7 @@ static bool wifi_csi_parse_open_options_rooted(JSContext *ctx, JSValue *value,
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property)) {
         if (!esp32_mquickjs_validate_plain_options(
-                ctx, property, "wifiCsi.open({ queue })",
+                ctx, property, "wifi.csi.open({ queue })",
                 queue_allowed, 2U)) return false;
         property = JS_GetPropertyStr(ctx, *value, "queue");
         if (JS_IsException(property)) return false;
@@ -695,7 +695,7 @@ static bool wifi_csi_parse_open_options_rooted(JSContext *ctx, JSValue *value,
     }
     property = JS_GetPropertyStr(ctx, *value, "capture");
     if (JS_IsException(property) || JS_IsUndefined(property)) {
-        return JS_ThrowTypeError(ctx, "wifiCsi.open() requires capture"), false;
+        return JS_ThrowTypeError(ctx, "wifi.csi.open() requires capture"), false;
     }
     JSValue schema = JS_GetPropertyStr(ctx, property, "schema");
     if (JS_IsException(schema)) return false;
@@ -984,7 +984,7 @@ static JSValue wifi_csi_throw_driver_error(JSContext *ctx,
         return JS_EXCEPTION;
     }
     result = esp32_mquickjs_throw_native_error(
-        ctx, code, "wifiCsi", "Wi-Fi CSI operation failed", *details);
+        ctx, code, "wifi.csi", "Wi-Fi CSI operation failed", *details);
     JS_PopGCRef(ctx, &details_ref);
     return result;
 }
@@ -2670,7 +2670,7 @@ JSValue js_wifi_csi_open(JSContext *ctx, JSValue *this_val,
     *object = JS_UNDEFINED;
     if (argc != 1) {
         JS_ThrowTypeError(ctx,
-            "wifiCsi.open(options) expects one options object");
+            "wifi.csi.open(options) expects one options object");
         goto fail;
     }
     if (!wifi_csi_parse_open_options(ctx, argv[0], &options)) goto fail;
@@ -2830,7 +2830,7 @@ static JSValue wifi_csi_status_to_js(JSContext *ctx,
                 JS_NewString(ctx, session->last_error_code != NULL
                     ? session->last_error_code : "WIFI_CSI_DRIVER_ERROR")) ||
             !esp32_mquickjs_set_property_ref(
-                ctx, error, "operation", JS_NewString(ctx, "wifiCsi")) ||
+                ctx, error, "operation", JS_NewString(ctx, "wifi.csi")) ||
             !esp32_mquickjs_set_property_ref(
                 ctx, error, "message",
                 JS_NewString(ctx, "Wi-Fi CSI operation failed")) ||

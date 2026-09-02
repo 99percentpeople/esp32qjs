@@ -133,7 +133,7 @@ and Libraries. Typical entries include:
 | `net` | Network interfaces | esp32c3, esp32c5, esp32s3 | none |
 | `wifi` | Wi-Fi | esp32c3, esp32c5, esp32s3 | `net` |
 | `espnow` | ESP-NOW | esp32c3, esp32c5, esp32s3 | none |
-| `wifi_csi` | Wi-Fi CSI | esp32c3, esp32c5, esp32s3 | none |
+| `wifi_csi` | Wi-Fi CSI | esp32c3, esp32c5, esp32s3 | `wifi` |
 | `ble` | Bluetooth LE | esp32c3, esp32c5, esp32s3 | none |
 | `tls` | TLS | esp32c3, esp32c5, esp32s3 | `net` |
 | `socket` | Socket | esp32c3, esp32c5, esp32s3 | `net` |
@@ -199,12 +199,12 @@ The external Build Context may include ordinary JavaScript libraries under
 `load(path)` uses the active application filesystem. Sources must use the
 vendored MQuickJS ES5-like dialect, not modern Node syntax.
 
-The complete native reference is under `docs/`. Compact framework facts for AI
-consumers are ordinary Markdown files under `docs/ai/`, indexed by
-`docs/ai/docs.json`. External Libraries and Boards can add their own ordinary
-documentation. A host may snapshot all of them into Artifact-bound `doc://`
-resources. Skills are a separate host concept for problem-solving workflows;
-they are not the framework API or a hardware fact database.
+The complete native JavaScript reference is shared by users and AI consumers
+under `docs/api/`, indexed by `docs/api/docs.json`. External Libraries and
+Boards can add their own ordinary documentation. A host may snapshot the
+Build Context-selected subset into Artifact-bound `doc://` resources. Skills
+are a separate host concept for problem-solving workflows; they are not the
+framework API or a hardware fact database.
 
 ## Flash, monitor, and test
 
@@ -273,7 +273,7 @@ void app_main(void)
 }
 ```
 
-See [Native runtime integration](docs/runtime-api.md) for embedding ownership
+See [Native runtime integration](docs/native-runtime-integration.md) for embedding ownership
 and [Native lifecycle contracts](docs/native-lifecycle-contracts.md) for the
 callback, finalizer, lease, EventQueue, and orphan-reaper invariants.
 
@@ -303,8 +303,7 @@ Generated esptool overrides stay under `build/tooling/esptool.cfg`. The CLI
 passes that path only in the environment of its build, flash, monitor, and
 RFC2217 child processes; it does not read or overwrite `~/esptool.cfg`.
 
-Start with [API index](docs/api.md), [Native Host API](docs/c-api.md),
-[JavaScript Library boundary](docs/js-api.md), and
+Start with the shared [API reference](docs/api/README.md) and
 [framework backlog](docs/backlog.md).
 
 ESP32QJS remains in development. Project-owned APIs and manifests use one v1

@@ -1,5 +1,9 @@
 test("wifi_csi/offline", function () {
-  var caps = wifiCsi.capabilities();
+  test.equal(typeof wifiCsi, "undefined",
+    "CSI should not expose a legacy global module");
+  test.equal(typeof wifi.csi, "object",
+    "CSI should be exposed through the wifi namespace");
+  var caps = wifi.csi.capabilities();
   var capture;
   var wrongCapture;
   var options;
@@ -44,7 +48,7 @@ test("wifi_csi/offline", function () {
   }
 
   try {
-    wifiCsi.open({ capture: wrongCapture });
+    wifi.csi.open({ capture: wrongCapture });
   } catch (schemaError) {
     errorText = String(schemaError && schemaError.message
       ? schemaError.message : schemaError);
@@ -54,7 +58,7 @@ test("wifi_csi/offline", function () {
 
   errorText = "";
   try {
-    wifiCsi.open({ capture: capture, unknown: true });
+    wifi.csi.open({ capture: capture, unknown: true });
   } catch (optionError) {
     errorText = String(optionError && optionError.message
       ? optionError.message : optionError);
@@ -77,7 +81,7 @@ test("wifi_csi/offline", function () {
     powerSavePolicy: "preserve"
   };
   try { wifi.disconnect(); } catch (ignoredDisconnectError) {}
-  session = wifiCsi.open(options);
+  session = wifi.csi.open(options);
   try {
     status = session.status();
     test.equal(status.state, "running", "open should start capture");
@@ -103,7 +107,7 @@ test("wifi_csi/offline", function () {
   test.equal(session.status().state, "closed",
     "closed-session status should remain observable until reopen");
 
-  replacement = wifiCsi.open(options);
+  replacement = wifi.csi.open(options);
   try {
     errorText = "";
     try {

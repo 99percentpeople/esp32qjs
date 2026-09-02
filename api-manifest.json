@@ -18,7 +18,7 @@
         "declaration": "Headers"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Headers"
       }
     },
@@ -38,7 +38,7 @@
         "declaration": "Request"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Request"
       }
     },
@@ -58,7 +58,7 @@
         "declaration": "Response"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Response"
       }
     },
@@ -78,7 +78,7 @@
         "declaration": "Future"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/futures.md",
         "ownerToken": "Future"
       }
     },
@@ -98,7 +98,7 @@
         "declaration": "EventQueue"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/event-queues.md",
         "ownerToken": "EventQueue"
       }
     },
@@ -118,7 +118,7 @@
         "declaration": "Stream"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/stream.md",
         "ownerToken": "Stream"
       }
     },
@@ -138,7 +138,7 @@
         "declaration": "ByteView"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/runtime.md",
         "ownerToken": "ByteView"
       }
     },
@@ -158,7 +158,7 @@
         "declaration": "ByteSpanSource"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/stream.md",
         "ownerToken": "ByteSpanSource"
       }
     },
@@ -178,7 +178,7 @@
         "declaration": "BitmapSpanSource"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "BitmapSpanSource"
       }
     },
@@ -198,7 +198,7 @@
         "declaration": "DisplayFont"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "DisplayFont"
       }
     },
@@ -218,7 +218,7 @@
         "declaration": "DisplayCommandBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "DisplayCommandBuffer"
       }
     },
@@ -238,7 +238,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -258,7 +258,7 @@
         "declaration": "FsVolume"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/fs.md",
         "ownerToken": "FsVolume"
       }
     },
@@ -278,7 +278,7 @@
         "declaration": "I2CBus"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2c.md",
         "ownerToken": "I2CBus"
       }
     },
@@ -298,7 +298,7 @@
         "declaration": "I2CDevice"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2c.md",
         "ownerToken": "I2CDevice"
       }
     },
@@ -318,7 +318,7 @@
         "declaration": "SPIBus"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/spi.md",
         "ownerToken": "SPIBus"
       }
     },
@@ -338,7 +338,7 @@
         "declaration": "SPIDevice"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/spi.md",
         "ownerToken": "SPIDevice"
       }
     },
@@ -358,7 +358,7 @@
         "declaration": "UARTPort"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/uart.md",
         "ownerToken": "UARTPort"
       }
     },
@@ -378,7 +378,7 @@
         "declaration": "RMTSymbolBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rmt.md",
         "ownerToken": "RMTSymbolBuffer"
       }
     },
@@ -398,7 +398,7 @@
         "declaration": "RMTChannel"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rmt.md",
         "ownerToken": "RMTChannel"
       }
     },
@@ -418,7 +418,7 @@
         "declaration": "I2SChannel"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2s.md",
         "ownerToken": "I2SChannel"
       }
     },
@@ -438,7 +438,7 @@
         "declaration": "Camera"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/camera.md",
         "ownerToken": "Camera"
       }
     },
@@ -458,7 +458,7 @@
         "declaration": "CameraFrame"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/camera.md",
         "ownerToken": "CameraFrame"
       }
     },
@@ -478,7 +478,7 @@
         "declaration": "RPCCodec"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rpc.md",
         "ownerToken": "RPCCodec"
       }
     },
@@ -498,7 +498,7 @@
         "declaration": "RPCDecoder"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rpc.md",
         "ownerToken": "RPCDecoder"
       }
     },
@@ -518,7 +518,7 @@
         "declaration": "TCPSocket"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "TCPSocket"
       }
     },
@@ -538,7 +538,7 @@
         "declaration": "TCPListener"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "TCPListener"
       }
     },
@@ -558,7 +558,7 @@
         "declaration": "UDPSocket"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "UDPSocket"
       }
     },
@@ -578,7 +578,7 @@
         "declaration": "HttpServer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http.md",
         "ownerToken": "HttpServer"
       }
     },
@@ -598,7 +598,7 @@
         "declaration": "EspNowSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowSession"
       }
     },
@@ -618,7 +618,7 @@
         "declaration": "EspNowPeer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowPeer"
       }
     },
@@ -638,7 +638,7 @@
         "declaration": "WiFiCsiSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiSession"
       }
     },
@@ -658,7 +658,7 @@
         "declaration": "WiFiCsiFrame"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiFrame"
       }
     },
@@ -678,7 +678,7 @@
         "declaration": "WiFiCsiBatch"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiBatch"
       }
     },
@@ -698,7 +698,7 @@
         "declaration": "BLEAdapter"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEAdapter"
       }
     },
@@ -718,7 +718,7 @@
         "declaration": "BLEScanner"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEScanner"
       }
     },
@@ -738,7 +738,7 @@
         "declaration": "BLEAdvertiser"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEAdvertiser"
       }
     },
@@ -758,7 +758,7 @@
         "declaration": "BLEConnection"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEConnection"
       }
     },
@@ -778,7 +778,7 @@
         "declaration": "USBSerialTextHandle"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/usb-serial.md",
         "ownerToken": "usbSerial"
       }
     },
@@ -798,7 +798,7 @@
         "declaration": "WebSocketClientHandle"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/websocket-client.md",
         "ownerToken": "websocketClient"
       }
     },
@@ -818,7 +818,7 @@
         "declaration": "BLENotificationStream"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLENotificationStream"
       }
     },
@@ -838,7 +838,7 @@
         "declaration": "BLEGattServer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEGattServer"
       }
     },
@@ -858,7 +858,7 @@
         "declaration": "BLELocalCharacteristic"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLELocalCharacteristic"
       }
     }
@@ -882,7 +882,7 @@
         "declaration": "BLEAdapter"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEAdapter"
       },
       "futureRegistration": {
@@ -908,7 +908,7 @@
         "declaration": "BLEAdapter"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEAdapter"
       }
     },
@@ -930,7 +930,7 @@
         "declaration": "BLEAdapter"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEAdapter"
       },
       "futureRegistration": {
@@ -956,7 +956,7 @@
         "declaration": "BLEAdapter"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEAdapter"
       },
       "futureRegistration": {
@@ -982,7 +982,7 @@
         "declaration": "BLEAdapter"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEAdapter"
       },
       "futureRegistration": {
@@ -1008,7 +1008,7 @@
         "declaration": "BLEAdapter"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEAdapter"
       },
       "futureRegistration": {
@@ -1034,7 +1034,7 @@
         "declaration": "BLEAdapter"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEAdapter"
       },
       "futureRegistration": {
@@ -1060,7 +1060,7 @@
         "declaration": "BLEAdapter"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEAdapter"
       }
     },
@@ -1082,7 +1082,7 @@
         "declaration": "BLEAdapter"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEAdapter"
       }
     },
@@ -1104,7 +1104,7 @@
         "declaration": "BLEAdvertiser"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEAdvertiser"
       },
       "futureRegistration": {
@@ -1130,7 +1130,7 @@
         "declaration": "BLEAdvertiser"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEAdvertiser"
       },
       "futureRegistration": {
@@ -1156,7 +1156,7 @@
         "declaration": "BLEAdvertiser"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEAdvertiser"
       }
     },
@@ -1178,7 +1178,7 @@
         "declaration": "BLEAdvertiser"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEAdvertiser"
       }
     },
@@ -1200,7 +1200,7 @@
         "declaration": "BLEConnection"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEConnection"
       },
       "futureRegistration": {
@@ -1226,7 +1226,7 @@
         "declaration": "BLEConnection"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEConnection"
       },
       "futureRegistration": {
@@ -1252,7 +1252,7 @@
         "declaration": "BLEConnection"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEConnection"
       },
       "futureRegistration": {
@@ -1278,7 +1278,7 @@
         "declaration": "BLEConnection"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEConnection"
       },
       "futureRegistration": {
@@ -1304,7 +1304,7 @@
         "declaration": "BLEConnection"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEConnection"
       }
     },
@@ -1326,7 +1326,7 @@
         "declaration": "BLEConnection"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEConnection"
       },
       "futureRegistration": {
@@ -1352,7 +1352,7 @@
         "declaration": "BLEConnection"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEConnection"
       },
       "futureRegistration": {
@@ -1378,7 +1378,7 @@
         "declaration": "BLEConnection"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEConnection"
       }
     },
@@ -1400,7 +1400,7 @@
         "declaration": "BLEConnection"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEConnection"
       }
     },
@@ -1422,7 +1422,7 @@
         "declaration": "BLEConnection"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEConnection"
       }
     },
@@ -1444,7 +1444,7 @@
         "declaration": "BLEConnection"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEConnection"
       }
     },
@@ -1466,7 +1466,7 @@
         "declaration": "BLEConnection"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEConnection"
       }
     },
@@ -1488,7 +1488,7 @@
         "declaration": "BLEGattServer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEGattServer"
       }
     },
@@ -1510,7 +1510,7 @@
         "declaration": "BLEGattServer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEGattServer"
       }
     },
@@ -1532,7 +1532,7 @@
         "declaration": "BLEGattServer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEGattServer"
       }
     },
@@ -1554,7 +1554,7 @@
         "declaration": "BLELocalCharacteristic"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLELocalCharacteristic"
       },
       "futureRegistration": {
@@ -1580,7 +1580,7 @@
         "declaration": "BLELocalCharacteristic"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLELocalCharacteristic"
       }
     },
@@ -1602,7 +1602,7 @@
         "declaration": "BLELocalCharacteristic"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLELocalCharacteristic"
       }
     },
@@ -1624,7 +1624,7 @@
         "declaration": "BLENotificationStream"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLENotificationStream"
       },
       "futureRegistration": {
@@ -1650,7 +1650,7 @@
         "declaration": "BLENotificationStream"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLENotificationStream"
       },
       "futureRegistration": {
@@ -1676,7 +1676,7 @@
         "declaration": "BLENotificationStream"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLENotificationStream"
       }
     },
@@ -1698,7 +1698,7 @@
         "declaration": "BLENotificationStream"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLENotificationStream"
       }
     },
@@ -1720,7 +1720,7 @@
         "declaration": "BLEScanner"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEScanner"
       },
       "futureRegistration": {
@@ -1746,7 +1746,7 @@
         "declaration": "BLEScanner"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEScanner"
       },
       "futureRegistration": {
@@ -1772,7 +1772,7 @@
         "declaration": "BLEScanner"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEScanner"
       }
     },
@@ -1794,7 +1794,7 @@
         "declaration": "BLEScanner"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "BLEScanner"
       }
     },
@@ -1816,7 +1816,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       },
       "futureRegistration": {
@@ -1842,7 +1842,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       },
       "futureRegistration": {
@@ -1868,7 +1868,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -1890,7 +1890,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -1912,7 +1912,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -1934,7 +1934,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -1956,7 +1956,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -1978,7 +1978,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap-jpeg.md",
         "ownerToken": "Bitmap"
       },
       "futureRegistration": {
@@ -2004,7 +2004,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2026,7 +2026,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2048,7 +2048,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2070,7 +2070,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2092,7 +2092,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2114,7 +2114,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2136,7 +2136,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2158,7 +2158,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2180,7 +2180,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2202,7 +2202,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2224,7 +2224,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2246,7 +2246,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2268,7 +2268,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2290,7 +2290,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2312,7 +2312,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2334,7 +2334,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2356,7 +2356,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2378,7 +2378,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2400,7 +2400,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2422,7 +2422,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2444,7 +2444,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2466,7 +2466,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2488,7 +2488,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2510,7 +2510,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2532,7 +2532,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2554,7 +2554,7 @@
         "declaration": "Bitmap"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "Bitmap"
       }
     },
@@ -2576,7 +2576,7 @@
         "declaration": "BitmapSpanSource"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "BitmapSpanSource"
       }
     },
@@ -2598,7 +2598,7 @@
         "declaration": "ByteSpanSource"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/stream.md",
         "ownerToken": "ByteSpanSource"
       }
     },
@@ -2620,7 +2620,7 @@
         "declaration": "ByteView"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/runtime.md",
         "ownerToken": "ByteView"
       }
     },
@@ -2642,7 +2642,7 @@
         "declaration": "ByteView"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/runtime.md",
         "ownerToken": "ByteView"
       }
     },
@@ -2664,7 +2664,7 @@
         "declaration": "ByteView"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/runtime.md",
         "ownerToken": "ByteView"
       }
     },
@@ -2686,7 +2686,7 @@
         "declaration": "Camera"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/camera.md",
         "ownerToken": "Camera"
       },
       "futureRegistration": {
@@ -2712,7 +2712,7 @@
         "declaration": "Camera"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/camera.md",
         "ownerToken": "Camera"
       },
       "futureRegistration": {
@@ -2738,7 +2738,7 @@
         "declaration": "Camera"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/camera.md",
         "ownerToken": "Camera"
       }
     },
@@ -2760,7 +2760,7 @@
         "declaration": "Camera"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/camera.md",
         "ownerToken": "Camera"
       }
     },
@@ -2782,7 +2782,7 @@
         "declaration": "Camera"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/camera.md",
         "ownerToken": "Camera"
       }
     },
@@ -2804,7 +2804,7 @@
         "declaration": "CameraFrame"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/camera.md",
         "ownerToken": "CameraFrame"
       }
     },
@@ -2826,7 +2826,7 @@
         "declaration": "CameraFrame"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/camera.md",
         "ownerToken": "CameraFrame"
       }
     },
@@ -2848,7 +2848,7 @@
         "declaration": "CameraFrame"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/camera.md",
         "ownerToken": "CameraFrame"
       }
     },
@@ -2870,7 +2870,7 @@
         "declaration": "DisplayCommandBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "DisplayCommandBuffer"
       }
     },
@@ -2892,7 +2892,7 @@
         "declaration": "DisplayCommandBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "DisplayCommandBuffer"
       }
     },
@@ -2914,7 +2914,7 @@
         "declaration": "DisplayCommandBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "DisplayCommandBuffer"
       }
     },
@@ -2936,7 +2936,7 @@
         "declaration": "DisplayCommandBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "DisplayCommandBuffer"
       }
     },
@@ -2958,7 +2958,7 @@
         "declaration": "DisplayCommandBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "DisplayCommandBuffer"
       }
     },
@@ -2980,7 +2980,7 @@
         "declaration": "DisplayCommandBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "DisplayCommandBuffer"
       }
     },
@@ -3002,7 +3002,7 @@
         "declaration": "DisplayCommandBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "DisplayCommandBuffer"
       }
     },
@@ -3024,7 +3024,7 @@
         "declaration": "DisplayCommandBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "DisplayCommandBuffer"
       }
     },
@@ -3046,7 +3046,7 @@
         "declaration": "DisplayCommandBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "DisplayCommandBuffer"
       }
     },
@@ -3068,7 +3068,7 @@
         "declaration": "DisplayCommandBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "DisplayCommandBuffer"
       }
     },
@@ -3090,7 +3090,7 @@
         "declaration": "DisplayCommandBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "DisplayCommandBuffer"
       }
     },
@@ -3112,7 +3112,7 @@
         "declaration": "DisplayCommandBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "DisplayCommandBuffer"
       }
     },
@@ -3134,7 +3134,7 @@
         "declaration": "DisplayCommandBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "DisplayCommandBuffer"
       }
     },
@@ -3156,7 +3156,7 @@
         "declaration": "EspNowPeer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowPeer"
       }
     },
@@ -3178,7 +3178,7 @@
         "declaration": "EspNowPeer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowPeer"
       }
     },
@@ -3200,7 +3200,7 @@
         "declaration": "EspNowPeer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowPeer"
       }
     },
@@ -3222,7 +3222,7 @@
         "declaration": "EspNowPeer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowPeer"
       },
       "futureRegistration": {
@@ -3248,7 +3248,7 @@
         "declaration": "EspNowPeer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowPeer"
       }
     },
@@ -3270,7 +3270,7 @@
         "declaration": "EspNowPeer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowPeer"
       },
       "futureRegistration": {
@@ -3296,7 +3296,7 @@
         "declaration": "EspNowSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowSession"
       },
       "futureRegistration": {
@@ -3322,7 +3322,7 @@
         "declaration": "EspNowSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowSession"
       },
       "futureRegistration": {
@@ -3348,7 +3348,7 @@
         "declaration": "EspNowSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowSession"
       },
       "futureRegistration": {
@@ -3374,7 +3374,7 @@
         "declaration": "EspNowSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowSession"
       }
     },
@@ -3396,7 +3396,7 @@
         "declaration": "EspNowSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowSession"
       }
     },
@@ -3418,7 +3418,7 @@
         "declaration": "EspNowSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowSession"
       }
     },
@@ -3440,7 +3440,7 @@
         "declaration": "EspNowSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowSession"
       }
     },
@@ -3462,7 +3462,7 @@
         "declaration": "EspNowSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowSession"
       }
     },
@@ -3484,7 +3484,7 @@
         "declaration": "EspNowSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowSession"
       },
       "futureRegistration": {
@@ -3510,7 +3510,7 @@
         "declaration": "EspNowSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowSession"
       }
     },
@@ -3532,7 +3532,7 @@
         "declaration": "EspNowSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowSession"
       },
       "futureRegistration": {
@@ -3558,7 +3558,7 @@
         "declaration": "EspNowSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowSession"
       }
     },
@@ -3580,7 +3580,7 @@
         "declaration": "EspNowSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "EspNowSession"
       }
     },
@@ -3602,7 +3602,7 @@
         "declaration": "EventQueue"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/event-queues.md",
         "ownerToken": "EventQueue"
       }
     },
@@ -3624,7 +3624,7 @@
         "declaration": "EventQueue"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/event-queues.md",
         "ownerToken": "EventQueue"
       },
       "futureRegistration": {
@@ -3650,7 +3650,7 @@
         "declaration": "EventQueue"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/event-queues.md",
         "ownerToken": "EventQueue"
       }
     },
@@ -3672,7 +3672,7 @@
         "declaration": "FsVolume"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/fs.md",
         "ownerToken": "FsVolume"
       },
       "futureRegistration": {
@@ -3698,7 +3698,7 @@
         "declaration": "FsVolume"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/fs.md",
         "ownerToken": "FsVolume"
       },
       "futureRegistration": {
@@ -3724,7 +3724,7 @@
         "declaration": "FsVolume"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/fs.md",
         "ownerToken": "FsVolume"
       }
     },
@@ -3746,7 +3746,7 @@
         "declaration": "FsVolume"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/fs.md",
         "ownerToken": "FsVolume"
       },
       "futureRegistration": {
@@ -3772,7 +3772,7 @@
         "declaration": "FsVolume"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/fs.md",
         "ownerToken": "FsVolume"
       },
       "futureRegistration": {
@@ -3798,7 +3798,7 @@
         "declaration": "FsVolume"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/fs.md",
         "ownerToken": "FsVolume"
       },
       "futureRegistration": {
@@ -3824,7 +3824,7 @@
         "declaration": "FsVolume"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/fs.md",
         "ownerToken": "FsVolume"
       },
       "futureRegistration": {
@@ -3850,7 +3850,7 @@
         "declaration": "FsVolume"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/fs.md",
         "ownerToken": "FsVolume"
       },
       "futureRegistration": {
@@ -3876,7 +3876,7 @@
         "declaration": "FsVolume"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/fs.md",
         "ownerToken": "FsVolume"
       },
       "futureRegistration": {
@@ -3902,7 +3902,7 @@
         "declaration": "FsVolume"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/fs.md",
         "ownerToken": "FsVolume"
       },
       "futureRegistration": {
@@ -3928,7 +3928,7 @@
         "declaration": "FsVolume"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/fs.md",
         "ownerToken": "FsVolume"
       }
     },
@@ -3950,7 +3950,7 @@
         "declaration": "FsVolume"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/fs.md",
         "ownerToken": "FsVolume"
       }
     },
@@ -3972,7 +3972,7 @@
         "declaration": "FsVolume"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/fs.md",
         "ownerToken": "FsVolume"
       },
       "futureRegistration": {
@@ -3998,7 +3998,7 @@
         "declaration": "FutureFactory"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/futures.md",
         "ownerToken": "Future"
       }
     },
@@ -4020,7 +4020,7 @@
         "declaration": "FutureFactory"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/futures.md",
         "ownerToken": "Future"
       }
     },
@@ -4042,7 +4042,7 @@
         "declaration": "Future"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/futures.md",
         "ownerToken": "Future"
       }
     },
@@ -4064,7 +4064,7 @@
         "declaration": "Future"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/futures.md",
         "ownerToken": "Future"
       }
     },
@@ -4086,7 +4086,7 @@
         "declaration": "Future"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/futures.md",
         "ownerToken": "Future"
       }
     },
@@ -4108,7 +4108,7 @@
         "declaration": "Future"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/futures.md",
         "ownerToken": "Future"
       }
     },
@@ -4130,7 +4130,7 @@
         "declaration": "Future"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/futures.md",
         "ownerToken": "Future"
       }
     },
@@ -4152,7 +4152,7 @@
         "declaration": "FutureFactory"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/futures.md",
         "ownerToken": "Future"
       }
     },
@@ -4174,7 +4174,7 @@
         "declaration": "FutureFactory"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/futures.md",
         "ownerToken": "Future"
       }
     },
@@ -4196,7 +4196,7 @@
         "declaration": "FutureFactory"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/futures.md",
         "ownerToken": "Future"
       }
     },
@@ -4218,7 +4218,7 @@
         "declaration": "Headers"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Headers"
       }
     },
@@ -4240,7 +4240,7 @@
         "declaration": "Headers"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Headers"
       }
     },
@@ -4262,7 +4262,7 @@
         "declaration": "Headers"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Headers"
       }
     },
@@ -4284,7 +4284,7 @@
         "declaration": "Headers"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Headers"
       }
     },
@@ -4306,7 +4306,7 @@
         "declaration": "Headers"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Headers"
       }
     },
@@ -4328,7 +4328,7 @@
         "declaration": "Headers"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Headers"
       }
     },
@@ -4350,7 +4350,7 @@
         "declaration": "HttpServer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http.md",
         "ownerToken": "HttpServer"
       }
     },
@@ -4372,7 +4372,7 @@
         "declaration": "HttpServer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http.md",
         "ownerToken": "HttpServer"
       }
     },
@@ -4394,7 +4394,7 @@
         "declaration": "HttpServer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http.md",
         "ownerToken": "HttpServer"
       },
       "futureRegistration": {
@@ -4420,7 +4420,7 @@
         "declaration": "HttpServer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http.md",
         "ownerToken": "HttpServer"
       }
     },
@@ -4442,7 +4442,7 @@
         "declaration": "HttpServer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http.md",
         "ownerToken": "HttpServer"
       },
       "futureRegistration": {
@@ -4468,7 +4468,7 @@
         "declaration": "HttpServer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http.md",
         "ownerToken": "HttpServer"
       }
     },
@@ -4490,7 +4490,7 @@
         "declaration": "HttpServer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http.md",
         "ownerToken": "HttpServer"
       }
     },
@@ -4512,7 +4512,7 @@
         "declaration": "HttpServer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http.md",
         "ownerToken": "HttpServer"
       }
     },
@@ -4534,7 +4534,7 @@
         "declaration": "HttpServer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http.md",
         "ownerToken": "HttpServer"
       }
     },
@@ -4556,7 +4556,7 @@
         "declaration": "I2CBus"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2c.md",
         "ownerToken": "I2CBus"
       }
     },
@@ -4578,7 +4578,7 @@
         "declaration": "I2CBus"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2c.md",
         "ownerToken": "I2CBus"
       }
     },
@@ -4600,7 +4600,7 @@
         "declaration": "I2CBus"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2c.md",
         "ownerToken": "I2CBus"
       },
       "futureRegistration": {
@@ -4626,7 +4626,7 @@
         "declaration": "I2CBus"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2c.md",
         "ownerToken": "I2CBus"
       }
     },
@@ -4648,7 +4648,7 @@
         "declaration": "I2CDevice"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2c.md",
         "ownerToken": "I2CDevice"
       }
     },
@@ -4670,7 +4670,7 @@
         "declaration": "I2CDevice"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2c.md",
         "ownerToken": "I2CDevice"
       },
       "futureRegistration": {
@@ -4696,7 +4696,7 @@
         "declaration": "I2CDevice"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2c.md",
         "ownerToken": "I2CDevice"
       }
     },
@@ -4718,7 +4718,7 @@
         "declaration": "I2CDevice"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2c.md",
         "ownerToken": "I2CDevice"
       },
       "futureRegistration": {
@@ -4744,7 +4744,7 @@
         "declaration": "I2CDevice"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2c.md",
         "ownerToken": "I2CDevice"
       },
       "futureRegistration": {
@@ -4770,7 +4770,7 @@
         "declaration": "I2CDevice"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2c.md",
         "ownerToken": "I2CDevice"
       },
       "futureRegistration": {
@@ -4796,7 +4796,7 @@
         "declaration": "I2CDevice"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2c.md",
         "ownerToken": "I2CDevice"
       },
       "futureRegistration": {
@@ -4822,7 +4822,7 @@
         "declaration": "I2SChannel"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2s.md",
         "ownerToken": "I2SChannel"
       }
     },
@@ -4844,7 +4844,7 @@
         "declaration": "I2SChannel"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2s.md",
         "ownerToken": "I2SChannel"
       },
       "futureRegistration": {
@@ -4870,7 +4870,7 @@
         "declaration": "I2SChannel"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2s.md",
         "ownerToken": "I2SChannel"
       }
     },
@@ -4892,7 +4892,7 @@
         "declaration": "I2SChannel"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2s.md",
         "ownerToken": "I2SChannel"
       }
     },
@@ -4914,7 +4914,7 @@
         "declaration": "I2SChannel"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2s.md",
         "ownerToken": "I2SChannel"
       }
     },
@@ -4936,7 +4936,7 @@
         "declaration": "I2SChannel"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2s.md",
         "ownerToken": "I2SChannel"
       },
       "futureRegistration": {
@@ -4962,7 +4962,7 @@
         "declaration": "RMTChannel"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rmt.md",
         "ownerToken": "RMTChannel"
       }
     },
@@ -4984,7 +4984,7 @@
         "declaration": "RMTChannel"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rmt.md",
         "ownerToken": "RMTChannel"
       },
       "futureRegistration": {
@@ -5010,7 +5010,7 @@
         "declaration": "RMTChannel"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rmt.md",
         "ownerToken": "RMTChannel"
       }
     },
@@ -5032,7 +5032,7 @@
         "declaration": "RMTChannel"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rmt.md",
         "ownerToken": "RMTChannel"
       }
     },
@@ -5054,7 +5054,7 @@
         "declaration": "RMTChannel"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rmt.md",
         "ownerToken": "RMTChannel"
       }
     },
@@ -5076,7 +5076,7 @@
         "declaration": "RMTChannel"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rmt.md",
         "ownerToken": "RMTChannel"
       },
       "futureRegistration": {
@@ -5102,7 +5102,7 @@
         "declaration": "RMTSymbolBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rmt.md",
         "ownerToken": "RMTSymbolBuffer"
       }
     },
@@ -5124,7 +5124,7 @@
         "declaration": "RMTSymbolBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rmt.md",
         "ownerToken": "RMTSymbolBuffer"
       }
     },
@@ -5146,7 +5146,7 @@
         "declaration": "RMTSymbolBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rmt.md",
         "ownerToken": "RMTSymbolBuffer"
       }
     },
@@ -5168,7 +5168,7 @@
         "declaration": "RMTSymbolBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rmt.md",
         "ownerToken": "RMTSymbolBuffer"
       }
     },
@@ -5190,7 +5190,7 @@
         "declaration": "RMTSymbolBuffer"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rmt.md",
         "ownerToken": "RMTSymbolBuffer"
       }
     },
@@ -5212,7 +5212,7 @@
         "declaration": "RPCCodec"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rpc.md",
         "ownerToken": "RPCCodec"
       }
     },
@@ -5234,7 +5234,7 @@
         "declaration": "RPCCodec"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rpc.md",
         "ownerToken": "RPCCodec"
       }
     },
@@ -5256,7 +5256,7 @@
         "declaration": "RPCCodec"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rpc.md",
         "ownerToken": "RPCCodec"
       }
     },
@@ -5278,7 +5278,7 @@
         "declaration": "RPCDecoder"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rpc.md",
         "ownerToken": "RPCDecoder"
       }
     },
@@ -5300,7 +5300,7 @@
         "declaration": "RPCDecoder"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rpc.md",
         "ownerToken": "RPCDecoder"
       }
     },
@@ -5322,7 +5322,7 @@
         "declaration": "RPCDecoder"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rpc.md",
         "ownerToken": "RPCDecoder"
       }
     },
@@ -5344,7 +5344,7 @@
         "declaration": "RPCDecoder"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rpc.md",
         "ownerToken": "RPCDecoder"
       }
     },
@@ -5366,7 +5366,7 @@
         "declaration": "Request"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Request"
       }
     },
@@ -5388,7 +5388,7 @@
         "declaration": "Request"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Request"
       }
     },
@@ -5410,7 +5410,7 @@
         "declaration": "Request"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Request"
       }
     },
@@ -5432,7 +5432,7 @@
         "declaration": "Response"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Response"
       }
     },
@@ -5454,7 +5454,7 @@
         "declaration": "Response"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Response"
       }
     },
@@ -5476,7 +5476,7 @@
         "declaration": "Response"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Response"
       }
     },
@@ -5498,7 +5498,7 @@
         "declaration": "Response"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Response"
       }
     },
@@ -5520,7 +5520,7 @@
         "declaration": "Response"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Response"
       }
     },
@@ -5542,7 +5542,7 @@
         "declaration": "Response"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Response"
       }
     },
@@ -5564,7 +5564,7 @@
         "declaration": "Response"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http-types.md",
         "ownerToken": "Response"
       }
     },
@@ -5586,7 +5586,7 @@
         "declaration": "SPIBus"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/spi.md",
         "ownerToken": "SPIBus"
       }
     },
@@ -5608,7 +5608,7 @@
         "declaration": "SPIBus"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/spi.md",
         "ownerToken": "SPIBus"
       }
     },
@@ -5630,7 +5630,7 @@
         "declaration": "SPIBus"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/spi.md",
         "ownerToken": "SPIBus"
       }
     },
@@ -5652,7 +5652,7 @@
         "declaration": "SPIDevice"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/spi.md",
         "ownerToken": "SPIDevice"
       }
     },
@@ -5674,7 +5674,7 @@
         "declaration": "SPIDevice"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/spi.md",
         "ownerToken": "SPIDevice"
       },
       "futureRegistration": {
@@ -5700,7 +5700,7 @@
         "declaration": "SPIDevice"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/spi.md",
         "ownerToken": "SPIDevice"
       }
     },
@@ -5722,7 +5722,7 @@
         "declaration": "SPIDevice"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/spi.md",
         "ownerToken": "SPIDevice"
       },
       "futureRegistration": {
@@ -5748,7 +5748,7 @@
         "declaration": "SPIDevice"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/spi.md",
         "ownerToken": "SPIDevice"
       },
       "futureRegistration": {
@@ -5774,7 +5774,7 @@
         "declaration": "SPIDevice"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/spi.md",
         "ownerToken": "SPIDevice"
       },
       "futureRegistration": {
@@ -5800,7 +5800,7 @@
         "declaration": "SPIDevice"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/spi.md",
         "ownerToken": "SPIDevice"
       },
       "futureRegistration": {
@@ -5826,7 +5826,7 @@
         "declaration": "Stream"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/stream.md",
         "ownerToken": "Stream"
       },
       "futureRegistration": {
@@ -5852,7 +5852,7 @@
         "declaration": "Stream"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/stream.md",
         "ownerToken": "Stream"
       }
     },
@@ -5874,7 +5874,7 @@
         "declaration": "Stream"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/stream.md",
         "ownerToken": "Stream"
       },
       "futureRegistration": {
@@ -5900,7 +5900,7 @@
         "declaration": "Stream"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/stream.md",
         "ownerToken": "Stream"
       },
       "futureRegistration": {
@@ -5926,7 +5926,7 @@
         "declaration": "Stream"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/stream.md",
         "ownerToken": "Stream"
       },
       "futureRegistration": {
@@ -5952,7 +5952,7 @@
         "declaration": "Stream"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/stream.md",
         "ownerToken": "Stream"
       }
     },
@@ -5974,7 +5974,7 @@
         "declaration": "Stream"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/stream.md",
         "ownerToken": "Stream"
       },
       "futureRegistration": {
@@ -6000,7 +6000,7 @@
         "declaration": "TCPListener"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "TCPListener"
       },
       "futureRegistration": {
@@ -6026,7 +6026,7 @@
         "declaration": "TCPListener"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "TCPListener"
       }
     },
@@ -6048,7 +6048,7 @@
         "declaration": "TCPListener"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "TCPListener"
       }
     },
@@ -6070,7 +6070,7 @@
         "declaration": "TCPSocket"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "TCPSocket"
       }
     },
@@ -6092,7 +6092,7 @@
         "declaration": "TCPSocket"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "TCPSocket"
       },
       "futureRegistration": {
@@ -6118,7 +6118,7 @@
         "declaration": "TCPSocket"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "TCPSocket"
       },
       "futureRegistration": {
@@ -6144,7 +6144,7 @@
         "declaration": "TCPSocket"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "TCPSocket"
       },
       "futureRegistration": {
@@ -6170,7 +6170,7 @@
         "declaration": "TCPSocket"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "TCPSocket"
       }
     },
@@ -6192,7 +6192,7 @@
         "declaration": "UARTPort"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/uart.md",
         "ownerToken": "UARTPort"
       }
     },
@@ -6214,7 +6214,7 @@
         "declaration": "UARTPort"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/uart.md",
         "ownerToken": "UARTPort"
       }
     },
@@ -6236,7 +6236,7 @@
         "declaration": "UARTPort"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/uart.md",
         "ownerToken": "UARTPort"
       }
     },
@@ -6258,7 +6258,7 @@
         "declaration": "UARTPort"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/uart.md",
         "ownerToken": "UARTPort"
       },
       "futureRegistration": {
@@ -6284,7 +6284,7 @@
         "declaration": "UARTPort"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/uart.md",
         "ownerToken": "UARTPort"
       },
       "futureRegistration": {
@@ -6310,7 +6310,7 @@
         "declaration": "UARTPort"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/uart.md",
         "ownerToken": "UARTPort"
       }
     },
@@ -6332,7 +6332,7 @@
         "declaration": "UARTPort"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/uart.md",
         "ownerToken": "UARTPort"
       }
     },
@@ -6354,7 +6354,7 @@
         "declaration": "UARTPort"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/uart.md",
         "ownerToken": "UARTPort"
       },
       "futureRegistration": {
@@ -6380,7 +6380,7 @@
         "declaration": "UARTPort"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/uart.md",
         "ownerToken": "UARTPort"
       },
       "futureRegistration": {
@@ -6406,7 +6406,7 @@
         "declaration": "UARTPort"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/uart.md",
         "ownerToken": "UARTPort"
       },
       "futureRegistration": {
@@ -6432,7 +6432,7 @@
         "declaration": "UDPSocket"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "UDPSocket"
       }
     },
@@ -6454,7 +6454,7 @@
         "declaration": "UDPSocket"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "UDPSocket"
       },
       "futureRegistration": {
@@ -6480,7 +6480,7 @@
         "declaration": "UDPSocket"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "UDPSocket"
       },
       "futureRegistration": {
@@ -6506,7 +6506,7 @@
         "declaration": "UDPSocket"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "UDPSocket"
       }
     },
@@ -6528,7 +6528,7 @@
         "declaration": "USBSerialTextHandle"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/usb-serial.md",
         "ownerToken": "usbSerial"
       }
     },
@@ -6550,7 +6550,7 @@
         "declaration": "USBSerialTextHandle"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/usb-serial.md",
         "ownerToken": "usbSerial"
       }
     },
@@ -6572,7 +6572,7 @@
         "declaration": "USBSerialTextHandle"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/usb-serial.md",
         "ownerToken": "usbSerial"
       }
     },
@@ -6594,7 +6594,7 @@
         "declaration": "USBSerialTextHandle"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/usb-serial.md",
         "ownerToken": "usbSerial"
       }
     },
@@ -6616,7 +6616,7 @@
         "declaration": "USBSerialTextHandle"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/usb-serial.md",
         "ownerToken": "usbSerial"
       }
     },
@@ -6638,7 +6638,7 @@
         "declaration": "WebSocketClientHandle"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/websocket-client.md",
         "ownerToken": "websocketClient"
       }
     },
@@ -6660,7 +6660,7 @@
         "declaration": "WebSocketClientHandle"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/websocket-client.md",
         "ownerToken": "websocketClient"
       }
     },
@@ -6682,7 +6682,7 @@
         "declaration": "WebSocketClientHandle"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/websocket-client.md",
         "ownerToken": "websocketClient"
       }
     },
@@ -6704,7 +6704,7 @@
         "declaration": "WebSocketClientHandle"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/websocket-client.md",
         "ownerToken": "websocketClient"
       }
     },
@@ -6726,7 +6726,7 @@
         "declaration": "WebSocketClientHandle"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/websocket-client.md",
         "ownerToken": "websocketClient"
       }
     },
@@ -6748,7 +6748,7 @@
         "declaration": "WiFiCsiBatch"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiBatch"
       }
     },
@@ -6770,7 +6770,7 @@
         "declaration": "WiFiCsiBatch"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiBatch"
       }
     },
@@ -6792,7 +6792,7 @@
         "declaration": "WiFiCsiBatch"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiBatch"
       }
     },
@@ -6814,7 +6814,7 @@
         "declaration": "WiFiCsiBatch"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiBatch"
       }
     },
@@ -6836,7 +6836,7 @@
         "declaration": "WiFiCsiFrame"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiFrame"
       }
     },
@@ -6858,7 +6858,7 @@
         "declaration": "WiFiCsiFrame"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiFrame"
       }
     },
@@ -6880,7 +6880,7 @@
         "declaration": "WiFiCsiFrame"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiFrame"
       }
     },
@@ -6902,7 +6902,7 @@
         "declaration": "WiFiCsiFrame"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiFrame"
       }
     },
@@ -6924,7 +6924,7 @@
         "declaration": "WiFiCsiSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiSession"
       }
     },
@@ -6946,7 +6946,7 @@
         "declaration": "WiFiCsiSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiSession"
       }
     },
@@ -6968,7 +6968,7 @@
         "declaration": "WiFiCsiSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiSession"
       }
     },
@@ -6990,7 +6990,7 @@
         "declaration": "WiFiCsiSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiSession"
       }
     },
@@ -7012,7 +7012,7 @@
         "declaration": "WiFiCsiSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiSession"
       }
     },
@@ -7034,7 +7034,7 @@
         "declaration": "WiFiCsiSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiSession"
       }
     },
@@ -7056,7 +7056,7 @@
         "declaration": "WiFiCsiSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiSession"
       }
     },
@@ -7078,7 +7078,7 @@
         "declaration": "WiFiCsiSession"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi-csi.md",
         "ownerToken": "WiFiCsiSession"
       }
     },
@@ -7100,7 +7100,7 @@
         "declaration": "AdcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/adc.md",
         "ownerToken": "adc"
       }
     },
@@ -7122,7 +7122,7 @@
         "declaration": "AdcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/adc.md",
         "ownerToken": "adc"
       }
     },
@@ -7144,7 +7144,7 @@
         "declaration": "AdcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/adc.md",
         "ownerToken": "adc"
       }
     },
@@ -7166,7 +7166,7 @@
         "declaration": "AdcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/adc.md",
         "ownerToken": "adc"
       }
     },
@@ -7188,7 +7188,7 @@
         "declaration": "AdcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/adc.md",
         "ownerToken": "adc"
       }
     },
@@ -7210,7 +7210,7 @@
         "declaration": "AdcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/adc.md",
         "ownerToken": "adc"
       }
     },
@@ -7232,7 +7232,7 @@
         "declaration": "AdcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/adc.md",
         "ownerToken": "adc"
       }
     },
@@ -7254,7 +7254,7 @@
         "declaration": "AdcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/adc.md",
         "ownerToken": "adc"
       }
     },
@@ -7276,7 +7276,7 @@
         "declaration": "BitmapModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "bitmap"
       },
       "futureRegistration": {
@@ -7302,7 +7302,7 @@
         "declaration": "BitmapModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "bitmap"
       }
     },
@@ -7324,7 +7324,7 @@
         "declaration": "BitmapModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/bitmap.md",
         "ownerToken": "bitmap"
       }
     },
@@ -7346,7 +7346,7 @@
         "declaration": "BLEModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "ble"
       }
     },
@@ -7368,7 +7368,7 @@
         "declaration": "BLEModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ble.md",
         "ownerToken": "ble"
       },
       "futureRegistration": {
@@ -7394,7 +7394,7 @@
         "declaration": "CameraModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/camera.md",
         "ownerToken": "camera"
       }
     },
@@ -7416,7 +7416,7 @@
         "declaration": "CameraModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/camera.md",
         "ownerToken": "camera"
       }
     },
@@ -7438,7 +7438,7 @@
         "declaration": "global"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/timers.md",
         "ownerToken": "Global Helpers"
       }
     },
@@ -7460,7 +7460,7 @@
         "declaration": "global"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/timers.md",
         "ownerToken": "Global Helpers"
       }
     },
@@ -7482,7 +7482,7 @@
         "declaration": "DacModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/dac.md",
         "ownerToken": "dac"
       }
     },
@@ -7504,7 +7504,7 @@
         "declaration": "DacModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/dac.md",
         "ownerToken": "dac"
       }
     },
@@ -7526,7 +7526,7 @@
         "declaration": "DacModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/dac.md",
         "ownerToken": "dac"
       }
     },
@@ -7548,7 +7548,7 @@
         "declaration": "DacModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/dac.md",
         "ownerToken": "dac"
       }
     },
@@ -7570,7 +7570,7 @@
         "declaration": "DacModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/dac.md",
         "ownerToken": "dac"
       }
     },
@@ -7592,7 +7592,7 @@
         "declaration": "DacModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/dac.md",
         "ownerToken": "dac"
       }
     },
@@ -7614,7 +7614,7 @@
         "declaration": "EspNowModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "espNow"
       }
     },
@@ -7636,7 +7636,7 @@
         "declaration": "EspNowModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/esp-now.md",
         "ownerToken": "espNow"
       },
       "futureRegistration": {
@@ -7662,7 +7662,7 @@
         "declaration": "FrameworkModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/global-helpers.md",
         "ownerToken": "framework"
       }
     },
@@ -7684,7 +7684,7 @@
         "declaration": "global"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/global-helpers.md",
         "ownerToken": "Global Helpers"
       }
     },
@@ -7706,7 +7706,7 @@
         "declaration": "GpioModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/gpio.md",
         "ownerToken": "gpio"
       }
     },
@@ -7728,7 +7728,7 @@
         "declaration": "GpioModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/gpio.md",
         "ownerToken": "gpio"
       }
     },
@@ -7750,7 +7750,7 @@
         "declaration": "GpioModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/gpio.md",
         "ownerToken": "gpio"
       }
     },
@@ -7772,7 +7772,7 @@
         "declaration": "GpioModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/gpio.md",
         "ownerToken": "gpio"
       }
     },
@@ -7794,7 +7794,7 @@
         "declaration": "GpioModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/gpio.md",
         "ownerToken": "gpio"
       }
     },
@@ -7816,7 +7816,7 @@
         "declaration": "GpioModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/gpio.md",
         "ownerToken": "gpio"
       }
     },
@@ -7838,7 +7838,7 @@
         "declaration": "GpioModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/gpio.md",
         "ownerToken": "gpio"
       }
     },
@@ -7860,7 +7860,7 @@
         "declaration": "GpioModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/gpio.md",
         "ownerToken": "gpio"
       }
     },
@@ -7882,7 +7882,7 @@
         "declaration": "GpioModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/gpio.md",
         "ownerToken": "gpio"
       }
     },
@@ -7904,7 +7904,7 @@
         "declaration": "GpioModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/gpio.md",
         "ownerToken": "gpio"
       }
     },
@@ -7926,7 +7926,7 @@
         "declaration": "GpioModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/gpio.md",
         "ownerToken": "gpio"
       }
     },
@@ -7948,7 +7948,7 @@
         "declaration": "GpioModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/gpio.md",
         "ownerToken": "gpio"
       }
     },
@@ -7970,7 +7970,7 @@
         "declaration": "GpioModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/gpio.md",
         "ownerToken": "gpio"
       }
     },
@@ -7992,7 +7992,7 @@
         "declaration": "GpioModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/gpio.md",
         "ownerToken": "gpio"
       }
     },
@@ -8014,7 +8014,7 @@
         "declaration": "GpioModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/gpio.md",
         "ownerToken": "gpio"
       }
     },
@@ -8036,7 +8036,7 @@
         "declaration": "global"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/global-helpers.md",
         "ownerToken": "Global Helpers"
       }
     },
@@ -8058,7 +8058,7 @@
         "declaration": "HttpModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http.md",
         "ownerToken": "http"
       },
       "futureRegistration": {
@@ -8084,7 +8084,7 @@
         "declaration": "HttpModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/http.md",
         "ownerToken": "http"
       }
     },
@@ -8106,7 +8106,7 @@
         "declaration": "I2CModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2c.md",
         "ownerToken": "i2c"
       }
     },
@@ -8128,7 +8128,7 @@
         "declaration": "I2SModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2s.md",
         "ownerToken": "i2s"
       }
     },
@@ -8150,7 +8150,7 @@
         "declaration": "I2SModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/i2s.md",
         "ownerToken": "i2s"
       }
     },
@@ -8172,7 +8172,7 @@
         "declaration": "LedcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ledc.md",
         "ownerToken": "ledc"
       }
     },
@@ -8194,7 +8194,7 @@
         "declaration": "LedcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ledc.md",
         "ownerToken": "ledc"
       }
     },
@@ -8216,7 +8216,7 @@
         "declaration": "LedcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ledc.md",
         "ownerToken": "ledc"
       }
     },
@@ -8238,7 +8238,7 @@
         "declaration": "LedcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ledc.md",
         "ownerToken": "ledc"
       }
     },
@@ -8260,7 +8260,7 @@
         "declaration": "LedcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ledc.md",
         "ownerToken": "ledc"
       }
     },
@@ -8282,7 +8282,7 @@
         "declaration": "LedcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ledc.md",
         "ownerToken": "ledc"
       }
     },
@@ -8304,7 +8304,7 @@
         "declaration": "LedcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ledc.md",
         "ownerToken": "ledc"
       }
     },
@@ -8326,7 +8326,7 @@
         "declaration": "LedcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ledc.md",
         "ownerToken": "ledc"
       }
     },
@@ -8348,7 +8348,7 @@
         "declaration": "LedcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ledc.md",
         "ownerToken": "ledc"
       }
     },
@@ -8370,7 +8370,7 @@
         "declaration": "LedcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ledc.md",
         "ownerToken": "ledc"
       }
     },
@@ -8392,7 +8392,7 @@
         "declaration": "LedcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ledc.md",
         "ownerToken": "ledc"
       }
     },
@@ -8414,7 +8414,7 @@
         "declaration": "LedcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ledc.md",
         "ownerToken": "ledc"
       }
     },
@@ -8436,7 +8436,7 @@
         "declaration": "LedcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ledc.md",
         "ownerToken": "ledc"
       }
     },
@@ -8458,7 +8458,7 @@
         "declaration": "LedcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ledc.md",
         "ownerToken": "ledc"
       }
     },
@@ -8480,7 +8480,7 @@
         "declaration": "LedcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ledc.md",
         "ownerToken": "ledc"
       }
     },
@@ -8502,7 +8502,7 @@
         "declaration": "LedcModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/ledc.md",
         "ownerToken": "ledc"
       }
     },
@@ -8524,7 +8524,7 @@
         "declaration": "global"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/global-helpers.md",
         "ownerToken": "Global Helpers"
       }
     },
@@ -8546,7 +8546,7 @@
         "declaration": "NetModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/net.md",
         "ownerToken": "net"
       }
     },
@@ -8568,7 +8568,7 @@
         "declaration": "NetModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/net.md",
         "ownerToken": "net"
       }
     },
@@ -8590,7 +8590,7 @@
         "declaration": "NVSModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/nvs.md",
         "ownerToken": "nvs"
       },
       "futureRegistration": {
@@ -8616,7 +8616,7 @@
         "declaration": "NVSModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/nvs.md",
         "ownerToken": "nvs"
       },
       "futureRegistration": {
@@ -8642,7 +8642,7 @@
         "declaration": "NVSModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/nvs.md",
         "ownerToken": "nvs"
       },
       "futureRegistration": {
@@ -8668,7 +8668,7 @@
         "declaration": "NVSModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/nvs.md",
         "ownerToken": "nvs"
       },
       "futureRegistration": {
@@ -8694,7 +8694,7 @@
         "declaration": "NVSModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/nvs.md",
         "ownerToken": "nvs"
       }
     },
@@ -8716,7 +8716,7 @@
         "declaration": "global"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/global-helpers.md",
         "ownerToken": "Global Helpers"
       }
     },
@@ -8738,7 +8738,7 @@
         "declaration": "RMTModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rmt.md",
         "ownerToken": "rmt"
       }
     },
@@ -8760,7 +8760,7 @@
         "declaration": "RMTModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rmt.md",
         "ownerToken": "rmt"
       }
     },
@@ -8782,7 +8782,7 @@
         "declaration": "RMTModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rmt.md",
         "ownerToken": "rmt"
       }
     },
@@ -8804,7 +8804,7 @@
         "declaration": "RPCModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rpc.md",
         "ownerToken": "rpc"
       }
     },
@@ -8826,7 +8826,7 @@
         "declaration": "RPCModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rpc.md",
         "ownerToken": "rpc"
       }
     },
@@ -8848,7 +8848,7 @@
         "declaration": "RPCModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rpc.md",
         "ownerToken": "rpc"
       }
     },
@@ -8870,7 +8870,7 @@
         "declaration": "RPCModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rpc.md",
         "ownerToken": "rpc"
       }
     },
@@ -8892,7 +8892,7 @@
         "declaration": "RPCModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rpc.md",
         "ownerToken": "rpc"
       }
     },
@@ -8914,7 +8914,7 @@
         "declaration": "RPCModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/rpc.md",
         "ownerToken": "rpc"
       }
     },
@@ -8936,7 +8936,7 @@
         "declaration": "RuntimeLogsModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/runtime-logs.md",
         "ownerToken": "runtimeLogs"
       }
     },
@@ -8958,7 +8958,7 @@
         "declaration": "global"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/timers.md",
         "ownerToken": "Global Helpers"
       }
     },
@@ -8980,7 +8980,7 @@
         "declaration": "global"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/timers.md",
         "ownerToken": "Global Helpers"
       }
     },
@@ -9002,7 +9002,7 @@
         "declaration": "global"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/global-helpers.md",
         "ownerToken": "Global Helpers"
       }
     },
@@ -9024,7 +9024,7 @@
         "declaration": "SocketModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "socket"
       }
     },
@@ -9046,7 +9046,7 @@
         "declaration": "SocketModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "socket"
       }
     },
@@ -9068,7 +9068,7 @@
         "declaration": "SocketModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/socket.md",
         "ownerToken": "socket"
       }
     },
@@ -9090,7 +9090,7 @@
         "declaration": "SPIModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/spi.md",
         "ownerToken": "spi"
       }
     },
@@ -9112,7 +9112,7 @@
         "declaration": "SysModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/sys.md",
         "ownerToken": "sys"
       }
     },
@@ -9134,7 +9134,7 @@
         "declaration": "SysModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/sys.md",
         "ownerToken": "sys"
       }
     },
@@ -9156,7 +9156,7 @@
         "declaration": "SysModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/sys.md",
         "ownerToken": "sys"
       }
     },
@@ -9178,7 +9178,7 @@
         "declaration": "SysModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/sys.md",
         "ownerToken": "sys"
       }
     },
@@ -9200,7 +9200,7 @@
         "declaration": "SysModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/sys.md",
         "ownerToken": "sys"
       }
     },
@@ -9222,7 +9222,7 @@
         "declaration": "SysModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/sys.md",
         "ownerToken": "sys"
       }
     },
@@ -9244,7 +9244,7 @@
         "declaration": "SysModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/sys.md",
         "ownerToken": "sys"
       }
     },
@@ -9266,7 +9266,7 @@
         "declaration": "SysModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/sys.md",
         "ownerToken": "sys"
       }
     },
@@ -9288,7 +9288,7 @@
         "declaration": "SysModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/sys.md",
         "ownerToken": "sys"
       }
     },
@@ -9310,7 +9310,7 @@
         "declaration": "SysTimeModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/sys.md",
         "ownerToken": "sys.time"
       }
     },
@@ -9332,7 +9332,7 @@
         "declaration": "SysTimeModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/sys.md",
         "ownerToken": "sys.time"
       },
       "futureRegistration": {
@@ -9358,7 +9358,7 @@
         "declaration": "SysModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/sys.md",
         "ownerToken": "sys"
       }
     },
@@ -9380,7 +9380,7 @@
         "declaration": "UARTModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/uart.md",
         "ownerToken": "uart"
       }
     },
@@ -9402,7 +9402,7 @@
         "declaration": "USBSerialModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/usb-serial.md",
         "ownerToken": "usbSerial"
       }
     },
@@ -9424,7 +9424,7 @@
         "declaration": "USBSerialModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/usb-serial.md",
         "ownerToken": "usbSerial"
       }
     },
@@ -9446,7 +9446,7 @@
         "declaration": "WebSocketClientModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/websocket-client.md",
         "ownerToken": "websocketClient"
       }
     },
@@ -9468,7 +9468,7 @@
         "declaration": "WebSocketClientModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/websocket-client.md",
         "ownerToken": "websocketClient"
       }
     },
@@ -9490,12 +9490,56 @@
         "declaration": "WiFiModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi.md",
         "ownerToken": "wifi"
       },
       "futureRegistration": {
         "file": "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi_future.c",
         "function": "esp32_mquickjs_init_wifi_future_runtime"
+      }
+    },
+    {
+      "qualifiedName": "wifi.csi.capabilities",
+      "surface": "wifi.csi",
+      "name": "capabilities",
+      "arity": 0,
+      "implementation": "js_wifi_csi_capabilities",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiModule"
+      },
+      "documentation": {
+        "file": "docs/api/wifi-csi.md",
+        "ownerToken": "wifi.csi"
+      }
+    },
+    {
+      "qualifiedName": "wifi.csi.open",
+      "surface": "wifi.csi",
+      "name": "open",
+      "arity": 1,
+      "implementation": "js_wifi_csi_open",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_csi"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiCsiModule"
+      },
+      "documentation": {
+        "file": "docs/api/wifi-csi.md",
+        "ownerToken": "wifi.csi"
       }
     },
     {
@@ -9516,7 +9560,7 @@
         "declaration": "WiFiModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi.md",
         "ownerToken": "wifi"
       },
       "futureRegistration": {
@@ -9542,7 +9586,7 @@
         "declaration": "WiFiModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi.md",
         "ownerToken": "wifi"
       },
       "futureRegistration": {
@@ -9568,7 +9612,7 @@
         "declaration": "WiFiModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi.md",
         "ownerToken": "wifi"
       }
     },
@@ -9590,7 +9634,7 @@
         "declaration": "WiFiModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi.md",
         "ownerToken": "wifi"
       }
     },
@@ -9612,52 +9656,8 @@
         "declaration": "WiFiModule"
       },
       "documentation": {
-        "file": "docs/c-api.md",
+        "file": "docs/api/wifi.md",
         "ownerToken": "wifi"
-      }
-    },
-    {
-      "qualifiedName": "wifiCsi.capabilities",
-      "surface": "wifiCsi",
-      "name": "capabilities",
-      "arity": 0,
-      "implementation": "js_wifi_csi_capabilities",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
-      "execution": "immediate",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_wifi_csi"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "WiFiCsiModule"
-      },
-      "documentation": {
-        "file": "docs/c-api.md",
-        "ownerToken": "wifiCsi"
-      }
-    },
-    {
-      "qualifiedName": "wifiCsi.open",
-      "surface": "wifiCsi",
-      "name": "open",
-      "arity": 1,
-      "implementation": "js_wifi_csi_open",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI",
-      "execution": "immediate",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_wifi_csi"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "WiFiCsiModule"
-      },
-      "documentation": {
-        "file": "docs/c-api.md",
-        "ownerToken": "wifiCsi"
       }
     }
   ]

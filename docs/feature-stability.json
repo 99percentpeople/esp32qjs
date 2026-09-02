@@ -51,7 +51,7 @@
     },
     {
       "features": ["wifi_csi"],
-      "area": "`wifiCsi`",
+      "area": "`wifi.csi`",
       "status": "Hardware pending",
       "evidence": "C3/S3 legacy and C5 HE RF capture, PHY metadata, 2.4/5 GHz, coexistence, transport throughput, 500-cycle close/reopen, and long-duration memory qualification are required beyond host ownership tests and target build coverage"
     },

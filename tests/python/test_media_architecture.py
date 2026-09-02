@@ -339,7 +339,7 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn("return ESP32_MQUICKJS_CANCEL_REJECTED;", close_cancel)
         self.assertIn(
             "Future.call(cam.close, cam, [])",
-            (ROOT / "docs/c-api.md").read_text(encoding="utf-8"),
+            (ROOT / "docs/api/camera.md").read_text(encoding="utf-8"),
         )
         self.assertIn("does not accept a sensor model; the driver probes it", source)
         self.assertIn("OV2640_PID", source)

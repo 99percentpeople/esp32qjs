@@ -103,7 +103,7 @@ class TransportArchitectureTests(SourceContractTestCase):
         declarations = (ROOT / "types" / "esp32qjs-c-api.d.ts").read_text(
             encoding="utf-8"
         )
-        docs = (ROOT / "docs" / "c-api.md").read_text(encoding="utf-8")
+        docs = (ROOT / "docs" / "api" / "rpc.md").read_text(encoding="utf-8")
         public_header = MQUICKJS / "include" / "esp32qjs_rpc_wire.h"
 
         self.assertIn("config ESP32_MQUICKJS_FEATURE_RPC", kconfig)

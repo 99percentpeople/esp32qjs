@@ -1,5 +1,5 @@
 test("wifi_csi/espnow-conflict-hardware", function () {
-  var caps = wifiCsi.capabilities();
+  var caps = wifi.csi.capabilities();
   var capture = caps.configSchema === "wifi-csi-he/1"
     ? { schema: "wifi-csi-he/1", enableLegacy: true, ht20: true, heSu: true }
     : { schema: "wifi-csi-legacy/1", lltf: true, htLtf: true, scale: "auto" };
@@ -23,7 +23,7 @@ test("wifi_csi/espnow-conflict-hardware", function () {
     test.ok(during.radio.clients.espNow >= 1,
       "ESP-NOW should hold the first fixed-channel radio lease");
     try {
-      csiSession = wifiCsi.open({
+      csiSession = wifi.csi.open({
         source: "associated",
         channel: conflictingCsiChannel,
         conflict: "fail",
@@ -46,7 +46,7 @@ test("wifi_csi/espnow-conflict-hardware", function () {
     test.equal(wifi.status().radio.clients.espNow, 0,
       "ESP-NOW close must release its radio lease before returning");
 
-    csiSession = wifiCsi.open({
+    csiSession = wifi.csi.open({
       source: "associated",
       channel: espnowChannel,
       conflict: "fail",

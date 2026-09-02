@@ -18,5 +18,14 @@ class FeatureDocumentationTests(unittest.TestCase):
         )
 
     def test_runtime_integration_does_not_reference_removed_apps_layout(self):
-        runtime = (ROOT / "docs" / "runtime-api.md").read_text(encoding="utf-8")
+        runtime = (ROOT / "docs" / "native-runtime-integration.md").read_text(
+            encoding="utf-8"
+        )
         self.assertNotIn("apps/<name>/flash_data/index.js", runtime)
+
+    def test_global_helpers_identify_global_this_as_the_global_object(self):
+        helpers = (ROOT / "docs" / "api" / "global-helpers.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("`globalThis` is the ESP32 MQuickJS global object", helpers)
+        self.assertIn("Do not guess browser or Node.js aliases", helpers)

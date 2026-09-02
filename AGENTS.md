@@ -15,9 +15,10 @@ tests under `tests/js/`, Python tooling tests under `tests/python/`, and complet
 test Build Context fixtures under `tests/build-contexts/`. Generated output
 stays under `build/`.
 
-Ordinary AI-readable framework facts live in `docs/ai/` and are listed by
-`docs/ai/docs.json`. They are documentation, not Skills. Problem-solving Skills
-belong to a host product and are outside this repository.
+The user-facing and AI-facing JavaScript API reference is shared under
+`docs/api/` and selected by `docs/api/docs.json`. These are ordinary
+documentation, not Skills. Problem-solving Skills belong to a host product and
+are outside this repository.
 
 ## Build, Flash, and Debug
 

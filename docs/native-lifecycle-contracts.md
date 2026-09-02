@@ -112,7 +112,11 @@ send timeout
   -> JavaScript policy may call session.recover()
 ```
 
-Recovery never retransmits the timed-out message implicitly.
+Each packet makes one native send attempt. `ESP_ERR_ESPNOW_NO_MEM` and other
+native admission errors complete that operation without internal backoff or
+retry. Firmware does not reset shared Wi-Fi or disconnect another radio owner
+implicitly. Explicit recovery never retransmits an accepted or timed-out
+message.
 
 ## Pool and lease contract
 

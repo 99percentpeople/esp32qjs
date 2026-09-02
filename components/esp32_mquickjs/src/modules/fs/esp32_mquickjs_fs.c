@@ -621,7 +621,7 @@ static JSValue load_from_fs(JSContext *ctx,
     }
 
     result = esp32_mquickjs_eval(ctx, runtime, (const char *)source, resolved_path, 0);
-    heap_caps_free(source);
+    esp32_mquickjs_memory_payload_free(source);
     return result;
 }
 
@@ -689,17 +689,17 @@ JSValue esp32_mquickjs_load_startup_from_active_fs(
                                              resolved_path,
                                              0);
 
-        heap_caps_free(source);
+        esp32_mquickjs_memory_payload_free(source);
         return result;
     }
 
     if (JS_RelocateBytecode(ctx, source, (uint32_t)source_len) != 0) {
-        heap_caps_free(source);
+        esp32_mquickjs_memory_payload_free(source);
         return JS_ThrowInternalError(ctx, "failed to relocate startup bytecode");
     }
     compiled = JS_LoadBytecode(ctx, source);
     if (JS_IsException(compiled)) {
-        heap_caps_free(source);
+        esp32_mquickjs_memory_payload_free(source);
         return compiled;
     }
 

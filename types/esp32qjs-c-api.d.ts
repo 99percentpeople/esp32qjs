@@ -2689,6 +2689,8 @@ namespace ESP32QJS {
    */
   interface WiFiModule {
     readonly DEFAULT_TIMEOUT_MS: number;
+    /** Bounded raw Channel State Information capture. */
+    readonly csi: WiFiCsiModule;
     status(): WiFiStatus;
     /** Set station modem power saving and return the active mode. */
     setPowerSave(mode: WiFiPowerSaveMode): WiFiPowerSaveMode;
@@ -2836,7 +2838,7 @@ namespace ESP32QJS {
 
   interface WiFiCsiError extends NativeError {
     code: WiFiCsiErrorCode;
-    operation: "wifiCsi";
+    operation: "wifi.csi";
     details: {
       stage?: string | null;
       espCode?: number;
@@ -3955,8 +3957,6 @@ namespace ESP32QJS {
   var wifi: ESP32QJS.WiFiModule;
   /** Station-interface ESP-NOW sessions, peers, receive queues, and sends. */
   var espNow: ESP32QJS.EspNowModule;
-  /** Bounded Wi-Fi CSI capture sessions and zero-copy frame/batch leases. */
-  var wifiCsi: ESP32QJS.WiFiCsiModule;
   /** Generic ESP-NimBLE central, peripheral, GATT, and security API. */
   var ble: ESP32QJS.BLEModule;
   /** HTTP client/server namespace. Exposed when either `sys.info.features.http` or `.httpServer` is enabled. */

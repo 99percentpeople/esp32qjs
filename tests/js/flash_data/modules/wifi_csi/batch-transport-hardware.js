@@ -1,6 +1,6 @@
 test("wifi_csi/batch-transport-hardware", function () {
   var cfg = test.requireConfig("wifiSsid", "wifiPassword");
-  var caps = wifiCsi.capabilities();
+  var caps = wifi.csi.capabilities();
   var capture = caps.configSchema === "wifi-csi-he/1"
     ? { schema: "wifi-csi-he/1", enableLegacy: true, ht20: true, heSu: true }
     : { schema: "wifi-csi-legacy/1", lltf: true, htLtf: true, scale: "auto" };
@@ -30,7 +30,7 @@ test("wifi_csi/batch-transport-hardware", function () {
       password: cfg.wifiPassword,
       timeoutMs: 15000
     });
-    session = wifiCsi.open({
+    session = wifi.csi.open({
       source: "promiscuous",
       channel: "current",
       conflict: "fail",

@@ -77,6 +77,43 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
         self.assertIn('"bytes"', sys_source)
         self.assertIn('"blocks"', sys_source)
 
+    def test_script_file_payloads_use_managed_release_paths(self):
+        fs_source = (
+            MQUICKJS / "src/modules/fs/esp32_mquickjs_fs.c"
+        ).read_text(encoding="utf-8")
+        runtime_source = (
+            MQUICKJS / "src/core/esp32_mquickjs.c"
+        ).read_text(encoding="utf-8")
+        load_from_fs = fs_source.split(
+            "static JSValue load_from_fs", 1
+        )[1].split(
+            "JSValue esp32_mquickjs_load_from_active_fs", 1
+        )[0]
+        load_startup = fs_source.split(
+            "JSValue esp32_mquickjs_load_startup_from_active_fs", 1
+        )[1].split(
+            "JSValue esp32_mquickjs_load_from_root", 1
+        )[0]
+
+        self.assertIn(
+            "esp32_mquickjs_memory_payload_free(source);", load_from_fs
+        )
+        self.assertNotIn("heap_caps_free(source);", load_from_fs)
+        self.assertEqual(
+            load_startup.count(
+                "esp32_mquickjs_memory_payload_free(source);"
+            ),
+            3,
+        )
+        self.assertNotIn("heap_caps_free(source);", load_startup)
+        self.assertIn(
+            "esp32_mquickjs_memory_payload_free(runtime->startup_bytecode);",
+            runtime_source,
+        )
+        self.assertNotIn(
+            "heap_caps_free(runtime->startup_bytecode);", runtime_source
+        )
+
     def test_espnow_uses_managed_rx_and_external_tx_payloads(self):
         source = (
             MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
@@ -115,8 +152,10 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
         source = (MQUICKJS / "src/core/esp32_mquickjs_memory.c").read_text(
             encoding="utf-8"
         )
-        docs = (ROOT / "docs/sys-management-api.md").read_text(
-            encoding="utf-8"
+        docs = " ".join(
+            (ROOT / "docs/sys-management-design.md")
+            .read_text(encoding="utf-8")
+            .split()
         )
         allocation_case = source.split(
             "case ESP32_MQUICKJS_MEMORY_DMA_EXTERNAL:", 1
@@ -148,9 +187,9 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
         self.assertIn("memory_internal_dma_can_fit(size)", realloc_body)
         self.assertEqual(realloc_body.count("heap_caps_realloc("), 2)
         self.assertIn('`DMA_EXTERNAL` class means "prefer external DMA"', docs)
-        self.assertIn("records one\nallocation failure", docs)
+        self.assertIn("records one allocation failure", docs)
         self.assertIn(
-            "`DMA_EXTERNAL` allocations that fell back to\ninternal RAM",
+            "`DMA_EXTERNAL` allocations that fall back to internal RAM",
             docs,
         )
 

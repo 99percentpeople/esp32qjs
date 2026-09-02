@@ -186,6 +186,40 @@ class EspNowArchitectureTests(unittest.TestCase):
         self.assertIn("recovery_pending", poll)
         self.assertIn("ESPNOW_RECOVERY_PENDING", source)
 
+    def test_native_send_admission_is_one_shot_without_hidden_retry(self):
+        source = (
+            MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
+        ).read_text(encoding="utf-8")
+        core = (
+            MQUICKJS / "src/core/esp32_mquickjs_wireless_core.c"
+        ).read_text(encoding="utf-8")
+        header = (
+            MQUICKJS / "internal/esp32_mquickjs_wireless_core.h"
+        ).read_text(encoding="utf-8")
+        tracked = source[
+            source.index("static bool espnow_start_tracked_send") :
+            source.index("static bool espnow_start_queued_send")
+        ]
+        queued_start = source.index("static bool espnow_start_queued_send")
+        queued = source[
+            queued_start : source.index(
+                "static void espnow_tx_worker(void *opaque)\n{", queued_start
+            )
+        ]
+
+        self.assertEqual(tracked.count("esp_now_send("), 1)
+        self.assertEqual(queued.count("esp_now_send("), 1)
+        for removed_retry_symbol in (
+            "ESP_ERR_ESPNOW_NO_MEM",
+            "ESPNOW_NO_MEM_BACKOFF",
+            "ESPNOW_TIMEOUT_RECOVERY_BACKOFF",
+            "espnow_note_no_memory",
+            "wireless_retry_gate",
+            "radioRecoveryRequired",
+            "txBackoff",
+        ):
+            self.assertNotIn(removed_retry_symbol, source + core + header)
+
     def test_session_close_disposes_native_event_queue_without_waiting_for_gc(self):
         source = (
             MQUICKJS / "src/modules/espnow/esp32_mquickjs_espnow.c"
@@ -371,8 +405,8 @@ class EspNowArchitectureTests(unittest.TestCase):
             "session->power_save_enabled ? session->wake_window_ms", restore
         )
 
-    def test_ai_wireless_doc_lists_the_complete_resource_surface(self):
-        wireless = (ROOT / "docs/ai/wireless.md").read_text(encoding="utf-8")
+    def test_shared_api_doc_lists_the_complete_resource_surface(self):
+        api = (ROOT / "docs/api/esp-now.md").read_text(encoding="utf-8")
 
         for token in (
             "session.stats()",
@@ -381,7 +415,7 @@ class EspNowArchitectureTests(unittest.TestCase):
             "session.setPowerSave(options)",
             "RSSI",
         ):
-            self.assertIn(token, wireless)
+            self.assertIn(token, api)
 
     def test_peer_rate_configuration_is_public_and_restored(self):
         source = (
@@ -390,8 +424,7 @@ class EspNowArchitectureTests(unittest.TestCase):
         types = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
             encoding="utf-8"
         )
-        c_api = (ROOT / "docs/c-api.md").read_text(encoding="utf-8")
-        wireless = (ROOT / "docs/ai/wireless.md").read_text(encoding="utf-8")
+        api = (ROOT / "docs/api/esp-now.md").read_text(encoding="utf-8")
 
         capabilities = source[
             source.index("JSValue js_espnow_capabilities") :
@@ -414,8 +447,7 @@ class EspNowArchitectureTests(unittest.TestCase):
         self.assertIn("esp_now_set_peer_rate_config", source)
         self.assertIn("espnow_apply_peer_rate_config(peer)", restore)
         self.assertIn("espnow_apply_peer_rate_config(peer)", update)
-        self.assertIn("peerRateConfig` is `true`", c_api)
-        self.assertIn("peerRateConfig` is `true`", wireless)
+        self.assertIn("peerRateConfig` is `true`", api)
 
     def test_broadcast_rate_configuration_is_public_and_restored(self):
         source = (
@@ -424,8 +456,7 @@ class EspNowArchitectureTests(unittest.TestCase):
         types = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
             encoding="utf-8"
         )
-        c_api = (ROOT / "docs/c-api.md").read_text(encoding="utf-8")
-        wireless = (ROOT / "docs/ai/wireless.md").read_text(encoding="utf-8")
+        api = (ROOT / "docs/api/esp-now.md").read_text(encoding="utf-8")
 
         capabilities = source[
             source.index("JSValue js_espnow_capabilities") :
@@ -459,8 +490,7 @@ class EspNowArchitectureTests(unittest.TestCase):
             "espnow_apply_rate_config(\n        s_broadcast_address",
             restore,
         )
-        self.assertIn("broadcastRateConfig` is `true`", c_api)
-        self.assertIn("broadcastRateConfig` is `true`", wireless)
+        self.assertIn("broadcastRateConfig` is `true`", api)
 
     def test_peer_slots_are_generation_checked_and_keys_are_scrubbed(self):
         source = (

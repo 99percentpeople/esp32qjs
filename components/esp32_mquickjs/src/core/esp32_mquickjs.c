@@ -1434,7 +1434,7 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
     esp32_mquickjs_deinit_fs_runtime(runtime);
 #endif
-    heap_caps_free(runtime->startup_bytecode);
+    esp32_mquickjs_memory_payload_free(runtime->startup_bytecode);
     runtime->startup_bytecode = NULL;
     esp32_mquickjs_deinit_future_runtime(runtime);
     esp32_mquickjs_deinit_async_state(runtime);
@@ -1577,8 +1577,8 @@ JSValue js_help(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     console_output_begin(esp32_mquickjs_get_active_runtime(),
                          ESP32_MQUICKJS_LOG_SOURCE_RUNTIME);
     console_output_write(esp32_mquickjs_get_active_runtime(),
-                         "See docs/api.md, docs/c-api.md, or docs/js-api.md for the API reference.",
-                         strlen("See docs/api.md, docs/c-api.md, or docs/js-api.md for the API reference."));
+                         "See docs/api/README.md for the API reference.",
+                         strlen("See docs/api/README.md for the API reference."));
     console_output_end(esp32_mquickjs_get_active_runtime());
     return JS_UNDEFINED;
 }

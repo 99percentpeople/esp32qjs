@@ -887,7 +887,7 @@ static const JSPropDef js_wifi_csi[] = {
 };
 
 static const JSClassDef js_wifi_csi_obj =
-    JS_OBJECT_DEF("wifiCsi", js_wifi_csi);
+    JS_OBJECT_DEF("csi", js_wifi_csi);
 #endif
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW
@@ -1281,6 +1281,9 @@ static const JSPropDef js_wifi[] = {
     JS_CFUNC_DEF("setTxPower", 1, js_wifi_set_tx_power),
     JS_CFUNC_DEF("status", 0, js_wifi_status),
     JS_CFUNC_DEF("scan", 1, js_wifi_scan),
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI
+    JS_PROP_CLASS_DEF("csi", &js_wifi_csi_obj),
+#endif
     JS_PROP_END,
 };
 
@@ -1401,7 +1404,6 @@ static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("EspNowPeer", &js_espnow_peer_class),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI
-    JS_PROP_CLASS_DEF("wifiCsi", &js_wifi_csi_obj),
     JS_PROP_CLASS_DEF("WiFiCsiSession", &js_wifi_csi_session_class),
     JS_PROP_CLASS_DEF("WiFiCsiFrame", &js_wifi_csi_frame_class),
     JS_PROP_CLASS_DEF("WiFiCsiBatch", &js_wifi_csi_batch_class),

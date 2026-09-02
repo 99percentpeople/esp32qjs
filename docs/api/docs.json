@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "docs": [
+    { "id": "runtime", "title": "ESP32QJS runtime and execution rules", "path": "api/runtime.md", "requiresAnyFeatures": [] },
+    { "id": "global-helpers", "title": "ESP32QJS global helper API", "path": "api/global-helpers.md", "requiresAnyFeatures": [] },
+    { "id": "native-errors", "title": "ESP32QJS native operational errors", "path": "api/native-errors.md", "requiresAnyFeatures": [] },
+    { "id": "futures", "title": "ESP32QJS Future API", "path": "api/futures.md", "requiresAnyFeatures": [] },
+    { "id": "event-queues", "title": "ESP32QJS EventQueue API", "path": "api/event-queues.md", "requiresAnyFeatures": [] },
+    { "id": "timers", "title": "ESP32QJS timer API", "path": "api/timers.md", "requiresAnyFeatures": [] },
+    { "id": "stream", "title": "ESP32QJS Stream API", "path": "api/stream.md", "requiresAnyFeatures": [] },
+    { "id": "http-types", "title": "ESP32QJS Headers Request and Response API", "path": "api/http-types.md", "requiresAnyFeatures": [] },
+    { "id": "sys", "title": "ESP32QJS system API", "path": "api/sys.md", "requiresAnyFeatures": [] },
+
+    { "id": "fs", "title": "ESP32QJS filesystem API", "path": "api/fs.md", "requiresAnyFeatures": ["fs"] },
+    { "id": "secondary-littlefs", "title": "ESP32QJS secondary LittleFS API", "path": "api/secondary-littlefs.md", "requiresAnyFeatures": ["fs"] },
+    { "id": "nvs", "title": "ESP32QJS NVS API", "path": "api/nvs.md", "requiresAnyFeatures": ["nvs"] },
+
+    { "id": "hardware-rules", "title": "ESP32QJS hardware pin and resource rules", "path": "api/hardware-rules.md", "requiresAnyFeatures": ["gpio", "ledc", "adc", "dac", "i2c", "spi", "uart", "rmt", "i2s", "camera"] },
+    { "id": "gpio", "title": "ESP32QJS GPIO API", "path": "api/gpio.md", "requiresAnyFeatures": ["gpio"] },
+    { "id": "ledc", "title": "ESP32QJS LEDC PWM API", "path": "api/ledc.md", "requiresAnyFeatures": ["ledc"] },
+    { "id": "adc", "title": "ESP32QJS ADC API", "path": "api/adc.md", "requiresAnyFeatures": ["adc"] },
+    { "id": "dac", "title": "ESP32QJS DAC API", "path": "api/dac.md", "requiresAnyFeatures": ["dac"] },
+    { "id": "i2c", "title": "ESP32QJS I2C API", "path": "api/i2c.md", "requiresAnyFeatures": ["i2c"] },
+    { "id": "spi", "title": "ESP32QJS SPI API", "path": "api/spi.md", "requiresAnyFeatures": ["spi"] },
+    { "id": "uart", "title": "ESP32QJS UART API", "path": "api/uart.md", "requiresAnyFeatures": ["uart"] },
+    { "id": "rmt", "title": "ESP32QJS RMT API", "path": "api/rmt.md", "requiresAnyFeatures": ["rmt"] },
+
+    { "id": "i2s", "title": "ESP32QJS I2S API", "path": "api/i2s.md", "requiresAnyFeatures": ["i2s"] },
+    { "id": "camera", "title": "ESP32QJS Camera API", "path": "api/camera.md", "requiresAnyFeatures": ["camera"] },
+    { "id": "bitmap", "title": "ESP32QJS Bitmap API", "path": "api/bitmap.md", "requiresAnyFeatures": ["bitmap"] },
+    { "id": "bitmap-jpeg", "title": "ESP32QJS Bitmap JPEG decoder API", "path": "api/bitmap-jpeg.md", "requiresAnyFeatures": ["bitmap_jpeg"] },
+
+    { "id": "net", "title": "ESP32QJS network interface API", "path": "api/net.md", "requiresAnyFeatures": ["net"] },
+    { "id": "tls", "title": "ESP32QJS TLS capability", "path": "api/tls.md", "requiresAnyFeatures": ["tls"] },
+    { "id": "wifi", "title": "ESP32QJS Wi-Fi station API", "path": "api/wifi.md", "requiresAnyFeatures": ["wifi"] },
+    { "id": "http", "title": "ESP32QJS HTTP client and server API", "path": "api/http.md", "requiresAnyFeatures": ["http_client", "http_server"] },
+    { "id": "socket", "title": "ESP32QJS raw socket API", "path": "api/socket.md", "requiresAnyFeatures": ["socket"] },
+    { "id": "websocket-client", "title": "ESP32QJS WebSocket client API", "path": "api/websocket-client.md", "requiresAnyFeatures": ["websocket_client"] },
+    { "id": "rpc", "title": "ESP32QJS binary RPC codec API", "path": "api/rpc.md", "requiresAnyFeatures": ["rpc"] },
+    { "id": "usb-serial", "title": "ESP32QJS USB Serial API", "path": "api/usb-serial.md", "requiresAnyFeatures": ["usb_serial"] },
+
+    { "id": "wifi-csi", "title": "ESP32QJS Wi-Fi CSI API", "path": "api/wifi-csi.md", "requiresAnyFeatures": ["wifi_csi"] },
+    { "id": "wifi-csi-protocol", "title": "ESP32QJS Wi-Fi CSI wire protocol", "path": "api/wifi-csi-protocol.md", "requiresAnyFeatures": ["wifi_csi"] },
+    { "id": "esp-now", "title": "ESP32QJS ESP-NOW API", "path": "api/esp-now.md", "requiresAnyFeatures": ["espnow"] },
+    { "id": "ble", "title": "ESP32QJS Bluetooth LE API", "path": "api/ble.md", "requiresAnyFeatures": ["ble"] },
+    { "id": "runtime-logs", "title": "ESP32QJS runtime logs API", "path": "api/runtime-logs.md", "requiresAnyFeatures": ["runtime_logs"] }
+  ]
+}

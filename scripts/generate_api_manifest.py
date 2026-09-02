@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STDLIB_PATH = ROOT / "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c"
 TYPES_PATH = ROOT / "types/esp32qjs-c-api.d.ts"
-DOCS_PATH = ROOT / "docs/c-api.md"
+DOCS_MANIFEST_PATH = ROOT / "docs/api/docs.json"
 KCONFIG_PATH = ROOT / "components/esp32_mquickjs/Kconfig.projbuild"
 MANIFEST_PATH = ROOT / "api-manifest.json"
 
@@ -45,6 +45,50 @@ FEATURES = {
     "runtimeLogs": "CONFIG_ESP32_MQUICKJS_FEATURE_RUNTIME_LOGS",
     "bitmap": "CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP",
     "bitmapJpeg": "CONFIG_ESP32_MQUICKJS_FEATURE_BITMAP_JPEG",
+}
+
+FEATURE_DOCUMENTS = {
+    FEATURES["fs"]: "docs/api/fs.md",
+    FEATURES["nvs"]: "docs/api/nvs.md",
+    FEATURES["gpio"]: "docs/api/gpio.md",
+    FEATURES["ledc"]: "docs/api/ledc.md",
+    FEATURES["adc"]: "docs/api/adc.md",
+    FEATURES["dac"]: "docs/api/dac.md",
+    FEATURES["i2c"]: "docs/api/i2c.md",
+    FEATURES["spi"]: "docs/api/spi.md",
+    FEATURES["uart"]: "docs/api/uart.md",
+    FEATURES["rmt"]: "docs/api/rmt.md",
+    FEATURES["i2s"]: "docs/api/i2s.md",
+    FEATURES["camera"]: "docs/api/camera.md",
+    FEATURES["usbSerial"]: "docs/api/usb-serial.md",
+    FEATURES["rpc"]: "docs/api/rpc.md",
+    FEATURES["socket"]: "docs/api/socket.md",
+    FEATURES["websocket"]: "docs/api/websocket-client.md",
+    FEATURES["wifi"]: "docs/api/wifi.md",
+    FEATURES["wifiCsi"]: "docs/api/wifi-csi.md",
+    FEATURES["espNow"]: "docs/api/esp-now.md",
+    FEATURES["ble"]: "docs/api/ble.md",
+    FEATURES["net"]: "docs/api/net.md",
+    FEATURES["http"]: "docs/api/http.md",
+    FEATURES["httpServer"]: "docs/api/http.md",
+    FEATURES["runtimeLogs"]: "docs/api/runtime-logs.md",
+    FEATURES["bitmap"]: "docs/api/bitmap.md",
+    FEATURES["bitmapJpeg"]: "docs/api/bitmap-jpeg.md",
+}
+
+OWNER_DOCUMENTS = {
+    "Global Helpers": "docs/api/global-helpers.md",
+    "Future": "docs/api/futures.md",
+    "EventQueue": "docs/api/event-queues.md",
+    "Stream": "docs/api/stream.md",
+    "ByteView": "docs/api/runtime.md",
+    "ByteSpanSource": "docs/api/stream.md",
+    "Headers": "docs/api/http-types.md",
+    "Request": "docs/api/http-types.md",
+    "Response": "docs/api/http-types.md",
+    "sys": "docs/api/sys.md",
+    "sys.time": "docs/api/sys.md",
+    "framework": "docs/api/global-helpers.md",
 }
 
 # table: (surface, TypeScript declaration, feature, documentation owner token)
@@ -151,7 +195,7 @@ SURFACES = {
     "js_wifi_csi_batch_proto": (
         "WiFiCsiBatch.prototype", "WiFiCsiBatch", "wifiCsi", "WiFiCsiBatch"
     ),
-    "js_wifi_csi": ("wifiCsi", "WiFiCsiModule", "wifiCsi", "wifiCsi"),
+    "js_wifi_csi": ("wifi.csi", "WiFiCsiModule", "wifiCsi", "wifi.csi"),
     "js_espnow_session_proto": (
         "EspNowSession.prototype", "EspNowSession", "espNow", "EspNowSession"
     ),
@@ -512,6 +556,20 @@ def feature_name(surface: str, method: str, default: str) -> str:
     return CORE if feature == CORE else FEATURES[feature]
 
 
+def documentation_file(feature: str, owner: str, surface: str, name: str) -> str:
+    if surface == "global" and name in {
+        "setTimeout", "clearTimeout", "setInterval", "clearInterval"
+    }:
+        return "docs/api/timers.md"
+    if owner in OWNER_DOCUMENTS:
+        return OWNER_DOCUMENTS[owner]
+    if feature in FEATURE_DOCUMENTS:
+        return FEATURE_DOCUMENTS[feature]
+    raise ValueError(
+        f"missing shared API document mapping for {surface}.{name} ({feature}, {owner})"
+    )
+
+
 def function_entry(
     *,
     table: str,
@@ -526,6 +584,7 @@ def function_entry(
 ) -> dict[str, object]:
     qualified = name if surface == "global" else f"{surface}.{name}"
     key = (surface, name)
+    resolved_feature = feature_name(surface, name, feature)
     visibility = "internal" if key in INTERNAL_METHODS else "public"
     registration = FUTURE_REGISTRATIONS.get(key)
     if registration is not None:
@@ -543,7 +602,7 @@ def function_entry(
         "arity": arity,
         "implementation": implementation,
         "visibility": visibility,
-        "feature": feature_name(surface, name, feature),
+        "feature": resolved_feature,
         "execution": execution,
         "stdlib": {"file": source_file, "table": table},
         "typescript": {
@@ -551,7 +610,7 @@ def function_entry(
             "declaration": declaration,
         },
         "documentation": {
-            "file": "docs/c-api.md",
+            "file": documentation_file(resolved_feature, docs_owner, surface, name),
             "ownerToken": docs_owner,
         },
     }
@@ -623,6 +682,7 @@ def build_manifest() -> dict[str, object]:
     classes: list[dict[str, object]] = []
     for class_name, (global_name, declaration, feature, docs_owner) in CLASSES.items():
         parsed_class = parsed_classes[class_name]
+        resolved_feature = CORE if feature == CORE else FEATURES[feature]
         classes.append(
             {
                 "name": class_name,
@@ -630,7 +690,7 @@ def build_manifest() -> dict[str, object]:
                 "arity": parsed_class["arity"],
                 "implementation": parsed_class["implementation"],
                 "classId": parsed_class["classId"],
-                "feature": CORE if feature == CORE else FEATURES[feature],
+                "feature": resolved_feature,
                 "stdlib": {
                     "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
                     "definition": parsed_class["definition"],
@@ -640,7 +700,9 @@ def build_manifest() -> dict[str, object]:
                     "declaration": declaration,
                 },
                 "documentation": {
-                    "file": "docs/c-api.md",
+                    "file": documentation_file(
+                        resolved_feature, docs_owner, global_name, class_name
+                    ),
                     "ownerToken": docs_owner,
                 },
             }
@@ -706,11 +768,27 @@ def extract_c_function(source: str, function: str) -> str:
 def validate_manifest(manifest: dict[str, object]) -> list[str]:
     errors: list[str] = []
     types = TYPES_PATH.read_text(encoding="utf-8")
-    docs = DOCS_PATH.read_text(encoding="utf-8")
     kconfig = KCONFIG_PATH.read_text(encoding="utf-8")
     declaration_cache: dict[str, str] = {}
+    documentation_cache: dict[str, str] = {}
     function_cache: dict[tuple[str, str], str] = {}
     stdlib = STDLIB_PATH.read_text(encoding="utf-8")
+    docs_manifest = json.loads(DOCS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    listed_documents = {
+        f"docs/{entry['path']}" for entry in docs_manifest["docs"]
+    }
+
+    def documentation(entry: dict[str, object]) -> str:
+        path = str(entry["documentation"]["file"])  # type: ignore[index]
+        if path not in listed_documents:
+            errors.append(f"{path}: API document is not listed in docs/api/docs.json")
+        try:
+            return documentation_cache.setdefault(
+                path, (ROOT / path).read_text(encoding="utf-8")
+            )
+        except OSError as error:
+            errors.append(f"{path}: cannot read API document: {error}")
+            return ""
 
     for raw_class in manifest["classes"]:  # type: ignore[index]
         class_entry = raw_class  # type: ignore[assignment]
@@ -728,8 +806,8 @@ def validate_manifest(manifest: dict[str, object]) -> list[str]:
         if f'JS_PROP_CLASS_DEF("{global_name}", &{definition})' not in stdlib:
             errors.append(f"{name}: class is not registered as global {global_name}")
         owner_token = str(class_entry["documentation"]["ownerToken"])  # type: ignore[index]
-        if owner_token not in docs:
-            errors.append(f"{name}: missing C API documentation owner {owner_token}")
+        if owner_token not in documentation(class_entry):
+            errors.append(f"{name}: missing API documentation owner {owner_token}")
         if feature != CORE:
             symbol = feature.removeprefix("CONFIG_")
             if f"config {symbol}" not in kconfig:
@@ -766,10 +844,11 @@ def validate_manifest(manifest: dict[str, object]) -> list[str]:
                     f"{qualified}: missing method in TypeScript {declaration}"
                 )
             owner_token = str(entry["documentation"]["ownerToken"])  # type: ignore[index]
+            docs = documentation(entry)
             if owner_token not in docs:
                 errors.append(f"{qualified}: missing documentation owner {owner_token}")
             if re.search(rf"\b{re.escape(name)}\s*\(", docs) is None:
-                errors.append(f"{qualified}: missing callable in C API docs")
+                errors.append(f"{qualified}: missing callable in shared API docs")
 
         if entry["execution"] == "nativeFuture":
             registration = entry["futureRegistration"]  # type: ignore[index]

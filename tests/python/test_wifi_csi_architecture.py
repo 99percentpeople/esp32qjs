@@ -16,10 +16,11 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         feature = {item["id"]: item for item in catalog["features"]}["wifi_csi"]
         kconfig = (MQUICKJS / "Kconfig.projbuild").read_text(encoding="utf-8")
 
-        self.assertEqual(feature["requires"], ["wifi_radio"])
+        self.assertEqual(feature["requires"], ["wifi"])
         self.assertEqual(feature["targets"], ["esp32c3", "esp32c5", "esp32s3"])
         self.assertEqual(feature["sdkconfig"], ["CONFIG_ESP_WIFI_CSI_ENABLED=y"])
         self.assertIn("config ESP32_MQUICKJS_FEATURE_WIFI_CSI", kconfig)
+        self.assertIn("depends on ESP32_MQUICKJS_FEATURE_WIFI", kconfig)
         self.assertIn("range 2 128", kconfig)
         self.assertIn("range 128 4096", kconfig)
         self.assertIn("ESP32_MQUICKJS_WIFI_CSI_ALLOW_PROMISCUOUS", kconfig)
@@ -221,8 +222,7 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
 
     def test_public_contract_is_present_in_types_docs_manifest_generator(self):
         types = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(encoding="utf-8")
-        docs = (ROOT / "docs/c-api.md").read_text(encoding="utf-8")
-        ai_docs = (ROOT / "docs/ai/wireless.md").read_text(encoding="utf-8")
+        docs = (ROOT / "docs/api/wifi-csi.md").read_text(encoding="utf-8")
         generator = (ROOT / "scripts/generate_api_manifest.py").read_text(
             encoding="utf-8"
         )
@@ -235,15 +235,30 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
             "class WiFiCsiSession",
             "class WiFiCsiFrame",
             "class WiFiCsiBatch",
-            "var wifiCsi: ESP32QJS.WiFiCsiModule",
+            "readonly csi: WiFiCsiModule",
         ):
             self.assertIn(token, types)
-        self.assertIn("## `wifiCsi` Module", docs)
-        self.assertIn("## Wi-Fi CSI", ai_docs)
+        self.assertNotIn("var wifiCsi: ESP32QJS.WiFiCsiModule", types)
+        self.assertIn("# Wi-Fi CSI", docs)
+        wifi_table = stdlib[
+            stdlib.index("static const JSPropDef js_wifi[]") :
+            stdlib.index("static const JSClassDef js_wifi_obj")
+        ]
+        globals_table = stdlib[
+            stdlib.index("static const JSPropDef js_global_object_extra[]") :
+        ]
+        self.assertIn('JS_PROP_CLASS_DEF("csi", &js_wifi_csi_obj)', wifi_table)
+        self.assertNotIn(
+            'JS_PROP_CLASS_DEF("wifiCsi", &js_wifi_csi_obj)', globals_table
+        )
         self.assertIn('JS_CGETSET_MAGIC_DEF("wifiCsi", js_sys_feature_get',
                       stdlib)
         self.assertIn('"wifiCsi": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI"',
                       generator)
+        self.assertIn(
+            '"js_wifi_csi": ("wifi.csi", "WiFiCsiModule", "wifiCsi", "wifi.csi")',
+            generator,
+        )
 
     def test_batch_protocol_is_fixed_little_endian_and_has_a_host_parser(self):
         source = (MODULE / "esp32_mquickjs_wifi_csi.c").read_text(

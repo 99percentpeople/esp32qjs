@@ -78,6 +78,8 @@ test("espnow/offline", function () {
     test.equal(status.peerCount, 0, "a new session should have no application peers");
     test.equal(status.pendingSends, 0, "a new session should have no pending sends");
     test.equal(status.txRecovering, false, "a new session should not be recovering");
+    test.equal(status.recoveryRequired, false,
+      "a new session should not require ESP-NOW recovery");
     test.equal(status.broadcastRateConfig.phyMode, "ht20",
       "session status should preserve the broadcast PHY mode");
     test.equal(status.broadcastRateConfig.mcs, 0,

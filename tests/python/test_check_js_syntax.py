@@ -86,10 +86,10 @@ class JavaScriptSyntaxToolTests(unittest.TestCase):
             )
 
             self.assertGreater(len(snippets), 0)
-            c_api_snippets = [path for path in snippets if "c-api.md" in path.name]
-            self.assertGreater(len(c_api_snippets), 0)
-            content = c_api_snippets[0].read_text(encoding="utf-8")
-            marker = int(c_api_snippets[0].stem.rsplit("_", 1)[-1])
+            api_snippets = [path for path in snippets if "global-helpers.md" in path.name]
+            self.assertGreater(len(api_snippets), 0)
+            content = api_snippets[0].read_text(encoding="utf-8")
+            marker = int(api_snippets[0].stem.rsplit("_", 1)[-1])
             self.assertTrue(content.startswith("\n" * (marker - 1)))
 
     def test_extra_document_directory_is_discovered(self):

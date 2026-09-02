@@ -24,8 +24,7 @@ DEFAULT_SOURCE_ROOTS = (
 )
 DEFAULT_DOCUMENTS = (
     ROOT_DIR / "README.md",
-    ROOT_DIR / "docs" / "c-api.md",
-    *sorted((ROOT_DIR / "docs" / "ai").glob("*.md")),
+    *sorted((ROOT_DIR / "docs" / "api").glob("*.md")),
 )
 
 

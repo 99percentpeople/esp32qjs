@@ -2122,7 +2122,7 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         gpio = (
             MQUICKJS / "src/modules/gpio/esp32_mquickjs_gpio.c"
         ).read_text(encoding="utf-8")
-        docs = (ROOT / "docs/c-api.md").read_text(encoding="utf-8")
+        docs = (ROOT / "docs/api/gpio.md").read_text(encoding="utf-8")
 
         self.assertIn("JS_IsNumber(ctx, value)", gpio)
         self.assertIn("gpio.watch(pin, mode = gpio.CHANGE)", docs)

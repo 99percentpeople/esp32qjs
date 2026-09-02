@@ -144,21 +144,23 @@ class TlsArchitectureTests(SourceContractTestCase):
         declarations = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
             encoding="utf-8"
         )
-        docs = (ROOT / "docs/c-api.md").read_text(encoding="utf-8")
+        sys_docs = (ROOT / "docs/api/sys.md").read_text(encoding="utf-8")
+        wifi_docs = (ROOT / "docs/api/wifi.md").read_text(encoding="utf-8")
+        socket_docs = (ROOT / "docs/api/socket.md").read_text(encoding="utf-8")
 
         self.assertIn("interface SysTimeSyncOptions", declarations)
         self.assertIn("interface SysTimeStatus", declarations)
         self.assertIn("sync(options: SysTimeSyncOptions)", declarations)
         self.assertIn("Integer timeout from 1 through 60000", declarations)
-        self.assertIn("timeoutMs` is an integer from 1 through 60000", docs)
-        self.assertIn('error.code === "TIME_SYNC_BUSY"', docs)
+        self.assertIn("timeoutMs` is an integer from 1 through 60000", sys_docs)
+        self.assertIn('error.code === "TIME_SYNC_BUSY"', sys_docs)
         self.assertIn("TIME_SYNC_BUSY if another operation is active", declarations)
         self.assertNotIn("interface WiFiTimeSyncOptions", declarations)
-        self.assertIn("largestFreeBlockBytes", docs)
-        self.assertIn("minimumFreeBytes", docs)
-        self.assertIn("active network attacker", docs)
-        self.assertIn("physical memory access", docs)
-        self.assertNotIn("insecure: true", docs)
+        self.assertIn("largestFreeBlockBytes", sys_docs)
+        self.assertIn("minimumFreeBytes", sys_docs)
+        self.assertIn("active network attacker", wifi_docs)
+        self.assertIn("physical memory access", socket_docs)
+        self.assertNotIn("insecure: true", sys_docs + wifi_docs + socket_docs)
 
 
 if __name__ == "__main__":
