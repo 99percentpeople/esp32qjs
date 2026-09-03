@@ -9,7 +9,8 @@
 - `i2c.DEFAULT_TIMEOUT_MS`
   Default transfer timeout in milliseconds.
 - `i2c.openBus(options?)`
-  Open an I2C master controller and return an `I2CBus`. `options` can include `{ sda, scl, freqHz, timeoutMs, internalPullup }`. The legacy `i2c.open()` entry point is not part of the v1 contract.
+  Open an I2C master controller and return an `I2CBus`. `options` can include
+  `{ sda, scl, freqHz, timeoutMs, internalPullup }`.
 
 `I2CBus` methods:
 

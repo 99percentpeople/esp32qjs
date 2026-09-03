@@ -3,9 +3,8 @@
 `rpc` is exposed only when `sys.info.features.rpc` is enabled. It is a generic
 `esp32qjs.rpc/1` connection codec: COBS record framing, CRC-32 corruption
 detection, deterministic CBOR, incremental reassembly, and transparent
-`ByteSpanSource` streaming. The framework does not define opcodes, request
-dispatch, authentication, authorization, retries, queues, workspace paths, or
-an application schema.
+`ByteSpanSource` streaming. Applications supply the field map, opcodes,
+dispatch, security, queueing, and persistence policy layered over the codec.
 
 - `rpc.createCodec(options)`
   Create and return an `RPCCodec` object. `options.fields` is the
@@ -13,9 +12,9 @@ an application schema.
   keys. `dynamicFields` optionally names fields whose nested JSON-like maps use
   CBOR text keys exclusively, including numeric-looking JavaScript property
   names. `allowStringKeys` applies the same text-key rule at the root when true.
-  `streamDirectory` optionally selects where incoming transparent streams are
-  spooled; without it, that codec rejects streamed input. `close()` releases
-  the codec after all of its decoders have been closed.
+  `streamDirectory` selects where incoming transparent streams are spooled and
+  is required for streamed input. `close()` releases the codec after all of its
+  decoders have been closed.
 - `codec.createDecoder()`
   Create an `RPCDecoder` object for incremental connection state. Keep one
   decoder per physical connection; each decoder accepts arbitrary input chunk
@@ -23,8 +22,8 @@ an application schema.
   the same cleanup if application code drops the object.
 - `decoder.feed(data)`
   Feed one raw transport chunk and return zero or more complete
-  `{ opcode, requestId, flags, logicalLength, payload }` messages. The caller
-  never parses or reassembles segments.
+  `{ opcode, requestId, flags, logicalLength, payload }` messages after native
+  framing, validation, and reassembly.
 - `decoder.reset()` / `decoder.status()`
   Discard an incomplete message and any temporary streamed input while keeping
   the decoder object, or inspect its message/error and active-stream counters.
@@ -44,16 +43,17 @@ an application schema.
   for Bitmap, camera, CSI, codec-output, and other `ByteSpanSource` producers.
 - `rpc.adoptFile(source, path)`
   Atomically rename an unused inbound temporary stream to an
-  application-selected destination. It does not impose a workspace policy.
+  application-selected destination.
 - `rpc.status()`
   Return the wire protocol name and aggregate codec, decoder, message, and
   error counters.
 
-The codec accepts only the deterministic, definite-length CBOR subset. It
-rejects tags, indefinite values, duplicate/non-canonical map keys, invalid
+The codec uses the deterministic, definite-length CBOR subset. It rejects tags,
+indefinite values, duplicate/non-canonical map keys, invalid
 UTF-8, non-finite floats, excessive nesting, trailing data, interleaved logical
-messages, and invalid frame CRCs. CRC-32 detects accidental transport or
-storage corruption; it is not authentication.
+messages, and invalid frame CRCs. CRC-32 provides transport and storage
+corruption detection; the surrounding application protocol supplies peer
+authentication.
 
 ```js
 var codec = rpc.createCodec({
@@ -74,5 +74,5 @@ codec.close();
 ```
 
 The public C wire contract and incremental decoder are declared in
-`include/esp32qjs_rpc_wire.h`, so a firmware application may use the framing
-layer without adopting the JavaScript Agent product.
+`include/esp32qjs_rpc_wire.h` for native firmware applications that use the
+same framing layer.

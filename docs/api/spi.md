@@ -57,7 +57,9 @@
 - `device.writeChunks(chunks, options?)`
   Queue an array-like list of byte-source spans for write-only SPI transfers. `options.queueDepth` defaults to `2` and is capped by the device queue size and the two fixed staging slots; `options.timeoutMs` overrides the device default. Internal DMA sources are direct, external DMA sources are direct only when `directExternalDma` is enabled, and all other sources use the bus staging workspace. The method returns `{ bytes, sourceSpans, transactions, path, stagedBytes, copyUs, queueUs, waitUs, transferUs, totalUs, queueDepth }`; `path` is `direct-internal`, `direct-external`, `staged-internal`, or `mixed`.
 - `device.writeSource(source, options?)`
-  Queue spans from a retained native `ByteSpanSource`, such as `Bitmap.createSpanSource(...)`, without materializing a JavaScript chunk array. SPI treats the source as a generic transport capability; it does not inspect Bitmap internals. `options.queueDepth` and the returned stats object match `writeChunks(...)`.
+  Queue spans from a retained native `ByteSpanSource`, such as
+  `Bitmap.createSpanSource(...)`, through its generic transport capability.
+  `options.queueDepth` and the returned stats object match `writeChunks(...)`.
 - `device.read(length, { fillByte = 0, timeoutMs? }?)`
   Clock `length` bytes and return an owned `ByteView` from MISO. `fillByte`
   controls the dummy value shifted out on MOSI while reading.
@@ -82,7 +84,7 @@ overall deadline. At each runtime poll SPI first drains every completion that
 ESP-IDF has already published, then evaluates the no-progress deadline. A late
 runtime poll therefore does not turn completed DMA work into a timeout; the
 deadline expires only while an in-flight transaction still has no observable
-completion. SPI does not retry with a different frequency, chunk size, or
+completion. Each operation keeps its requested frequency, chunk size, and
 memory path. Structured failures use `DMA_STAGING_NO_MEMORY`,
 `DMA_TX_UNDERFLOW`, `DMA_RX_OVERFLOW`, `DMA_TRANSFER_TIMEOUT`, or
 `DMA_DEVICE_FAULTED`. Their `details` include the ESP error, completed byte

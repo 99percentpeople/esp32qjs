@@ -2,8 +2,8 @@
 
 `net` is exposed when `sys.info.features.net` is enabled. It initializes the
 shared ESP-NETIF runtime and observes every interface registered by Wi-Fi,
-Ethernet, PPP, or an embedding application. It does not create link drivers,
-store credentials, connect an interface, or test Internet reachability.
+Ethernet, PPP, or an embedding application. It reports converged interface,
+address, route, and readiness state through snapshots and event queues.
 
 - `net.status()`
   Return `{ ready, primaryInterface, interfaces, truncated }`. Each interface

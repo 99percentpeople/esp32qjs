@@ -72,7 +72,8 @@ applications so the current JavaScript call stack does not wait.
   `capacity` must be in `1..64`. Each port permits one watcher. Closing the
   watcher leaves the port open.
 
-Watcher events do not contain received payload bytes. A readable event is
+Watcher events report readiness and hardware-error metadata; payload bytes are
+consumed separately through `port.read(...)`. A readable event is
 `{ type: "readable", sequence, timestampUs, availableBytes, reason }`, where
 `reason` is `"threshold"` or `"idle"`. Error events are
 `{ type: "error", sequence, timestampUs, code }`, with `code` equal to

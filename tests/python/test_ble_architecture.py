@@ -67,6 +67,30 @@ class BLEArchitectureTests(unittest.TestCase):
         ):
             self.assertIn(f"select {symbol}", kconfig)
 
+    def test_public_document_covers_precise_ble_call_and_event_contracts(self):
+        document = (ROOT / "docs" / "api" / "ble.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertLessEqual(len(document.encode("utf-8")), 12_288)
+        for contract in (
+            "ble.capabilities() -> {",
+            "ble.open(options?: {",
+            "adapter.scan(options?: {",
+            'eventType: "advertisement" | "scan-response" | "directed-advertisement"',
+            "adapter.advertise(options: {",
+            "data: ByteSource",
+            "adapter.connect(peer: BLEAddress, options?: {",
+            "connection.discover(options?: {",
+            "connection.readHandle(handle, {",
+            "connection.writeHandle(handle, data: ByteSource, {",
+            "connection.subscribeHandle(valueHandle, cccdHandle, {",
+            "BLEGattServerDefinition = {",
+            'type: "pairing-request"',
+            'type: "subscription"',
+        ):
+            self.assertIn(contract, document)
+
     def test_gap_callbacks_use_fixed_pools_without_js_or_allocation(self):
         source = self.source()
         callback_start = source.index(

@@ -18,7 +18,7 @@ and `pins: { bclk, ws, din?, dout?, mclk? }`. RX requires `din`, TX requires
 Formats are `philips`, `msb`, `pcmShort`, and `pcmLong`. PDM accepts only
 `direction: "rx"` with `pins: { clk, din }`, or uses explicitly selected
 hardware constants. PDM output is signed 16-bit little-endian mono PCM; raw PDM
-is not exposed.
+samples are converted by the native driver into this PCM representation.
 
 `I2SChannel` methods:
 

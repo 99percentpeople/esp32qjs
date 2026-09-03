@@ -16,8 +16,8 @@ native operational failures use one v1 shape:
 
 `code` is the stable programmatic discriminator, `operation` identifies the
 failed native operation, and every module-specific numeric or status field is
-nested under `details`. The sole v1 contract has no legacy top-level detail
-aliases. Error details exclude payload bytes, Wi-Fi passwords, BLE/ESP-NOW
-keys, certificate contents, and other secrets. The exact module unions are
+nested under `details`. Error details contain bounded operational metadata and
+exclude payload bytes, Wi-Fi passwords, BLE/ESP-NOW keys, certificate contents,
+and other secrets. The exact module unions are
 declared by `NativeError`, `SPIError`, `TlsError`, `WiFiError`, `EspNowError`,
 `BLEError`, and `HTTPError` in `types/esp32qjs-c-api.d.ts`.

@@ -1,25 +1,23 @@
 # `socket` Module
 
 `socket` is exposed when `sys.info.features.socket` is enabled. It provides
-bounded TCP/UDP socket objects. Verified outbound TLS streams are
-available only when the separately selectable `sys.info.features.tls` build
-capability is enabled. The framework does not add line framing, reconnect
-policy, authentication, or an application protocol.
+bounded TCP/UDP socket objects, asynchronous DNS resolution, raw byte-stream
+and datagram operations, and optional verified outbound TLS when
+`sys.info.features.tls` is enabled.
 
 - `socket.openTCP(options = {})`
   Return a `TCPSocket`. `options.localPort` binds the local port. For an
   outbound verified TLS client, use `socket.openTCP({ tls: true })`; TLS uses
-  the system CA certificate
-  bundle, verifies the DNS name and certificate validity dates, and does not
-  support a fixed local port. When the TLS capability is omitted, requesting
-  `tls: true` fails before allocating a socket object.
+  the system CA certificate bundle and verifies the DNS name and certificate
+  validity dates. TLS clients use the stack-selected local port. Requesting
+  `tls: true` requires the TLS capability.
 - `socket.listenTCP({ localPort, backlog = 4 })`
   Bind and return a `TCPListener`.
 - `socket.openUDP(options = {})`
   Bind and return a `UDPSocket`; `options.localPort` defaults to `0`.
 - `socket.MAX_TRANSFER_BYTES`
-  Is the maximum bytes accepted by one datagram or stream chunk. TCP itself
-  has no message boundary.
+  Is the maximum bytes accepted by one datagram or stream chunk. TCP receive
+  calls return the raw chunks currently available from the byte stream.
 - `tcp.connect(remoteHost, remotePort, { timeoutMs = 5000 } = {})`
   Connect a `TCPSocket`. The host string may be an IP address or DNS name. DNS
   resolution is dispatched through the asynchronous lwIP resolver, so a slow
@@ -36,14 +34,14 @@ policy, authentication, or an application protocol.
   are bounded by `CONFIG_ESP32_MQUICKJS_SOCKET_MAX_SOURCE_BYTES` (1 MiB by
   default) without requiring a single contiguous copy.
 - `tcp.recv(maxBytes = socket.MAX_TRANSFER_BYTES, timeoutMs = 0)`
-  Return one raw stream chunk or `null`. TCP has no message boundaries.
+  Return one currently available raw stream chunk or `null`.
 - `udp.sendTo(remoteHost, remotePort, data)`
   Send one UDP datagram. DNS names use the same asynchronous resolver path.
 - `udp.receiveFrom(maxBytes = socket.MAX_TRANSFER_BYTES, timeoutMs = 0)`
   Return `{ data, remoteHost, remotePort }` or `null`.
 - `socketObject.status()`
   Return protocol, local/remote endpoint, connected/listening state, peer-close
-  state, and byte counters. Internal IDs are never exposed.
+  state, and byte counters.
 - `socketObject.close()`
   Request cancellation of pending operations and release the socket after each
   driver confirms completion. The first call returns `true`; repeated calls
@@ -78,7 +76,7 @@ Verified TLS failures from raw sockets and HTTPS fetches carry a stable `code`
 of `TLS_ALLOC_FAILED`, `TLS_TIME_INVALID`, `TLS_VERIFY_FAILED`,
 `TLS_HANDSHAKE_FAILED`, or `TLS_TIMEOUT`. `details.operationError`,
 `details.espTlsError`, `details.mbedtlsError`, and `details.verifyFlags` retain
-the numeric diagnostics. Certificate contents and secrets are not included.
+bounded numeric diagnostics.
 Close or cancel always releases the per-connection TLS context.
 PSRAM profiles retain the standard 16 KiB RX and 4 KiB TX records while placing
 mbedTLS allocations in external RAM; non-PSRAM profiles continue to use

@@ -1,9 +1,9 @@
 # `rmt` Module
 
 `rmt` is exposed when `sys.info.features.rmt` is true. It provides bounded
-hardware pulse symbols and RX/TX channel lifecycle only. Protocols such as NEC,
-device-specific pulse interpretation, and board policy remain in application
-JavaScript.
+hardware pulse-symbol buffers, RX/TX channel lifecycle, finite-loop transmit,
+timestamped receive, and Future-backed operation queues. Application
+JavaScript composes protocol encoders and decoders from these primitives.
 
 - `rmt.capabilities()`
   Return target-dependent DMA support, the minimum hardware memory block, the

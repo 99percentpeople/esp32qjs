@@ -1,8 +1,8 @@
 # `runtimeLogs` Module
 
 When `sys.info.features.runtimeLogs` is enabled, `runtimeLogs` exposes the
-bounded native log ring used by headless applications. It is a diagnostics
-transport, not a persistence API.
+bounded native log ring used by headless applications, including boot identity,
+source-tagged chunks, resumable sequence reads, and overflow accounting.
 
 - `runtimeLogs.read(afterSequence, limit, maxBytes)`
   Return `{ bootId, entries, dropped }`. Each entry contains

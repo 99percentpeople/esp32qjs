@@ -1,6 +1,7 @@
 # `dac` Module
 
-This module exposes ESP-IDF DAC oneshot primitives and GPIO/channel mapping helpers. It is registered only on boards that compile with the `dac` feature enabled.
+This module exposes ESP-IDF DAC oneshot primitives and GPIO/channel mapping
+helpers when the Board compiles with the `dac` feature enabled.
 
 - `dac.CHANNEL_0`, `dac.CHANNEL_1`
   DAC channel identifiers accepted by `dac.open(...)`, `dac.close(...)`, `dac.status(...)`, `dac.write(...)`, and `dac.channelToIo(...)`.

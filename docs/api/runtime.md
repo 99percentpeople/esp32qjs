@@ -2,31 +2,64 @@
 
 ## Runtime boundaries
 
-Do not infer one JavaScript environment from another repository directory.
-
-| Code location                                                      | Runtime                    | Constraints                                                                                           |
-| ------------------------------------------------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `exec`, `/workspace/*.js`, Build Context `flash_data/**/*.js` | Vendored MQuickJS on ESP32 | ES5-like source, feature-gated ESP32QJS globals, no Node.js or browser environment                    |
-| `web/`, host-side Agent code, host tests                         | Bun/TypeScript             | Modern JavaScript/TypeScript and allowlisted host APIs; never send this source directly to the device |
-| `firmware/` native modules                                       | ESP-IDF C/C++ and FreeRTOS | Native ownership, task, heap, and driver rules; these are not JavaScript APIs until explicitly bound  |
-
-The ESP32 runs one active MQuickJS runtime. Device code is trusted application
-code, but it is not a Node.js process, browser, ECMAScript-module loader, or
-untrusted-code sandbox. Optional globals exist only when the corresponding
-firmware feature is compiled; check `sys.info.features` before use.
+ESP32QJS runs one active vendored MQuickJS runtime for trusted device
+application code. Build Context `flash_data/**/*.js`, installed application
+scripts, and interactive evaluation share the same ES5-like language profile
+and feature-gated ESP32QJS globals. Native modules execute in ESP-IDF/FreeRTOS
+and publish their JavaScript surface through explicit bindings. Check
+`sys.info.features` before using an optional global.
 
 ## Language
 
-The device runs a vendored MQuickJS ES5-like dialect. Use `var`, ordinary
-functions, function expressions, arrays, plain objects, `try`/`catch`/`finally`,
-and supported built-ins.
+The device source profile uses `var`, ordinary functions and function
+expressions, arrays, plain objects, `try`/`catch`/`finally`, and the documented
+built-ins. Script composition uses `load()` and `framework.load()`.
+Asynchronous and binary work uses the documented `Future`, `EventQueue`, and
+`ByteView` APIs. Generate device code entirely from this profile and the
+globals present in the current Artifact documentation index.
 
-Do not emit `const`, `let`, classes, arrow functions, template literals,
-destructuring, spread/rest syntax, optional chaining, nullish coalescing,
-generators, async/await, `import`, or `export`. Do not use `require`, `process`,
-Node `Buffer`, DOM APIs, or other assumed host globals. Use ESP32QJS APIs such
-as `ByteView`, `Future`, `EventQueue`, `load`, and `framework.load` only when
-their documented feature is present.
+### Built-in objects and methods
+
+The vendored standard library provides this concrete built-in surface:
+
+- `Object`: `defineProperty`, `getPrototypeOf`, `setPrototypeOf`, `create`, and
+  `keys`; instances provide `hasOwnProperty()` and `toString()`.
+- `Function` instances: `call()`, `apply()`, `bind()`, `toString()`, `length`,
+  and `name`.
+- `Number`: `parseInt`, `parseFloat`, numeric constants, and the instance
+  methods `toExponential()`, `toFixed()`, `toPrecision()`, and `toString()`.
+- `String`: `fromCharCode` and `fromCodePoint`; instances provide `charAt()`,
+  `charCodeAt()`, `codePointAt()`, `slice()`, `substring()`, `concat()`,
+  `indexOf()`, `lastIndexOf()`, `match()`, `replace()`, `replaceAll()`,
+  `search()`, `split()`, `toLowerCase()`, `toUpperCase()`, `trim()`,
+  `trimStart()`, `trimEnd()`, `repeat()`, and `toString()`.
+- `Array`: `isArray`; instances provide `concat()`, `push()`, `pop()`,
+  `join()`, `reverse()`, `shift()`, `unshift()`, `slice()`, `splice()`,
+  `indexOf()`, `lastIndexOf()`, `every()`, `some()`, `forEach()`, `map()`,
+  `filter()`, `reduce()`, `reduceRight()`, `sort()`, and `toString()`.
+- `Math`: `min`, `max`, `sign`, `abs`, `floor`, `ceil`, `round`, `sqrt`,
+  `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `exp`, `log`, `pow`,
+  `random`, `imul`, `clz32`, `fround`, `trunc`, `log2`, and `log10`, together
+  with the standard `E`, logarithm, `PI`, and square-root constants.
+- `JSON`: `parse()` and `stringify()`.
+- `RegExp`: construction from a pattern and flags; instances provide
+  `lastIndex`, `source`, `flags`, `exec()`, and `test()`. String `match()`,
+  `replace()`, `replaceAll()`, `search()`, and `split()` accept regular
+  expressions.
+- `Date`: `new Date(...)`, `Date.now()`, and instance `valueOf()`. Use the
+  millisecond number returned by `valueOf()` when serializing device time.
+- `ArrayBuffer` and `Uint8ClampedArray`, signed and unsigned 8/16/32-bit typed
+  arrays, plus `Float32Array` and `Float64Array`. Typed arrays provide
+  `length`, `byteLength`, `byteOffset`, `buffer`, `join()`, `toString()`,
+  `subarray()`, and `set()`.
+- `Error`, `EvalError`, `RangeError`, `ReferenceError`, `SyntaxError`,
+  `TypeError`, `URIError`, and `InternalError`; error values expose `name`,
+  `message`, `stack`, and `toString()`.
+- Global `parseInt()`, `parseFloat()`, `eval()`, `isNaN()`, and `isFinite()`,
+  plus `console.log()` and monotonic `performance.now()`.
+
+ESP32QJS globals such as `sys`, `Future`, `EventQueue`, and `ByteView` extend
+this built-in surface according to the selected native features.
 
 ## `ByteView`
 
@@ -81,37 +114,9 @@ editing a large function.
 
 ### Syntax validation
 
-The host validates `exec` code and complete `.js` content produced by `write`
-or `edit` with the exact vendored MQuickJS parser before dispatch or mutation.
-`JAVASCRIPT_SYNTAX_ERROR` means the device call or file mutation did not start;
-fix the reported source instead of retrying it unchanged. Node, Bun, TypeScript,
-and browser parsers are not syntax authorities for device code.
-
-## `exec({code, timeout?})`
-
-- `code`: 1–4096 UTF-8 bytes of device JavaScript.
-- `timeout`: optional host deadline in milliseconds, 1–60000; default 10000.
-- The host validates source with the vendored MQuickJS parser before sending an
-  `exec`; a syntax failure means no device operation was dispatched.
-- The final expression is serialized as the result. A top-level `return` is invalid.
-- Valid results are primitives or JSON-compatible values. Native handles, cycles, and large buffers must be projected to small plain objects.
-- `print()` produces a device log; it is not the tool result.
-
-Use an IIFE for multi-statement inspection:
-
-```js
-(function () {
-    var chip = sys.info.hardware.chip;
-    return {
-        mcu: sys.info.hardware.target,
-        chip: chip.model,
-        freeHeap: sys.freeHeap(),
-        wifi: sys.info.features.wifi
-    };
-})()
-```
-
-An undefined final expression returns `{ "kind": "undefined" }`. This means execution succeeded. If a value was needed, issue one corrected read-only call; never automatically repeat a mutation.
+Device-bound `.js` source is validated with the exact vendored MQuickJS parser
+before installation or execution. `JAVASCRIPT_SYNTAX_ERROR` identifies source
+that does not match this runtime dialect.
 
 ## `Future`
 
@@ -161,9 +166,8 @@ the current JavaScript turn returns.
   the operation to finish. Callbacks that run during that wait cannot close or
   mutate leased Bitmap, CameraFrame, or ByteView values; such attempts fail
   with a busy error. Panel transfer remains synchronous to the display driver.
-- Always pass finite API timeouts. The host `exec` deadline and
-  `sys.withTimeout()` are wall-clock bounds; cancellation remains cooperative,
-  and an uncertain mutation must not be replayed automatically.
+- Pass finite API timeouts. `sys.withTimeout()` adds an outer wall-clock bound;
+  cancellation remains cooperative.
 
 ## `EventQueue`
 
@@ -173,9 +177,9 @@ constructed directly.
 - `receive(timeoutMs?)`: synchronously wait for the next event or return `null`
   at timeout.
 - `close()`: stop delivery and release the queue.
-- Concrete sources may add operations, but repeated input consistently uses
-  `receive(timeoutMs?)`; the old transport-specific `recv()` alias does not
-  exist. WebSocket and USB Serial handles also expose `send()` and `status()`.
+- Concrete sources may add operations, while repeated input consistently uses
+  `receive(timeoutMs?)`. WebSocket and USB Serial handles also expose `send()`
+  and `status()`.
 
 Always close queues that persistent code owns.
 
@@ -184,7 +188,7 @@ Always close queues that persistent code owns.
 - `setTimeout(fn, delayMs)` / `clearTimeout(handle)`
 - `setInterval(fn, intervalMs)` / `clearInterval(handle)`
 
-Store timer IDs and clear them during application cleanup. Avoid leaving detached one-off work after `exec`.
+Store timer IDs and clear them during application cleanup.
 
 ## `sys`
 
@@ -201,8 +205,8 @@ Store timer IDs and clear them during application cleanup. Avoid leaving detache
   watchdogs. `sys.status.runtime.startup` reports startup health and safe-mode
   state.
 - `sys.safeMode` is a persistent operator-only boolean. Writing `false` clears
-  the startup failure latch for the next boot; it does not load workspace code
-  immediately. Generated and startup code must never modify it.
+  the startup failure latch so the next boot evaluates normal workspace startup
+  policy. Operator lifecycle code owns this setting.
 - `sys.millis()` and `sys.micros()` return monotonic uptime counters.
 - `sys.freeHeap()` returns available heap bytes.
 - `sys.randomHex(byteLength)` returns 1-64 random bytes as lowercase
@@ -212,7 +216,8 @@ Store timer IDs and clear them during application cleanup. Avoid leaving detache
   string, number, boolean, or `undefined`. Registered framework keys use the
   `ESP32QJS_*` prefix; application-specific constants should use another prefix
   such as `APP_*`.
-- `sys.withTimeout(timeoutMs, fn)` shortens the active wall-clock deadline for `fn`; it cannot extend the host `exec` deadline.
+- `sys.withTimeout(timeoutMs, fn)` shortens the active wall-clock deadline for
+  `fn`; nested calls can only shorten the current deadline.
 
 For device boot uptime use `sys.status.boot.uptimeMs` or `sys.millis()`; for the
 current JavaScript generation use `sys.status.runtime.uptimeMs`. For detailed
@@ -231,12 +236,6 @@ Use one targeted feature query instead of a chain of `typeof` probes:
     };
 })()
 ```
-
-Do not invoke `sys.restartRuntime()` or `sys.reboot()` unless the user
-explicitly requested that exact lifecycle operation. Operator code should use
-the dedicated device lifecycle control message because a control issued through
-ordinary `exec` can disconnect before its tool result arrives and has an
-uncertain outcome.
 
 ## Application lifecycle
 
@@ -268,5 +267,3 @@ Persistent startup code should own a single state object and clean it before sta
     };
 })(this);
 ```
-
-Do not use obsolete `defer`, `waitFor`, `wifi.async`, or callback-style interrupt helpers documented for older firmware versions.

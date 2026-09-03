@@ -1,7 +1,6 @@
 # `esp32qjs-csi/1` Wire Format
 
-Status: sole development v1 contract. All integers are little-endian. There is
-no legacy metadata reader or alternate protocol version.
+Status: sole development v1 contract. All integers are little-endian.
 
 The batch starts with a 24-byte header:
 

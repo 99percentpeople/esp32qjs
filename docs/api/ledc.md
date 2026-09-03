@@ -1,6 +1,7 @@
 # `ledc` Module
 
-This module exposes the ESP-IDF LEDC low-level timer/channel primitives. It does not implement higher-level drivers such as servos or `analogWrite(...)`.
+This module exposes ESP-IDF LEDC timer and channel primitives for PWM output
+and application-level actuator drivers.
 
 - `ledc.AUTO_CLOCK`, `ledc.APB_CLOCK`, `ledc.XTAL_CLOCK`, `ledc.RC_FAST_CLOCK`
   Clock-source strings accepted by `ledc.timerConfig(...)`.

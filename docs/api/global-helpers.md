@@ -9,8 +9,7 @@ compiled, `globalThis.wifi === wifi`. Optional module properties are absent
 when their corresponding `sys.info.features` value is `false`.
 
 Use `globalThis` when code needs an explicit global receiver or a persistent
-application namespace. Do not guess browser or Node.js aliases such as
-`window`, `self`, or `global`; they are not ESP32QJS APIs.
+application namespace.
 
 ```js
 globalThis.application = {
@@ -27,13 +26,11 @@ globalThis.application = {
 - `print(...values)`
   Write values to the runtime's standard-output sink. Normal profiles use the
   serial console; the headless Agent profile forwards a bounded copy to its
-  host diagnostics cache so protocol byte streams are not polluted.
+  host diagnostics cache.
 - `gc()`
-  Run the JavaScript garbage collector explicitly for diagnostics. Normal
-  applications do not need to call it: MQuickJS automatically collects before
-  a JavaScript heap allocation would exhaust its configured heap. The framework
-  does not schedule additional collections from Future completion, native
-  allocation pressure, or scheduler polling.
+  Run the JavaScript garbage collector explicitly for diagnostics. MQuickJS
+  also collects automatically before a JavaScript heap allocation would
+  exhaust its configured heap.
 - `load(path)`
   Evaluate a script from the immutable volume currently stored in global `fs`.
   The initial volume is rooted at `/littlefs`; applications can install another
@@ -49,7 +46,8 @@ globalThis.application = {
 Startup behavior:
 
 - If `/littlefs/index.js` exists, it is loaded automatically before the first `js>` prompt appears.
-- `index.js` is the single startup entry point. An external Build Context resolver may generate it from selected JavaScript Library entries; the framework does not interpret Library manifests.
+- `index.js` is the single startup entry point. An external Build Context
+  resolver may generate it from selected JavaScript Library entries.
 - A Library entry may initialize a native-feature wrapper, register Board support, or decide whether and when to load writable application code.
 - Optional examples can live under `demo/` and be started manually, for example `load("demo/display_perf.js")`.
 

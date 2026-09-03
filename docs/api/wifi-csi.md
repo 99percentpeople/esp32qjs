@@ -1,9 +1,11 @@
 # Wi-Fi CSI
 
-`wifi.csi` is a bounded raw Channel State Information capture primitive, not a
-presence/motion classifier. Call `wifi.csi.capabilities()` before constructing
-the required capture object; do not infer a schema, PHY, sample encoding, or
-channel set from a Board name. The only API version is `wifi-csi/1`.
+`wifi.csi` provides bounded raw Channel State Information capture, retained
+native sample views, structured frame metadata, batch export, filtering, and
+radio-ownership reporting. `wifi.csi.capabilities()` is the authoritative
+source for target support, the exact configuration schema, required capture
+object, PHY/sample encoding, and channel set. The sole API version is
+`wifi-csi/1`.
 
 ### Capabilities
 
@@ -56,9 +58,9 @@ channel set from a Board name. The only API version is `wifi-csi/1`.
 }
 ```
 
-`radio.allowedChannels: null` means ESP-IDF cannot enumerate the band
-authoritatively; it never means unrestricted. Check `sources`, `supports`, and
-the appropriate limit before requesting an optional control.
+`radio.allowedChannels: null` represents an authoritative channel set that is
+unavailable from ESP-IDF and must be treated as unknown. Check `sources`,
+`supports`, and the appropriate limit before requesting an optional control.
 
 ### Opening a session
 
@@ -69,7 +71,7 @@ the only session immediately:
 {
   source?: "associated" | "promiscuous",       // default "associated"
   channel?: "current" | number,                 // default "current"
-  conflict?: "fail",                            // the only policy
+  conflict?: "fail",
   capture: LegacyCapture | HeCapture,            // required
   filter?: {
     sourceMac?: string | string[],
@@ -174,7 +176,7 @@ var session = wifi.csi.open({
   droppedFrameTooLarge, droppedClosing, receivedBytes, leasedFrames,
   freePoolSlots, queue }`. `queue` is the normal EventQueue statistics object.
 - `receive(timeoutMs?)` returns one `WiFiCsiFrame` or `null`.
-- `receiveBatch(options?)` accepts only an object with optional
+- `receiveBatch(options?)` accepts an object with optional
   `{ maximumFrames, minimumFrames, timeoutMs, maximumLatencyMs }`.
   `maximumFrames` defaults to the Build Context limit, `minimumFrames` to 1,
   omitted `timeoutMs` waits indefinitely for the first frame, and
@@ -241,9 +243,9 @@ var session = wifi.csi.open({
 ```
 
 `timestampUs` is boot-relative driver time extended across 32-bit wraps and
-represented as a JavaScript number; it is not UTC. Firmware preserves raw
-imaginary-real IQ order. Ambiguous PHY/configuration/length combinations use an
-explicit unknown layout; the framework does not invent subcarrier positions.
+represented as a JavaScript number. Firmware preserves raw imaginary-real IQ
+order. Ambiguous PHY/configuration/length combinations report
+`layout.known: false` with an explicit unknown layout.
 
 `frame.samples()` returns a retained pool-backed `ByteView`,
 `frame.copySamples()` returns an independent owned `ByteView`, and
@@ -255,9 +257,7 @@ close and keep only their old pool generation alive.
 
 The batch source is the sole little-endian `esp32qjs-csi/1` format and carries
 uint64 timestamps plus complete Layout/Segment metadata. Read
-`doc://framework/wifi-csi-protocol` for exact offsets and enum values. Native
-firmware does not calculate FFT, magnitude, phase, recognition, storage, or
-upload policy.
+`doc://framework/wifi-csi-protocol` for exact offsets and enum values.
 
 Operational failures use `error.operation === "wifi.csi"` and one of:
 `WIFI_CSI_NOT_COMPILED`, `WIFI_CSI_NOT_SUPPORTED`, `WIFI_CSI_ALREADY_OPEN`,
@@ -288,7 +288,3 @@ try {
   session.close();
 }
 ```
-
-Target compilation and host ownership tests do not substitute for RF hardware
-qualification. Treat PHY metadata, actual frame sizes, rate/throughput, and
-long-duration coexistence as hardware-pending until recorded per target.

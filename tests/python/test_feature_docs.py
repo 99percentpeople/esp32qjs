@@ -28,4 +28,19 @@ class FeatureDocumentationTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("`globalThis` is the ESP32 MQuickJS global object", helpers)
-        self.assertIn("Do not guess browser or Node.js aliases", helpers)
+        self.assertIn("Use `globalThis` when code needs an explicit global receiver", helpers)
+
+    def test_runtime_document_lists_the_vendored_builtin_surface(self):
+        runtime = (ROOT / "docs" / "api" / "runtime.md").read_text(
+            encoding="utf-8"
+        )
+
+        for contract in (
+            "### Built-in objects and methods",
+            "`Array`: `isArray`",
+            "`RegExp`: construction from a pattern and flags",
+            "`Date`: `new Date(...)`, `Date.now()`, and instance `valueOf()`",
+            "`ArrayBuffer` and `Uint8ClampedArray`",
+            "monotonic `performance.now()`",
+        ):
+            self.assertIn(contract, runtime)

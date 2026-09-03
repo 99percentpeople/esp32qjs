@@ -1,9 +1,9 @@
 # `espNow` Module
 
 `espNow` exposes generic station-interface ESP-NOW transport when
-`sys.info.features.espNow` is enabled. It intentionally does not implement
-application acknowledgements, retries, deduplication, fragmentation, routing,
-Mesh behavior, provisioning, or a product message schema.
+`sys.info.features.espNow` is enabled. It provides peer management, bounded
+receive delivery, direct and queued transmission, per-peer PHY configuration,
+power-save control, and explicit timeout recovery.
 
 - `espNow.capabilities()` returns v1/target/ESP-IDF identity, the configured
   peer, encrypted-peer, and payload limits. `peerRateConfig` is `true` and
@@ -30,8 +30,8 @@ Mesh behavior, provisioning, or a product message schema.
   are PSRAM-backed when PSRAM is available and use a reserve-checked internal
   fallback otherwise.
   The broadcast rate is applied to the native broadcast peer after open and
-  restored after explicit timeout recovery. It changes PHY transmission only;
-  broadcast remains fire-and-forget without application ACK or retry semantics.
+  restored after explicit timeout recovery. Broadcast uses single-attempt
+  fire-and-forget delivery.
 - `session.receive(timeoutMs?)` and `session.stats()` expose its bounded
   DROP_NEWEST receive EventQueue. Each event contains normalized source and
   destination addresses, RSSI, channel, sequence, timestamp, broadcast flag,
@@ -52,9 +52,9 @@ Mesh behavior, provisioning, or a product message schema.
   copied into fixed native slots before the call returns, so sources may be
   closed or reused immediately. Batch admission is all-or-none, packets from
   one batch remain contiguous, and `drop-oldest-batch` evicts only whole
-  batches that have not started. These calls add no acknowledgement, retry, or
-  reliability semantics. `session.flushTx(timeoutMs?)` waits only for this
-  native queue to drain. `status().txQueue` reports capacity, depth,
+  batches that have not started. Each admitted packet receives one native send
+  attempt. `session.flushTx(timeoutMs?)` waits for this native queue to drain.
+  `status().txQueue` reports capacity, depth,
   high-water, admission, eviction, completion, failure, and last ESP-IDF error
   counters. Each admitted packet makes at most one native `esp_now_send()`
   call. A native admission failure, including `ESP_ERR_ESPNOW_NO_MEM`, marks
@@ -65,8 +65,8 @@ Mesh behavior, provisioning, or a product message schema.
   native deinitialization.
 - `session.recover()` explicitly rebuilds a faulted native session after send
   timeout cleanup has reached callback quiescence. Each call makes one explicit
-  rebuild attempt. Firmware does not retry sends, loop recovery, reset the
-  shared Wi-Fi service, or disconnect another radio owner implicitly.
+  rebuild attempt while preserving the shared Wi-Fi service and other radio
+  owners.
 - `session.close()` closes receive delivery, unregisters callbacks, deinitializes
   ESP-NOW, releases the shared radio lease, clears keys, and invalidates peers.
 
@@ -77,16 +77,14 @@ Mesh behavior, provisioning, or a product message schema.
 `close()`, `send()`, enqueue/batch/flush operations, `update()`, and `remove()`
 as described above.
 
-Use `channel: "current"` when Wi-Fi is connected. The framework rejects channel
-conflicts and does not disconnect Wi-Fi, change an AP channel, or perform
-hidden off-channel sends. A send callback timeout reports
+Use `channel: "current"` when Wi-Fi is connected. A conflicting explicit
+channel returns `ESPNOW_CHANNEL_CONFLICT` while preserving the active shared
+radio channel. A send callback timeout reports
 `ESPNOW_RECOVERY_PENDING` while its native Future state and transmit lane remain
 retained. A worker waits for callbacks to become quiescent, deinitializes the
 native driver, and only then completes the Future with a timeout. The session
-remains faulted with `recoveryRequired: true` while explicit ESP-NOW-only
-recovery is available. `session.recover()` is the only operation that rebuilds
-the native ESP-NOW session. When native admission returns
+remains faulted with `recoveryRequired: true` until `session.recover()` performs
+one native ESP-NOW rebuild. When native admission returns
 `ESP_ERR_ESPNOW_NO_MEM`, a tracked send completes with `ESPNOW_SEND_FAILED` and
-a queued packet is recorded as failed in `txQueue`; neither path triggers
-backoff or retransmission. An accepted or timed-out message is never
-retransmitted.
+a queued packet is recorded as failed in `txQueue`. Single-attempt delivery
+leaves backoff, acknowledgement, and retransmission policy to the application.

@@ -1,14 +1,14 @@
 # `camera` Module
 
-`camera` is registered only when `sys.info.features.camera` is true on a
-supported ESP32-S3 build. It is independent of I2S and provides explicit still
-capture only: no background video, codecs, MJPEG, RTSP, or upload policy.
+`camera` is registered when `sys.info.features.camera` is true on a supported
+ESP32-S3 build. It provides explicit single-frame capture, sensor controls,
+bounded framebuffer ownership, and native handoff to Bitmap and byte-source
+consumers independently of I2S.
 
 - `camera.capabilities()`
   Return target, PSRAM status/size, compiled sensor drivers, pixel formats, and
-  frame sizes, including the native square `128x128` mode. Version 1 probes
-  OV2640, OV3660, or OV5640 after initialization; callers do not select a
-  sensor model.
+  frame sizes, including the native square `128x128` mode. After initialization,
+  Version 1 reports the detected OV2640, OV3660, or OV5640 sensor model.
 - `camera.open(options?)`
   Open the singleton camera. Options include `pixelFormat`, `frameSize`,
   `jpegQuality`, `frameBuffers`, `grabMode`, `bufferLocation`, `xclkFreqHz`,

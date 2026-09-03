@@ -229,20 +229,20 @@ sys.status.runtime = {
 }
 ```
 
-`bootId` identifies one physical firmware boot and does not change across
+`bootId` identifies one physical firmware boot and remains constant across
 `restartRuntime()`. A runtime restart increments `generation`; a full reboot
 creates a new `bootId` and starts at generation `1`.
 
-Heap views are overlapping ESP-IDF capability views and must not be added
-together. `default` can be dominated by PSRAM. Use `internal`, `dma`, and
+Heap views are overlapping ESP-IDF capability views and should be interpreted
+independently. `default` can be dominated by PSRAM. Use `internal`, `dma`, and
 `psram`—especially `largestFreeBlockBytes` and `minimumFreeBytes`—to diagnose
 allocation failures or fragmentation.
 
-`memory.manager` describes only allocations known to the framework memory
+`memory.manager` describes allocations known to the framework memory
 manager. `pinnedBytes` includes managed pinned blocks, registered driver DMA
 payloads, and reusable staging pools. Opaque ESP-IDF metadata and unregistered
-third-party allocations are intentionally excluded. `allocations` is sorted by
-owner, class, and actual region and never exposes addresses.
+third-party allocations remain in the physical heap views. `allocations` is
+sorted by owner, class, and actual region.
 
 ## Configuration and lightweight helpers
 
@@ -295,10 +295,10 @@ owner, class, and actual region and never exposes addresses.
 
 `options.limit` is an integer from 1 through
 `sys.status.rtos.taskSnapshotLimit` and defaults to that limit. The operation
-sorts by task ID and exposes no task handles or stack addresses. It throws an
-`InternalError` when snapshots are disabled or the system task count exceeds
-the configured native snapshot capacity; use the cheap `taskCount` getter when
-a complete snapshot is unnecessary.
+returns detached task records sorted by task ID. It throws an `InternalError`
+when snapshots are disabled or the system task count exceeds the configured
+native snapshot capacity; use the cheap `taskCount` getter when a complete
+snapshot is unnecessary.
 
 ## Lifecycle control and safe mode
 
@@ -325,15 +325,13 @@ Success returns an acceptance receipt:
 }
 ```
 
-The runtime acts only after the delay expires and the outer JavaScript turn
-unwinds. The receipt does not prove completion, only that the request was
-accepted. Only one request may be pending. Do not invoke either control unless
-the user explicitly requested it; a transport can disconnect before an
-ordinary `exec` result arrives, leaving an uncertain mutation.
+The runtime acts after the delay expires and the outer JavaScript turn unwinds.
+The receipt confirms acceptance; observe a new runtime generation or boot ID to
+confirm completion. The lifecycle queue holds one pending request.
 
 `sys.safeMode` is the persistent operator latch. Assigning `false` clears the
-startup failure count and latch for the next boot; it does not load workspace
-code in the current generation. Application startup code must not modify it.
+startup failure count and latch for the next boot. The next boot then evaluates
+normal workspace startup policy. Operator lifecycle code owns this latch.
 
 ```js
 sys.safeMode = false;
@@ -343,10 +341,10 @@ sys.reboot({ reason: "safe-mode-repaired" });
 ## Errors
 
 Shape and type errors use `TypeError`; numeric and string bounds use
-`RangeError`. Unavailable task snapshots, lifecycle controls, duplicate control
-requests, or failed getter allocation use catchable `InternalError`. Missing
-PSRAM and unavailable CPU-frequency observations return `null` as documented
-instead of fabricated values.
+`RangeError`. Task-snapshot capability errors, lifecycle-control errors,
+duplicate control requests, and failed getter allocation use catchable
+`InternalError`. Missing PSRAM and unavailable CPU-frequency observations are
+represented by the documented `null` values.
 
 ## Example
 

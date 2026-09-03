@@ -16,14 +16,14 @@ The namespace is present when the HTTP client or server feature is enabled.
   keeps its Future capacity occupied until a later request or runtime teardown
   completes the retry.
 
-The HTTP client remains available without TLS for `http://` URLs. An
-`https://` URL is rejected before its worker starts when
-`sys.info.features.tls` is false; there is no insecure fallback.
+The HTTP client supports `http://` URLs directly. `https://` uses the selected
+TLS capability and requires `sys.info.features.tls`.
 
 Call `sys.time.sync(...)` once after a network interface connects and before
 public HTTPS.
 HTTPS uses the same TLS verification and structured error categories described
-in the socket section; it has no insecure or skip-verification option.
+in the socket section, with mandatory CA, hostname, and certificate-date
+verification.
 - `http.server(options?)`
   Create a low-level declarative server when
   `sys.info.features.httpServer` is enabled.

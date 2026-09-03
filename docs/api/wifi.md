@@ -65,12 +65,12 @@ print(JSON.stringify(wifi.status()));
 wifi.disconnect();
 ```
 
-The firmware does not embed a time provider; Agent/workspace policy supplies
-the server list. Complete `sys.time.sync(...)` after connecting and before any
-public HTTPS, TLS, or secure WebSocket operation so certificate validity dates
-are checked against a current clock. SNTP provides ordinary wall-clock setup,
-not authenticated time: it does not defend against an active network attacker
-who can tamper with both DNS/network traffic and time synchronization.
+The application supplies the SNTP server list to `sys.time.sync(...)`. Complete
+time synchronization after connecting and before any public HTTPS, TLS, or
+secure WebSocket operation so certificate validity dates are checked against a
+current clock. Treat SNTP as ordinary wall-clock initialization; applications
+that must resist an active network attacker capable of altering both time and
+network traffic should establish an authenticated time source.
 After synchronization, `Date.now()` and `new Date()` use the same wall clock;
 `sys.millis()`, `sys.micros()`, and `performance.now()` remain monotonic uptime
 clocks and are not affected by SNTP adjustments.

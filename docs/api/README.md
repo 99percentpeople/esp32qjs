@@ -1,9 +1,10 @@
 # ESP32QJS API reference
 
-These module documents are the sole user-facing and AI-facing JavaScript API
-reference. The host snapshots the subset selected by the immutable Build
-Context and exposes it as `doc://framework/<id>` resources. Humans read the
-same Markdown files directly; there is no separate compact AI copy.
+These module documents describe the JavaScript globals, native handles,
+operations, lifecycle, and error semantics provided by ESP32QJS. The host
+snapshots the subset selected by the immutable Build Context and exposes it as
+`doc://framework/<id>` resources. Humans and Agents read the same versioned
+Markdown sources.
 
 Always inspect `sys.info.features` and the current Artifact documentation index
 instead of inferring compiled modules from an MCU or Board name. Exact static
@@ -53,6 +54,6 @@ native callable points to one of these documents.
 native Build Context feature IDs; an empty list makes a document core, while a
 non-empty list includes it when at least one named feature is selected.
 
-Framework JavaScript libraries and Board wrappers remain outside this index.
-Their owning repositories/manifests provide separate Artifact-bound
-`doc://library/...` and `doc://board/...` resources.
+Artifact documentation combines this framework index with JavaScript Library
+and Board resources supplied by their owning manifests under
+`doc://library/...` and `doc://board/...`.

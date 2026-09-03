@@ -1,6 +1,7 @@
 # `adc` Module
 
-This module exposes ESP-IDF ADC oneshot primitives and GPIO/channel mapping helpers. It does not implement development-board-specific sensor drivers.
+This module exposes ESP-IDF ADC oneshot primitives and GPIO/channel mapping
+helpers for application and JavaScript Library sensor drivers.
 
 - `adc.UNIT_1`, `adc.UNIT_2`
   ADC unit identifiers accepted by `adc.open(...)`, `adc.status(...)`, and the read/configure helpers.

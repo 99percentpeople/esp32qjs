@@ -1,6 +1,11 @@
 # `bitmap` Module
 
-This module exposes native Bitmaps for heavy pixel work. It is registered only when `sys.info.features.bitmap` is enabled. Compressed JPEG decoding is a separate optional `bitmap_jpeg` subfeature reported by `sys.info.features.bitmapJpeg`; disabling it leaves the raw Bitmap formats and transforms available without installing `Bitmap.prototype.decode`. The JS `Surface` owns rendering, `PanelDriver` owns controller sequencing, and `DisplayTransport` owns SPI/I2C/GPIO operations; `bitmap` only owns pixels, transforms, and exported bytes.
+This module exposes native Bitmaps for pixel storage, drawing, fused transforms,
+fonts, dirty-region tracking, and exported byte sources. It is registered when
+`sys.info.features.bitmap` is enabled. The optional `bitmap_jpeg` subfeature,
+reported by `sys.info.features.bitmapJpeg`, adds direct JPEG decoding into
+RGB565 Bitmaps. JavaScript display libraries compose these primitives with
+surface rendering, panel sequencing, and SPI/I2C/GPIO transports.
 
 - `bitmap.MONO1`
   Pixel format string `"mono1"`.
@@ -22,7 +27,9 @@ This module exposes native Bitmaps for heavy pixel work. It is registered only w
 Formats and layouts:
 
 - `format: "mono1"`
-  One bit per pixel. Default layout is `"page-y8"` for SSD1306-style vertical pages. `"linear"` is also supported. Colors are packed numeric values `0` or `1`; booleans are not accepted.
+  One bit per pixel. Default layout is `"page-y8"` for SSD1306-style vertical
+  pages. `"linear"` is also supported. Colors use packed numeric values `0`
+  and `1`.
 - `format: "gray4"`
   Two 4-bit luminance pixels per byte in linear layout. Even `x` uses the high
   nibble and odd `x` uses the low nibble; stride defaults to
@@ -34,7 +41,7 @@ Formats and layouts:
 - `format: "gray8"`
   One luminance byte per pixel. Layout must be `"linear"`.
 - `format: "rgb888"`
-  Three bytes per pixel in RGB order with no alpha channel. Layout must be `"linear"`.
+  Three bytes per pixel in RGB order. Layout must be `"linear"`.
 - `storage`
   `"auto"`, `"internal"`, `"psram"`, or `"dma"`. `"auto"` uses internal RAM for small buffers and PSRAM for larger buffers when available. `"dma"` is required for zero-copy RGB565 SPI flushes.
 
@@ -52,7 +59,7 @@ Formats and layouts:
 - `clear(color?)` / `fill(color?)`
   Fill the whole buffer and mark it dirty.
 - `setPixel(x, y, color)` / `getPixel(x, y)`
-  Write or read one packed color. `mono1` returns `0` or `1`, not a boolean.
+  Write or read one packed color. `mono1` returns the numeric value `0` or `1`.
 - `fillRect(x, y, width, height, color?)`
 - `drawCircle(cx, cy, radius, color?)`
 - `fillCircle(cx, cy, radius, color?)`
@@ -114,7 +121,8 @@ Formats and layouts:
   write-leased until the native Future worker publishes the complete image.
   The result reports `{ codec, engine, width, height, inputBytes,
   outputBytes }`; `engine` is `"rom-tjpgd"` on supported ROM targets and
-  `"software-tjpgd"` otherwise. Scaling and progressive JPEG are not accepted.
+  `"software-tjpgd"` otherwise. Decoding supports baseline JPEG at its source
+  dimensions.
 - `drawText(x, y, text, options?)`
   Draw text with `options.color` and `options.font`, a `DisplayFont` returned by `bitmap.loadFont(...)`. `options.spacing` controls extra inter-character pixels. Text background is transparent by default; pass `options.background` to fill each glyph cell before drawing, or `null` to keep it transparent explicitly.
 - `measureText(text, options?)`
@@ -239,7 +247,11 @@ suited to inspecting a small protocol header without allocating an array. Every
 `ByteView` owns a stable immutable snapshot until it is closed or collected.
 They can be passed directly to `spi`, `i2c`, and `uart` writes without
 converting to a JavaScript array.
-For high-frequency SPI display flushes, prefer `Bitmap.createSpanSource(...)` with `SPIDevice.writeSource(...)`. `readRect(...)` and `readRectChunks(...)` remain useful for inspection, diagnostics, compatibility, and I2C chunk writes. Transport modules consume generic byte sources or span sources and do not inspect Bitmap objects.
+For high-frequency SPI display flushes, prefer `Bitmap.createSpanSource(...)`
+with `SPIDevice.writeSource(...)`. `readRect(...)` and `readRectChunks(...)`
+remain useful for inspection, diagnostics, compatibility, and I2C chunk writes.
+Transport modules consume the Bitmap's generic byte-source and span-source
+interfaces.
 
 Example:
 
