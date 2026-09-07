@@ -5,6 +5,7 @@
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_options.h"
+#include "esp32_mquickjs_wireless_core.h"
 
 #include <inttypes.h>
 #include <math.h>
@@ -470,6 +471,8 @@ static bool wifi_connect_future_prepare(JSContext *ctx,
     }
     state->kind = WIFI_FUTURE_CONNECT;
     if (!wifi_future_parse_connect(ctx, argc, argv, state)) {
+        esp32_mquickjs_wireless_secure_zero(
+            &state->connect_config, sizeof(state->connect_config));
         heap_caps_free(state);
         return false;
     }
@@ -752,6 +755,8 @@ static void wifi_future_destroy(esp32_mquickjs_future_driver_state_t *state)
             (void)wifi_future_cancel(state);
         }
     }
+    esp32_mquickjs_wireless_secure_zero(
+        &state->connect_config, sizeof(state->connect_config));
     heap_caps_free(state);
 }
 

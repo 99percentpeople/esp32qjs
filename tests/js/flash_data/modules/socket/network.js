@@ -32,10 +32,10 @@ test("socket/network", function () {
 
   connectAndClose();
   gc();
-  before = sys.status.memory;
+  before = test.memorySnapshot();
   for (i = 0; i < 5; i += 1) connectAndClose();
   gc();
-  after = sys.status.memory;
+  after = test.memorySnapshot();
 
   test.ok(after.internal.largestFreeBlockBytes > 0,
     "internal heap should retain a usable contiguous block");

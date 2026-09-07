@@ -10,7 +10,6 @@
 #include "esp_err.h"
 #include "esp_wifi.h"
 
-#include "esp32_mquickjs_future.h"
 
 typedef enum {
     ESP32_MQUICKJS_WIFI_RADIO_CLIENT_WIFI_STA = 0,
@@ -36,6 +35,10 @@ typedef struct {
 
 typedef struct {
     uint32_t generation;
+    bool driver_owned;
+    bool restart_required;
+    const char *fault_stage;
+    esp_err_t fault_error;
     bool initialized;
     bool starting;
     bool started;
@@ -89,7 +92,7 @@ void esp32_mquickjs_wifi_radio_release_promiscuous(
 void esp32_mquickjs_wifi_radio_release(
     esp32_mquickjs_wifi_radio_lease_t *lease);
 
-esp32_mquickjs_resource_key_t
+const void *
 esp32_mquickjs_wifi_radio_channel_key(void);
 
 #endif

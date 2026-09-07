@@ -31,13 +31,13 @@ test("wifi_csi/lifecycle-hardware", function () {
     try { wifi.disconnect(); } catch (ignoredDisconnectError) {}
     for (i = 0; i < 10; i += 1) openAndClose();
     gc();
-    before = sys.status.memory;
+    before = test.memorySnapshot();
     for (i = 0; i < 500; i += 1) {
       openAndClose();
       if ((i + 1) % 25 === 0) gc();
     }
     gc();
-    after = sys.status.memory;
+    after = test.memorySnapshot();
 
     test.ok(after.internal.freeBytes + 8192 >= before.internal.freeBytes,
       "500 CSI close/reopen cycles should return internal heap to baseline");

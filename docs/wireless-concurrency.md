@@ -16,7 +16,7 @@ event, and wake an already registered Future.
 | BLE scan/advertise lifecycle and counters | Runtime and NimBLE host callbacks | Runtime status and event conversion | C11 atomics; event payloads are copied into fixed native pools before enqueue |
 | BLE connection scalar status | Runtime and NimBLE host callbacks | Runtime, Future drivers, and callbacks | C11 atomics for allocation, generation, handle, role, MTU, RSSI, and open/close state |
 | BLE peer address and security state | Runtime and NimBLE host callbacks | Runtime status and security-event conversion | `s_ble.lock`; readers copy one native snapshot under the lock, then perform NVS and JavaScript work after unlocking |
-| BLE Future callback references | Runtime and NimBLE host callbacks | Both tasks | `s_ble.lock` plus atomic active-state publication; detached storage is freed only after its callback reference count reaches zero |
+| BLE Future callback references | Runtime and NimBLE host callbacks | Both tasks | `s_ble.lock` protects registry lookup/retain/removal and active-state publication; native ownership holds a reference independently of callback execution and JS roots; detached storage is freed only after both native and callback references reach zero |
 | BLE GATT Server values | Runtime and NimBLE host callbacks | Both tasks | Per-characteristic FreeRTOS critical section; remote access uses the native cache and never calls JavaScript |
 | ESP-NOW session lifecycle, generation, counters, and active operations | Runtime, worker, and Wi-Fi callbacks | All three contexts | C11 atomics; peer and radio mutations remain serialized by the native Future resource lane |
 | ESP-NOW receive payloads | Wi-Fi callback | Runtime event conversion | Fixed native pool; the queued event contains only generation and slot index, and drop/discard returns the slot |
@@ -75,3 +75,31 @@ publisher. A successful enqueue transfers the slot to the EventQueue drop/event
 converter; any rejected enqueue returns it immediately. Host saturation tests
 exercise this same production helper for 100 publishes and verify all 98
 rejected slots are reusable.
+
+
+## First-stage Radio and BLE operation isolation
+
+Radio uses a boot-lived task mutex for lease validation, driver mutation, and
+release, plus a short critical section for snapshots. Driver calls never run
+under the snapshot critical section. The live lease registry is bounded at 16
+entries and IDs never wrap; fixed-channel ownership is still exclusive. A failed
+once initialization/mode/start records its original stage/error and prohibits
+repeat initialization. Runtime restart does not clear this fault.
+
+BLE GATT callbacks pass a boot-scoped operation ID through NimBLE's `arg`.
+The bounded native registry lookup and callback retain occur under `s_ble.lock`.
+Removing JS roots neither releases the native reference nor makes the ATT lane
+available. A detached discovery callback aborts its original procedure before
+accessing the cache. Native termination removes the ID; stale IDs cannot resolve
+a later operation even when registry entries or connection slots are reused.
+Successful Host stop/deinit drains remaining native references before pool release.
+Pair/close and indication paths without per-request cookies retain their lane until
+native termination. Indication submission is not confirmation; pending recipients
+are tracked individually and synchronous submission callbacks cannot finish a
+broadcast partway through its submission loop.
+
+Wi-Fi ESP event-loop callbacks commit native control state and Future results
+without traversing the lossy deferred-driver queue. Timer callbacks only publish a
+native timeout obligation; the runtime poller executes its driver mutation. None
+of these callback paths executes JS. CSI still admits only one unfreed pool;
+retained data blocks reopen, not public session close.

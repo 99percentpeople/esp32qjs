@@ -370,3 +370,17 @@ target_include_directories(test_wifi_csi_batch PRIVATE
     ../../components/esp32_mquickjs/internal
 )
 add_test(NAME test_wifi_csi_batch COMMAND test_wifi_csi_batch)
+
+find_package(Threads REQUIRED)
+add_executable(test_wifi_radio
+    test_wifi_radio.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_wireless_core.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_native_pool.c
+)
+target_include_directories(test_wifi_radio PRIVATE radio_stubs ../../components/esp32_mquickjs/internal)
+target_link_libraries(test_wifi_radio PRIVATE Threads::Threads)
+target_compile_definitions(test_wifi_radio PRIVATE RADIO_DIAGNOSTICS_TEST=1)
+foreach(RADIO_CASE stale channel concurrent release-race exhaustion promiscuous-cleanup capacity 1 2 3 4 5 6)
+    add_test(NAME test_wifi_radio_${RADIO_CASE} COMMAND test_wifi_radio ${RADIO_CASE})
+    set_tests_properties(test_wifi_radio_${RADIO_CASE} PROPERTIES TIMEOUT 10)
+endforeach()

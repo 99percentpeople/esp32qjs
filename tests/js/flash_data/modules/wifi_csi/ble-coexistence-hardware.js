@@ -19,7 +19,7 @@ test("wifi_csi/ble-coexistence-hardware", function () {
   test.equal(caps.supports.promiscuous, true,
     "BLE coexistence requires the promiscuous Build Context gate");
   gc();
-  before = sys.status.memory;
+  before = test.memorySnapshot();
   try {
     try { wifi.disconnect(); } catch (ignoredDisconnectError) {}
     adapter = ble.open({
@@ -72,7 +72,7 @@ test("wifi_csi/ble-coexistence-hardware", function () {
   }
 
   gc();
-  after = sys.status.memory;
+  after = test.memorySnapshot();
   test.equal(wifi.status().radio.clients.wifiCsi, 0,
     "BLE coexistence close should release the CSI radio lease");
   test.ok(after.internal.largestFreeBlockBytes + 131072 >=

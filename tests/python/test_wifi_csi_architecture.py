@@ -390,7 +390,7 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertIn("acceptedRateHz", hardware_test)
         self.assertIn("batchTransportBytesPerSecond", hardware_test)
         self.assertIn("dropRatio", hardware_test)
-        self.assertIn("sys.status.memory", hardware_test)
+        self.assertIn("test.memorySnapshot()", hardware_test)
 
     def test_hardware_batch_receives_respect_the_build_context_limit(self):
         directory = ROOT / "tests/js/flash_data/modules/wifi_csi"

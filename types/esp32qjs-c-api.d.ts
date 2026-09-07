@@ -2531,6 +2531,10 @@ namespace ESP32QJS {
 
   interface WiFiRadioStatus {
     generation: number;
+    driverOwned: boolean;
+    restartRequired: boolean;
+    faultStage: "nvs" | "init" | "storage" | "get-mode" | "mode" | "start" | "promiscuous-stop" | null;
+    faultError: number | null;
     initialized: boolean;
     starting: boolean;
     started: boolean;

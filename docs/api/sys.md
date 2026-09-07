@@ -233,6 +233,22 @@ sys.status.runtime = {
 `restartRuntime()`. A runtime restart increments `generation`; a full reboot
 creates a new `bootId` and starts at generation `1`.
 
+`sys.status.memory` itself is a lazy tree. To compare two points in time,
+read each region getter at the measurement point, for example:
+
+```js
+var before = { internal: sys.status.memory.internal, psram: sys.status.memory.psram,
+  manager: sys.status.memory.manager };
+// Run the workload and release its resources.
+gc();
+var after = { internal: sys.status.memory.internal, psram: sys.status.memory.psram,
+  manager: sys.status.memory.manager };
+print(after.internal.freeBytes - before.internal.freeBytes);
+```
+
+Saving the tree itself keeps live getters; it does not preserve earlier values.
+Regions are sampled consecutively, not atomically.
+
 Heap views are overlapping ESP-IDF capability views and should be interpreted
 independently. `default` can be dominated by PSRAM. Use `internal`, `dma`, and
 `psram`—especially `largestFreeBlockBytes` and `minimumFreeBytes`—to diagnose

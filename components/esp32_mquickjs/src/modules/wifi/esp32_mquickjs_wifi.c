@@ -196,18 +196,24 @@ static void wifi_queue_connect_event(uint32_t generation,
     }
 }
 
+static _Atomic bool s_wifi_timeout_pending;
+static void wifi_process_driver_event(
+    const esp32_mquickjs_wifi_driver_event_t *driver_event);
+
 static bool wifi_publish_driver_event_from_callback(
     const esp32_mquickjs_wifi_driver_event_t *event)
 {
-    if (event == NULL || s_wifi_state.driver_event_queue == NULL ||
-        xQueueSend(s_wifi_state.driver_event_queue, event, 0) != pdTRUE) {
-        atomic_fetch_add_explicit(&s_wifi_state.dropped_driver_events, 1,
-                                  memory_order_relaxed);
-        return false;
+    if (event == NULL) return false;
+    if (event->kind == WIFI_DRIVER_EVENT_CONNECT_TIMEOUT) {
+        /* Timer callbacks never invoke Wi-Fi driver mutations. A coalesced
+         * native obligation survives a full queue until the runtime polls. */
+        atomic_store_explicit(&s_wifi_timeout_pending, true, memory_order_release);
+    } else {
+        /* ESP event-loop task: commit control state and Future results before
+         * any lossy observation. No JS or Wi-Fi driver mutation in this path. */
+        wifi_process_driver_event(event);
     }
-    if (s_wifi_runtime != NULL) {
-        esp32_mquickjs_notify_activity(s_wifi_runtime);
-    }
+    if (s_wifi_runtime != NULL) esp32_mquickjs_notify_activity(s_wifi_runtime);
     return true;
 }
 
@@ -423,6 +429,14 @@ static bool wifi_driver_event_poller(JSContext *ctx,
         wifi_process_driver_event(&event);
         handled = true;
     }
+    if (atomic_exchange_explicit(&s_wifi_timeout_pending, false,
+                                  memory_order_acq_rel)) {
+        event = (esp32_mquickjs_wifi_driver_event_t){
+            .kind = WIFI_DRIVER_EVENT_CONNECT_TIMEOUT,
+        };
+        wifi_process_driver_event(&event);
+        handled = true;
+    }
     return handled;
 }
 
@@ -495,6 +509,7 @@ static esp_err_t wifi_init_once(void)
     memset(&s_wifi_state, 0, sizeof(s_wifi_state));
     atomic_init(&s_wifi_state.callbacks_active, 0);
     atomic_init(&s_wifi_state.dropped_driver_events, 0);
+    atomic_store(&s_wifi_timeout_pending, false);
     if (!esp32_mquickjs_wifi_runtime_resources_init(
             &resources, &s_wifi_runtime_resource_ops,
             WIFI_SCAN_EVENT_QUEUE_LEN,
@@ -858,6 +873,16 @@ static JSValue wifi_make_status_object(JSContext *ctx)
         !esp32_mquickjs_set_property_ref(ctx, radio_obj, "initialized",
                                          JS_NewBool(
                                              radio_status.initialized)) ||
+        !esp32_mquickjs_set_property_ref(ctx, radio_obj, "driverOwned",
+                                         JS_NewBool(radio_status.driver_owned)) ||
+        !esp32_mquickjs_set_property_ref(ctx, radio_obj, "restartRequired",
+                                         JS_NewBool(radio_status.restart_required)) ||
+        !esp32_mquickjs_set_property_ref(ctx, radio_obj, "faultStage",
+            radio_status.fault_stage != NULL
+                ? JS_NewString(ctx, radio_status.fault_stage) : JS_NULL) ||
+        !esp32_mquickjs_set_property_ref(ctx, radio_obj, "faultError",
+            radio_status.fault_stage != NULL
+                ? JS_NewInt32(ctx, radio_status.fault_error) : JS_NULL) ||
         !esp32_mquickjs_set_property_ref(ctx, radio_obj, "starting",
                                          JS_NewBool(radio_status.starting)) ||
         !esp32_mquickjs_set_property_ref(ctx, radio_obj, "started",

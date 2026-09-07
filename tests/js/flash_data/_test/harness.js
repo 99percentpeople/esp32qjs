@@ -70,6 +70,13 @@
     };
   };
 
+  helper.memorySnapshot = function () {
+    // sys.status.memory is a lazy tree, not a point-in-time snapshot.
+    return { internal: sys.status.memory.internal, psram: sys.status.memory.psram,
+      dma: sys.status.memory.dma, "default": sys.status.memory.default,
+      manager: sys.status.memory.manager };
+  };
+
   helper.config = config;
   helper.requireConfig = function () {
     var cfg = config();

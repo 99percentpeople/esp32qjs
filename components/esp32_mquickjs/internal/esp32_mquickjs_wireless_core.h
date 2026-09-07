@@ -141,6 +141,25 @@ bool esp32_mquickjs_wireless_fixed_channel_release(
     esp32_mquickjs_wireless_fixed_channel_owner_t *owner,
     uint32_t lease_identity, uint32_t client);
 
+/* Caller supplies synchronization. IDs are boot-scoped and never reused,
+ * including after removal; callback arguments contain IDs, never freed pointers. */
+#define ESP32_MQUICKJS_WIRELESS_OPERATION_CAPACITY 16U
+typedef struct {
+    uint32_t identity;
+    void *owner;
+} esp32_mquickjs_wireless_operation_entry_t;
+typedef struct {
+    uint32_t last_identity;
+    esp32_mquickjs_wireless_operation_entry_t entries[
+        ESP32_MQUICKJS_WIRELESS_OPERATION_CAPACITY];
+} esp32_mquickjs_wireless_operation_registry_t;
+uint32_t esp32_mquickjs_wireless_operation_register(
+    esp32_mquickjs_wireless_operation_registry_t *registry, void *owner);
+void *esp32_mquickjs_wireless_operation_lookup(
+    const esp32_mquickjs_wireless_operation_registry_t *registry, uint32_t identity);
+void *esp32_mquickjs_wireless_operation_remove(
+    esp32_mquickjs_wireless_operation_registry_t *registry, uint32_t identity);
+
 #ifdef __cplusplus
 }
 #endif

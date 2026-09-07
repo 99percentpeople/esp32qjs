@@ -63,7 +63,7 @@ class WifiRadioArchitectureTests(unittest.TestCase):
             / "src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
         ).read_text(encoding="utf-8")
         ensure_started = radio[
-            radio.index("esp_err_t esp32_mquickjs_wifi_radio_ensure_started") :
+            radio.index("static esp_err_t wifi_radio_ensure_started_locked") :
             radio.index("esp_err_t esp32_mquickjs_wifi_radio_get_channel")
         ]
 

@@ -12,6 +12,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 typedef enum {
     WIFI_RADIO_NOT_STARTED = 0,
@@ -19,8 +20,20 @@ typedef enum {
     WIFI_RADIO_COMPLETE,
 } wifi_radio_once_state_t;
 
+#define WIFI_RADIO_MAX_LEASES 16U
+
+typedef struct {
+    uint32_t identity;
+    esp32_mquickjs_wifi_radio_client_t client;
+    wifi_mode_t required_mode;
+} wifi_radio_live_lease_t;
+
 typedef struct {
     portMUX_TYPE lock;
+    wifi_radio_live_lease_t leases[WIFI_RADIO_MAX_LEASES];
+    bool driver_owned;
+    const char *fault_stage;
+    esp_err_t fault_error;
     uint32_t generation;
     uint32_t next_lease_identity;
     uint32_t clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_COUNT];
@@ -46,6 +59,43 @@ static _Atomic int s_start_state = WIFI_RADIO_NOT_STARTED;
 static _Atomic int s_init_result = ESP_ERR_INVALID_STATE;
 static _Atomic int s_start_result = ESP_ERR_INVALID_STATE;
 
+/* Boot-lived task mutex covers validation, driver effects and release.
+ * SDK calls never run under the short snapshot critical section. */
+static StaticSemaphore_t s_operation_mutex_storage;
+static SemaphoreHandle_t s_operation_mutex;
+static _Atomic int s_operation_mutex_state;
+
+static void wifi_radio_operation_lock(void)
+{
+    int expected = 0;
+    if (atomic_compare_exchange_strong(&s_operation_mutex_state, &expected, 1)) {
+        s_operation_mutex = xSemaphoreCreateMutexStatic(&s_operation_mutex_storage);
+        atomic_store_explicit(&s_operation_mutex_state, 2, memory_order_release);
+    } else {
+        while (atomic_load_explicit(&s_operation_mutex_state,
+                                    memory_order_acquire) != 2) vTaskDelay(1);
+    }
+    (void)xSemaphoreTake(s_operation_mutex, portMAX_DELAY);
+}
+
+static void wifi_radio_operation_unlock(void)
+{
+    (void)xSemaphoreGive(s_operation_mutex);
+}
+
+static esp_err_t wifi_radio_record_fault(const char *stage, esp_err_t err)
+{
+    if (err != ESP_OK) {
+        taskENTER_CRITICAL(&s_radio.lock);
+        if (s_radio.fault_stage == NULL) {
+            s_radio.fault_stage = stage;
+            s_radio.fault_error = err;
+        }
+        taskEXIT_CRITICAL(&s_radio.lock);
+    }
+    return err;
+}
+
 static esp_err_t wifi_radio_wait_once(_Atomic int *state,
                                       _Atomic int *result)
 {
@@ -64,13 +114,20 @@ static esp_err_t wifi_radio_initialize(void)
             &s_init_state, &expected, WIFI_RADIO_IN_PROGRESS,
             memory_order_acq_rel, memory_order_acquire)) {
         wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
-        esp_err_t err = esp32_mquickjs_nvs_flash_ensure_initialized();
+        esp_err_t err = wifi_radio_record_fault(
+            "nvs", esp32_mquickjs_nvs_flash_ensure_initialized());
 
         if (err == ESP_OK) {
-            err = esp_wifi_init(&config);
+            err = wifi_radio_record_fault("init", esp_wifi_init(&config));
+            if (err == ESP_OK) {
+                taskENTER_CRITICAL(&s_radio.lock);
+                s_radio.driver_owned = true;
+                taskEXIT_CRITICAL(&s_radio.lock);
+            }
         }
         if (err == ESP_OK) {
-            err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
+            err = wifi_radio_record_fault(
+                "storage", esp_wifi_set_storage(WIFI_STORAGE_RAM));
         }
         atomic_store_explicit(&s_init_result, err, memory_order_relaxed);
         atomic_store_explicit(
@@ -83,15 +140,22 @@ static esp_err_t wifi_radio_initialize(void)
 static bool wifi_radio_lease_valid(
     const esp32_mquickjs_wifi_radio_lease_t *lease)
 {
-    bool valid;
+    bool valid = false;
 
     if (lease == NULL || !lease->acquired || lease->identity == 0U ||
-        lease->client >= ESP32_MQUICKJS_WIFI_RADIO_CLIENT_COUNT) {
+        (unsigned)lease->client >= ESP32_MQUICKJS_WIFI_RADIO_CLIENT_COUNT) {
         return false;
     }
     taskENTER_CRITICAL(&s_radio.lock);
-    valid = lease->generation == s_radio.generation &&
-            s_radio.clients[lease->client] > 0;
+    if (lease->generation == s_radio.generation) {
+        for (size_t i = 0; i < WIFI_RADIO_MAX_LEASES; ++i) {
+            if (s_radio.leases[i].identity == lease->identity &&
+                s_radio.leases[i].client == lease->client) {
+                valid = true;
+                break;
+            }
+        }
+    }
     taskEXIT_CRITICAL(&s_radio.lock);
     return valid;
 }
@@ -143,19 +207,27 @@ static esp_err_t wifi_radio_validate_regulatory_channel(uint8_t channel)
 #endif
 }
 
-esp_err_t esp32_mquickjs_wifi_radio_acquire(
+static esp_err_t wifi_radio_acquire_locked(
     esp32_mquickjs_wifi_radio_client_t client,
     wifi_mode_t required_mode,
     esp32_mquickjs_wifi_radio_lease_t *out_lease)
 {
     if (out_lease == NULL ||
-        client >= ESP32_MQUICKJS_WIFI_RADIO_CLIENT_COUNT ||
+        (unsigned)client >= ESP32_MQUICKJS_WIFI_RADIO_CLIENT_COUNT ||
         (required_mode != WIFI_MODE_STA &&
          required_mode != WIFI_MODE_APSTA)) {
         return ESP_ERR_INVALID_ARG;
     }
     memset(out_lease, 0, sizeof(*out_lease));
     taskENTER_CRITICAL(&s_radio.lock);
+    size_t slot;
+    for (slot = 0; slot < WIFI_RADIO_MAX_LEASES; ++slot) {
+        if (s_radio.leases[slot].identity == 0U) break;
+    }
+    if (slot == WIFI_RADIO_MAX_LEASES || s_radio.next_lease_identity == 0U) {
+        taskEXIT_CRITICAL(&s_radio.lock);
+        return ESP_ERR_NO_MEM;
+    }
     s_radio.clients[client]++;
     if (required_mode == WIFI_MODE_APSTA ||
         s_radio.required_modes[client] == WIFI_MODE_NULL) {
@@ -163,16 +235,18 @@ esp_err_t esp32_mquickjs_wifi_radio_acquire(
     }
     out_lease->generation = s_radio.generation;
     out_lease->identity = s_radio.next_lease_identity++;
-    if (out_lease->identity == 0U) {
-        out_lease->identity = s_radio.next_lease_identity++;
-    }
+    s_radio.leases[slot] = (wifi_radio_live_lease_t){
+        .identity = out_lease->identity,
+        .client = client,
+        .required_mode = required_mode,
+    };
     out_lease->client = client;
     out_lease->acquired = true;
     taskEXIT_CRITICAL(&s_radio.lock);
     return ESP_OK;
 }
 
-esp_err_t esp32_mquickjs_wifi_radio_ensure_started(
+static esp_err_t wifi_radio_ensure_started_locked(
     esp32_mquickjs_wifi_radio_lease_t *lease)
 {
     int expected = WIFI_RADIO_NOT_STARTED;
@@ -185,6 +259,7 @@ esp_err_t esp32_mquickjs_wifi_radio_ensure_started(
     if (!wifi_radio_lease_valid(lease)) {
         return ESP_ERR_INVALID_STATE;
     }
+    if (s_radio.fault_stage != NULL) return s_radio.fault_error;
     ESP_RETURN_ON_ERROR(
         wifi_radio_initialize(), TAG, "Wi-Fi radio initialization failed");
     taskENTER_CRITICAL(&s_radio.lock);
@@ -197,16 +272,16 @@ esp_err_t esp32_mquickjs_wifi_radio_ensure_started(
     }
     taskEXIT_CRITICAL(&s_radio.lock);
     ESP_RETURN_ON_ERROR(
-        esp_wifi_get_mode(&current_mode), TAG, "read Wi-Fi mode failed");
+        wifi_radio_record_fault("get-mode", esp_wifi_get_mode(&current_mode)), TAG, "read Wi-Fi mode failed");
     merged_mode = required_mode;
     if (merged_mode != current_mode) {
         ESP_RETURN_ON_ERROR(
-            esp_wifi_set_mode(merged_mode), TAG, "set Wi-Fi mode failed");
+            wifi_radio_record_fault("mode", esp_wifi_set_mode(merged_mode)), TAG, "set Wi-Fi mode failed");
     }
     if (atomic_compare_exchange_strong_explicit(
             &s_start_state, &expected, WIFI_RADIO_IN_PROGRESS,
             memory_order_acq_rel, memory_order_acquire)) {
-        err = esp_wifi_start();
+        err = wifi_radio_record_fault("start", esp_wifi_start());
 
         atomic_store_explicit(&s_start_result, err, memory_order_relaxed);
         atomic_store_explicit(
@@ -280,6 +355,10 @@ esp_err_t esp32_mquickjs_wifi_radio_get_status(
                           start_result == ESP_OK;
 
     taskENTER_CRITICAL(&s_radio.lock);
+    out_status->driver_owned = s_radio.driver_owned;
+    out_status->fault_stage = s_radio.fault_stage;
+    out_status->fault_error = s_radio.fault_error;
+    out_status->restart_required = s_radio.fault_stage != NULL;
     out_status->generation = s_radio.generation;
     memcpy(out_status->clients, s_radio.clients,
            sizeof(out_status->clients));
@@ -296,7 +375,7 @@ esp_err_t esp32_mquickjs_wifi_radio_get_status(
     out_status->promiscuous_client = s_radio.promiscuous_client;
     taskEXIT_CRITICAL(&s_radio.lock);
 
-    if (!out_status->initialized) {
+    if (!out_status->initialized || out_status->restart_required) {
         return ESP_OK;
     }
     err = esp_wifi_get_mode(&out_status->mode);
@@ -328,7 +407,7 @@ esp_err_t esp32_mquickjs_wifi_radio_get_status(
     return ESP_OK;
 }
 
-esp_err_t esp32_mquickjs_wifi_radio_set_channel(
+static esp_err_t wifi_radio_set_channel_locked(
     esp32_mquickjs_wifi_radio_lease_t *lease,
     uint8_t primary,
     wifi_second_chan_t secondary)
@@ -341,9 +420,13 @@ esp_err_t esp32_mquickjs_wifi_radio_set_channel(
     uint32_t reserved_generation;
     esp_err_t err;
 
-    if (!wifi_radio_lease_valid(lease) || primary == 0) {
+    if (!wifi_radio_lease_valid(lease) || primary == 0 ||
+        (secondary != WIFI_SECOND_CHAN_NONE &&
+         secondary != WIFI_SECOND_CHAN_ABOVE &&
+         secondary != WIFI_SECOND_CHAN_BELOW)) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (s_radio.fault_stage != NULL) return s_radio.fault_error;
     err = wifi_radio_validate_regulatory_channel(primary);
     if (err != ESP_OK) return err;
     taskENTER_CRITICAL(&s_radio.lock);
@@ -412,7 +495,7 @@ rollback_owner:
     return err;
 }
 
-void esp32_mquickjs_wifi_radio_release_channel(
+static void wifi_radio_release_channel_locked(
     esp32_mquickjs_wifi_radio_lease_t *lease)
 {
     if (!wifi_radio_lease_valid(lease)) {
@@ -424,7 +507,7 @@ void esp32_mquickjs_wifi_radio_release_channel(
     taskEXIT_CRITICAL(&s_radio.lock);
 }
 
-esp_err_t esp32_mquickjs_wifi_radio_acquire_promiscuous(
+static esp_err_t wifi_radio_acquire_promiscuous_locked(
     esp32_mquickjs_wifi_radio_lease_t *radio_lease,
     esp32_mquickjs_wifi_radio_promiscuous_lease_t *out_lease)
 {
@@ -434,6 +517,7 @@ esp_err_t esp32_mquickjs_wifi_radio_acquire_promiscuous(
     if (!wifi_radio_lease_valid(radio_lease) || out_lease == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (s_radio.fault_stage != NULL) return s_radio.fault_error;
     memset(out_lease, 0, sizeof(*out_lease));
     taskENTER_CRITICAL(&s_radio.lock);
     if (s_radio.promiscuous_claimed) {
@@ -471,62 +555,132 @@ esp_err_t esp32_mquickjs_wifi_radio_acquire_promiscuous(
     return ESP_OK;
 }
 
-void esp32_mquickjs_wifi_radio_release_promiscuous(
+static void wifi_radio_release_promiscuous_locked(
     esp32_mquickjs_wifi_radio_promiscuous_lease_t *lease)
 {
     bool restore = false;
-
-    if (lease == NULL || !lease->acquired) {
-        return;
-    }
+    if (lease == NULL || !lease->acquired) return;
     taskENTER_CRITICAL(&s_radio.lock);
-    if (lease->generation == s_radio.generation &&
+    restore = lease->generation == s_radio.generation &&
         s_radio.promiscuous_claimed &&
         s_radio.promiscuous_client == lease->client &&
-        s_radio.promiscuous_lease_identity == lease->radio_lease_identity) {
+        s_radio.promiscuous_lease_identity == lease->radio_lease_identity;
+    taskEXIT_CRITICAL(&s_radio.lock);
+    if (restore && lease->framework_enabled &&
+        wifi_radio_record_fault("promiscuous-stop",
+                                 esp_wifi_set_promiscuous(false)) != ESP_OK) {
+        /* Keep exact ownership for a later cleanup suffix retry. */
+        return;
+    }
+    if (restore) {
+        taskENTER_CRITICAL(&s_radio.lock);
         s_radio.promiscuous_claimed = false;
         s_radio.promiscuous_lease_identity = 0U;
-        restore = lease->framework_enabled;
-    }
-    taskEXIT_CRITICAL(&s_radio.lock);
-    if (restore) {
-        (void)esp_wifi_set_promiscuous(false);
+        taskEXIT_CRITICAL(&s_radio.lock);
     }
     memset(lease, 0, sizeof(*lease));
 }
 
-void esp32_mquickjs_wifi_radio_release(
+static void wifi_radio_release_locked(
     esp32_mquickjs_wifi_radio_lease_t *lease)
 {
-    bool restore_promiscuous = false;
-
     if (!wifi_radio_lease_valid(lease)) {
         return;
+    }
+    if (s_radio.promiscuous_claimed &&
+        s_radio.promiscuous_client == lease->client &&
+        s_radio.promiscuous_lease_identity == lease->identity) {
+        esp32_mquickjs_wifi_radio_promiscuous_lease_t promiscuous = {
+            .generation = lease->generation,
+            .radio_lease_identity = lease->identity,
+            .client = lease->client,
+            .acquired = true,
+            .framework_enabled = true,
+        };
+        wifi_radio_release_promiscuous_locked(&promiscuous);
+        if (promiscuous.acquired) return;
     }
     taskENTER_CRITICAL(&s_radio.lock);
     if (s_radio.clients[lease->client] > 0) {
         (void)esp32_mquickjs_wireless_fixed_channel_release(
             &s_radio.fixed_channel_owner, lease->identity, lease->client);
-        if (s_radio.promiscuous_claimed &&
-            s_radio.promiscuous_client == lease->client &&
-            s_radio.promiscuous_lease_identity == lease->identity) {
-            s_radio.promiscuous_claimed = false;
-            s_radio.promiscuous_lease_identity = 0U;
-            restore_promiscuous = true;
-        }
         s_radio.clients[lease->client]--;
-        if (s_radio.clients[lease->client] == 0) {
-            s_radio.required_modes[lease->client] = WIFI_MODE_NULL;
+        s_radio.required_modes[lease->client] = WIFI_MODE_NULL;
+        for (size_t i = 0; i < WIFI_RADIO_MAX_LEASES; ++i) {
+            wifi_radio_live_lease_t *live = &s_radio.leases[i];
+            if (live->identity == lease->identity) live->identity = 0U;
+            if (live->identity != 0U && live->client == lease->client &&
+                (live->required_mode == WIFI_MODE_APSTA ||
+                 s_radio.required_modes[lease->client] == WIFI_MODE_NULL)) {
+                s_radio.required_modes[lease->client] = live->required_mode;
+            }
         }
     }
     taskEXIT_CRITICAL(&s_radio.lock);
-    if (restore_promiscuous) {
-        (void)esp_wifi_set_promiscuous(false);
-    }
     memset(lease, 0, sizeof(*lease));
 }
 
-esp32_mquickjs_resource_key_t
+esp_err_t esp32_mquickjs_wifi_radio_acquire(
+    esp32_mquickjs_wifi_radio_client_t client, wifi_mode_t required_mode, esp32_mquickjs_wifi_radio_lease_t *out_lease)
+{
+    wifi_radio_operation_lock();
+    esp_err_t err = wifi_radio_acquire_locked(client, required_mode, out_lease);
+    wifi_radio_operation_unlock();
+    return err;
+}
+
+esp_err_t esp32_mquickjs_wifi_radio_ensure_started(
+    esp32_mquickjs_wifi_radio_lease_t *lease)
+{
+    wifi_radio_operation_lock();
+    esp_err_t err = wifi_radio_ensure_started_locked(lease);
+    wifi_radio_operation_unlock();
+    return err;
+}
+
+esp_err_t esp32_mquickjs_wifi_radio_set_channel(
+    esp32_mquickjs_wifi_radio_lease_t *lease, uint8_t primary, wifi_second_chan_t secondary)
+{
+    wifi_radio_operation_lock();
+    esp_err_t err = wifi_radio_set_channel_locked(lease, primary, secondary);
+    wifi_radio_operation_unlock();
+    return err;
+}
+
+void esp32_mquickjs_wifi_radio_release_channel(
+    esp32_mquickjs_wifi_radio_lease_t *lease)
+{
+    wifi_radio_operation_lock();
+    wifi_radio_release_channel_locked(lease);
+    wifi_radio_operation_unlock();
+}
+
+esp_err_t esp32_mquickjs_wifi_radio_acquire_promiscuous(
+    esp32_mquickjs_wifi_radio_lease_t *radio_lease, esp32_mquickjs_wifi_radio_promiscuous_lease_t *out_lease)
+{
+    wifi_radio_operation_lock();
+    esp_err_t err = wifi_radio_acquire_promiscuous_locked(radio_lease, out_lease);
+    wifi_radio_operation_unlock();
+    return err;
+}
+
+void esp32_mquickjs_wifi_radio_release_promiscuous(
+    esp32_mquickjs_wifi_radio_promiscuous_lease_t *lease)
+{
+    wifi_radio_operation_lock();
+    wifi_radio_release_promiscuous_locked(lease);
+    wifi_radio_operation_unlock();
+}
+
+void esp32_mquickjs_wifi_radio_release(
+    esp32_mquickjs_wifi_radio_lease_t *lease)
+{
+    wifi_radio_operation_lock();
+    wifi_radio_release_locked(lease);
+    wifi_radio_operation_unlock();
+}
+
+const void *
 esp32_mquickjs_wifi_radio_channel_key(void)
 {
     return &s_wifi_radio_channel_lane_key;

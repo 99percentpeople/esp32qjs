@@ -192,6 +192,13 @@ JS_TEST_MODULES = (
         required_features=("wifi",),
     ),
     JsTestModule(
+        "wireless_core",
+        (JsTestCase("modules/wireless_core/lifecycle-existing-api.js",
+                    required_capabilities=("wireless-hardware",),
+                    timeout_seconds=60.0, record_details=True),),
+        required_features=("wifi", "ble", "espNow", "wifiCsi"),
+    ),
+    JsTestModule(
         "espnow",
         (
             JsTestCase("modules/espnow/offline.js"),

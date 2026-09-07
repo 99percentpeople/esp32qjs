@@ -425,8 +425,12 @@ struct esp32_mquickjs_future_driver_state {
     bool open_initialization_started;
     bool cancelled;
     bool transferred;
-    bool detached;
+    _Atomic bool detached;
+    uint32_t native_identity;
     uint16_t callback_refs;
+    bool notify_submitting;
+    uint16_t notify_handles[CONFIG_ESP32_MQUICKJS_BLE_MAX_CONNECTIONS];
+    bool notify_pending[CONFIG_ESP32_MQUICKJS_BLE_MAX_CONNECTIONS];
     bool result_bool;
     int result_count;
     uint16_t attempted_connections;
@@ -479,6 +483,8 @@ typedef struct {
 static ble_orphan_close_state_t s_ble_orphan_close;
 
 static const char *TAG = "esp32qjs_ble";
+/* Survives adapter/runtime generations. Never reset identity allocation. */
+static esp32_mquickjs_wireless_operation_registry_t s_ble_operations;
 
 static int ble_gap_event_callback(struct ble_gap_event *event, void *arg);
 static int ble_gatt_server_access(uint16_t conn_handle, uint16_t attr_handle,
@@ -492,6 +498,8 @@ static int ble_server_event_pool_acquire(ble_gatt_server_t *server,
                                          uint16_t *out_index);
 static void ble_server_event_pool_release(ble_gatt_server_t *server,
                                           uint16_t index);
+static void ble_native_state_complete(esp32_mquickjs_future_driver_state_t *state);
+static void ble_native_states_quiesced(void);
 static void ble_future_state_storage_free(
     esp32_mquickjs_future_driver_state_t *state);
 static JSValue ble_bool_finish(
@@ -528,6 +536,7 @@ static int ble_runtime_deinit_port(void *opaque)
     (void)opaque;
     err = nimble_port_deinit();
     if (err == ESP_OK) {
+        ble_native_states_quiesced();
         ble_note_native_deinit();
     }
     return err;
@@ -1011,7 +1020,9 @@ static ble_connection_slot_t *ble_reserve_connection(bool central,
     uint16_t index;
     for (index = 0; index < s_ble.max_connections; ++index) {
         ble_connection_slot_t *slot = &s_ble.connections[index];
-        if (!slot->allocated && !slot->reserved) {
+        if (!slot->allocated && !slot->reserved &&
+            atomic_load(&slot->active_gatt_state) == NULL &&
+            esp32_mquickjs_wireless_native_operation_is_quiescent(&slot->connect_operation)) {
             if (slot->queue != NULL)
                 (void)esp32_mquickjs_event_queue_discard_all(slot->queue);
             slot->reserved = true;
@@ -1504,10 +1515,10 @@ fail:
 
 /*
  * NimBLE callbacks run on the host task, independently of the JS runtime.
- * Callback arguments therefore point only at boot-lived connection slots;
- * Future state is published through a protected slot and is detached before
- * the runtime can free it.  A callback reference keeps a detached state alive
- * until that callback has returned, without touching JS from the host task.
+ * GAP callbacks refer to boot-lived connection slots. GATT callback cookies
+ * identify one native operation through the protected boot-scoped registry.
+ * Native ownership outlives public Future detach; callback references also
+ * protect an entered callback, without touching JS from the host task.
  */
 static void ble_active_state_bind(
     _Atomic(esp32_mquickjs_future_driver_state_t *) *location,
@@ -1518,17 +1529,35 @@ static void ble_active_state_bind(
     taskEXIT_CRITICAL(&s_ble.lock);
 }
 
-static void ble_gatt_state_bind(
+static bool ble_gatt_state_bind(
     ble_connection_slot_t *slot,
     esp32_mquickjs_future_driver_state_t *state)
 {
-    if (slot == NULL || state == NULL) return;
+    if (slot == NULL || state == NULL) return false;
+    taskENTER_CRITICAL(&s_ble.lock);
+    if (slot->generation != state->connection_generation ||
+        atomic_load_explicit(&slot->active_gatt_state, memory_order_relaxed) != NULL) {
+        taskEXIT_CRITICAL(&s_ble.lock);
+        ble_throw_error(state->ctx, "BLE_BUSY", BLE_HS_EBUSY, -1,
+                        state->connection_index, -1);
+        return false;
+    }
+    state->native_identity = esp32_mquickjs_wireless_operation_register(
+        &s_ble_operations, state);
+    if (state->native_identity == 0U) {
+        taskEXIT_CRITICAL(&s_ble.lock);
+        ble_throw_error(state->ctx, "BLE_BUSY", BLE_HS_ENOMEM, -1,
+                        state->connection_index, -1);
+        return false;
+    }
+    state->callback_refs++; /* Native ownership, independent of JS Future. */
+    atomic_store_explicit(&slot->active_gatt_state, state, memory_order_release);
+    taskEXIT_CRITICAL(&s_ble.lock);
     if (state->gatt_accounted && !state->gatt_started) {
-        (void)atomic_fetch_sub_explicit(&slot->gatt_pending, 1,
-                                        memory_order_acq_rel);
+        (void)atomic_fetch_sub_explicit(&slot->gatt_pending, 1, memory_order_acq_rel);
         state->gatt_started = true;
     }
-    ble_active_state_bind(&slot->active_gatt_state, state);
+    return true;
 }
 
 static esp32_mquickjs_future_driver_state_t *ble_active_state_acquire(
@@ -1537,7 +1566,7 @@ static esp32_mquickjs_future_driver_state_t *ble_active_state_acquire(
     esp32_mquickjs_future_driver_state_t *state;
     taskENTER_CRITICAL(&s_ble.lock);
     state = atomic_load_explicit(location, memory_order_acquire);
-    if (state != NULL && !state->detached) state->callback_refs++;
+    if (state != NULL && (!state->detached || state->native_identity != 0U)) state->callback_refs++;
     else state = NULL;
     taskEXIT_CRITICAL(&s_ble.lock);
     return state;
@@ -1562,6 +1591,73 @@ static void ble_future_state_drop(
     if (state->callback_refs == 0 && state->detached) release = true;
     taskEXIT_CRITICAL(&s_ble.lock);
     if (release) ble_future_state_storage_free(state);
+}
+
+/* Cookie lookup and retain share the same lock as detach/removal. */
+static esp32_mquickjs_future_driver_state_t *ble_operation_acquire(void *arg)
+{
+    esp32_mquickjs_future_driver_state_t *state;
+    taskENTER_CRITICAL(&s_ble.lock);
+    state = esp32_mquickjs_wireless_operation_lookup(
+        &s_ble_operations, (uint32_t)(uintptr_t)arg);
+    if (state != NULL) state->callback_refs++;
+    taskEXIT_CRITICAL(&s_ble.lock);
+    return state;
+}
+
+static void ble_native_state_complete(esp32_mquickjs_future_driver_state_t *state)
+{
+    bool drop = false;
+    if (state == NULL) return;
+    taskENTER_CRITICAL(&s_ble.lock);
+    if (state->native_identity != 0U) {
+        (void)esp32_mquickjs_wireless_operation_remove(
+            &s_ble_operations, state->native_identity);
+        state->native_identity = 0U;
+        for (size_t i = 0; i < CONFIG_ESP32_MQUICKJS_BLE_MAX_CONNECTIONS; ++i) {
+            ble_connection_slot_t *slot = &s_ble.connections[i];
+            if (atomic_load(&slot->active_gatt_state) == state)
+                atomic_store(&slot->active_gatt_state, NULL);
+            if (atomic_load(&slot->active_gap_state) == state)
+                atomic_store(&slot->active_gap_state, NULL);
+        }
+        if (atomic_load(&s_ble_server_notify_state) == state)
+            atomic_store(&s_ble_server_notify_state, NULL);
+        drop = true;
+    }
+    taskEXIT_CRITICAL(&s_ble.lock);
+    if (drop) ble_future_state_drop(state);
+}
+
+static void ble_native_states_quiesced(void)
+{
+    /* Only after successful Host stop/deinit: no future SDK callback. */
+    for (size_t i = 0; i < ESP32_MQUICKJS_WIRELESS_OPERATION_CAPACITY; ++i) {
+        esp32_mquickjs_future_driver_state_t *state;
+        taskENTER_CRITICAL(&s_ble.lock);
+        state = s_ble_operations.entries[i].owner;
+        if (state != NULL) state->callback_refs++;
+        taskEXIT_CRITICAL(&s_ble.lock);
+        if (state != NULL) {
+            ble_native_state_complete(state);
+            ble_future_state_drop(state);
+        }
+    }
+}
+
+static void ble_gatt_callback_drop(esp32_mquickjs_future_driver_state_t *state)
+{
+    if (atomic_load_explicit(&state->completed, memory_order_acquire))
+        ble_native_state_complete(state);
+    ble_future_state_drop(state);
+}
+
+static void ble_future_wake_state(esp32_mquickjs_future_driver_state_t *state)
+{
+    /* Runtime destruction must stop/deinit Host before freeing Future queues.
+     * Detached operations never wake either the old or a replacement runtime. */
+    if (!atomic_load_explicit(&state->detached, memory_order_acquire))
+        (void)esp32_mquickjs_future_wake(state->runtime, state->token);
 }
 
 static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
@@ -1706,8 +1802,7 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
             if (event->connect.status != 0) state->host_code = event->connect.status;
             atomic_store_explicit(&state->completed, true,
                                   memory_order_release);
-            (void)esp32_mquickjs_future_wake(
-                state->runtime, state->token);
+            ble_future_wake_state(state);
         }
         if (callback_slot != NULL) {
             (void)esp32_mquickjs_wireless_native_operation_complete(
@@ -1753,16 +1848,18 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
                         ? 0 : BLE_HS_ENOTCONN;
                 atomic_store_explicit(&state->completed, true,
                                       memory_order_release);
-                (void)esp32_mquickjs_future_wake(
-                    state->runtime, state->token);
+                ble_future_wake_state(state);
             }
             if (gatt_state != NULL && gatt_state != state) {
                 gatt_state->host_code = BLE_HS_ENOTCONN;
                 atomic_store_explicit(&gatt_state->completed, true,
                                       memory_order_release);
-                (void)esp32_mquickjs_future_wake(
-                    gatt_state->runtime, gatt_state->token);
+                ble_future_wake_state(gatt_state);
             }
+            if (gatt_state != NULL &&
+                (gatt_state->operation == BLE_OP_PAIR ||
+                 gatt_state->operation == BLE_OP_CONNECTION_CLOSE))
+                ble_native_state_complete(gatt_state);
             ble_future_state_drop(gatt_state);
         }
         break;
@@ -1810,8 +1907,8 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
         if (state != NULL && state->operation == BLE_OP_PAIR) {
             state->host_code = event->enc_change.status;
             atomic_store_explicit(&state->completed, true, memory_order_release);
-            (void)esp32_mquickjs_future_wake(state->runtime,
-                                              state->token);
+            ble_future_wake_state(state);
+            ble_native_state_complete(state);
         }
         break;
     case BLE_GAP_EVENT_PASSKEY_ACTION:
@@ -1900,24 +1997,29 @@ static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_NOTIFY_TX: {
         esp32_mquickjs_future_driver_state_t *notify_state =
             ble_active_state_acquire(&s_ble_server_notify_state);
+        bool complete = false;
         if (notify_state != NULL && notify_state->indication &&
             notify_state->attribute_handle == event->notify_tx.attr_handle &&
-            event->notify_tx.indication) {
-            uint16_t pending;
-            if (event->notify_tx.status != 0 &&
-                event->notify_tx.status != BLE_HS_EDONE &&
-                notify_state->host_code == 0)
-                notify_state->host_code = event->notify_tx.status;
-            pending = atomic_fetch_sub_explicit(
-                &notify_state->pending_confirmations, 1,
-                memory_order_acq_rel);
-            if (pending <= 1U) {
-                atomic_store_explicit(&s_ble_server_notify_state, NULL,
-                                      memory_order_release);
-                atomic_store_explicit(&notify_state->completed, true,
-                                      memory_order_release);
-                (void)esp32_mquickjs_future_wake(
-                    notify_state->runtime, notify_state->token);
+            event->notify_tx.indication && event->notify_tx.status != 0) {
+            taskENTER_CRITICAL(&s_ble.lock);
+            for (size_t i = 0; i < CONFIG_ESP32_MQUICKJS_BLE_MAX_CONNECTIONS; ++i) {
+                if (!notify_state->notify_pending[i] ||
+                    notify_state->notify_handles[i] != event->notify_tx.conn_handle)
+                    continue;
+                notify_state->notify_pending[i] = false;
+                if (event->notify_tx.status != BLE_HS_EDONE &&
+                    notify_state->host_code == 0)
+                    notify_state->host_code = event->notify_tx.status;
+                uint16_t pending = atomic_fetch_sub_explicit(
+                    &notify_state->pending_confirmations, 1, memory_order_acq_rel);
+                complete = pending == 1U && !notify_state->notify_submitting;
+                break;
+            }
+            taskEXIT_CRITICAL(&s_ble.lock);
+            if (complete) {
+                atomic_store_explicit(&notify_state->completed, true, memory_order_release);
+                ble_future_wake_state(notify_state);
+                ble_native_state_complete(notify_state);
             }
         }
         ble_future_state_drop(notify_state);
@@ -1985,7 +2087,7 @@ static void ble_on_sync(void)
         state->host_code = rc;
         s_ble.synchronized = rc == 0;
         atomic_store_explicit(&state->completed, true, memory_order_release);
-        (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+        ble_future_wake_state(state);
     }
     ble_future_state_drop(state);
 }
@@ -2030,24 +2132,27 @@ static void ble_future_state_release(esp32_mquickjs_future_driver_state_t *state
     taskENTER_CRITICAL(&s_ble.lock);
     if (atomic_load_explicit(&s_ble_open_state, memory_order_relaxed) == state)
         atomic_store_explicit(&s_ble_open_state, NULL, memory_order_release);
-    if (atomic_load_explicit(&s_ble_server_notify_state,
+    if (state->native_identity == 0U &&
+        atomic_load_explicit(&s_ble_server_notify_state,
                              memory_order_relaxed) == state)
         atomic_store_explicit(&s_ble_server_notify_state, NULL,
                               memory_order_release);
     for (index = 0; index < CONFIG_ESP32_MQUICKJS_BLE_MAX_CONNECTIONS;
          ++index) {
         ble_connection_slot_t *slot = &s_ble.connections[index];
-        if (atomic_load_explicit(&slot->active_gap_state,
+        if (state->native_identity == 0U &&
+            atomic_load_explicit(&slot->active_gap_state,
                                  memory_order_relaxed) == state)
             atomic_store_explicit(&slot->active_gap_state, NULL,
                                   memory_order_release);
-        if (atomic_load_explicit(&slot->active_gatt_state,
+        if (state->native_identity == 0U &&
+            atomic_load_explicit(&slot->active_gatt_state,
                                  memory_order_relaxed) == state)
             atomic_store_explicit(&slot->active_gatt_state, NULL,
                                   memory_order_release);
     }
+    state->detached = true;
     if (state->callback_refs == 0) release = true;
-    else state->detached = true;
     taskEXIT_CRITICAL(&s_ble.lock);
     if (release) ble_future_state_storage_free(state);
 }
@@ -2084,17 +2189,21 @@ static JSValue ble_future_on_timeout(
     if (state != NULL && state->started) {
         switch (state->operation) {
         case BLE_OP_SCAN:
-        case BLE_OP_SCANNER_CLOSE:
-            (void)ble_gap_disc_cancel();
-            s_ble.scanner.active = false;
+        case BLE_OP_SCANNER_CLOSE: {
+            int rc = ble_gap_disc_cancel();
+            /* A timeout settles the public Future, not the native procedure.
+             * Preserve callback-visible storage when cancellation fails. */
+            if (rc == 0 || rc == BLE_HS_EALREADY) s_ble.scanner.active = false;
             s_ble.scanner.stop_reason = BLE_STOP_ERROR;
             break;
+        }
         case BLE_OP_ADVERTISE:
-        case BLE_OP_ADVERTISER_CLOSE:
-            (void)ble_gap_adv_stop();
-            s_ble.advertiser.active = false;
+        case BLE_OP_ADVERTISER_CLOSE: {
+            int rc = ble_gap_adv_stop();
+            if (rc == 0 || rc == BLE_HS_EALREADY) s_ble.advertiser.active = false;
             s_ble.advertiser.stop_reason = BLE_STOP_ERROR;
             break;
+        }
         case BLE_OP_CONNECT:
             if (state->connection_index < s_ble.max_connections) {
                 (void)esp32_mquickjs_wireless_native_operation_request_cancel(
@@ -2107,7 +2216,7 @@ static JSValue ble_future_on_timeout(
             if (state->connection_index < s_ble.max_connections) {
                 ble_connection_slot_t *slot =
                     &s_ble.connections[state->connection_index];
-                if (slot->open) {
+                if (slot->open && slot->generation == state->connection_generation) {
                     (void)ble_gap_terminate(slot->conn_handle,
                                             BLE_ERR_REM_USER_CONN_TERM);
                 }
@@ -2124,7 +2233,7 @@ static JSValue ble_future_on_timeout(
             if (state->connection_index < s_ble.max_connections) {
                 ble_connection_slot_t *slot =
                     &s_ble.connections[state->connection_index];
-                if (slot->open)
+                if (slot->open && slot->generation == state->connection_generation)
                     (void)ble_gap_terminate(slot->conn_handle,
                                             BLE_ERR_REM_USER_CONN_TERM);
             }
@@ -2133,11 +2242,14 @@ static JSValue ble_future_on_timeout(
             uint16_t index;
             for (index = 0; index < s_ble.max_connections; ++index) {
                 ble_connection_slot_t *slot = &s_ble.connections[index];
-                if (slot->open &&
-                    (state->connection_index == UINT16_MAX ||
-                     state->connection_index == index)) {
-                    (void)ble_gap_terminate(slot->conn_handle,
-                                            BLE_ERR_REM_USER_CONN_TERM);
+                bool pending;
+                uint16_t handle;
+                taskENTER_CRITICAL(&s_ble.lock);
+                pending = state->notify_pending[index];
+                handle = state->notify_handles[index];
+                taskEXIT_CRITICAL(&s_ble.lock);
+                if (pending && slot->open && handle == slot->conn_handle) {
+                    (void)ble_gap_terminate(handle, BLE_ERR_REM_USER_CONN_TERM);
                 }
             }
             break;
@@ -2927,8 +3039,9 @@ static bool ble_open_capture(
     atomic_init(&state->completed, false);
     generation = ble_next_generation(&s_ble_next_generation);
     ble_reset_orphan_close();
-    memset(&s_ble, 0, sizeof(s_ble));
-    s_ble.lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
+    /* Host is quiescent here; preserve the permanent callback lock. */
+    memset((uint8_t *)&s_ble + sizeof(s_ble.lock), 0,
+           sizeof(s_ble) - sizeof(s_ble.lock));
     s_ble.lifecycle = BLE_LIFECYCLE_OPENING;
     s_ble.ctx = ctx;
     s_ble.runtime = esp32_mquickjs_get_active_runtime();
@@ -3008,7 +3121,7 @@ fail:
     s_ble.lifecycle = BLE_LIFECYCLE_FAILED;
     ble_active_state_bind(&s_ble_open_state, NULL);
     atomic_store_explicit(&state->completed, true, memory_order_release);
-    (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+    ble_future_wake_state(state);
 }
 
 static bool ble_open_start(
@@ -3315,7 +3428,16 @@ static void ble_scan_destroy(esp32_mquickjs_future_driver_state_t *state)
 {
     if (state != NULL && !state->transferred &&
         state->connection_generation == s_ble.scanner.generation) {
-        if (s_ble.scanner.active) (void)ble_gap_disc_cancel();
+        if (s_ble.scanner.active) {
+            int rc = ble_gap_disc_cancel();
+            if (rc != 0 && rc != BLE_HS_EALREADY) {
+                s_ble.scanner.stop_reason = BLE_STOP_ERROR;
+                ble_request_orphan_close(state->adapter_generation);
+                ble_future_state_release(state);
+                return;
+            }
+            s_ble.scanner.active = false;
+        }
         ble_release_event_queue(state->ctx, &s_ble.scanner.queue,
                                 &s_ble.scanner.queue_ref,
                                 &s_ble.scanner.queue_rooted);
@@ -3679,7 +3801,16 @@ static void ble_advertise_destroy(esp32_mquickjs_future_driver_state_t *state)
 {
     if (state != NULL && !state->transferred &&
         state->connection_generation == s_ble.advertiser.generation) {
-        if (s_ble.advertiser.active) (void)ble_gap_adv_stop();
+        if (s_ble.advertiser.active) {
+            int rc = ble_gap_adv_stop();
+            if (rc != 0 && rc != BLE_HS_EALREADY) {
+                s_ble.advertiser.stop_reason = BLE_STOP_ERROR;
+                ble_request_orphan_close(state->adapter_generation);
+                ble_future_state_release(state);
+                return;
+            }
+            s_ble.advertiser.active = false;
+        }
         ble_release_event_queue(state->ctx, &s_ble.advertiser.queue,
                                 &s_ble.advertiser.queue_ref,
                                 &s_ble.advertiser.queue_rooted);
@@ -4058,12 +4189,13 @@ static bool ble_connection_close_start(
     slot = &s_ble.connections[state->connection_index];
     state->runtime = runtime;
     state->token = token;
+    if (!ble_gatt_state_bind(slot, state)) return false;
     state->started = true;
-    ble_gatt_state_bind(slot, state);
     if (!slot->open || slot->generation != state->connection_generation) {
         state->host_code = 0;
         atomic_store_explicit(&state->completed, true, memory_order_release);
         (void)esp32_mquickjs_future_wake(runtime, token);
+        ble_native_state_complete(state);
         return true;
     }
     ble_active_state_bind(&slot->active_gap_state, state);
@@ -4077,11 +4209,14 @@ static bool ble_connection_close_start(
     }
     if (rc != 0) {
         ble_active_state_bind(&slot->active_gap_state, NULL);
+        ble_native_state_complete(state);
         state->host_code = rc;
         ble_throw_error(ctx, "BLE_DISCONNECTED", rc, -1,
                         state->connection_index, -1);
         return false;
     }
+    if (atomic_load_explicit(&state->completed, memory_order_acquire))
+        ble_native_state_complete(state);
     return true;
 }
 
@@ -4097,7 +4232,7 @@ static JSValue ble_connection_close_finish(
         (void)ble_gap_set_event_cb(slot->conn_handle, ble_gap_event_callback,
                                    NULL);
         ble_active_state_bind(&slot->active_gap_state, NULL);
-        ble_active_state_bind(&slot->active_gatt_state, NULL);
+        ble_native_state_complete(state);
         ble_recycle_connection(slot);
     }
     ble_retire_handle(ctx, state->owner_ref.val, JS_CLASS_BLE_CONNECTION,
@@ -4139,19 +4274,22 @@ static bool ble_pair_start(
     int rc;
     state->runtime = runtime;
     state->token = token;
+    if (!ble_gatt_state_bind(slot, state)) return false;
     state->started = true;
-    ble_gatt_state_bind(slot, state);
     ble_active_state_bind(&slot->active_gap_state, state);
     (void)ble_gap_set_event_cb(slot->conn_handle, ble_gap_event_callback, slot);
     rc = ble_gap_security_initiate(slot->conn_handle);
     if (rc != 0) {
         (void)ble_gap_set_event_cb(slot->conn_handle, ble_gap_event_callback, NULL);
         ble_active_state_bind(&slot->active_gap_state, NULL);
+        ble_native_state_complete(state);
         state->host_code = rc;
         ble_throw_error(ctx, "BLE_SECURITY_ERROR", rc, -1,
                         state->connection_index, -1);
         return false;
     }
+    if (atomic_load_explicit(&state->completed, memory_order_acquire))
+        ble_native_state_complete(state);
     return true;
 }
 
@@ -4201,18 +4339,22 @@ static int ble_exchange_mtu_callback(uint16_t conn_handle,
                                      const struct ble_gatt_error *error,
                                      uint16_t mtu, void *arg)
 {
-    ble_connection_slot_t *slot = arg;
-    esp32_mquickjs_future_driver_state_t *state =
-        slot != NULL
-            ? ble_active_state_acquire(&slot->active_gatt_state) : NULL;
+    esp32_mquickjs_future_driver_state_t *state = ble_operation_acquire(arg);
+    ble_connection_slot_t *slot = state != NULL
+        ? &s_ble.connections[state->connection_index] : NULL;
     (void)conn_handle;
     if (state == NULL) return 0;
+    if (state->detached || slot->generation != state->connection_generation) {
+        ble_native_state_complete(state);
+        ble_gatt_callback_drop(state);
+        return BLE_HS_EAPP;
+    }
     state->host_code = error != NULL ? error->status : BLE_HS_EUNKNOWN;
     state->mtu = mtu;
     if (slot != NULL && state->host_code == 0) slot->mtu = mtu;
     atomic_store_explicit(&state->completed, true, memory_order_release);
-    (void)esp32_mquickjs_future_wake(state->runtime, state->token);
-    ble_future_state_drop(state);
+    ble_future_wake_state(state);
+    ble_gatt_callback_drop(state);
     return 0;
 }
 
@@ -4271,14 +4413,14 @@ static bool ble_exchange_mtu_start(
     int rc;
     state->runtime = runtime;
     state->token = token;
+    if (!ble_gatt_state_bind(slot, state)) return false;
     state->started = true;
-    ble_gatt_state_bind(slot, state);
     rc = ble_att_set_preferred_mtu(state->mtu);
     if (rc == 0)
         rc = ble_gattc_exchange_mtu(slot->conn_handle,
-                                    ble_exchange_mtu_callback, slot);
+                                    ble_exchange_mtu_callback, (void *)(uintptr_t)state->native_identity);
     if (rc != 0) {
-        ble_active_state_bind(&slot->active_gatt_state, NULL);
+        ble_native_state_complete(state);
         state->host_code = rc;
         ble_throw_error(ctx, "BLE_GATT_ERROR", rc, -1,
                         state->connection_index, -1);
@@ -4349,16 +4491,17 @@ static bool ble_read_rssi_start(
     esp32_mquickjs_future_driver_state_t *state)
 {
     ble_connection_slot_t *slot = &s_ble.connections[state->connection_index];
-    int8_t rssi;
+    int8_t rssi = 0;
     int rc;
     state->runtime = runtime;
     state->token = token;
+    if (!ble_gatt_state_bind(slot, state)) return false;
     state->started = true;
-    ble_gatt_state_bind(slot, state);
     rc = ble_gap_conn_rssi(slot->conn_handle, &rssi);
     state->host_code = rc;
     state->result_count = rssi;
     if (rc != 0) {
+        ble_native_state_complete(state);
         ble_throw_error(ctx, "BLE_DISCONNECTED", rc, -1,
                         state->connection_index, -1);
         return false;
@@ -4367,6 +4510,8 @@ static bool ble_read_rssi_start(
     slot->rssi_valid = true;
     atomic_store_explicit(&state->completed, true, memory_order_release);
     (void)esp32_mquickjs_future_wake(runtime, token);
+    if (atomic_load_explicit(&state->completed, memory_order_acquire))
+        ble_native_state_complete(state);
     return true;
 }
 
@@ -4437,7 +4582,7 @@ static int ble_discover_start_descriptors(
     if (characteristic->value_handle >= end_handle) return BLE_HS_EDONE;
     return ble_gattc_disc_all_dscs(
         slot->conn_handle, characteristic->value_handle, end_handle,
-        ble_discover_descriptor_callback, slot);
+        ble_discover_descriptor_callback, (void *)(uintptr_t)state->native_identity);
 }
 
 static void ble_discover_complete(
@@ -4445,21 +4590,25 @@ static void ble_discover_complete(
 {
     state->host_code = status == BLE_HS_EDONE ? 0 : status;
     atomic_store_explicit(&state->completed, true, memory_order_release);
-    (void)esp32_mquickjs_future_wake(state->runtime, state->token);
+    ble_future_wake_state(state);
 }
 
 static int ble_discover_descriptor_callback(
     uint16_t conn_handle, const struct ble_gatt_error *error,
     uint16_t chr_val_handle, const struct ble_gatt_dsc *descriptor, void *arg)
 {
-    ble_connection_slot_t *slot = arg;
-    esp32_mquickjs_future_driver_state_t *state =
-        slot != NULL
-            ? ble_active_state_acquire(&slot->active_gatt_state) : NULL;
+    esp32_mquickjs_future_driver_state_t *state = ble_operation_acquire(arg);
+    ble_connection_slot_t *slot = state != NULL
+        ? &s_ble.connections[state->connection_index] : NULL;
     int result = 0;
     (void)conn_handle;
     (void)chr_val_handle;
     if (state == NULL || slot == NULL) return 0;
+    if (state->detached || slot->generation != state->connection_generation) {
+        ble_native_state_complete(state);
+        ble_future_state_drop(state);
+        return BLE_HS_EAPP;
+    }
     if (error->status == 0 && descriptor != NULL) {
         if (slot->descriptor_count >= state->max_descriptors) {
             ble_discover_complete(state, BLE_HS_ENOMEM);
@@ -4490,7 +4639,7 @@ static int ble_discover_descriptor_callback(
     }
     ble_discover_complete(state, error->status);
 done:
-    ble_future_state_drop(state);
+    ble_gatt_callback_drop(state);
     return result;
 }
 
@@ -4498,13 +4647,17 @@ static int ble_discover_characteristic_callback(
     uint16_t conn_handle, const struct ble_gatt_error *error,
     const struct ble_gatt_chr *characteristic, void *arg)
 {
-    ble_connection_slot_t *slot = arg;
-    esp32_mquickjs_future_driver_state_t *state =
-        slot != NULL
-            ? ble_active_state_acquire(&slot->active_gatt_state) : NULL;
+    esp32_mquickjs_future_driver_state_t *state = ble_operation_acquire(arg);
+    ble_connection_slot_t *slot = state != NULL
+        ? &s_ble.connections[state->connection_index] : NULL;
     int result = 0;
     (void)conn_handle;
     if (state == NULL || slot == NULL) return 0;
+    if (state->detached || slot->generation != state->connection_generation) {
+        ble_native_state_complete(state);
+        ble_gatt_callback_drop(state);
+        return BLE_HS_EAPP;
+    }
     if (error->status == 0 && characteristic != NULL) {
         ble_remote_service_t *service =
             &slot->services[state->discover_service_index];
@@ -4531,7 +4684,7 @@ static int ble_discover_characteristic_callback(
             service->first_characteristic = slot->characteristic_count;
             rc = ble_gattc_disc_all_chrs(
                 slot->conn_handle, service->start_handle, service->end_handle,
-                ble_discover_characteristic_callback, slot);
+                ble_discover_characteristic_callback, (void *)(uintptr_t)state->native_identity);
             if (rc == 0) goto done;
             if (rc != BLE_HS_EDONE) {
                 ble_discover_complete(state, rc);
@@ -4557,7 +4710,7 @@ static int ble_discover_characteristic_callback(
     }
     ble_discover_complete(state, error->status);
 done:
-    ble_future_state_drop(state);
+    ble_gatt_callback_drop(state);
     return result;
 }
 
@@ -4565,30 +4718,34 @@ static int ble_discover_service_callback(
     uint16_t conn_handle, const struct ble_gatt_error *error,
     const struct ble_gatt_svc *service, void *arg)
 {
-    ble_connection_slot_t *slot = arg;
-    esp32_mquickjs_future_driver_state_t *state =
-        slot != NULL
-            ? ble_active_state_acquire(&slot->active_gatt_state) : NULL;
+    esp32_mquickjs_future_driver_state_t *state = ble_operation_acquire(arg);
+    ble_connection_slot_t *slot = state != NULL
+        ? &s_ble.connections[state->connection_index] : NULL;
     (void)conn_handle;
     if (state == NULL || slot == NULL) return 0;
+    if (state->detached || slot->generation != state->connection_generation) {
+        ble_native_state_complete(state);
+        ble_gatt_callback_drop(state);
+        return BLE_HS_EAPP;
+    }
     if (error->status == 0 && service != NULL) {
         ble_remote_service_t *target;
         if (slot->service_count >= state->max_services) {
             ble_discover_complete(state, BLE_HS_ENOMEM);
-            ble_future_state_drop(state);
+            ble_gatt_callback_drop(state);
             return BLE_HS_ENOMEM;
         }
         target = &slot->services[slot->service_count++];
         target->uuid = service->uuid;
         target->start_handle = service->start_handle;
         target->end_handle = service->end_handle;
-        ble_future_state_drop(state);
+        ble_gatt_callback_drop(state);
         return 0;
     }
     if (error->status == BLE_HS_EDONE) {
         if (slot->service_count == 0) {
             ble_discover_complete(state, 0);
-            ble_future_state_drop(state);
+            ble_gatt_callback_drop(state);
             return 0;
         }
         state->discover_service_index = 0;
@@ -4596,14 +4753,14 @@ static int ble_discover_service_callback(
         state->host_code = ble_gattc_disc_all_chrs(
             slot->conn_handle, slot->services[0].start_handle,
             slot->services[0].end_handle,
-            ble_discover_characteristic_callback, slot);
+            ble_discover_characteristic_callback, (void *)(uintptr_t)state->native_identity);
         if (state->host_code != 0)
             ble_discover_complete(state, state->host_code);
-        ble_future_state_drop(state);
+        ble_gatt_callback_drop(state);
         return 0;
     }
     ble_discover_complete(state, error->status);
-    ble_future_state_drop(state);
+    ble_gatt_callback_drop(state);
     return 0;
 }
 
@@ -4632,6 +4789,12 @@ static bool ble_discover_capture(
          !ble_validate_option_keys(ctx, options, "BLEConnection.discover()",
                                    allowed, 5))) {
         JS_PopGCRef(ctx, &property_ref);
+        return false;
+    }
+    if (atomic_load(&slot->active_gatt_state) != NULL ||
+        atomic_load(&slot->gatt_pending) != 0) {
+        JS_PopGCRef(ctx, &property_ref);
+        ble_throw_error(ctx, "BLE_BUSY", BLE_HS_EBUSY, -1, ref->index, -1);
         return false;
     }
     state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
@@ -4707,12 +4870,12 @@ static bool ble_discover_start(
     int rc;
     state->runtime = runtime;
     state->token = token;
+    if (!ble_gatt_state_bind(slot, state)) return false;
     state->started = true;
-    ble_gatt_state_bind(slot, state);
     rc = ble_gattc_disc_all_svcs(slot->conn_handle,
-                                 ble_discover_service_callback, slot);
+                                 ble_discover_service_callback, (void *)(uintptr_t)state->native_identity);
     if (rc != 0) {
-        ble_active_state_bind(&slot->active_gatt_state, NULL);
+        ble_native_state_complete(state);
         state->host_code = rc;
         ble_throw_error(ctx, "BLE_GATT_ERROR", rc, -1,
                         state->connection_index, -1);
@@ -5039,13 +5202,17 @@ static int ble_gatt_attr_callback(uint16_t conn_handle,
                                   const struct ble_gatt_error *error,
                                   struct ble_gatt_attr *attribute, void *arg)
 {
-    ble_connection_slot_t *slot = arg;
-    esp32_mquickjs_future_driver_state_t *state =
-        slot != NULL
-            ? ble_active_state_acquire(&slot->active_gatt_state) : NULL;
+    esp32_mquickjs_future_driver_state_t *state = ble_operation_acquire(arg);
+    ble_connection_slot_t *slot = state != NULL
+        ? &s_ble.connections[state->connection_index] : NULL;
     uint16_t length = 0;
     (void)conn_handle;
     if (state == NULL) return 0;
+    if (state->detached || slot->generation != state->connection_generation) {
+        ble_native_state_complete(state);
+        ble_gatt_callback_drop(state);
+        return BLE_HS_EAPP;
+    }
     state->host_code = error != NULL ? error->status : BLE_HS_EUNKNOWN;
     state->att_code = error != NULL ? error->att_handle : 0;
     if (state->host_code == 0 && state->operation == BLE_OP_GATT_READ &&
@@ -5061,8 +5228,8 @@ static int ble_gatt_attr_callback(uint16_t conn_handle,
         }
     }
     atomic_store_explicit(&state->completed, true, memory_order_release);
-    (void)esp32_mquickjs_future_wake(state->runtime, state->token);
-    ble_future_state_drop(state);
+    ble_future_wake_state(state);
+    ble_gatt_callback_drop(state);
     return 0;
 }
 
@@ -5075,12 +5242,12 @@ static bool ble_gatt_read_start(
     int rc;
     state->runtime = runtime;
     state->token = token;
+    if (!ble_gatt_state_bind(slot, state)) return false;
     state->started = true;
-    ble_gatt_state_bind(slot, state);
     rc = ble_gattc_read(slot->conn_handle, state->attribute_handle,
-                        ble_gatt_attr_callback, slot);
+                        ble_gatt_attr_callback, (void *)(uintptr_t)state->native_identity);
     if (rc != 0) {
-        ble_active_state_bind(&slot->active_gatt_state, NULL);
+        ble_native_state_complete(state);
         state->host_code = rc;
         ble_throw_error(ctx, "BLE_GATT_ERROR", rc, -1,
                         state->connection_index, state->attribute_handle);
@@ -5202,12 +5369,12 @@ static bool ble_gatt_write_start(
     int rc;
     state->runtime = runtime;
     state->token = token;
+    if (!ble_gatt_state_bind(slot, state)) return false;
     state->started = true;
-    ble_gatt_state_bind(slot, state);
     if (state->response) {
         rc = ble_gattc_write_flat(slot->conn_handle, state->attribute_handle,
                                   state->payload, state->payload_length,
-                                  ble_gatt_attr_callback, slot);
+                                  ble_gatt_attr_callback, (void *)(uintptr_t)state->native_identity);
     } else {
         rc = ble_gattc_write_no_rsp_flat(slot->conn_handle,
                                          state->attribute_handle,
@@ -5220,12 +5387,15 @@ static bool ble_gatt_write_start(
         }
     }
     if (rc != 0) {
-        ble_active_state_bind(&slot->active_gatt_state, NULL);
+        ble_native_state_complete(state);
+        ble_native_state_complete(state);
         state->host_code = rc;
         ble_throw_error(ctx, "BLE_GATT_ERROR", rc, -1,
                         state->connection_index, state->attribute_handle);
         return false;
     }
+    if (atomic_load_explicit(&state->completed, memory_order_acquire))
+        ble_native_state_complete(state);
     return true;
 }
 
@@ -5470,13 +5640,13 @@ static bool ble_subscribe_start(
     int rc;
     state->runtime = runtime;
     state->token = token;
+    if (!ble_gatt_state_bind(slot, state)) return false;
     state->started = true;
-    ble_gatt_state_bind(slot, state);
     rc = ble_gattc_write_flat(slot->conn_handle, state->cccd_handle,
                               state->payload, state->payload_length,
-                              ble_gatt_attr_callback, slot);
+                              ble_gatt_attr_callback, (void *)(uintptr_t)state->native_identity);
     if (rc != 0) {
-        ble_active_state_bind(&slot->active_gatt_state, NULL);
+        ble_native_state_complete(state);
         state->host_code = rc;
         ble_throw_error(ctx, "BLE_GATT_ERROR", rc, -1,
                         state->connection_index, state->cccd_handle);
@@ -6159,8 +6329,25 @@ static bool ble_server_notify_start(
     state->runtime = runtime;
     state->token = token;
     state->started = true;
-    if (state->indication)
-        ble_active_state_bind(&s_ble_server_notify_state, state);
+    if (state->indication) {
+        taskENTER_CRITICAL(&s_ble.lock);
+        if (atomic_load(&s_ble_server_notify_state) != NULL) {
+            taskEXIT_CRITICAL(&s_ble.lock);
+            ble_throw_error(ctx, "BLE_BUSY", BLE_HS_EBUSY, -1, -1, -1);
+            return false;
+        }
+        state->native_identity = esp32_mquickjs_wireless_operation_register(
+            &s_ble_operations, state);
+        if (state->native_identity == 0U) {
+            taskEXIT_CRITICAL(&s_ble.lock);
+            ble_throw_error(ctx, "BLE_BUSY", BLE_HS_ENOMEM, -1, -1, -1);
+            return false;
+        }
+        state->callback_refs++;
+        state->notify_submitting = true;
+        atomic_store(&s_ble_server_notify_state, state);
+        taskEXIT_CRITICAL(&s_ble.lock);
+    }
     for (index = 0; index < s_ble.max_connections; ++index) {
         ble_connection_slot_t *slot = &s_ble.connections[index];
         struct os_mbuf *mbuf;
@@ -6172,23 +6359,35 @@ static bool ble_server_notify_start(
         state->attempted_connections++;
         mbuf = ble_hs_mbuf_from_flat(state->payload, state->payload_length);
         if (mbuf == NULL) {
+            taskENTER_CRITICAL(&s_ble.lock);
             if (state->host_code == 0) state->host_code = BLE_HS_ENOMEM;
+            taskEXIT_CRITICAL(&s_ble.lock);
             continue;
         }
         if (state->indication) {
+            taskENTER_CRITICAL(&s_ble.lock);
+            state->notify_handles[index] = slot->conn_handle;
+            state->notify_pending[index] = true;
             atomic_fetch_add_explicit(&state->pending_confirmations, 1,
                                       memory_order_relaxed);
+            taskEXIT_CRITICAL(&s_ble.lock);
             rc = ble_gatts_indicate_custom(slot->conn_handle,
                                             state->attribute_handle, mbuf);
-            if (rc != 0)
+            taskENTER_CRITICAL(&s_ble.lock);
+            if (rc != 0 && state->notify_pending[index]) {
+                state->notify_pending[index] = false;
                 atomic_fetch_sub_explicit(&state->pending_confirmations, 1,
                                           memory_order_relaxed);
+            }
+            taskEXIT_CRITICAL(&s_ble.lock);
         } else {
             rc = ble_gatts_notify_custom(slot->conn_handle,
                                           state->attribute_handle, mbuf);
         }
+        taskENTER_CRITICAL(&s_ble.lock);
         if (rc == 0) state->submitted_connections++;
         else if (state->host_code == 0) state->host_code = rc;
+        taskEXIT_CRITICAL(&s_ble.lock);
     }
     if (state->indication)
         atomic_fetch_add_explicit(&s_ble.server.indications,
@@ -6198,10 +6397,13 @@ static bool ble_server_notify_start(
         atomic_fetch_add_explicit(&s_ble.server.notifications,
                                   state->submitted_connections,
                                   memory_order_relaxed);
-    if (!state->indication ||
-        atomic_load_explicit(&state->pending_confirmations,
-                             memory_order_acquire) == 0) {
-        ble_active_state_bind(&s_ble_server_notify_state, NULL);
+    taskENTER_CRITICAL(&s_ble.lock);
+    state->notify_submitting = false;
+    bool notify_complete = !state->indication ||
+        atomic_load_explicit(&state->pending_confirmations, memory_order_acquire) == 0;
+    taskEXIT_CRITICAL(&s_ble.lock);
+    if (notify_complete) {
+        ble_native_state_complete(state);
         atomic_store_explicit(&state->completed, true, memory_order_release);
         (void)esp32_mquickjs_future_wake(runtime, token);
     }
@@ -6519,6 +6721,7 @@ JSValue js_ble_adapter_bonds(JSContext *ctx, JSValue *this_val,
             authenticated = value.authenticated;
             secure_connections = value.sc;
         }
+        esp32_mquickjs_wireless_secure_zero(&value, sizeof(value));
         *peer = ble_address_to_js(ctx, &peers[index]);
         *item = JS_NewObject(ctx);
         if (JS_IsException(*peer) || JS_IsException(*item) ||
@@ -6791,7 +6994,9 @@ JSValue js_ble_connection_respond_pairing(JSContext *ctx, JSValue *this_val,
         if (JS_VALUE_GET_SPECIAL_VALUE(argv[1]) == 0) return JS_FALSE;
         response.passkey = slot->pairing_passkey;
     }
-    if (ble_sm_inject_io(slot->conn_handle, &response) != 0)
+    int response_result = ble_sm_inject_io(slot->conn_handle, &response);
+    esp32_mquickjs_wireless_secure_zero(&response, sizeof(response));
+    if (response_result != 0)
         return ble_throw_error(ctx, "BLE_SECURITY_ERROR", BLE_HS_EINVAL,
                                -1, -1, -1);
     slot->pairing_request_id = 0;

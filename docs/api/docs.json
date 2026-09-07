@@ -43,6 +43,7 @@
     { "id": "wifi-csi-protocol", "title": "ESP32QJS Wi-Fi CSI wire protocol", "path": "api/wifi-csi-protocol.md", "requiresAnyFeatures": ["wifi_csi"] },
     { "id": "esp-now", "title": "ESP32QJS ESP-NOW API", "path": "api/esp-now.md", "requiresAnyFeatures": ["espnow"] },
     { "id": "ble", "title": "ESP32QJS Bluetooth LE API", "path": "api/ble.md", "requiresAnyFeatures": ["ble"] },
+    { "id": "ble-lifecycle", "title": "BLE Future timeouts and native cleanup", "path": "api/ble-lifecycle.md", "requiresAnyFeatures": ["ble"] },
     { "id": "runtime-logs", "title": "ESP32QJS runtime logs API", "path": "api/runtime-logs.md", "requiresAnyFeatures": ["runtime_logs"] }
   ]
 }

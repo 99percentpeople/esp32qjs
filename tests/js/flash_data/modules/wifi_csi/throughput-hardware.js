@@ -30,7 +30,7 @@ test("wifi_csi/throughput-hardware", function () {
       timeoutMs: 15000
     });
     gc();
-    before = sys.status.memory;
+    before = test.memorySnapshot();
     session = wifi.csi.open({
       source: "promiscuous",
       channel: "current",
@@ -81,7 +81,7 @@ test("wifi_csi/throughput-hardware", function () {
   }
 
   gc();
-  after = sys.status.memory;
+  after = test.memorySnapshot();
   drops = stats.droppedPoolFull + stats.droppedQueueFull +
     stats.droppedFrameTooLarge + stats.droppedClosing;
   test.equal(wifi.status().radio.clients.wifiCsi, 0,

@@ -32,7 +32,7 @@ test("wifi_csi/tls-coexistence-hardware", function () {
   }).synchronized, true, "TLS qualification requires synchronized time");
 
   gc();
-  before = sys.status.memory;
+  before = test.memorySnapshot();
   try {
     session = wifi.csi.open({
       source: "associated",
@@ -71,7 +71,7 @@ test("wifi_csi/tls-coexistence-hardware", function () {
   }
 
   gc();
-  after = sys.status.memory;
+  after = test.memorySnapshot();
   test.equal(wifi.status().radio.clients.wifiCsi, 0,
     "TLS coexistence close should release the CSI radio lease");
   test.ok(after.internal.largestFreeBlockBytes + 131072 >=

@@ -328,3 +328,43 @@ bool esp32_mquickjs_wireless_fixed_channel_release(
     owner->secondary_channel = 0U;
     return true;
 }
+
+uint32_t esp32_mquickjs_wireless_operation_register(
+    esp32_mquickjs_wireless_operation_registry_t *registry, void *owner)
+{
+    if (registry == NULL || owner == NULL || registry->last_identity == UINT32_MAX)
+        return 0U;
+    for (size_t i = 0; i < ESP32_MQUICKJS_WIRELESS_OPERATION_CAPACITY; ++i) {
+        if (registry->entries[i].owner == NULL) {
+            uint32_t identity = ++registry->last_identity;
+            registry->entries[i] = (esp32_mquickjs_wireless_operation_entry_t){identity, owner};
+            return identity;
+        }
+    }
+    return 0U;
+}
+
+void *esp32_mquickjs_wireless_operation_lookup(
+    const esp32_mquickjs_wireless_operation_registry_t *registry, uint32_t identity)
+{
+    if (registry == NULL || identity == 0U) return NULL;
+    for (size_t i = 0; i < ESP32_MQUICKJS_WIRELESS_OPERATION_CAPACITY; ++i) {
+        if (registry->entries[i].identity == identity)
+            return registry->entries[i].owner;
+    }
+    return NULL;
+}
+
+void *esp32_mquickjs_wireless_operation_remove(
+    esp32_mquickjs_wireless_operation_registry_t *registry, uint32_t identity)
+{
+    if (registry == NULL || identity == 0U) return NULL;
+    for (size_t i = 0; i < ESP32_MQUICKJS_WIRELESS_OPERATION_CAPACITY; ++i) {
+        if (registry->entries[i].identity == identity) {
+            void *owner = registry->entries[i].owner;
+            registry->entries[i] = (esp32_mquickjs_wireless_operation_entry_t){0};
+            return owner;
+        }
+    }
+    return NULL;
+}

@@ -28,6 +28,10 @@ int main(void)
     assert(esp32_mquickjs_wifi_csi_slot_retain(&resources, slot));
     assert(esp32_mquickjs_native_lease_retain_count(&slot->lease) == 3);
     assert(esp32_mquickjs_wifi_csi_slot_close_public_owner(&resources, slot));
+    esp32_mquickjs_wifi_csi_resources_set_accepting(&resources, false);
+    assert(!esp32_mquickjs_wifi_csi_resources_deinit(&resources));
+    assert(state.allocations == 2);
+    assert(slot->payload[0] == 42); /* View/Source still owns readable storage. */
     assert(esp32_mquickjs_native_pool_available(&resources.pool) == 0);
     assert(atomic_load(&resources.counters.leased_frames) == 1);
     assert(esp32_mquickjs_wifi_csi_slot_release(&resources, slot));

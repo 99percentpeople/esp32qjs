@@ -12,7 +12,7 @@ interface readiness, and later Ethernet/PPP state belong exclusively to
   `droppedDriverEvents` counts bounded internal Wi-Fi event publications that
   could not be queued without blocking.
   `started` is the boot-scoped physical-radio state rather than the station
-  helper's event history. `radio` contains `{ generation, initialized,
+  helper's event history. `radio` contains `{ generation, driverOwned, restartRequired, faultStage, faultError, initialized,
   starting, started, mode, channel, channelGeneration, maxTxPowerDbm,
   powerSave, clients }`; client counts distinguish the Wi-Fi station helper
   from ESP-NOW leases.
@@ -74,3 +74,19 @@ network traffic should establish an authenticated time source.
 After synchronization, `Date.now()` and `new Date()` use the same wall clock;
 `sys.millis()`, `sys.micros()`, and `performance.now()` remain monotonic uptime
 clocks and are not affected by SNTP adjustments.
+
+
+`radio.driverOwned` records successful native driver initialization even if a later
+storage/mode/start step failed. `faultStage` and the original numeric ESP-IDF
+`faultError` are null when no boot-scoped Radio fault was recorded. Fault stages
+are `nvs`, `init`, `storage`, `get-mode`, `mode`, `start`, and `promiscuous-stop`.
+`restartRequired:true` requires a **device reboot**: `sys.restartRuntime()` does
+not reset the Radio's once initialization or repeat a failed driver mutation.
+These fields contain no credentials. An unsuccessful promiscuous cleanup retains
+its exact owner until the cleanup suffix succeeds; it does not advertise release.
+
+The native Radio has at most 16 live leases. Released lease copies cannot alter
+another client; exhausted identity space fails without wrapping. Fixed-channel
+ownership remains exclusive, including when two owners request the same channel.
+Wi-Fi control events update native status and Future results independently of
+lossy observation queues. Timer callbacks defer disconnect to the runtime.

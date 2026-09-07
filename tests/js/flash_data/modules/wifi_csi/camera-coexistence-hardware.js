@@ -17,7 +17,7 @@ test("wifi_csi/camera-coexistence-hardware", function () {
   test.equal(caps.supports.promiscuous, true,
     "camera coexistence requires the promiscuous CSI Build Context gate");
   gc();
-  before = sys.status.memory;
+  before = test.memorySnapshot();
   try {
     try { wifi.disconnect(); } catch (ignoredDisconnectError) {}
     cam = camera.open({
@@ -66,7 +66,7 @@ test("wifi_csi/camera-coexistence-hardware", function () {
   }
 
   gc();
-  after = sys.status.memory;
+  after = test.memorySnapshot();
   test.equal(wifi.status().radio.clients.wifiCsi, 0,
     "camera coexistence close should release the CSI radio lease");
   test.ok(after.internal.largestFreeBlockBytes + 131072 >=

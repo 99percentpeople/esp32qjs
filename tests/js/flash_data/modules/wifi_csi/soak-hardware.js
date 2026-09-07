@@ -28,7 +28,7 @@ test("wifi_csi/soak-hardware", function () {
   test.equal(caps.supports.promiscuous, true,
     "long soak requires the promiscuous Build Context gate");
   gc();
-  before = sys.status.memory;
+  before = test.memorySnapshot();
   minimumInternalLargest = before.internal.largestFreeBlockBytes;
   minimumDmaLargest = before.dma.largestFreeBlockBytes;
   minimumPsramLargest = before.psram === null
@@ -58,7 +58,7 @@ test("wifi_csi/soak-hardware", function () {
       }
       if (sys.millis() >= nextSampleMs) {
         gc();
-        sample = sys.status.memory;
+        sample = test.memorySnapshot();
         if (sample.internal.largestFreeBlockBytes < minimumInternalLargest) {
           minimumInternalLargest = sample.internal.largestFreeBlockBytes;
         }
@@ -86,7 +86,7 @@ test("wifi_csi/soak-hardware", function () {
   }
 
   gc();
-  after = sys.status.memory;
+  after = test.memorySnapshot();
   test.equal(wifi.status().radio.clients.wifiCsi, 0,
     "long soak close should release the CSI radio lease");
   test.ok(after.internal.largestFreeBlockBytes + 131072 >=
