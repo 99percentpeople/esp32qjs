@@ -1,0 +1,4128 @@
+{
+  "fieldCoverageSource": "idf-wifi-api-inventory.json: variants[target/profile].symbols[symbol].fields; typedef references are followed through the same variant inventory. Offsets/ABI layout are not computed.",
+  "schema": 1,
+  "scope": "Target contract coverage tracking; task defaults resolve each symbol disposition, implementation, contract, ownership, completion and validation. No completed implementation is inferred from C usage.",
+  "symbols": {
+    "components/esp_phy/include/esp_phy.h::ESP_PHY_ANT_ANT0": {
+      "task": "W-07"
+    },
+    "components/esp_phy/include/esp_phy.h::ESP_PHY_ANT_ANT1": {
+      "task": "W-07"
+    },
+    "components/esp_phy/include/esp_phy.h::ESP_PHY_ANT_MAX": {
+      "task": "W-07"
+    },
+    "components/esp_phy/include/esp_phy.h::ESP_PHY_ANT_MODE_ANT0": {
+      "task": "W-07"
+    },
+    "components/esp_phy/include/esp_phy.h::ESP_PHY_ANT_MODE_ANT1": {
+      "task": "W-07"
+    },
+    "components/esp_phy/include/esp_phy.h::ESP_PHY_ANT_MODE_AUTO": {
+      "task": "W-07"
+    },
+    "components/esp_phy/include/esp_phy.h::ESP_PHY_ANT_MODE_MAX": {
+      "task": "W-07"
+    },
+    "components/esp_phy/include/esp_phy.h::esp_phy_ant_config_t": {
+      "task": "W-07"
+    },
+    "components/esp_phy/include/esp_phy.h::esp_phy_ant_gpio_config_t": {
+      "task": "W-07"
+    },
+    "components/esp_phy/include/esp_phy.h::esp_phy_ant_gpio_t": {
+      "task": "W-07"
+    },
+    "components/esp_phy/include/esp_phy.h::esp_phy_ant_mode_t": {
+      "task": "W-07"
+    },
+    "components/esp_phy/include/esp_phy.h::esp_phy_ant_t": {
+      "task": "W-07"
+    },
+    "components/esp_phy/include/esp_phy.h::esp_phy_get_ant": {
+      "task": "W-07"
+    },
+    "components/esp_phy/include/esp_phy.h::esp_phy_get_ant_gpio": {
+      "task": "W-07"
+    },
+    "components/esp_phy/include/esp_phy.h::esp_phy_set_ant": {
+      "task": "W-07"
+    },
+    "components/esp_phy/include/esp_phy.h::esp_phy_set_ant_gpio": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_ARGUMENT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_DISCARD": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_DISCARD_DUPLICATE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_DISCONNECTED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_EXCEED_MTU": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_INTERFACE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_NOT_ALLOWED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_NOT_CONFIG": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_NOT_INIT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_NOT_START": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_NOT_SUPPORT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_NO_MEMORY": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_NO_PARENT_FOUND": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_NO_ROUTE_FOUND": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_OPTION_NULL": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_OPTION_UNKNOWN": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_PS": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_QUEUE_FAIL": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_QUEUE_FULL": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_QUEUE_READ": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_RECV_RELEASE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_TIMEOUT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_VOTING": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_WIFI_NOT_START": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_XMIT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::ESP_ERR_MESH_XON_NO_WINDOW": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_ASSOC_FLAG_MAP_ASSOC": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_ASSOC_FLAG_NETWORK_FREE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_ASSOC_FLAG_ROOTS_FOUND": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_ASSOC_FLAG_ROOT_FIXED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_ASSOC_FLAG_STA_VOTED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_ASSOC_FLAG_STA_VOTE_EXPIRE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_ASSOC_FLAG_VOTE_IN_PROGRESS": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_DATA_DROP": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_DATA_ENC": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_DATA_FROMDS": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_DATA_GROUP": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_DATA_NONBLOCK": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_DATA_P2P": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_DATA_TODS": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_CHANNEL_SWITCH": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_CHILD_CONNECTED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_CHILD_DISCONNECTED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_FIND_NETWORK": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_LAYER_CHANGE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_MAX": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_NETWORK_STATE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_NO_PARENT_FOUND": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_PARENT_CONNECTED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_PARENT_DISCONNECTED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_PS_CHILD_DUTY": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_PS_DEVICE_DUTY": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_PS_PARENT_DUTY": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_ROOT_ADDRESS": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_ROOT_ASKED_YIELD": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_ROOT_FIXED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_ROOT_SWITCH_ACK": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_ROOT_SWITCH_REQ": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_ROUTER_SWITCH": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_ROUTING_TABLE_ADD": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_ROUTING_TABLE_REMOVE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_SCAN_DONE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_STARTED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_STOPPED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_STOP_RECONNECTION": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_TODS_STATE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_VOTE_STARTED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_EVENT_VOTE_STOPPED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_IDLE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_INIT_CONFIG_DEFAULT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_LEAF": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_MPS": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_MTU": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_NODE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_OPT_RECV_DS_ADDR": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_OPT_SEND_GROUP": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_PROTO_AP": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_PROTO_BIN": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_PROTO_HTTP": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_PROTO_JSON": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_PROTO_MQTT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_PROTO_STA": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_PS_DEVICE_DUTY_DEMAND": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_PS_DEVICE_DUTY_REQUEST": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_PS_NETWORK_DUTY_APPLIED_ENTIRE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_PS_NETWORK_DUTY_APPLIED_UPLINK": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_PS_NETWORK_DUTY_MASTER": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_REASON_CYCLIC": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_REASON_DIFF_ID": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_REASON_EMPTY_PASSWORD": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_REASON_IE_UNKNOWN": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_REASON_LEAF": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_REASON_PARENT_IDLE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_REASON_PARENT_STOPPED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_REASON_PARENT_UNENCRYPTED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_REASON_PARENT_WORSE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_REASON_ROOTS": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_REASON_SCAN_FAIL": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_REASON_WAIVE_ROOT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_ROOT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_ROOT_LAYER": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_STA": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_TODS_REACHABLE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_TODS_UNREACHABLE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_TOPO_CHAIN": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_TOPO_TREE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_TOS_DEF": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_TOS_E2E": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_TOS_P2P": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_VOTE_REASON_CHILD_INITIATED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::MESH_VOTE_REASON_ROOT_INITIATED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::__ESP_MESH_H__": {
+      "disposition": "private-excluded",
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_allow_root_conflicts": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_available_txupQ_num": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_connect": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_deinit": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_delete_group_id": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_disable_ps": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_disconnect": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_enable_ps": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_fix_root": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_flush_scan_result": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_flush_upstream_packets": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_active_duty_cycle": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_ap_assoc_expire": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_ap_authmode": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_ap_connections": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_capacity_num": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_config": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_group_list": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_group_num": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_id": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_ie_crypto_key": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_layer": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_max_layer": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_network_duty_cycle": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_non_mesh_connections": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_parent_bssid": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_root_healing_delay": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_router": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_router_bssid": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_routing_table": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_routing_table_size": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_running_active_duty_cycle": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_rx_pending": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_self_organized": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_subnet_nodes_list": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_subnet_nodes_num": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_topology": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_total_node_num": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_tsf_time": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_tx_pending": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_type": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_vote_percentage": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_get_xon_qsize": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_init": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_is_device_active": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_is_my_group": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_is_ps_enabled": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_is_root": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_is_root_conflicts_allowed": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_is_root_fixed": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_post_toDS_state": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_ps_duty_signaling": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_recv": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_recv_toDS": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_scan_get_ap_ie_len": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_scan_get_ap_record": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_send": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_send_block_time": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_active_duty_cycle": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_ap_assoc_expire": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_ap_authmode": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_ap_connections": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_ap_password": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_capacity_num": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_config": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_group_id": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_id": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_ie_crypto_funcs": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_ie_crypto_key": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_max_layer": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_network_duty_cycle": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_parent": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_root_healing_delay": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_router": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_self_organized": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_topology": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_type": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_vote_percentage": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_set_xon_qsize": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_start": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_stop": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_switch_channel": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_topology_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::esp_mesh_waive_root": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::g_wifi_default_mesh_crypto_funcs": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_addr_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_ap_cfg_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_cfg_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_data_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_disconnect_reason_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_channel_switch_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_child_connected_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_child_disconnected_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_connected_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_disconnected_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_find_network_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_id_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_info_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_layer_change_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_network_state_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_no_parent_found_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_ps_duty_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_root_address_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_root_conflict_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_root_fixed_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_root_switch_req_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_router_switch_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_routing_table_change_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_scan_done_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_toDS_state_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_event_vote_started_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_opt_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_proto_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_rc_config_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_router_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_rx_pending_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_tos_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_tx_pending_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_type_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_vote_reason_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mesh_vote_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_mesh.h::mip_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_ERR_ESPNOW_ARG": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_ERR_ESPNOW_BASE": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_ERR_ESPNOW_CHAN": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_ERR_ESPNOW_EXIST": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_ERR_ESPNOW_FULL": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_ERR_ESPNOW_IF": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_ERR_ESPNOW_INTERNAL": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_ERR_ESPNOW_NOT_FOUND": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_ERR_ESPNOW_NOT_INIT": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_ERR_ESPNOW_NO_MEM": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_NOW_ETH_ALEN": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_NOW_KEY_LEN": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_NOW_MAX_DATA_LEN": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_NOW_MAX_DATA_LEN_V2": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_NOW_MAX_ENCRYPT_PEER_NUM": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_NOW_MAX_IE_DATA_LEN": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_NOW_MAX_TOTAL_PEER_NUM": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_NOW_SEND_FAIL": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::ESP_NOW_SEND_SUCCESS": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::__ESP_NOW_H__": {
+      "disposition": "private-excluded",
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_add_peer": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_deinit": {
+      "disposition": "framework-owned",
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_del_peer": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_fetch_peer": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_get_peer": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_get_peer_num": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_get_user_oui": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_get_version": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_init": {
+      "disposition": "framework-owned",
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_is_peer_exist": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_mod_peer": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_peer_info_t": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_peer_num_t": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_rate_config_t": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_recv_cb_t": {
+      "disposition": "framework-owned",
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_recv_info_t": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_register_recv_cb": {
+      "disposition": "framework-owned",
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_register_send_cb": {
+      "disposition": "framework-owned",
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_remain_on_channel": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_remain_on_channel_t": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_send": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_send_cb_t": {
+      "disposition": "framework-owned",
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_send_info_t": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_send_status_t": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_set_peer_rate_config": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_set_pmk": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_set_user_oui": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_set_wake_window": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_switch_channel_t": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_switch_channel_tx": {
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_unregister_recv_cb": {
+      "disposition": "framework-owned",
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_now.h::esp_now_unregister_send_cb": {
+      "disposition": "framework-owned",
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-09"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::SC_EVENT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::SC_EVENT_FOUND_CHANNEL": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::SC_EVENT_GOT_SSID_PSWD": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::SC_EVENT_SCAN_DONE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::SC_EVENT_SEND_ACK_DONE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::SC_TYPE_AIRKISS": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::SC_TYPE_ESPTOUCH": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::SC_TYPE_ESPTOUCH_AIRKISS": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::SC_TYPE_ESPTOUCH_V2": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::SMARTCONFIG_START_CONFIG_DEFAULT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::__ESP_SMARTCONFIG_H__": {
+      "disposition": "private-excluded",
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::esp_esptouch_set_timeout": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::esp_smartconfig_fast_mode": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::esp_smartconfig_get_rvd_data": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::esp_smartconfig_get_version": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::esp_smartconfig_set_type": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::esp_smartconfig_start": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::esp_smartconfig_stop": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::smartconfig_event_got_ssid_pswd_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::smartconfig_event_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::smartconfig_start_config_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_smartconfig.h::smartconfig_type_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi.h::CONFIG_FEATURE_11R_BIT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::CONFIG_FEATURE_BSS_MAX_IDLE_BIT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::CONFIG_FEATURE_CACHE_TX_BUF_BIT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::CONFIG_FEATURE_FTM_INITIATOR_BIT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::CONFIG_FEATURE_FTM_RESPONDER_BIT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::CONFIG_FEATURE_GCMP_BIT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::CONFIG_FEATURE_GMAC_BIT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::CONFIG_FEATURE_OWE_SOFTAP_BIT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::CONFIG_FEATURE_WIFI_ENT_BIT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::CONFIG_FEATURE_WIFI_PASSIVE_HIDDEN_AP_BIT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::CONFIG_FEATURE_WPA3_SAE_BIT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_CONN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_DISCARD": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_IF": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_INIT_STATE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_MAC": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_MODE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_NOT_ASSOC": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_NOT_CONNECT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_NOT_INIT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_NOT_STARTED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_NOT_STOPPED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_NVS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_PASSWORD": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_POST": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_ROC_IN_PROGRESS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_SSID": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_STATE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_STOP_STATE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_TIMEOUT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_TWT_FULL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_TWT_SETUP_REJECT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_TWT_SETUP_TIMEOUT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_TWT_SETUP_TXFAIL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_TX_DISALLOW": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_WAKE_FAIL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_ERR_WIFI_WOULD_BLOCK": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::ESP_WIFI_CONNECTIONLESS_INTERVAL_DEFAULT_MODE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_AMPDU_RX_ENABLED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_AMPDU_TX_ENABLED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_AMSDU_TX_ENABLED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_CACHE_TX_BUFFER_NUM": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_CSI_ENABLED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_DEFAULT_RX_BA_WIN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_DUMP_HESIGB_ENABLED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_DYNAMIC_TX_BUFFER_NUM": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_ENABLE_11R": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_ENABLE_BSS_MAX_IDLE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_ENABLE_CACHE_TX_BUFFER": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_ENABLE_ENTERPRISE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_ENABLE_GCMP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_ENABLE_GMAC": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_ENABLE_OWE_SOFTAP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_ENABLE_PASSIVE_HIDDEN_AP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_ENABLE_WPA3_SAE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_FEATURE_CAPS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_FTM_INITIATOR": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_FTM_RESPONDER": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_INIT_CONFIG_DEFAULT": {
+      "disposition": "build-time",
+      "task": "W-01"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_INIT_CONFIG_MAGIC": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_MGMT_SBUF_NUM": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_NANO_FORMAT_ENABLED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_NVS_ENABLED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_PRIVACY_ENHANCEMENTS_ENABLED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_RMAC_AUTO_RESET_INTERVAL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_RX_MGMT_BUF_NUM_DEF": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_SOFTAP_BEACON_MAX_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_STATIC_TX_BUFFER_NUM": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_STA_DISCONNECTED_PM_ENABLED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_TASK_CORE_ID": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::WIFI_TX_HETB_QUEUE_NUM": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::__ESP_WIFI_H__": {
+      "disposition": "private-excluded",
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_vendor_ie_cb_t": {
+      "disposition": "framework-owned",
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_80211_tx": {
+      "task": "W-04A"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_80211_tx_done_cb_t": {
+      "disposition": "framework-owned",
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_action_tx_req": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_ap_get_sta_aid": {
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_ap_get_sta_list": {
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_clear_ap_list": {
+      "disposition": "framework-owned",
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_clear_fast_connect": {
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_config_11b_rate": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_config_80211_tx": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_config_80211_tx_rate": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_connect": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_connectionless_module_set_wake_interval": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_deauth_sta": {
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_deinit": {
+      "disposition": "framework-owned",
+      "task": "W-01"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_disable_pmf_config": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_disconnect": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi.c",
+        "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi_future.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_force_wakeup_acquire": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_force_wakeup_release": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_ftm_end_session": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_ftm_get_report": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_ftm_initiate_session": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_ftm_resp_set_offset": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_band": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_band_mode": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_bandwidth": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_bandwidths": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_channel": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-01"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_config": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_country": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c",
+        "components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_country_code": {
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_csi_config": {
+      "task": "W-05"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_event_mask": {
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_home_channel": {
+      "task": "W-01"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_inactive_time": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_mac": {
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_max_tx_power": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi.c",
+        "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_mode": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-01"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_promiscuous": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-03"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_promiscuous_ctrl_filter": {
+      "task": "W-03"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_promiscuous_filter": {
+      "task": "W-03"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_protocol": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_protocols": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_ps": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi.c",
+        "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_scan_parameters": {
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_get_tsf_time": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_init": {
+      "disposition": "framework-owned",
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-01"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_register_80211_tx_cb": {
+      "disposition": "framework-owned",
+      "task": "W-04A"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_remain_on_channel": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_restore": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_scan_get_ap_num": {
+      "disposition": "framework-owned",
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_scan_get_ap_record": {
+      "disposition": "framework-owned",
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_scan_get_ap_records": {
+      "disposition": "framework-owned",
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_scan_start": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi_future.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_scan_stop": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi.c",
+        "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi_future.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_band": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_band_mode": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_bandwidth": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_bandwidths": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_channel": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-01"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_config": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_country": {
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_country_code": {
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_csi": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-05"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_csi_config": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_he.c",
+        "components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_legacy.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-05"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_csi_rx_cb": {
+      "disposition": "framework-owned",
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-05"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_dynamic_cs": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_event_mask": {
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_inactive_time": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_mac": {
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_max_tx_power": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_mode": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-01"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_promiscuous": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-03"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_promiscuous_ctrl_filter": {
+      "task": "W-03"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_promiscuous_filter": {
+      "task": "W-03"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_promiscuous_rx_cb": {
+      "disposition": "framework-owned",
+      "task": "W-03"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_protocol": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_protocols": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_ps": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_rssi_threshold": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_scan_parameters": {
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_storage": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-01"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_vendor_ie": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_set_vendor_ie_cb": {
+      "disposition": "framework-owned",
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_sta_get_aid": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_sta_get_ap_info": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-02"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_sta_get_negotiated_phymode": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_sta_get_rssi": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_start": {
+      "evidence": [
+        "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi.c",
+        "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+      ],
+      "implementation": "in-progress",
+      "task": "W-01"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_statis_dump": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::esp_wifi_stop": {
+      "task": "W-01"
+    },
+    "components/esp_wifi/include/esp_wifi.h::g_wifi_default_wpa_crypto_funcs": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::g_wifi_osi_funcs": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::wifi_csi_cb_t": {
+      "disposition": "framework-owned",
+      "task": "W-05"
+    },
+    "components/esp_wifi/include/esp_wifi.h::wifi_init_config_t": {
+      "disposition": "build-time",
+      "task": "W-01"
+    },
+    "components/esp_wifi/include/esp_wifi.h::wifi_osi_funcs_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi.h::wifi_promiscuous_cb_t": {
+      "disposition": "framework-owned",
+      "task": "W-03"
+    },
+    "components/esp_wifi/include/esp_wifi.h::wifi_sta_list_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_he.h::esp_wifi_enable_bsscolor_collision_detection": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he.h::esp_wifi_enable_rx_statistics": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he.h::esp_wifi_enable_tx_statistics": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he.h::esp_wifi_sta_btwt_get_info": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he.h::esp_wifi_sta_btwt_setup": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he.h::esp_wifi_sta_btwt_teardown": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he.h::esp_wifi_sta_get_btwt_num": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he.h::esp_wifi_sta_itwt_get_flow_id_status": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he.h::esp_wifi_sta_itwt_send_probe_req": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he.h::esp_wifi_sta_itwt_set_target_wake_time_offset": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he.h::esp_wifi_sta_itwt_setup": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he.h::esp_wifi_sta_itwt_suspend": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he.h::esp_wifi_sta_itwt_teardown": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he.h::esp_wifi_sta_twt_config": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::BSS_MAX_COLOR": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::BTWT_ID_ALL": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::BTWT_SETUP_FULL": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::BTWT_SETUP_INTERNAL_ERR": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::BTWT_SETUP_INVALID_ARG": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::BTWT_SETUP_SUCCESS": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::BTWT_SETUP_TIMEOUT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::BTWT_SETUP_TXFAIL": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::BTWT_TEARDOWN_FAIL": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::BTWT_TEARDOWN_SUCCESS": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::ESP_CSI_ACQUIRE_STBC_HELTF1": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::ESP_CSI_ACQUIRE_STBC_HELTF2": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::ESP_CSI_ACQUIRE_STBC_SAMPLE_HELTFS": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::ESP_WIFI_ACI_BE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::ESP_WIFI_ACI_BK": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::ESP_WIFI_ACI_MAX": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::ESP_WIFI_ACI_VI": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::ESP_WIFI_ACI_VO": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::FLOW_ID_ALL": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::HE_SU_ERSU_1_LTF_0_8_US_GI": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::HE_SU_ERSU_2_LTF_0_8_US_GI": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::HE_SU_ERSU_2_LTF_1_6_US_GI": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::HE_SU_ERSU_4_LTF_3_2_US_GI": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::ITWT_PROBE_FAIL": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::ITWT_PROBE_STA_DISCONNECTED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::ITWT_PROBE_SUCCESS": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::ITWT_PROBE_TIMEOUT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::ITWT_TEARDOWN_FAIL": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::ITWT_TEARDOWN_SUCCESS": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::RX_BB_FORMAT_11A": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::RX_BB_FORMAT_11B": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::RX_BB_FORMAT_11G": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::RX_BB_FORMAT_HE_ERSU": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::RX_BB_FORMAT_HE_MU": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::RX_BB_FORMAT_HE_SU": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::RX_BB_FORMAT_HE_TB": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::RX_BB_FORMAT_HT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::RX_BB_FORMAT_VHT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::RX_BB_FORMAT_VHT_MU": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::TWT_ACCEPT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::TWT_ALTERNATE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::TWT_DEMAND": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::TWT_DICTATE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::TWT_GROUPING": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::TWT_REJECT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::TWT_REQUEST": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::TWT_SUGGEST": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::TWT_TYPE_BROADCAST": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::TWT_TYPE_INDIVIDUAL": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::TWT_TYPE_MAX": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::esp_wifi_aci_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::esp_wifi_btwt_info_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::esp_wifi_htc_omc_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::esp_wifi_rxctrl_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::he_su_gi_and_ltf_type_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_btwt_setup_config_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_btwt_setup_status_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_btwt_teardown_status_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_csi_acquire_config_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_event_sta_btwt_setup_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_event_sta_btwt_teardown_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_event_sta_itwt_probe_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_event_sta_itwt_setup_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_event_sta_itwt_suspend_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_event_sta_itwt_teardown_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_event_sta_twt_wakeup_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_itwt_probe_status_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_itwt_setup_config_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_itwt_teardown_status_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_rx_bb_format_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_twt_config_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_twt_setup_cmds_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_twt_setup_config_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_he_types.h::wifi_twt_type_t": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::BIT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::BIT_NUMBER_TO_CHANNEL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::CHANNEL_TO_BIT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::CHANNEL_TO_BIT_NUMBER": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_DPP_MAX_CONNECTOR_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_DPP_MAX_KEY_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_WIFI_MAX_FILTER_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_WIFI_MAX_FUP_SSI_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_WIFI_MAX_NEIGHBOR_REP_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_WIFI_MAX_SVC_INFO_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_WIFI_MAX_SVC_NAME_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_WIFI_MAX_SVC_SSI_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_WIFI_NAN_DATAPATH_MAX_PEERS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_WIFI_NAN_MAX_CREDS_PER_SVC": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_WIFI_NAN_MAX_PEER_CREDS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_WIFI_NAN_MAX_SVC_SUPPORTED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_WIFI_NAN_NDP_PMKID_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_WIFI_NAN_NDP_PMK_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_WIFI_NAN_NIK_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_WIFI_NAN_NPK_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_WIFI_NDP_ROLE_INITIATOR": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::ESP_WIFI_NDP_ROLE_RESPONDER": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::FTM_STATUS_CONF_REJECTED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::FTM_STATUS_FAIL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::FTM_STATUS_NO_RESPONSE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::FTM_STATUS_NO_VALID_MSMT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::FTM_STATUS_SUCCESS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::FTM_STATUS_UNSUPPORTED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::FTM_STATUS_USER_TERM": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::MAX_PASSPHRASE_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::MAX_SSID_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::MAX_WPS_AP_CRED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::NAN_PUBLISH_SOLICITED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::NAN_PUBLISH_UNSOLICITED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::NAN_SUBSCRIBE_ACTIVE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::NAN_SUBSCRIBE_PASSIVE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::NAN_VENDOR_IE_MAX_BODY_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::SAE_H2E_IDENTIFIER_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ACTION_TX_DONE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ACTION_TX_DURATION_COMPLETED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ACTION_TX_FAILED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ACTION_TX_OP_CANCELLED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ACTIVE_SCAN_MAX_DEFAULT_TIME": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ACTIVE_SCAN_MIN_DEFAULT_TIME": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ALL_CHANNEL_SCAN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ANT_ANT0": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ANT_ANT1": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ANT_MAX": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ANT_MODE_ANT0": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ANT_MODE_ANT1": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ANT_MODE_AUTO": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ANT_MODE_MAX": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AP_DEFAULT_MAX_IDLE_PERIOD": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_DPP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_DUMMY_1": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_DUMMY_2": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_ENTERPRISE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_MAX": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_OPEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_OWE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_UNKNOWN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_WAPI_PSK": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_WEP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_WPA2_ENTERPRISE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_WPA2_PSK": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_WPA2_WPA3_ENTERPRISE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_WPA2_WPA3_PSK": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_WPA3_ENTERPRISE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_WPA3_ENT_192": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_WPA3_PSK": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_WPA_ENTERPRISE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_WPA_PSK": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_AUTH_WPA_WPA2_PSK": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_BAND_2G": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_BAND_5G": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_BAND_MODE_2G_ONLY": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_BAND_MODE_5G_ONLY": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_BAND_MODE_AUTO": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_BW160": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_BW20": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_BW40": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_BW80": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_BW80_BW80": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_1": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_10": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_100": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_104": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_108": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_11": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_112": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_116": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_12": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_120": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_124": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_128": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_13": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_132": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_136": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_14": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_140": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_144": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_149": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_153": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_157": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_161": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_165": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_169": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_173": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_177": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_2": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_3": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_36": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_4": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_40": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_44": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_48": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_5": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_52": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_56": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_6": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_60": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_64": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_7": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_8": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CHANNEL_9": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CIPHER_TYPE_AES_CMAC128": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CIPHER_TYPE_AES_GMAC128": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CIPHER_TYPE_AES_GMAC256": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CIPHER_TYPE_CCMP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CIPHER_TYPE_GCMP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CIPHER_TYPE_GCMP256": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CIPHER_TYPE_NONE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CIPHER_TYPE_SMS4": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CIPHER_TYPE_TKIP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CIPHER_TYPE_TKIP_CCMP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CIPHER_TYPE_UNKNOWN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CIPHER_TYPE_WEP104": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CIPHER_TYPE_WEP40": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CONNECT_AP_BY_SECURITY": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_CONNECT_AP_BY_SIGNAL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_COUNTRY_POLICY_AUTO": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_COUNTRY_POLICY_MANUAL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_ACTION_TX_STATUS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_AP_PROBEREQRECVED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_AP_STACONNECTED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_AP_STADISCONNECTED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_AP_START": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_AP_STOP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_AP_WPS_RG_FAILED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_AP_WPS_RG_PBC_OVERLAP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_AP_WPS_RG_PIN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_AP_WPS_RG_SUCCESS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_AP_WPS_RG_TIMEOUT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_AP_WRONG_PASSWORD": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_BTWT_SETUP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_BTWT_TEARDOWN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_CONNECTIONLESS_MODULE_WAKE_INTERVAL_START": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_DPP_CFG_RECVD": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_DPP_FAILED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_DPP_URI_READY": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_FTM_REPORT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_HOME_CHANNEL_CHANGE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_ITWT_PROBE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_ITWT_SETUP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_ITWT_SUSPEND": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_ITWT_TEARDOWN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_MASK_ALL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_MASK_AP_PROBEREQRECVED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_MASK_NONE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_MAX": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_NAN_CLUSTER_JOIN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_NAN_PAIRING_CONFIRM": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_NAN_PAIRING_INDICATION": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_NAN_RECEIVE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_NAN_REPLIED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_NAN_SVC_MATCH": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_NAN_SYNC_STARTED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_NAN_SYNC_STOPPED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_NDP_CONFIRM": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_NDP_INDICATION": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_NDP_TERMINATED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_ROC_DONE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_SCAN_DONE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_STA_AUTHMODE_CHANGE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_STA_BEACON_OFFSET_UNSTABLE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_STA_BEACON_TIMEOUT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_STA_BSS_RSSI_LOW": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_STA_CONNECTED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_STA_DISCONNECTED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_STA_NEIGHBOR_REP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_STA_START": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_STA_STOP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_STA_WPS_ER_FAILED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_STA_WPS_ER_PBC_OVERLAP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_STA_WPS_ER_PIN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_STA_WPS_ER_SUCCESS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_STA_WPS_ER_TIMEOUT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_TWT_WAKEUP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_EVENT_WIFI_READY": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_FAST_SCAN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_IF_AP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_IF_MAX": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_IF_NAN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_IF_STA": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_MAX_REGULATORY_RULE_NUM": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_MODE_AP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_MODE_APSTA": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_MODE_MAX": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_MODE_NAN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_MODE_NULL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_MODE_STA": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_BOOTSTRAP_NFC_READER": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_BOOTSTRAP_NFC_TAG": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_BOOTSTRAP_OPPORTUNISTIC": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_BOOTSTRAP_PASSPHRASE_DISPLAY": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_BOOTSTRAP_PASSPHRASE_KEYPAD": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_BOOTSTRAP_PIN_CODE_DISPLAY": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_BOOTSTRAP_PIN_CODE_KEYPAD": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_BOOTSTRAP_QR_CODE_DISPLAY": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_BOOTSTRAP_QR_CODE_SCAN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_CSID_BIT_NCS_GTK_CCMP_128": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_CSID_BIT_NCS_GTK_GCMP_256": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_CSID_BIT_NCS_PK_2WDH_128": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_CSID_BIT_NCS_PK_2WDH_256": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_CSID_BIT_NCS_PK_PASN_128": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_CSID_BIT_NCS_PK_PASN_256": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_CSID_BIT_NCS_SK_128": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_CSID_BIT_NCS_SK_256": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_CSID_NCS_GTK_CCMP_128": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_CSID_NCS_GTK_GCMP_256": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_CSID_NCS_PK_2WDH_128": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_CSID_NCS_PK_2WDH_256": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_CSID_NCS_PK_PASN_128": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_CSID_NCS_PK_PASN_256": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_CSID_NCS_SK_128": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_NAN_CSID_NCS_SK_256": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_OFFCHAN_TX_CANCEL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_OFFCHAN_TX_CONNECTING_REQ": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_OFFCHAN_TX_REQ": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_OUI_LEN": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PASSIVE_SCAN_DEFAULT_TIME": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_MODE_11A": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_MODE_11B": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_MODE_11G": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_MODE_HE20": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_MODE_HT20": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_MODE_HT40": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_MODE_LR": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_MODE_VHT20": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_11M_L": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_11M_S": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_12M": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_18M": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_1M_L": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_24M": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_2M_L": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_2M_S": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_36M": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_48M": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_54M": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_5M_L": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_5M_S": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_6M": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_9M": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_LORA_250K": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_LORA_500K": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MAX": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS0_LGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS0_SGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS1_LGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS1_SGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS2_LGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS2_SGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS3_LGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS3_SGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS4_LGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS4_SGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS5_LGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS5_SGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS6_LGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS6_SGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS7_LGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS7_SGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS8_LGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS8_SGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS9_LGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PHY_RATE_MCS9_SGI": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PKT_CTRL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PKT_DATA": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PKT_MGMT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PKT_MISC": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_CTRL_FILTER_MASK_ACK": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_CTRL_FILTER_MASK_ALL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_CTRL_FILTER_MASK_BA": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_CTRL_FILTER_MASK_BAR": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_CTRL_FILTER_MASK_CFEND": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_CTRL_FILTER_MASK_CFENDACK": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_CTRL_FILTER_MASK_CTS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_CTRL_FILTER_MASK_PSPOLL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_CTRL_FILTER_MASK_RTS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_CTRL_FILTER_MASK_WRAPPER": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_FILTER_MASK_ALL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_FILTER_MASK_CTRL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_FILTER_MASK_DATA": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_FILTER_MASK_DATA_AMPDU": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_FILTER_MASK_DATA_MPDU": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_FILTER_MASK_FCSFAIL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_FILTER_MASK_MGMT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROMIS_FILTER_MASK_MISC": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROTOCOL_11A": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROTOCOL_11AC": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROTOCOL_11AX": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROTOCOL_11B": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROTOCOL_11G": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROTOCOL_11N": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PROTOCOL_LR": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PS_MAX_MODEM": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PS_MIN_MODEM": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_PS_NONE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_802_1X_AUTH_FAILED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_AKMP_INVALID": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_ALTERATIVE_CHANNEL_OCCUPIED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_AP_INITIATED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_AP_TSF_RESET": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_ASSOC_COMEBACK_TIME_TOO_LONG": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_ASSOC_FAIL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_ASSOC_LEAVE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_ASSOC_NOT_AUTHED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_ASSOC_TOOMANY": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_AUTH_EXPIRE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_AUTH_FAIL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_AUTH_LEAVE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_BAD_CIPHER_OR_AKM": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_BEACON_TIMEOUT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_BSS_TRANSITION_DISASSOC": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_CIPHER_SUITE_REJECTED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_CLASS2_FRAME_FROM_NONAUTH_STA": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_CLASS3_FRAME_FROM_NONASSOC_STA": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_CONNECTION_FAIL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_DISASSOC_DUE_TO_INACTIVITY": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_DISASSOC_PWRCAP_BAD": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_DISASSOC_SUPCHAN_BAD": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_END_BA": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_EXCEEDED_TXOP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_GROUP_CIPHER_INVALID": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_GROUP_KEY_UPDATE_TIMEOUT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_HANDSHAKE_TIMEOUT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_IE_INVALID": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_IE_IN_4WAY_DIFFERS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_INVALID_FTE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_INVALID_FT_ACTION_FRAME_COUNT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_INVALID_MDE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_INVALID_PMKID": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_INVALID_RSN_IE_CAP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_MIC_FAILURE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_MISSING_ACKS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_NOT_AUTHORIZED_THIS_LOCATION": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_NOT_ENOUGH_BANDWIDTH": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_NO_AP_FOUND": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_NO_SSP_ROAMING_AGREEMENT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_PAIRWISE_CIPHER_INVALID": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_PEER_INITIATED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_ROAMING": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_SA_QUERY_TIMEOUT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_SERVICE_CHANGE_PERCLUDES_TS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_SSP_REQUESTED_DISASSOC": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_STA_LEAVING": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_TDLS_PEER_UNREACHABLE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_TDLS_UNSPECIFIED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_TIMEOUT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_TRANSMISSION_LINK_ESTABLISH_FAILED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_UNKNOWN_BA": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_UNSPECIFIED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_UNSPECIFIED_QOS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_REASON_UNSUPP_RSN_IE_VERSION": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ROC_CANCEL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ROC_CONNECTING_REQ": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ROC_DONE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ROC_FAIL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_ROC_REQ": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_SCAN_HOME_CHANNEL_DWELL_DEFAULT_TIME": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_SCAN_PARAMS_DEFAULT_CONFIG": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_SCAN_TYPE_ACTIVE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_SCAN_TYPE_PASSIVE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_SECOND_CHAN_ABOVE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_SECOND_CHAN_BELOW": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_SECOND_CHAN_NONE": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_SEND_FAIL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_SEND_SUCCESS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_STATIS_ALL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_STATIS_BUFFER": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_STATIS_DIAG": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_STATIS_HW": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_STATIS_PS": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_STATIS_RXTX": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_STORAGE_FLASH": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_STORAGE_RAM": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_SVC_PROTO_BONJOUR": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_SVC_PROTO_CSA_MATTER": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_SVC_PROTO_GENERIC": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_SVC_PROTO_MAX": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_SVC_PROTO_RESERVED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_VENDOR_IE_ELEMENT_ID": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_VND_IE_ID_0": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_VND_IE_ID_1": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_VND_IE_TYPE_ASSOC_REQ": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_VND_IE_TYPE_ASSOC_RESP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_VND_IE_TYPE_BEACON": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_VND_IE_TYPE_PROBE_REQ": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WIFI_VND_IE_TYPE_PROBE_RESP": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WPA3_SAE_PK_MODE_AUTOMATIC": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WPA3_SAE_PK_MODE_DISABLED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WPA3_SAE_PK_MODE_ONLY": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WPA3_SAE_PWE_BOTH": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WPA3_SAE_PWE_HASH_TO_ELEMENT": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WPA3_SAE_PWE_HUNT_AND_PECK": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WPA3_SAE_PWE_UNSPECIFIED": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WPS_AP_FAIL_REASON_AUTH": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WPS_AP_FAIL_REASON_CONFIG": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WPS_AP_FAIL_REASON_MAX": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WPS_AP_FAIL_REASON_NORMAL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WPS_FAIL_REASON_MAX": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WPS_FAIL_REASON_NORMAL": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WPS_FAIL_REASON_RECV_DEAUTH": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::WPS_FAIL_REASON_RECV_M2D": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::__ESP_WIFI_TYPES_H__": {
+      "disposition": "private-excluded",
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::esp_80211_tx_info_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::esp_dpp_config_data_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::nan_vendor_ie_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::vendor_ie_data_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_2g_channel_bit_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_5g_channel_bit_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_action_roc_done_cb_t": {
+      "disposition": "framework-owned",
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_action_rx_cb_t": {
+      "disposition": "framework-owned",
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_action_tx_req_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_action_tx_status_type_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_action_tx_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_active_scan_time_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_ant_config_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_ant_gpio_config_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_ant_gpio_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_ant_mode_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_ant_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_ap_config_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_ap_record_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_auth_mode_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_band_mode_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_band_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_bandwidth_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_bandwidths_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_bss_max_idle_config_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_cipher_type_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_config_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_country_policy_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_country_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_csi_info_t": {
+      "task": "W-05"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_err_reason_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_action_tx_status_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_ap_probe_req_rx_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_ap_staconnected_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_ap_stadisconnected_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_ap_wps_rg_fail_reason_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_ap_wps_rg_pin_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_ap_wps_rg_success_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_ap_wrong_password_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_bss_rssi_low_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_dpp_config_received_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_dpp_failed_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_dpp_uri_ready_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_ftm_report_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_home_channel_change_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_nan_cluster_join_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_nan_pairing_complete_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_nan_receive_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_nan_replied_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_nan_svc_match_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_ndp_confirm_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_ndp_indication_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_ndp_terminated_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_neighbor_report_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_roc_done_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_sta_authmode_change_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_sta_beacon_offset_unstable_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_sta_connected_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_sta_disconnected_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_sta_scan_done_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_sta_wps_er_pin_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_sta_wps_er_success_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_sta_wps_fail_reason_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_event_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_ftm_initiator_cfg_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_ftm_report_entry_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_ftm_status_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_he_ap_info_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_interface_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_mode_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_nan_cipher_suite_id_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_nan_credential_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_nan_datapath_end_req_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_nan_datapath_req_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_nan_datapath_resp_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_nan_discovery_security_params_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_nan_followup_params_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_nan_pairing_cfg_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_nan_publish_cfg_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_nan_service_type_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_nan_subscribe_cfg_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_nan_svc_proto_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_nan_sync_config_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_nan_usd_config_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_nan_wfa_ssi_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_phy_mode_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_phy_rate_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_pmf_config_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_promiscuous_filter_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_promiscuous_pkt_type_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_protocols_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_ps_type_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_reg_rule_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_regdomain_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_regulatory_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_roc_done_status_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_roc_req_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_roc_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_sae_pk_mode_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_sae_pwe_method_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_scan_channel_bitmap_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_scan_config_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_scan_default_params_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_scan_method_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_scan_threshold_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_scan_time_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_scan_type_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_second_chan_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_sort_method_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_sta_config_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_sta_info_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_storage_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_tx_info_t": {
+      "task": "W-04A"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_tx_rate_config_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_tx_status_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_vendor_ie_id_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wifi_vendor_ie_type_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/esp_wifi_types_generic.h::wps_fail_reason_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/local/esp_wifi_types_native.h::ESP_WIFI_MAX_CONN_NUM": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/include/local/esp_wifi_types_native.h::wifi_csi_config_t": {
+      "task": "W-05"
+    },
+    "components/esp_wifi/include/local/esp_wifi_types_native.h::wifi_csi_info_t": {
+      "task": "W-05"
+    },
+    "components/esp_wifi/include/local/esp_wifi_types_native.h::wifi_pkt_rx_ctrl_t": {
+      "task": "W-03"
+    },
+    "components/esp_wifi/include/local/esp_wifi_types_native.h::wifi_promiscuous_pkt_t": {
+      "task": "W-03"
+    },
+    "components/esp_wifi/include/local/esp_wifi_types_native.h::wifi_sta_list_t": {
+      "task": "W-07"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::ESP_NAN_PUBLISH": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::ESP_NAN_SET_IPV6_LINKLOCAL_FROM_IDENTIFIER": {
+      "disposition": "framework-owned",
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::ESP_NAN_SUBSCRIBE": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::IS_ZERO_NAN_IPV6_IDENTIFIER": {
+      "disposition": "framework-owned",
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::NAN_IPV6_IDENTIFIER_LEN": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::NAN_MAX_PEERS_RECORD": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::NDP_STATUS_ACCEPTED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::NDP_STATUS_REJECTED": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::WIFI_NAN_SYNC_CONFIG_DEFAULT": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_cancel_service": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_datapath_end": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_datapath_req": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_datapath_resp": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_get_ipv6_linklocal_from_mac": {
+      "disposition": "framework-owned",
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_get_own_svc_info": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_get_peer_info": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_get_peer_records": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_publish_service": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_send_message": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_subscribe_service": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_sync_start": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_sync_stop": {
+      "task": "W-08"
+    },
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::struct nan_peer_record": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::DPP_BOOTSTRAP_NFC_URI": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::DPP_BOOTSTRAP_PKEX": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::DPP_BOOTSTRAP_QR_CODE": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::ESP_DPP_AKM_DPP": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::ESP_DPP_AKM_PSK": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::ESP_DPP_AKM_PSK_SAE": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::ESP_DPP_AKM_PSK_SAE_DPP": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::ESP_DPP_AKM_SAE": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::ESP_DPP_AKM_SAE_DPP": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::ESP_DPP_AKM_UNKNOWN": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::ESP_DPP_H": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::ESP_DPP_MAX_CHAN_COUNT": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::ESP_DPP_MAX_CONFIG_COUNT": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::ESP_ERR_DPP_AUTH_TIMEOUT": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::ESP_ERR_DPP_CONF_TIMEOUT": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::ESP_ERR_DPP_FAILURE": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::ESP_ERR_DPP_INVALID_ATTR": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::ESP_ERR_DPP_INVALID_LIST": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::ESP_ERR_DPP_TX_FAILURE": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::esp_dpp_akm_t": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::esp_supp_dpp_bootstrap_gen": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::esp_supp_dpp_bootstrap_t": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::esp_supp_dpp_deinit": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::esp_supp_dpp_init": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::esp_supp_dpp_set_config": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::esp_supp_dpp_start_listen": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_dpp.h::esp_supp_dpp_stop_listen": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::ESP_EAP_TTLS_PHASE2_CHAP": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::ESP_EAP_TTLS_PHASE2_EAP": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::ESP_EAP_TTLS_PHASE2_MSCHAP": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::ESP_EAP_TTLS_PHASE2_MSCHAPV2": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::ESP_EAP_TTLS_PHASE2_PAP": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::ESP_EAP_TYPE_ALL": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::ESP_EAP_TYPE_FAST": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::ESP_EAP_TYPE_NONE": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::ESP_EAP_TYPE_PEAP": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::ESP_EAP_TYPE_TLS": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::ESP_EAP_TYPE_TTLS": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_clear_ca_cert": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_clear_certificate_and_key": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_clear_identity": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_clear_new_password": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_clear_password": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_clear_username": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_get_disable_time_check": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_set_ca_cert": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_set_certificate_and_key": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_set_disable_time_check": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_set_domain_name": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_set_eap_methods": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_set_fast_params": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_set_identity": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_set_new_password": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_set_pac_file": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_set_password": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_set_suiteb_192bit_certification": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_set_ttls_phase2_method": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_set_username": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_client_use_default_cert_bundle": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_fast_config": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_method_t": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_eap_ttls_phase2_types": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_wifi_set_okc_support": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_wifi_sta_enterprise_disable": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_eap_client.h::esp_wifi_sta_enterprise_enable": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_rrm.h::_ESP_RRM_H": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_rrm.h::esp_rrm_is_rrm_supported_connection": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_rrm.h::esp_rrm_send_neighbor_report_request": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_rrm.h::neighbor_rep_request_cb": {
+      "disposition": "framework-owned",
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wnm.h::REASON_BANDWIDTH": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wnm.h::REASON_DELAY": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wnm.h::REASON_FRAME_LOSS": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wnm.h::REASON_GRAY_ZONE": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wnm.h::REASON_INTERFERENCE": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wnm.h::REASON_LOAD_BALANCE": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wnm.h::REASON_PREMIUM_AP": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wnm.h::REASON_RETRANSMISSIONS": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wnm.h::REASON_RSSI": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wnm.h::REASON_UNSPECIFIED": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wnm.h::_ESP_WNM_H": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wnm.h::enum btm_query_reason": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wnm.h::esp_wnm_is_btm_supported_connection": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wnm.h::esp_wnm_send_bss_transition_mgmt_query": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::ESP_ERR_WIFI_REGISTRAR": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::ESP_ERR_WIFI_WPS_SM": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::ESP_ERR_WIFI_WPS_TYPE": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::PIN_LEN": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::WPS_CONFIG_INIT_DEFAULT": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::WPS_MAX_DEVICE_NAME_LEN": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::WPS_MAX_MANUFACTURER_LEN": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::WPS_MAX_MODEL_NAME_LEN": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::WPS_MAX_MODEL_NUMBER_LEN": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::WPS_TYPE_DISABLE": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::WPS_TYPE_MAX": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::WPS_TYPE_PBC": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::WPS_TYPE_PIN": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::__ESP_WPS_H__": {
+      "disposition": "private-excluded",
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::esp_wifi_ap_wps_disable": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::esp_wifi_ap_wps_enable": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::esp_wifi_ap_wps_start": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::esp_wifi_wps_disable": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::esp_wifi_wps_enable": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::esp_wifi_wps_start": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::esp_wps_config_t": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::wps_factory_information_t": {
+      "task": "W-08"
+    },
+    "components/wpa_supplicant/esp_supplicant/include/esp_wps.h::wps_type_t": {
+      "task": "W-08"
+    }
+  },
+  "tasks": {
+    "W-01": {
+      "completionContract": "Each lifecycle stage publishes native state; cleanup retries the unfinished suffix.",
+      "contract": "review-required",
+      "disposition": "mapped",
+      "fieldCoverage": "review-required",
+      "implementation": "planned",
+      "ownershipContract": "The sole Radio registry and serialized mutation lane own the driver.",
+      "spec": "02_esp32qjs_wifi_refactor_and_features.md section 25",
+      "validation": {
+        "build": "declarations-only",
+        "hardware": "not-run",
+        "host": "not-run"
+      }
+    },
+    "W-02": {
+      "completionContract": "Future/native terminal state is independent of watch queue capacity.",
+      "contract": "review-required",
+      "disposition": "mapped",
+      "fieldCoverage": "review-required",
+      "implementation": "planned",
+      "ownershipContract": "Wi-Fi operation owns result buffers; the event broker owns internal completion.",
+      "spec": "02_esp32qjs_wifi_refactor_and_features.md section 6-8",
+      "validation": {
+        "build": "declarations-only",
+        "hardware": "not-run",
+        "host": "not-run"
+      }
+    },
+    "W-03": {
+      "completionContract": "Detach admission and drain entered callbacks before releasing control storage.",
+      "contract": "review-required",
+      "disposition": "mapped",
+      "fieldCoverage": "review-required",
+      "implementation": "planned",
+      "ownershipContract": "Promiscuous broker owns SDK callbacks; subscriptions retain bounded pools.",
+      "spec": "02_esp32qjs_wifi_refactor_and_features.md section 9",
+      "validation": {
+        "build": "declarations-only",
+        "hardware": "not-run",
+        "host": "not-run"
+      }
+    },
+    "W-04A": {
+      "completionContract": "Cookie-free completion stays quarantined after public timeout until a proven barrier.",
+      "contract": "review-required",
+      "disposition": "mapped",
+      "fieldCoverage": "review-required",
+      "implementation": "planned",
+      "ownershipContract": "One in-flight raw TX broker owns input and callback snapshots.",
+      "spec": "02_esp32qjs_wifi_refactor_and_features.md section 10/25.9",
+      "validation": {
+        "build": "declarations-only",
+        "hardware": "not-run",
+        "host": "not-run"
+      }
+    },
+    "W-05": {
+      "completionContract": "Copy only proven-readable callback data; retained storage outlives operation close.",
+      "contract": "review-required",
+      "disposition": "mapped",
+      "fieldCoverage": "review-required",
+      "implementation": "planned",
+      "ownershipContract": "CSI capture session and retained Frame/Batch/View/Source owners share a bounded pool.",
+      "spec": "02_esp32qjs_wifi_refactor_and_features.md section 11-12",
+      "validation": {
+        "build": "declarations-only",
+        "hardware": "not-run",
+        "host": "not-run"
+      }
+    },
+    "W-07": {
+      "completionContract": "Typed synchronous getters or explicit Future terminal state; preserve failed restore ownership.",
+      "contract": "review-required",
+      "disposition": "mapped",
+      "fieldCoverage": "review-required",
+      "implementation": "planned",
+      "ownershipContract": "Driver setters use the shared Radio lane and validate all live owners.",
+      "spec": "02_esp32qjs_wifi_refactor_and_features.md section 8/27",
+      "validation": {
+        "build": "declarations-only",
+        "hardware": "not-run",
+        "host": "not-run"
+      }
+    },
+    "W-08": {
+      "completionContract": "Per-module cancel and native termination barrier remains contract-pending.",
+      "contract": "contract-pending",
+      "disposition": "mapped",
+      "fieldCoverage": "review-required",
+      "implementation": "planned",
+      "ownershipContract": "Per-module field/state/secret/owner contract must be completed before registration.",
+      "spec": "02_esp32qjs_wifi_refactor_and_features.md section 13-22",
+      "validation": {
+        "build": "declarations-only",
+        "hardware": "not-run",
+        "host": "not-run"
+      }
+    },
+    "W-09": {
+      "completionContract": "Keep explicit recovery and input retention; never restart an unrelated Radio owner.",
+      "contract": "review-required",
+      "disposition": "mapped",
+      "fieldCoverage": "review-required",
+      "implementation": "planned",
+      "ownershipContract": "Existing ESP-NOW owners retain queues and share the Radio boundary.",
+      "spec": "02_esp32qjs_wifi_refactor_and_features.md section 23/26",
+      "validation": {
+        "build": "declarations-only",
+        "hardware": "not-run",
+        "host": "not-run"
+      }
+    }
+  },
+  "unexpandedHeaders": {
+    "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h": "NAN-Sync declarations collected in esp32c5/wireless-inventory. Experimental NAN-USD remains disabled; its four conditional functions require a separate reviewed configuration before W-08 implementation. All field/secret/cancel contracts remain pending W-08."
+  }
+}

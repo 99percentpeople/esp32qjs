@@ -16,6 +16,17 @@ SPEC.loader.exec_module(CI_CONTEXT)
 
 
 class CiBuildContextTests(unittest.TestCase):
+    def test_nan_inventory_profile_uses_real_c5_kconfig_without_js_api(self):
+        with tempfile.TemporaryDirectory() as name:
+            output = CI_CONTEXT.generate_context("esp32c5", "wireless-inventory", Path(name))
+            defaults = (output / "sdkconfig.defaults").read_text()
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertIn("CONFIG_ESP_WIFI_NAN_SYNC_ENABLE=y", defaults)
+            self.assertNotIn("nan", manifest["nativeFeatures"])
+        for target in ("esp32c3", "esp32s3"):
+            with self.assertRaisesRegex(SystemExit, "only supported for esp32c5"):
+                CI_CONTEXT.generate_context(target, "wireless-inventory", Path("unused"))
+
     def test_ci_workflow_covers_required_target_profiles(self):
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"

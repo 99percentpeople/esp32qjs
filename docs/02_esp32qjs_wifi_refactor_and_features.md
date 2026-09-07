@@ -1,6 +1,6 @@
 # ESP32QJS 第二阶段：Wi-Fi 重构与新功能实施文档
 
-- **状态**：W-00 in-progress（输入采集）；其余任务 planned；不是已通过硬件验收的报告
+- **状态**：W-00 in-progress（覆盖清单与检查工具）；其余任务 planned；不是已通过硬件验收的报告
 - **目标仓库**：`99percentpeople/esp32qjs`
 - **历史审查基线**：`9a74f1197d53863e079c30f8559ccd5b6cd60b42`
 - **第一阶段实施基线**：firmware `e1b861c`；[实际证据与剩余边界](investigations/2026-09-07-wireless-core.md)
@@ -24,7 +24,7 @@
 
 ### 0.1 前置条件
 
-第一份文档的 F-CORE 通过后开始 W-01。W-00 输入采集已启动，见[本轮收尾与第二阶段进度](investigations/2026-09-07-wifi-refactor-start.md)。长时间验收按用户安排统一移到全部功能完成后，短竞争/错误注入仍随实现执行。若现有无线硬件验证仍未完成，可以继续受控开发，但所有相关 feature 保留其真实的 Hardware pending/Candidate 状态。
+第一份文档的 F-CORE 已完成本轮收尾，W-01 可以开始，尚未实施新生命周期；见[最终证据及测试边界](investigations/2026-09-08-fcore-closeout.md)。连接交接/入站队列、原生 handle 复用交错、payload 转换及构造失败已有生产实现回归。W-00 符号/字段覆盖工具已实现，见[本轮收尾与第二阶段进度](investigations/2026-09-07-wifi-refactor-start.md)。长时间验收按用户安排统一移到全部功能完成后，短竞争/错误注入仍随实现执行。若现有无线硬件验证仍未完成，可以继续受控开发，但所有相关 feature 保留其真实的 Hardware pending/Candidate 状态。
 
 共享 Future、ByteView、EventQueue、generation 和内存预算器只扩展一套。Wi-Fi 与 BLE 分支不得各自复制底层实现。框架继续消费不可变 Build Context，不解析 Board、Library、Agent 或产品 workspace manifest。
 
@@ -2647,11 +2647,17 @@ scripts/esp32qjs_csi.py
 
 ## 30. 实施阶段与工单
 
-下面的任务顺序替换原方案“先写全量正式声明，再逐个实现”的顺序。W-00 已开始输入采集，其余 task 保持 planned。
+下面的任务顺序替换原方案“先写全量正式声明，再逐个实现”的顺序。W-00 已实现代表配置的符号/字段清单和检查工具，其余 task 保持 planned。
 
 ### W-00：覆盖清单和契约冻结点
 
-**实际状态**：in-progress / inputs-only。`scripts/inspect_idf_wifi_inputs.py` 已按 C3/S3/C5 实际 compile_commands 提取 16 份公共头文件的条件声明与字段，保留 hash 和 actual manifest。逐 symbol/字段分类、正式 mapping 与 CI 未完成；不宣称覆盖验收通过。
+**实际状态**：in-progress / coverage review。已用 C3/S3/C5 五种实际编译配置生成
+`docs/idf-wifi-api-inventory.json` 和逐符号 `docs/idf-wifi-api-map.json`，并集 1,267 条，
+包括结构字段、数组、bitfield、enum 与宏。`scripts/generate_idf_wifi_api_map.py` 检查
+未知条目、字段变化和错误提前宣传 planned API；CI 已接入映射、固定 SDK 头文件保护
+及已记录 variant 的构建后语义比较。C5 disabled 与 NAN-Sync enabled 分别保留基线。
+完整 Python 359/359 通过。字段业务契约、NAN-USD 和其他未记录配置仍待审查，
+不宣称 W-00 全部验收通过。见[本轮实施记录](investigations/2026-09-07-wifi-refactor-start.md)。
 
 **输入**：第一阶段 F-00/F-10、固定 IDF headers 和现有 runtime registration。
 

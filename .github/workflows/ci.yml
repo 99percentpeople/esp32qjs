@@ -41,6 +41,8 @@ jobs:
         run: uv sync --locked
       - name: Check generated API manifest
         run: uv run python scripts/generate_api_manifest.py --check
+      - name: Check Wi-Fi coverage dispositions
+        run: uv run python scripts/generate_idf_wifi_api_map.py --check
       - name: Check generated feature documentation
         run: uv run python scripts/generate_feature_docs.py --check
       - name: Check flashed JavaScript syntax
@@ -66,6 +68,10 @@ jobs:
             profile: minimal
           - target: esp32c5
             profile: representative
+          - target: esp32c5
+            profile: disabled
+          - target: esp32c5
+            profile: wireless-inventory
           - target: esp32s3
             profile: minimal
           - target: esp32s3
@@ -87,7 +93,9 @@ jobs:
           esp_idf_version: v6.1
           target: ${{ matrix.target }}
           path: .
-          command: >-
-            python3 scripts/ci_build.py
-            --target ${{ matrix.target }}
+          command: |
+            set -e
+            python3 -m pip install 'pycparser==3.0'
+            python3 scripts/ci_build.py \
+            --target ${{ matrix.target }} \
             --profile ${{ matrix.profile }}

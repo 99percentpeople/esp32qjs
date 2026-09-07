@@ -19,6 +19,7 @@ SUPPORTED_PROFILES = (
     "representative",
     "representative-psram",
     "disabled",
+    "wireless-inventory",
 )
 
 
@@ -69,6 +70,8 @@ def sdkconfig_text(
         f"CONFIG_ESP32QJS_JS_HEAP_SIZE={heap_size}",
     ]
     native_features: list[str] = []
+    if profile == "wireless-inventory":
+        lines.append("CONFIG_ESP_WIFI_NAN_SYNC_ENABLE=y")
     for feature in features:
         feature_id = str(feature["id"])
         kconfig = str(feature["kconfig"])
@@ -96,6 +99,8 @@ def generate_context(target: str, profile: str, output: Path) -> Path:
         raise SystemExit(f"Unsupported CI profile: {profile}")
     if profile == "representative-psram" and target != "esp32s3":
         raise SystemExit("representative-psram is only supported for esp32s3")
+    if profile == "wireless-inventory" and target != "esp32c5":
+        raise SystemExit("wireless-inventory is only supported for esp32c5")
 
     features = load_features()
     defaults, native_features, psram_mode, psram_bytes = sdkconfig_text(
