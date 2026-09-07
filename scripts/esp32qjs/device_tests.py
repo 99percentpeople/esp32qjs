@@ -349,7 +349,7 @@ JS_TEST_MODULES = (
     ),
     JsTestModule(
         "rpc",
-        (JsTestCase("modules/rpc/offline.js"),),
+        (JsTestCase("modules/rpc/offline.js"), JsTestCase("modules/rpc/memory.js")),
         required_features=("rpc",),
     ),
     JsTestModule(

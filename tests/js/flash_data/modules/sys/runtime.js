@@ -343,3 +343,60 @@ test("sys/runtime", function () {
     freeHeap: heap,
   };
 });
+
+
+test("sys/runtime-log-memory", function () {
+  var cursor = 0;
+  var batch;
+  var allocations;
+  var ring;
+  var index;
+  var pass;
+  var found = false;
+  var marker = "runtime-log-memory-UTF8-测试";
+
+  if (!sys.info.features.runtimeLogs) {
+    return { enabled: false };
+  }
+  allocations = sys.status.memory.manager.allocations;
+  for (index = 0; index < allocations.length; index += 1) {
+    if (allocations[index].owner === "runtime.logs") {
+      ring = allocations[index];
+    }
+  }
+  test.ok(ring && ring.blocks === 1 && ring.bytes > 32768,
+    "the full 64-entry log ring should be accounted as one allocation");
+  test.equal(ring.region,
+    sys.status.memory.psram.totalBytes > 0 ? "psram" : "internal",
+    "log storage should use PSRAM when it is present");
+
+  // Advance past existing boot logs before checking a fresh console entry.
+  for (pass = 0; pass < 64; pass += 1) {
+    batch = runtimeLogs.read(cursor, 16, 2048);
+    if (batch.entries.length === 0) {
+      break;
+    }
+    cursor = batch.entries[batch.entries.length - 1].sequence;
+  }
+  console.log(marker);
+  batch = runtimeLogs.read(cursor, 16, 2048);
+  for (index = 0; index < batch.entries.length; index += 1) {
+    if (batch.entries[index].text.indexOf(marker) >= 0) {
+      found = true;
+    }
+  }
+  test.ok(found, "PSRAM log storage should preserve console text and UTF-8");
+  for (pass = 0; pass < 20; pass += 1) {
+    runtimeLogs.read(cursor, 16, 2048);
+  }
+  allocations = sys.status.memory.manager.allocations;
+  for (index = 0; index < allocations.length; index += 1) {
+    test.ok(allocations[index].owner !== "runtime.logs.read",
+      "reading logs should release every temporary snapshot");
+    if (allocations[index].owner === "runtime.logs") {
+      test.equal(allocations[index].bytes, ring.bytes,
+        "reading logs should retain exactly the original ring allocation");
+    }
+  }
+  return { region: ring.region, bytes: ring.bytes };
+});

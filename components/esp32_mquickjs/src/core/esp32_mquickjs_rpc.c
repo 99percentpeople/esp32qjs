@@ -3,6 +3,7 @@
 #include "esp32_mquickjs_core.h"
 #include "esp32_mquickjs_fs_events.h"
 #include "esp32_mquickjs_options.h"
+#include "esp32_mquickjs_memory.h"
 #include "utils/esp32_mquickjs_byte_source.h"
 #include "esp32qjs_rpc_wire.h"
 
@@ -87,7 +88,8 @@ typedef struct {
     bool used;
     uint32_t generation;
     rpc_codec_slot_t *codec;
-    esp32_mquickjs_rpc_wire_decoder_t wire;
+    /* Allocate the frame buffer only for live decoders, preferably in PSRAM. */
+    esp32_mquickjs_rpc_wire_decoder_t *wire;
     FILE *stream_file;
     char stream_path[RPC_STREAM_PATH_BYTES];
     size_t stream_received;
@@ -1410,7 +1412,8 @@ static void rpc_decoder_cleanup(rpc_decoder_slot_t *slot)
     codec = slot->codec;
     generation = slot->generation;
     rpc_decoder_stream_cleanup(slot);
-    esp32_mquickjs_rpc_wire_decoder_reset(&slot->wire);
+    esp32_mquickjs_rpc_wire_decoder_reset(slot->wire);
+    esp32_mquickjs_memory_payload_free(slot->wire);
     memset(slot, 0, sizeof(*slot));
     slot->generation = generation;
     if (codec != NULL && codec->decoders != 0) {
@@ -1587,7 +1590,14 @@ JSValue js_rpc_create_decoder(JSContext *ctx, JSValue *this_val, int argc, JSVal
     for (i = 0; i < RPC_DECODER_SLOTS; ++i) {
         if (!s_rpc_decoders[i].used) {
             uint32_t generation = s_rpc_decoders[i].generation + 1U;
+            esp32_mquickjs_rpc_wire_decoder_t *wire;
             JSValue result;
+
+            wire = esp32_mquickjs_memory_payload_alloc(
+                "rpc.decoder", sizeof(*wire), ESP32_MQUICKJS_MEMORY_EXTERNAL);
+            if (wire == NULL) {
+                return JS_ThrowOutOfMemory(ctx);
+            }
 
             if (generation == 0) {
                 generation = 1;
@@ -1596,8 +1606,9 @@ JSValue js_rpc_create_decoder(JSContext *ctx, JSValue *this_val, int argc, JSVal
             s_rpc_decoders[i].generation = generation;
             s_rpc_decoders[i].used = true;
             s_rpc_decoders[i].codec = codec;
+            s_rpc_decoders[i].wire = wire;
             codec->decoders++;
-            esp32_mquickjs_rpc_wire_decoder_init(&s_rpc_decoders[i].wire);
+            esp32_mquickjs_rpc_wire_decoder_init(s_rpc_decoders[i].wire);
             result = rpc_new_handle(ctx, JS_CLASS_RPC_DECODER, (uint8_t)i,
                                     generation);
             if (JS_IsException(result)) {
@@ -1674,8 +1685,8 @@ JSValue js_rpc_reset_decoder(JSContext *ctx, JSValue *this_val, int argc, JSValu
         return JS_EXCEPTION;
     }
     rpc_decoder_stream_cleanup(slot);
-    esp32_mquickjs_rpc_wire_decoder_reset(&slot->wire);
-    esp32_mquickjs_rpc_wire_decoder_init(&slot->wire);
+    esp32_mquickjs_rpc_wire_decoder_reset(slot->wire);
+    esp32_mquickjs_rpc_wire_decoder_init(slot->wire);
     return JS_NewBool(true);
 }
 
@@ -1742,7 +1753,7 @@ JSValue js_rpc_feed(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     *messages = JS_NewArray(ctx, 0);
     feed = (rpc_feed_context_t){ .ctx = ctx, .messages = messages, .slot = slot };
     emitted = esp32_mquickjs_rpc_wire_decoder_feed(
-        &slot->wire, source.data, source.length,
+        slot->wire, source.data, source.length,
         (uint64_t)(esp_timer_get_time() / 1000), rpc_feed_message,
         rpc_feed_stream,
         rpc_feed_error, &feed);

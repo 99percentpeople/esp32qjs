@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "esp_heap_caps.h"
+#include "esp32_mquickjs_memory.h"
 #include "esp_log.h"
 #include "esp_log_write.h"
 #include "esp_timer.h"
@@ -16,7 +16,8 @@
 #define ESP32_MQUICKJS_LOG_READ_MAX_BYTES 2048U
 
 typedef struct {
-    esp32_mquickjs_log_ring_t ring;
+    /* Task-context log storage; the callback lock stays in internal RAM. */
+    esp32_mquickjs_log_ring_t *ring;
     portMUX_TYPE lock;
     char boot_id[17];
     char console_chunk[ESP32_MQUICKJS_LOG_TEXT_MAX_BYTES];
@@ -26,7 +27,9 @@ typedef struct {
     bool active;
 } esp32_mquickjs_runtime_logs_state_t;
 
-static esp32_mquickjs_runtime_logs_state_t s_runtime_logs;
+static esp32_mquickjs_runtime_logs_state_t s_runtime_logs = {
+    .lock = portMUX_INITIALIZER_UNLOCKED,
+};
 static esp32_mquickjs_runtime_t *s_runtime_logs_owner;
 static vprintf_like_t s_previous_vprintf;
 
@@ -115,6 +118,9 @@ static void append_raw_locked(esp32_mquickjs_runtime_logs_state_t *state,
 {
     size_t offset = 0U;
 
+    if (!state->active || state->ring == NULL) {
+        return;
+    }
     while (offset < text_length) {
         size_t chunk_length = raw_chunk_length(text + offset,
                                                text_length - offset);
@@ -123,7 +129,7 @@ static void append_raw_locked(esp32_mquickjs_runtime_logs_state_t *state,
             break;
         }
         (void)esp32_mquickjs_log_ring_append(
-            &state->ring,
+            state->ring,
             (uint32_t)(esp_timer_get_time() / 1000),
             source,
             text + offset,
@@ -184,7 +190,7 @@ static int runtime_logs_vprintf(const char *format, va_list arguments)
     va_copy(copy, arguments);
     formatted_length = vsnprintf(buffer, sizeof(buffer), format, copy);
     va_end(copy);
-    if (formatted_length <= 0 || !state->active) {
+    if (formatted_length <= 0) {
         return formatted_length;
     }
     captured_length = (size_t)formatted_length;
@@ -202,17 +208,29 @@ static int runtime_logs_vprintf(const char *format, va_list arguments)
 
 bool esp32_mquickjs_init_runtime_logs(esp32_mquickjs_runtime_t *runtime)
 {
+    esp32_mquickjs_log_ring_t *ring;
+
     if (runtime == NULL || s_runtime_logs_owner != NULL) {
         return false;
     }
-    memset(&s_runtime_logs, 0, sizeof(s_runtime_logs));
-    s_runtime_logs.lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
-    esp32_mquickjs_log_ring_init(&s_runtime_logs.ring);
+    ring = esp32_mquickjs_memory_payload_alloc(
+        "runtime.logs", sizeof(*ring), ESP32_MQUICKJS_MEMORY_EXTERNAL);
+    if (ring == NULL) {
+        return false;
+    }
+    esp32_mquickjs_log_ring_init(ring);
+    /* A previous log callback may still be in flight during a restart.
+     * Keep the lock valid for the entire process lifetime. */
+    portENTER_CRITICAL(&s_runtime_logs.lock);
+    s_runtime_logs.ring = ring;
+    s_runtime_logs.console_open = false;
+    s_runtime_logs.console_chunk_length = 0U;
     snprintf(s_runtime_logs.boot_id,
              sizeof(s_runtime_logs.boot_id),
              "%s",
              runtime->boot_id);
     s_runtime_logs.active = true;
+    portEXIT_CRITICAL(&s_runtime_logs.lock);
     s_runtime_logs_owner = runtime;
     runtime->runtime_log_state = &s_runtime_logs;
     s_previous_vprintf = esp_log_set_vprintf(runtime_logs_vprintf);
@@ -221,6 +239,8 @@ bool esp32_mquickjs_init_runtime_logs(esp32_mquickjs_runtime_t *runtime)
 
 void esp32_mquickjs_deinit_runtime_logs(esp32_mquickjs_runtime_t *runtime)
 {
+    esp32_mquickjs_log_ring_t *ring;
+
     if (runtime == NULL || s_runtime_logs_owner != runtime) {
         return;
     }
@@ -228,7 +248,10 @@ void esp32_mquickjs_deinit_runtime_logs(esp32_mquickjs_runtime_t *runtime)
     portENTER_CRITICAL(&s_runtime_logs.lock);
     s_runtime_logs.active = false;
     s_runtime_logs.console_open = false;
+    ring = s_runtime_logs.ring;
+    s_runtime_logs.ring = NULL;
     portEXIT_CRITICAL(&s_runtime_logs.lock);
+    esp32_mquickjs_memory_payload_free(ring);
     runtime->runtime_log_state = NULL;
     s_runtime_logs_owner = NULL;
     s_previous_vprintf = NULL;
@@ -341,21 +364,21 @@ JSValue js_runtime_logs_read(JSContext *ctx,
         return JS_ThrowTypeError(ctx,
             "runtimeLogs.read(afterSequence, limit, maxBytes) expects 0..4294967295, 1..16, 1..2048");
     }
-    snapshot = heap_caps_calloc((size_t)limit_value,
-                                sizeof(*snapshot),
-                                MALLOC_CAP_8BIT);
+    snapshot = esp32_mquickjs_memory_payload_calloc(
+        "runtime.logs.read", (size_t)limit_value, sizeof(*snapshot),
+        ESP32_MQUICKJS_MEMORY_EXTERNAL);
     if (snapshot == NULL) {
         return JS_ThrowOutOfMemory(ctx);
     }
     state = runtime->runtime_log_state;
     portENTER_CRITICAL(&state->lock);
-    entry_count = esp32_mquickjs_log_ring_read(&state->ring,
+    entry_count = esp32_mquickjs_log_ring_read(state->ring,
                                                (uint32_t)after_value,
                                                (size_t)limit_value,
                                                (size_t)max_bytes_value,
                                                snapshot,
                                                (size_t)limit_value);
-    dropped = state->ring.dropped;
+    dropped = state->ring->dropped;
     portEXIT_CRITICAL(&state->lock);
 
     result = JS_PushGCRef(ctx, &result_ref);
@@ -394,12 +417,12 @@ JSValue js_runtime_logs_read(JSContext *ctx,
                                          JS_NewUint32(ctx, dropped))) {
         goto fail;
     }
-    heap_caps_free(snapshot);
+    esp32_mquickjs_memory_payload_free(snapshot);
     JS_PopGCRef(ctx, &entries_ref);
     return JS_PopGCRef(ctx, &result_ref);
 
 fail:
-    heap_caps_free(snapshot);
+    esp32_mquickjs_memory_payload_free(snapshot);
     JS_PopGCRef(ctx, &entries_ref);
     JS_PopGCRef(ctx, &result_ref);
     return JS_EXCEPTION;
