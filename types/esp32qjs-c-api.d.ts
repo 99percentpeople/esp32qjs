@@ -60,6 +60,8 @@ namespace ESP32QJS {
   /**
    * Byte payload accepted by low-level transports.
    *
+   * Array-like lengths must be finite integers in 0..2147483647 and elements
+   * must be numeric integers in 0..255; coercion and wraparound are rejected.
    * Plain array-like values are copied by the transport. Native `ByteView`
    * values returned by modules such as `bitmap.readRect(...)` can be
    * passed directly without first converting them to JavaScript arrays.
@@ -3338,6 +3340,8 @@ namespace ESP32QJS {
     resetCount: number;
     droppedScanReports: number;
     droppedConnectionEvents: number;
+    /** Last native failure terminating an unclaimed connection; zero if none. Reset on adapter open. */
+    rejectedConnectionError: number;
     droppedServerEvents: number;
   }
 

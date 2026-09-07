@@ -94,7 +94,7 @@ class BLEArchitectureTests(unittest.TestCase):
     def test_gap_callbacks_use_fixed_pools_without_js_or_allocation(self):
         source = self.source()
         callback_start = source.index(
-            "static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)\n{"
+            "static int ble_gap_event_callback_locked(struct ble_gap_event *event, void *arg)\n{"
         )
         callback_end = source.index("static void ble_host_task", callback_start)
         callback = source[callback_start:callback_end]
@@ -246,7 +246,7 @@ class BLEArchitectureTests(unittest.TestCase):
             self.assertIn(".resource_key = ble_gap_resource_key", source[start:end])
 
         callback_start = source.index(
-            "static int ble_gap_event_callback(struct ble_gap_event *event, void *arg)\n{"
+            "static int ble_gap_event_callback_locked(struct ble_gap_event *event, void *arg)\n{"
         )
         callback_end = source.index("static void ble_host_task", callback_start)
         callback = source[callback_start:callback_end]

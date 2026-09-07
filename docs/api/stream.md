@@ -15,6 +15,11 @@ closes the iterator, so cooperative UART and USB consumers do not make a
 defensive full-span copy. Calling `close()` or changing a reusable source with
 `setRect()` while it is leased throws a busy error.
 
+Array-like `ByteSource` inputs require a numeric, finite integer `length` in
+`0..2147483647` and numeric integer elements in `0..255`. Fractional values,
+non-finite numbers and values that would wrap during integer conversion are
+rejected. Each transport can impose a smaller payload limit.
+
 - `Stream.SEEK_SET`
 - `Stream.SEEK_CUR`
 - `Stream.SEEK_END`

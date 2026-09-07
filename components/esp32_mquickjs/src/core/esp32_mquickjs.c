@@ -761,7 +761,8 @@ bool esp32_mquickjs_set_property(JSContext *ctx,
                                  const char *name,
                                  JSValue value)
 {
-    return !JS_IsException(JS_SetPropertyStr(ctx, target_obj, name, value));
+    return !JS_IsException(target_obj) && !JS_IsException(value) &&
+           !JS_IsException(JS_SetPropertyStr(ctx, target_obj, name, value));
 }
 
 bool esp32_mquickjs_set_property_ref(JSContext *ctx,
@@ -769,7 +770,8 @@ bool esp32_mquickjs_set_property_ref(JSContext *ctx,
                                      const char *name,
                                      JSValue value)
 {
-    return target_obj != NULL &&
+    return target_obj != NULL && !JS_IsException(*target_obj) &&
+           !JS_IsException(value) &&
            !JS_IsException(JS_SetPropertyStr(ctx, *target_obj, name, value));
 }
 

@@ -61,12 +61,16 @@ static void leased_byte_span_source_close(JSContext *ctx, void *opaque)
 
 static bool js_value_to_u32(JSContext *ctx, JSValue value, uint32_t *out_value)
 {
-    int raw_value = 0;
+    double number;
 
-    if (JS_ToInt32(ctx, &raw_value, value) != 0 || raw_value < 0) {
+    /* Array lengths and bytes must not undergo ToInt32 truncation/wraparound.
+     * Keep the existing signed array-length limit used by MQuickJS. */
+    if (!JS_IsNumber(ctx, value) || JS_ToNumber(ctx, &number, value) != 0 ||
+        !isfinite(number) || number < 0 || number > INT32_MAX ||
+        (double)(uint32_t)number != number) {
         return false;
     }
-    *out_value = (uint32_t)raw_value;
+    *out_value = (uint32_t)number;
     return true;
 }
 

@@ -63,7 +63,7 @@ Connections with the compiled bonding policy, `mitm:false`, and
   open, synchronized, address, addressType, deviceName, roles,
   connections, maxConnections, scanning, advertising, bondedDevices,
   resetCount, droppedScanReports, droppedConnectionEvents,
-  droppedServerEvents
+  rejectedConnectionError, droppedServerEvents
 }
 ```
 
@@ -71,6 +71,9 @@ All booleans, counts, and strings in this status are snapshots. BLE addresses
 use `{ address: "aa:bb:cc:dd:ee:ff", type }`, where `type` is `"public"`,
 `"random-static"`, `"random-private-resolvable"`, or
 `"random-private-nonresolvable"`.
+
+`rejectedConnectionError` records failed termination of an unclaimed connection
+(zero if none; reset on open). See [ownership and cleanup](ble-lifecycle.md).
 
 ## Scanning
 
@@ -391,8 +394,7 @@ attempt and terminates a late success. Scan/advertise stop only their owner.
 Indication timeout affects only submitted recipients still awaiting confirmation.
 `receive(timeoutMs)` remains a queue wait returning `null`.
 
-Public timeout does not release native storage or permit lane reuse. GATT returns
-`BLE_BUSY` until the original native operation terminates; unrelated connections
-remain usable. Indication TX submission (`status=0`) is not peer confirmation.
-See [operation-by-operation cleanup](ble-lifecycle.md) for native completion and
-Host teardown boundaries. Timeout does not lower security or auto-reconnect.
+Public timeout retains native storage and occupied lanes until native completion.
+GATT returns `BLE_BUSY` meanwhile. Indication TX `status=0` is not confirmation.
+See [operation-by-operation cleanup](ble-lifecycle.md) for completion boundaries.
+Timeout does not lower security or auto-reconnect.

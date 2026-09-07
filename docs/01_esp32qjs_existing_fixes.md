@@ -474,17 +474,23 @@ outstandingOwnersAfter: null
 
 ### Gate F-CORE：可以开始后续重构
 
-本轮新增 BLE timeout 取消失败存储保留修复，四目标构建通过。F-03/F-08 短测试缺口仍在收尾；W-00 已开始输入采集，W-01 尚未开始。见[收尾与集中验收账本](investigations/2026-09-07-wifi-refactor-start.md)。
+已新增 BLE timeout 取消失败存储保留、扫描/广播 callback cookie 与退出屏障修复，
+以及排队广播请求的 generation 重验。实际 MQuickJS 测试还复现并修复状态转换的
+分配失败传播、移动 GC 引用与属性 helper 写入 exception sentinel 问题。
+连接交接失败、入站队列丢弃/关闭及未完成 receive 的清理已有生产回归；终止失败保留槽位，显式清理可重试。
+已补连接句柄复用竞争、失败状态断连清理及断连/配对先完成 Future 的回归；GATT snapshot 已有实际 GC 测试。
+F-08 的 payload、ByteView/Source、CSI 合成转移及 capture 失败测试已经收尾；
+F-CORE 通过，W-01 可以开始。见[最终证据与测试边界](investigations/2026-09-08-fcore-closeout.md)。
 
 - [x] F-00 已保存可复现基线。
-- [ ] 已确认的 P0 缺陷完成修复；风险项有测试或明确阻塞说明。
-- [ ] callback admission、Future settle、native cleanup 和数据 storage 的边界明确。
-- [ ] 现有控制状态在观察队列饱和时仍可达终态。
+- [x] 已确认的 P0 缺陷完成修复；风险项有测试或明确阻塞说明。
+- [x] callback admission、Future settle、native cleanup 和数据 storage 的边界明确；转换失败的 API/allocator 边界注入见最终证据。
+- [x] 现有控制状态在观察队列饱和时仍可达终态（生产分支测试与完成路径核对；真实 RF 压力单列）。
 - [x] Radio lease 和 BLE operation identity 有生产测试；耗尽不回绕。
-- [x] CSI 原生 retained storage 测试通过；JS/RF 扩展验证仍单列。
+- [x] CSI 原生及实际 VM retained storage 测试通过；真实 RF 仍单列。
 - [x] BLE timeout 逐操作副作用已与源代码同步记录。
 - [x] ESP-NOW 现有 recovery/queue retain 的 Host 回归通过；双机 RF 未运行。
-- [x] Host C 65/65、Python 340/340、三 target 与 C5 disabled build 有记录。
+- [x] Host C 65/65、Python 407/407、三 target 与 C5 disabled/NAN-Sync build 有记录。
 - [x] 公共 API 不提前宣称后续新能力已经实现。
 
 ### Gate F-HARDWARE：可宣称现有修复完成硬件验收

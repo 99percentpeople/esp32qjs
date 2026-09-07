@@ -129,6 +129,7 @@ int main(void) {
 typedef struct { bool transferred; uint32_t connection_generation, adapter_generation; void *ctx; } esp32_mquickjs_future_driver_state_t;
 static struct { struct { bool active; uint32_t generation; void *queue,*payloads; int queue_ref,stop_reason; bool queue_rooted; } scanner; } s_ble;
 static int freed, orphan, roots;
+static void ble_scan_callbacks_quiesce(void) { }
 static int ble_gap_disc_cancel(void) { return 1; }
 static void ble_release_event_queue(void *ctx, void **q, int *r, bool *rooted) { (void)ctx; (void)q; (void)r; (void)rooted; roots++; }
 static void heap_caps_free(void *p) { (void)p; freed++; }
@@ -171,6 +172,9 @@ int main(void) {
 typedef struct { bool transferred; uint32_t connection_generation, adapter_generation; void *ctx; } esp32_mquickjs_future_driver_state_t;
 static struct { struct { bool active; uint32_t generation; void *queue,*payloads; int queue_ref,stop_reason; bool queue_rooted; } scanner, advertiser; } s_ble;
 static int freed, orphan, roots, stop_result;
+static void ble_scan_callbacks_quiesce(void) { }
+static void ble_advertise_callbacks_quiesce(void) { }
+static void ble_discard_advertiser_connections(void *ad) { (void)ad; }
 static int ble_gap_disc_cancel(void) { return stop_result; }
 static int ble_gap_adv_stop(void) { return stop_result; }
 static void ble_release_event_queue(void *ctx, void **q, int *r, bool *rooted) { (void)ctx; (void)q; (void)r; (void)rooted; roots++; }

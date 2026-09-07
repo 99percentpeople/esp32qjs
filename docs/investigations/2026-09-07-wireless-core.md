@@ -1,7 +1,12 @@
 # 01 无线核心实施证据
 
-实施范围仅为 01 的 F-CORE；02/03 只修订依赖与边界。本轮代码及 Host/构建验证已执行；F-HARDWARE 未通过，
-后续功能没有实施。没有提交、推送、更新父仓库 gitlink 或擦除 workspace。
+最新状态：F-CORE 收尾完成，W-01 可开始；[最终测试与边界](2026-09-08-fcore-closeout.md)。
+下文保留各次历史结果；F-HARDWARE 仍未通过。
+
+本调查原始范围为 01 的 F-CORE；F-HARDWARE 未通过。修复随后已提交到 firmware
+`4026f7f`，02 的 W-00 已开始；后续扫描竞争修复及五配置清单的最新状态见
+[收尾与第二阶段记录](2026-09-07-wifi-refactor-start.md)。没有推送、更新父仓库
+gitlink 或擦除 workspace。
 
 > 取样更正（同日后续调查）：旧 `lifecycle-existing-api` 把 `sys.status.memory`
 > 惰性树当作快照保存，before/after 会在事后重新取值。因此下文旧脚本的
@@ -31,12 +36,12 @@
 | F-00 | `modules/wifi_radio`、固定 IDF/NimBLE/MQuickJS；合法 CI Build Context generator | 本文、构建上下文和日志 hash；区分历史和本轮结果 | 硬件结果单列 |
 | F-01 | Radio init/start once，不在线重试 | 生产 Radio + SDK/RTOS stubs，NVS/init/storage/get-mode/mode/start 六处失败；记录 driverOwned、faultStage、faultError、restartRequired | 设备重启才重置 once；没有新增在线 cleanup/restart |
 | F-02 | 单固定信道 owner、失败回滚 | 精确 16 项存活 lease registry；旧 token、重复 release、容量和 identity 耗尽、并发 ensure、初始化期间 release；driver 调用断言不在 critical section | 同信道多 owner 仍拒绝，属于 W-01 |
-| F-03 | BLE callback refs、native Host stop/deinit；ESP-NOW 两阶段清理 | BLE 独立 boot-scoped operation cookie；Future detach 删除 roots，native owner 保留 storage；迟到 callback 不读新 slot；Host barrier 回收；scanner cancel 失败保留 storage；已有 `test_ble_runtime_resources` 检验 stop/deinit 失败准确后缀 | 完整 NimBLE callback-entry/scan-stop 并发调度尚无 Host SDK shim；不得把零 active callback 当未来 callback 屏障 |
-| F-04 | ESP-NOW TX native completion、BLE connection snapshot、Wi-Fi Future 结果队列 | 生产 Wi-Fi publisher 满队列测试；Wi-Fi 控制状态直接在 event-loop task 记录，timer mutation 仍由 runtime 执行；生产 BLE indication callback 区分提交与确认，并按连接消除重复终态 | BLE/GATT 对端断连、真实 RF 队列压力仍需设备与对端 |
+| F-03 | BLE callback refs、native Host stop/deinit；ESP-NOW 两阶段清理 | BLE 独立 boot-scoped operation cookie；Future detach 删除 roots，native owner 保留 storage；Host barrier 回收；scanner cancel 失败保留 storage；后续扫描及广播 cookie/退出屏障、提交中完成与排队 start 重验通过生产函数回归（含 pthread 调度）；`test_ble_runtime_resources` 检验 stop/deinit 失败准确后缀；连接结果构造失败保留清理责任，入站队列 drop/close 与实际 receive Future finish/destroy 回归通过，终止失败保留 slot 并由 runtime teardown 重试；FAILED 状态继续消费清理终态；关闭结果不再修改旧原生句柄的 callback | 测试替换 SDK 边界，尚非完整 NimBLE Host；已补原生 handle 复用的受控竞争、GAP/提交互斥与 stale identity 回归；完整 Host/RF 调度未冒充已测；不得把零 active callback 当未来 callback 屏障 |
+| F-04 | ESP-NOW TX native completion、BLE connection snapshot、Wi-Fi Future 结果队列 | 生产 Wi-Fi publisher 满队列测试；Wi-Fi 控制状态直接在 event-loop task 记录，timer mutation 仍由 runtime 执行；生产 BLE indication callback 区分提交与确认，并按连接消除重复终态；断连与配对先完成 Future 再发布观察事件，满队列回归通过 | BLE/GATT 对端断连、真实 RF 队列压力仍需设备与对端 |
 | F-05 | `ble_future_on_timeout` 逐操作副作用 | GATT/native lane 隔离；timeout 只针对匹配 generation 的连接；indication 只影响仍在等待确认的原提交连接；`docs/api/ble.md` 超时表 | GATT timeout 后无损保连接不作保证；没有自动重连或降低 MITM/SC |
-| F-06 | `wifi_csi_maybe_destroy_resources`、`js_wifi_csi_open` 单 pool guard；Frame/Batch/Event owner 转移 | 现有 pool/lease/ownership/batch 测试；新增 parent close 后禁止销毁且 payload 仍可读；最后 retain 释放后归还 | 无 RF 帧时，真实 JS Frame/Batch/View/Source conversion/GC 为 not-run；不新增多代 pool |
+| F-06 | `wifi_csi_maybe_destroy_resources`、`js_wifi_csi_open` 单 pool guard；Frame/Batch/Event owner 转移 | 现有 pool/lease/ownership/batch 测试；新增 parent close 后禁止销毁且 payload 仍可读；最后 retain 释放后归还 | 实际 VM 的 synthetic Frame/Batch/View/Source conversion/GC 已补；RF 为 not-run；不新增多代 pool |
 | F-07 | `esp32_mquickjs_espnow_tx_queue`、无线 TX core、native queue retain、显式 recovery | 保留现有 TX queue、wireless core、architecture 用例；只调整共享 Radio 的 identity/清理语义 | ESP-NOW 双机加密、timeout/recovery RF 为 not-run |
-| F-08 | Wi-Fi/BLE runtime resource helpers；CSI allocator、layout、batch checked sizes | 既有第 N 次资源分配失败、长度、offset、资源回滚测试；GATT discovery capture 在旧 lane 活跃时不清空旧 cache | 尚无覆盖所有 MQuickJS allocator 调用的故障注入器；JS conversion 的每个 N、每次移动 GC 不宣称全覆盖 |
+| F-08 | Wi-Fi/BLE runtime resource helpers；CSI allocator、layout、batch checked sizes | 既有第 N 次资源分配失败、长度、offset、资源回滚测试；GATT discovery capture 保留旧 cache；新增实际 MQuickJS 状态转换 25 个可分配 API 边界注入和实际 root 移动断言；修复 roles 引用/异常及公共属性 helper 写入 exception sentinel；入站转换的 9 个 JS API 故障边界验证部分句柄撤销与目标连接清理；地址/安全/连接状态/控制事件/GATT snapshot 已扩展实际 VM 的逐 API 失败与 GC，修复 GATT properties 数组旧引用及异常吞没 | 本轮已补上述整链 API/allocator 失败注入与真实 GC，见最终证据；不宣称 VM 内部 malloc 或全部公开参数组合全覆盖 |
 | F-09 | 现有 wireless_secure_zero、ESP-NOW PMK/LMK 清零；pairing 需显式 boolean | 生产 Wi-Fi destroy 测试先失败再修复，parse 失败也清零 connect_config；BLE bond 临时副本和 pairing response 用完清零 | JS 不可变字符串/SDK 内部副本不声称可擦除；对端交互配对 not-run |
 | F-10 | 唯一 v1；C registration、源类型、生成 manifest、docs selector | WiFiRadioStatus 在已有 radio 对象增加诊断；生成器和 check-js 验证；无后续能力占位 API | 稳定等级不变 |
 | F-11 | CI Context generator 的 C3/S3/C5/disabled profiles | 三目标和 feature-disabled 构建见下表；设备执行另列 | 500 次完整 Adapter/Connection/RF/共存为 not-run；CSI 500 次 Host pool 循环不等价 |
@@ -216,10 +221,12 @@ C5 disabled `4de779e64e7ccbdb`。完整值以 JSON 为准。
 已复现的 Radio identity/once/mutation/cleanup、BLE indication/scan cleanup、Wi-Fi
 控制队列及秘密释放缺陷均完成修复，Host 检查、三目标/disabled 构建和公共生成物通过。
 
-**F-CORE 暂不勾选为全部完成**：F-03 的完整 SDK callback-entry/stop 竞争调度，以及
-F-08 所有 JS 构造/转换的第 N 次分配失败与移动 GC 覆盖尚不足。现有生产 helper 测试
-和明确的固定 SDK 边界已记录，但不将其扩大成完整适配器证明。这两项保留为待完成短测试；W-00 输入采集已启动，W-01/B-01 仍以 F-CORE 通过作为启动前提。见[最新收尾与集中验收账本](2026-09-07-wifi-refactor-start.md)，包含后续复现并修复的 BLE timeout 取消失败存储释放问题及 Python 340/340、四目标构建结果。
+**F-CORE 收尾完成**：扫描/广播 callback、连接身份与原生 mutation、控制终态、
+GC/异常传播、payload 所有权及 capture 回滚的已确认缺陷已经修复，最终 Host/VM
+证据和测试边界见 [2026-09-08 收尾记录](2026-09-08-fcore-closeout.md)。
+W-00 输入采集已启动；W-01/B-01 可以按各自前置条件进入实施，本次没有提前注册
+后续能力或实施新的 Radio 生命周期。
 
 **F-HARDWARE 未通过**：新固件的有界关闭/重开、GC、pending Future runtime restart
 已取得设备结果；取样与任务回收时机问题已在后续内存调查修复并复测。真实 BLE/GATT 对端、
-ESP-NOW 双机、CSI RF、500 次完整生命周期及共存未完成。此前首次 flash 依靠用户重新连接；后续去探针正式固件的自动重连已通过，见[内存调查](2026-09-07-runtime-heap.md)。新增 timeout 修复尚未刷写。长时间测试按用户安排在全部功能完成后集中执行，仍为 not-run；feature-stability 未提升。
+ESP-NOW 双机、CSI RF、500 次完整生命周期及共存未完成。此前首次 flash 依靠用户重新连接；后续去探针正式固件的自动重连已通过，见[内存调查](2026-09-07-runtime-heap.md)。新增 timeout/callback 修复尚未刷写。长时间测试按用户安排在全部功能完成后集中执行，仍为 not-run；feature-stability 未提升。
