@@ -25,6 +25,11 @@
    回调和有返回值的 netif start，再发布状态。已有真实 START 时不重复 netif_add；
    AP-only 不误设 Station started，错误保留实际阶段并走现有清理后缀。
    新回归及相关 29 项通过。原崩溃顺序和独立后创建联网均实机通过。
+   提交后的并发审查又补了 START 已发事件但原生调用尚未返回的窗口：早期 started
+   快照可为 false，现于最终 Radio START/fence 后再次确保 netif 就绪；失败沿同一
+   helper 清理后缀退出。新增生产后缀回归先失败后通过，两个 netif 回归及相关 29 项
+   通过；这项新增用例在上述完整 Python 运行之后执行，不计入该次 1252 项。
+   见 `late-station-in-progress-before/after/related.log`。
 2. **后台 worker 污染 JS wait/watchdog 和串口 RPC。** worker 原来改动 JS deadline /
    native wait，并对未注册任务调用 watchdog reset。旧串口原始数据仅移除十条该
    错误日志后，生产 CRC/reassembly 解码恢复了原请求的成功回复。修复限定 runtime

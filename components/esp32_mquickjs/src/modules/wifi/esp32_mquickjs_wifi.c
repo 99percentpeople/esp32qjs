@@ -1507,6 +1507,17 @@ esp_err_t esp32_mquickjs_wifi_ensure_started(void)
                         TAG, "read Wi-Fi radio status failed");
     if (!radio_status.started || (radio_status.mode & WIFI_MODE_STA) == 0)
         return ESP_ERR_INVALID_STATE;
+    /* The early helper snapshot may have seen another owner's START still in
+     * progress. Its event can precede helper attachment and esp_wifi_start's
+     * return, so always reconcile the IP interface after joining the fence. */
+    esp_err_t err = wifi_start_existing_station_netif();
+    if (err != ESP_OK) {
+        s_wifi_setup_error = err;
+        (void)wifi_cleanup_failed_init();
+        return err;
+    }
+    s_wifi_setup_stage = NULL;
+    s_wifi_setup_error = ESP_OK;
     wifi_lock();
     s_wifi_state.started = true;
     s_wifi_state.status.started = true;
