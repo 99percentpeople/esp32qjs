@@ -1,14 +1,15 @@
 # Wi-Fi API 当前实现与剩余工作
 
-当前基线为 firmware `d7db8d1` 加 Wi-Fi 工作区增量，固定 ESP-IDF
+当前实现为 firmware `70f4e88` 加并发修复 `388069d`，固定 ESP-IDF
 `fff9895c82d744c7237be8847347bdd1b07c6643`。F-CORE 已提交（`4026f7f`、`1ec39a5`），
 W-00 已提交（`d7db8d1`）；本阶段 Wi-Fi 提交及镜像结果见最新验收记录。
 
 ## 当前状态（2026-09-13）
 
-已经进入实机验收。合并镜像 `9e697840…` 在 XIAO C5 上完成十五项短时功能回归与六次
+本轮实现与可执行的短时验收已收尾。合并镜像 `9e697840…` 在 XIAO C5 上完成十五项短时功能回归与六次
 带 pending/retained 资源的 runtime restart。后创建 Station 网络接口的真实崩溃已修复，
-原触发顺序及独立联网用例均通过。完整证据见
+原触发顺序及独立联网用例均通过。最终提交镜像 `20f988e2…` 已 preserve 刷入，
+四项受影响路径复测、实机覆盖元数据和 workspace 核对通过。完整证据见
 [当前短时验收记录](2026-09-13-wifi-c5-short-acceptance.md)。
 
 | 范围 | 实际状态与边界 |
@@ -18,14 +19,14 @@ W-00 已提交（`d7db8d1`）；本阶段 Wi-Fi 提交及镜像结果见最新�
 | 配网、Enterprise、roaming、FTM/TWT、NAN、Mesh | 公开实现与目标编译 gate 已接入；按生产 fixture 和各配置构建逐项验证；缺少对端的 RF 项目不算通过 |
 | 共享预算、关闭与 runtime restart | 六次实机 restart 后 owner/operation/CSI pool 归零；同等 healthy 状态的 memory manager 账本相等，largest block 不变 |
 | ESP-NOW 对齐 | offline 和共享 Radio 当前镜像通过；五项新增 ESP-NOW 能力仍按 W-10 范围排除，保留 contract-pending |
-| 契约、生成物与交付 | 四项生成物检查通过；完整 Python 已执行，两个旧断言修订后 26 项相关回归通过；165 个覆盖条目同步证据，15 个已审查条目达到 implemented；提交审查待完成 |
+| 契约、生成物与交付 | 四项生成物检查通过；完整 Python 已执行，两个旧断言修订后 26 项相关回归通过；165 个覆盖条目同步证据，15 个已审查条目达到 implemented；实现提交与最终镜像核对完成 |
 
-当前交付收尾为提交及最终覆盖元数据镜像核对。
+本轮提交及最终镜像核对完成，剩余为下列尚未执行的硬件资格与后置阶段。
 完整 Python 的原终态为 1252 项、2 failures / 1 skipped；修订后的相关 26 项通过，
 原失败记录保留。SDK 覆盖表未满足完整字段审查的条目继续保留审查状态，
 不把 source/fixture/build 证明提升为硬件资格或 feature 稳定等级。
 
-提交只包含 firmware 与必要 Host Build Context / CSI 诊断依赖；不纳入根仓库其他
+Host 适配提交为根仓库 `27fa8dd`。提交只包含 firmware 与必要 Host Build Context / CSI 诊断依赖；不纳入根仓库其他
 改动，不自动更新 firmware gitlink。
 
 C3/S3/C5 构建与 feature-disabled 的通过不代表三种 MCU 的实机 RF 资格。

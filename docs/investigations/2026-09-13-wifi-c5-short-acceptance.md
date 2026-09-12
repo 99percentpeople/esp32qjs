@@ -1,15 +1,18 @@
 # Wi-Fi C5 合并镜像短时验收
 
-本记录是当前结果入口；此前阶段文档中的各批次按原镜像保留。本记录随 Wi-Fi 功能增量提交，公开能力保持 Candidate / v1。长时间 soak、500 次完整生命周期和 BLE 扩展
+本记录是当前结果入口；此前阶段文档中的各批次按原镜像保留。Wi-Fi 功能及本轮可执行的短时验收已收尾，公开能力保持 Candidate / v1。长时间 soak、500 次完整生命周期和 BLE 扩展
 按用户安排后置；缺少对端的 RF 验收没有因此记为通过。
 
 ## 镜像与设备
 
-- 验证基线：`d7db8d1` 加 Wi-Fi 工作区增量；上述镜像之后仅同步覆盖证据元数据及测试断言。
+- 实现提交：firmware `70f4e88`，最后的 Station START 并发补充为 `388069d`；
+  必要 Host Build Context / CSI 诊断适配为根仓库 `27fa8dd`。
+  下述十五项功能和六次 runtime restart 对应合并镜像 `9e697840…`；
+  提交镜像 `20f988e2…` 的最终四项定向复测另列，不混算为同一镜像的全量结果。
 - 固定 ESP-IDF：`fff9895c82d744c7237be8847347bdd1b07c6643`。
 - XIAO ESP32-C5：`hw-10bda3c854e8`，MAC `10:BD:A3:C8:54:E8`；8 MiB Flash、
   8 MiB quad PSRAM。通过后端重新探测 ROM，仅操作此设备。
-- Artifact：`9e69784053b43164746280641f9b60b68b7a1cf8c1911881febbf3307566e71c`。
+- 前一验收 Artifact：`9e69784053b43164746280641f9b60b68b7a1cf8c1911881febbf3307566e71c`。
   Build job `493db054fd8b93cb693604d1`、Flash job `b957d583fc0856ea6c8d357b`
   均 succeeded；写入校验、Agent 重连通过。
 - app：3,133,312 / 3,145,728 bytes；原功能集、SRAM 优化和分区保留。
@@ -39,7 +42,7 @@
    [阶段入口](2026-09-12-wifi-stage-entry.md)对应生产回归和 SDK 证据。
    下表给出本次合并镜像的实际复测，不沿用旧镜像通过记录。
 
-## 当前镜像实机结果
+## 合并镜像实机结果（9e697840）
 
 原始记录根目录为 `build/wifi-stage-tests/hardware-runs/`。
 
@@ -91,7 +94,44 @@ restart；必须另查实际 generation、bootId 和资源，不能把接受回�
 `7ebfb188f0fd0c8e7d53e9774aaff2d08d14ea84613cf66d3a804854e1b0e1d4`；刷写前后核对
 一致，启动状态 healthy、safe mode=false、failureCount=0。仅删除本次拥有的临时文件。
 
-## 软件与剩余门槛
+## 提交镜像最终核对（20f988e2）
+
+- Artifact：`20f988e2d5b192aefe66f63a6168c7c91a882621749cd301440ffc5d52d9f91b`，
+  不可变 Build Context 的 firmwareCommit 为
+  `388069dc2b63b657cc0a9b497c6e4210f43dbdf5`。
+  Build job `0ae56663748152ac542eef0e`、Flash job `72dbe53b96e32564b3c43c90`
+  均 succeeded，写入校验及 Agent 重连通过。后端另列的
+  `artifactIdentityConfirmed` 为 false，未把重连当成设备独立镜像身份认证。
+- app 为 3,133,376 / 3,145,728 bytes，剩余 12,352 bytes。原功能集、分区、
+  SRAM 优化及 workspace 保留；没有因测试删减功能或扩大应用分区。
+- 实机 `wifi.diagnostics.idfApiCoverage()` 的 map SHA-256 为
+  `c829806899f77bcd3d10e66557708bf604873bdb59225fdcc8e4cc30294d13b0`，manifest
+  SHA-256 为 `239d0fec362f865f58034119feddcf46aef043ae90e72d3da54947687f03fae3`，
+  均与当前文件相等，target 与固定 SDK revision 相符。
+  合并返回完整 coverage、Radio 和启动信息超过 Host exec 的 16,384-byte 结果上限，
+  返回明确 `TOOL_ERROR`；随后仅返回所需字段完成核对，没有调整生产限制。
+- 最终四项定向复测全部 passed，原始目录仍为 `hardware-runs/`：
+
+| 用例 | 运行目录后缀 |
+| --- | --- |
+| Driver 生命周期 | `driver-lifecycle-hardware-a19b6b18` |
+| Monitor retained / GC / 饱和 | `monitor-retained-hardware-1a7df86e` |
+| 前两项后的 CSI 对应包 | `csi-packet-hardware-e5c1f485` |
+| Monitor 先启动、后创建 Station 联网 | `late-station-netif-hardware-64de4354` |
+
+四项都完成临时文件清理，无 cleanupError。bootId 始终为 `5a6624f5569e9b97`，
+runtime generation=1，无意外重启；原生并发时间点由生产后缀调度回归证明，
+不声称实机强制命中了该时间点。最终 Radio stopped，owner/operation 为零，
+无 fault/restartRequired，CSI reservedSlots=0，Monitor Session 数为零。
+启动 healthy、safe mode=false、failureCount=0；`index.js` 大小与上述 SHA-256 不变。
+最终静止状态 internal free=92,523、largest=63,488 bytes，PSRAM free=3,970,684、
+largest=3,932,160 bytes；这次单点读取不作为跨镜像内存差值或长时无泄漏证明。
+
+证据见 `build/wifi-stage-tests/hardware-preflight/committed-fence-*`。
+最后的 START 并发补充另经 S3 WPS registrar、C3 NAN/USD、C5 no-SoftAP、
+C5 全关闭四项增量构建通过；没有为文档收尾重复全量构建或重跑此前全部短测。
+
+## 软件与剩余资格门槛
 
 - 当前 C5 Board 构建，以及 S3 WPS registrar、C3 NAN/USD、C5 no-SoftAP、C5 全关闭
   四项受影响配置构建通过。此前八配置矩阵证据独立保留。
@@ -104,6 +144,8 @@ restart；必须另查实际 generation、bootId 和资源，不能把接受回�
   其中仅 15 个已有 reviewed 契约、字段和实际注册的条目提升为 implemented。
   其他条目保持原审查状态，硬件资格不提升。生成检查及覆盖工具测试通过。
 - 必要 Host Build Context 五项测试与 CSI 诊断两项测试通过；不构建前端。
-- 剩余为最终覆盖元数据镜像核对；主体实现、测试及必要 Host 适配分别提交。C3/S3 实机、配套对端要求的
+- 主体实现、测试、必要 Host 适配已分别提交，最终提交镜像核对及定向短测完成。
+  这完成本轮可执行的 Wi-Fi 功能短时验收，不代表第二阶段所有硬件资格冻结。
+  C3/S3 实机、配套对端要求的
   Enterprise/DPP/WPS/NAN/Mesh/FTM/TWT 等 RF、ESP-NOW 双机、受控 CSI RF/共存、
   独占 USB 和外部 tshark 资格仍为 not-run；BLE 和长时间 soak 后置。

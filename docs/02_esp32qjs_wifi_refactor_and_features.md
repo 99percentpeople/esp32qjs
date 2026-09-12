@@ -1,8 +1,8 @@
 # ESP32QJS 第二阶段：Wi-Fi 重构与新功能实施文档
 
-- **当前状态（2026-09-13）**：Wi-Fi 功能增量已进入交付收尾。C5 合并镜像完成 15 项短时功能回归、6 次带 pending/retained 资源的 runtime restart；后创建 Station 的崩溃已修复。相同 healthy 状态的内存账本相等、largest block 不变，原 workspace 核对一致。
+- **当前状态（2026-09-13）**：Wi-Fi 主体实现与本轮可执行的短时验收已收尾，firmware 提交 `70f4e88`、`388069d`，Host 适配提交 `27fa8dd`。C5 合并镜像完成 15 项短时功能回归、6 次带 pending/retained 资源的 runtime restart；后创建 Station 的崩溃已修复。相同 healthy 状态的内存账本相等、largest block 不变，原 workspace 核对一致。最终提交镜像 `20f988e2…` 已刷入，四项定向复测和覆盖元数据核对通过。
 - **软件结果**：Host C 138 项通过；完整 Python 1252 项的原终态为 2 failures / 1 skipped，两个旧测试断言修正后相关 26 项通过，原记录保留。MQuickJS、生成物、三目标矩阵及本次四项受影响配置通过。覆盖表 165 个条目同步 Host 证据，仅 15 个已满足字段/契约审查的条目提升为 implemented；其余状态与硬件资格不冒进。
-- **剩余交付**：提交范围审查与最终覆盖元数据镜像核对。公开功能继续 Candidate / v1；缺少对端的 RF / 三目标实机资格仍 not-run，BLE 和长时间 soak 按用户安排后置。详见[当前短时验收记录](investigations/2026-09-13-wifi-c5-short-acceptance.md)。
+- **剩余资格与后续阶段**：公开功能继续 Candidate / v1；缺少对端的 RF / 三目标实机资格仍 not-run，不把本轮短测当成全部硬件资格冻结。BLE 和长时间 soak 按用户安排后置。详见[当前短时验收记录](investigations/2026-09-13-wifi-c5-short-acceptance.md)。
 
 - **目标仓库**：`99percentpeople/esp32qjs`
 - **历史审查基线**：`9a74f1197d53863e079c30f8559ccd5b6cd60b42`

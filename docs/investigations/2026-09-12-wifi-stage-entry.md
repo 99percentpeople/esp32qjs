@@ -4,6 +4,8 @@
 [2026-09-13 C5 短时验收](2026-09-13-wifi-c5-short-acceptance.md)和
 [当前剩余工作](2026-09-08-wifi-api-remaining.md)。本批 15 项 C5 功能短测、6 次 runtime
 restart、workspace 与静止状态资源核对通过；Python 完整执行及旧断言修订证据单独列出。
+实现已提交为 `70f4e88` / `388069d`，最终提交镜像 `20f988e2…` 已刷入并通过四项
+定向复测、覆盖元数据与 workspace 核对；Host 适配提交为根仓库 `27fa8dd`。
 公开能力仍为 Candidate / v1，缺少对端的 RF、BLE 和长 soak 不记为通过。
 
 以下保留实现及测试过程中各批的原始状态；其中“当前”“最新”“未刷写”“待测”均
