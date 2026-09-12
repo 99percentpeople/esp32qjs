@@ -30,11 +30,9 @@ test("wifi_csi/saturation-hardware", function () {
       timeoutMs: 15000
     });
     session = wifi.csi.open({
-      source: "promiscuous",
-      channel: "current",
-      conflict: "fail",
+      source: { mode: "promiscuous", channel: "current" },
       capture: capture,
-      queue: { capacity: 2, overflow: "drop-newest" }
+      buffering: { queueCapacity: 2, overflow: "drop-newest" }
     });
     status = session.status();
 
@@ -43,8 +41,9 @@ test("wifi_csi/saturation-hardware", function () {
       wifi.scan({
         channel: status.effective.channel,
         showHidden: true,
-        passive: false,
-        dwellMs: 250,
+        mode: "active",
+        activeMinMs: 250,
+        activeMaxMs: 250,
         timeoutMs: 3000
       });
       fillScanAttempts += 1;
@@ -86,8 +85,9 @@ test("wifi_csi/saturation-hardware", function () {
       wifi.scan({
         channel: status.effective.channel,
         showHidden: true,
-        passive: false,
-        dwellMs: 250,
+        mode: "active",
+        activeMinMs: 250,
+        activeMaxMs: 250,
         timeoutMs: 3000
       });
       stats = session.stats();

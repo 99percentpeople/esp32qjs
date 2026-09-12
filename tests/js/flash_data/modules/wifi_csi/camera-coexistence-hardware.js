@@ -28,11 +28,9 @@ test("wifi_csi/camera-coexistence-hardware", function () {
       bufferLocation: "psram"
     });
     session = wifi.csi.open({
-      source: "promiscuous",
-      channel: "current",
-      conflict: "fail",
+      source: { mode: "promiscuous", channel: "current" },
       capture: capture,
-      queue: { capacity: 8, overflow: "drop-newest" }
+      buffering: { queueCapacity: 8, overflow: "drop-newest" }
     });
 
     for (i = 0; i < 20; i += 1) {

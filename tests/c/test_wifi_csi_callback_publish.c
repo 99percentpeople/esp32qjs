@@ -21,7 +21,7 @@ int main(void)
     uint8_t payload[9] = {0};
 
     assert(esp32_mquickjs_wifi_csi_resources_init(
-        &resources, 1, 1, 8, &allocator));
+        &resources, 1, 1, 8,0, &allocator));
     assert(!esp32_mquickjs_wifi_csi_callback_enter(&resources));
     esp32_mquickjs_wifi_csi_callback_leave(&resources);
     assert(atomic_load(&resources.callbacks_active) == 0);
@@ -29,22 +29,22 @@ int main(void)
 
     esp32_mquickjs_wifi_csi_resources_set_accepting(&resources, true);
     assert(esp32_mquickjs_wifi_csi_callback_publish(
-        &resources, &metadata, payload, sizeof(payload),
+        &resources, &metadata, payload, sizeof(payload),NULL,
         wifi_csi_test_publish_ok, &first_event) ==
         ESP32_MQUICKJS_WIFI_CSI_PUBLISH_TOO_LARGE);
     assert(esp32_mquickjs_wifi_csi_callback_publish(
-        &resources, &metadata, payload, 8,
+        &resources, &metadata, payload, 8,NULL,
         publish_reject, NULL) ==
         ESP32_MQUICKJS_WIFI_CSI_PUBLISH_QUEUE_FULL);
     assert(esp32_mquickjs_native_pool_available(&resources.pool) == 1);
     assert(atomic_load(&resources.counters.leased_frames) == 0);
 
     assert(esp32_mquickjs_wifi_csi_callback_publish(
-        &resources, &metadata, payload, 8,
+        &resources, &metadata, payload, 8,NULL,
         wifi_csi_test_publish_ok, &first_event) ==
         ESP32_MQUICKJS_WIFI_CSI_PUBLISH_ACCEPTED);
     assert(esp32_mquickjs_wifi_csi_callback_publish(
-        &resources, &metadata, payload, 8,
+        &resources, &metadata, payload, 8,NULL,
         wifi_csi_test_publish_ok, &first_event) ==
         ESP32_MQUICKJS_WIFI_CSI_PUBLISH_POOL_FULL);
     esp32_mquickjs_wifi_csi_slot_t *slot =
@@ -55,7 +55,7 @@ int main(void)
 
     esp32_mquickjs_wifi_csi_resources_set_accepting(&resources, false);
     assert(esp32_mquickjs_wifi_csi_callback_publish(
-        &resources, &metadata, payload, 8,
+        &resources, &metadata, payload, 8,NULL,
         wifi_csi_test_publish_ok, &first_event) ==
         ESP32_MQUICKJS_WIFI_CSI_PUBLISH_CLOSING);
     assert(atomic_load(&resources.counters.dropped_frame_too_large) == 1);

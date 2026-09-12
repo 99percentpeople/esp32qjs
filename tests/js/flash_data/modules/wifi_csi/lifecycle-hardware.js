@@ -4,11 +4,9 @@ test("wifi_csi/lifecycle-hardware", function () {
     ? { schema: "wifi-csi-he/1", enableLegacy: true, ht20: true, heSu: true }
     : { schema: "wifi-csi-legacy/1", lltf: true, htLtf: true, scale: "auto" };
   var options = {
-    source: "associated",
-    channel: "current",
-    conflict: "fail",
+    source: { mode: "associated" },
     capture: capture,
-    queue: { capacity: 2, overflow: "drop-newest" }
+    buffering: { queueCapacity: 2, overflow: "drop-newest" }
   };
   var session = null;
   var stats;

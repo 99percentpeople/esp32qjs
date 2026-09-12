@@ -128,8 +128,8 @@ typedef struct {
     uint32_t receive_capacity;
     uint32_t max_payload_bytes;
     uint32_t send_timeout_ms;
-    uint8_t channel;
-    uint32_t channel_generation;
+    _Atomic uint8_t channel;
+    _Atomic uint32_t channel_generation;
     bool channel_fixed;
     bool now_initialized;
     bool receive_callback_registered;
@@ -175,10 +175,16 @@ typedef struct {
     bool has_pmk;
     uint8_t pmk[ESP_NOW_KEY_LEN];
     bool power_save_enabled;
+    bool power_save_cleanup_required;
+    bool power_save_fault;
+    esp32_mquickjs_wifi_interval_token_t interval_token;
     uint16_t wake_window_ms;
     uint16_t wake_interval_ms;
     _Atomic uint32_t callbacks_active;
     _Atomic bool cleanup_scheduled;
+    _Atomic esp_err_t cleanup_error;
+    _Atomic(const char *) cleanup_stage;
+    uint8_t close_power_phase;
     bool reaper_registered;
     _Atomic(esp32_mquickjs_future_driver_state_t *) active_close;
     _Atomic uint32_t sequence;
@@ -289,7 +295,7 @@ static void espnow_retire_handle(JSContext *ctx, JSValue value,
         return;
     }
     JS_SetOpaque(ctx, value, closed_ref);
-    heap_caps_free(ref);
+    esp32_mquickjs_memory_payload_free(ref);
 }
 
 static JSValue espnow_future_call_and_wait(JSContext *ctx,
@@ -600,7 +606,7 @@ static JSValue espnow_new_peer_handle(JSContext *ctx,
     if (JS_IsException(object)) {
         return object;
     }
-    ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
+    ref = esp32_mquickjs_memory_wireless_calloc("espnow", 1, sizeof(*ref), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (ref == NULL) {
         return JS_ThrowOutOfMemory(ctx);
     }
@@ -718,9 +724,9 @@ static JSValue espnow_receive_event_to_js(JSContext *ctx,
     rssi = slot->rssi;
     channel = slot->channel;
     if (payload_length > 0) {
-        payload = esp32_mquickjs_memory_payload_alloc(
-            "espnow.rx-copy", payload_length,
-            ESP32_MQUICKJS_MEMORY_EXTERNAL);
+        payload = esp32_mquickjs_memory_wireless_alloc(
+        "espnow.rx-copy", payload_length,
+            ESP32_MQUICKJS_MEMORY_EXTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_COPY);
         if (payload == NULL) {
             espnow_release_rx_slot(session, receive_event->slot_index);
             JS_ThrowOutOfMemory(ctx);
@@ -732,7 +738,7 @@ static JSValue espnow_receive_event_to_js(JSContext *ctx,
     espnow_format_address(slot->destination, destination_address);
     broadcast = memcmp(slot->destination, s_broadcast_address,
                        ESPNOW_ADDRESS_BYTES) == 0;
-    *data = esp32_mquickjs_new_owned_byte_view(ctx, payload, payload_length);
+    *data = esp32_mquickjs_new_wireless_owned_byte_view("espnow", ctx, payload, payload_length);
     payload = NULL;
     espnow_release_rx_slot(session, receive_event->slot_index);
     if (JS_IsException(*data)) {
@@ -783,6 +789,26 @@ static void espnow_event_queue_close(void *opaque)
     }
 }
 
+static esp_err_t espnow_channel_admit(espnow_session_t *session, bool refresh)
+{
+    uint8_t primary;
+    wifi_second_chan_t secondary;
+    uint32_t generation;
+    if (refresh) {
+        esp_err_t err = esp32_mquickjs_wifi_radio_get_channel(&primary, &secondary, &generation);
+        if (err != ESP_OK) return err;
+    }
+    esp32_mquickjs_wifi_radio_channel_status_t channel;
+    esp_err_t err = esp32_mquickjs_wifi_radio_lease_channel_status(&session->radio_lease, &channel);
+    if (err != ESP_OK) return err;
+    if (channel.conflicted) return ESP_ERR_ESPNOW_CHAN;
+    if (!channel.fixed) {
+        atomic_store_explicit(&session->channel, channel.primary, memory_order_release);
+        atomic_store_explicit(&session->channel_generation, channel.generation, memory_order_release);
+    }
+    return ESP_OK;
+}
+
 static void espnow_receive_callback(const esp_now_recv_info_t *receive_info,
                                     const uint8_t *data,
                                     int data_length)
@@ -804,6 +830,10 @@ static void espnow_receive_callback(const esp_now_recv_info_t *receive_info,
             atomic_fetch_add_explicit(&session->malformed_packets, 1,
                                       memory_order_relaxed);
         }
+        goto done;
+    }
+    if (espnow_channel_admit(session, false) != ESP_OK) {
+        atomic_fetch_add_explicit(&session->dropped_packets, 1, memory_order_relaxed);
         goto done;
     }
     if ((uint32_t)data_length > session->max_payload_bytes) {
@@ -1003,23 +1033,23 @@ static void espnow_fail_queued_timeout(espnow_session_t *session)
     atomic_store_explicit(&session->lifecycle, ESPNOW_LIFECYCLE_FAILED,
                           memory_order_release);
     if (session->receive_callback_registered) {
-        (void)esp_now_unregister_recv_cb();
-        session->receive_callback_registered = false;
+        if (esp_now_unregister_recv_cb() == ESP_OK) session->receive_callback_registered = false;
     }
     if (session->send_callback_registered) {
-        (void)esp_now_unregister_send_cb();
-        session->send_callback_registered = false;
+        if (esp_now_unregister_send_cb() == ESP_OK) session->send_callback_registered = false;
     }
-    while (atomic_load_explicit(&session->callbacks_active,
-                                memory_order_acquire) != 0) {
-        vTaskDelay(1);
-    }
-    if (session->now_initialized) {
-        if (esp_now_deinit() == ESP_OK) {
-            espnow_note_native_deinit();
+    if (!session->receive_callback_registered && !session->send_callback_registered) {
+        while (atomic_load_explicit(&session->callbacks_active,
+                                    memory_order_acquire) != 0) {
+            vTaskDelay(1);
         }
-        session->now_initialized = false;
-        session->broadcast_peer_added = false;
+        if (session->now_initialized) {
+            if (esp_now_deinit() == ESP_OK) {
+                espnow_note_native_deinit();
+                session->now_initialized = false;
+                session->broadcast_peer_added = false;
+            }
+        }
     }
     portENTER_CRITICAL(&session->lock);
     (void)esp32_mquickjs_espnow_tx_queue_complete_active(
@@ -1071,8 +1101,10 @@ static bool espnow_start_tracked_send(espnow_session_t *session)
         memcpy(session->tx_staging, state->payload,
                state->payload_length);
     }
-    state->err = esp_now_send(state->address, session->tx_staging,
-                              state->payload_length);
+    state->err = espnow_channel_admit(session, true);
+    if (state->err == ESP_OK)
+        state->err = esp_now_send(state->address, session->tx_staging,
+                                  state->payload_length);
     if (state->err == ESP_OK) {
         atomic_fetch_add_explicit(&session->sent_packets, 1,
                                   memory_order_relaxed);
@@ -1120,9 +1152,9 @@ static bool espnow_start_queued_send(espnow_session_t *session)
                    ((size_t)slot * session->max_payload_bytes),
                packet->length);
     }
-    err = esp_now_send(
-        packet->address, session->tx_staging,
-        packet->length);
+    err = espnow_channel_admit(session, true);
+    if (err == ESP_OK)
+        err = esp_now_send(packet->address, session->tx_staging, packet->length);
     if (err == ESP_OK) {
         atomic_fetch_add_explicit(&session->sent_packets, 1,
                                   memory_order_relaxed);
@@ -1231,9 +1263,9 @@ static void espnow_reset_session_storage(espnow_session_t *session)
     session->tx_staging = NULL;
     esp32_mquickjs_memory_payload_free(session->tx_task_stack);
     session->tx_task_stack = NULL;
-    heap_caps_free(session->tx_packets);
+    esp32_mquickjs_memory_payload_free(session->tx_packets);
     session->tx_packets = NULL;
-    heap_caps_free(session->tx_links);
+    esp32_mquickjs_memory_payload_free(session->tx_links);
     session->tx_links = NULL;
     memset(&session->tx_queue, 0, sizeof(session->tx_queue));
     session->tx_queue_capacity = 0;
@@ -1273,10 +1305,6 @@ static void espnow_begin_close(espnow_session_t *session)
         !esp32_mquickjs_event_queue_is_closed(session->event_queue)) {
         (void)esp32_mquickjs_event_queue_close(session->event_queue);
     }
-    if (session->receive_callback_registered) {
-        (void)esp_now_unregister_recv_cb();
-        session->receive_callback_registered = false;
-    }
     portENTER_CRITICAL(&session->lock);
     pending_send = atomic_exchange_explicit(
         &session->pending_tracked_send, NULL, memory_order_acq_rel);
@@ -1298,6 +1326,68 @@ static void espnow_begin_close(espnow_session_t *session)
     espnow_notify_tx_worker(session);
 }
 
+static bool espnow_close_failure(espnow_session_t *session, const char *stage, esp_err_t error)
+{
+    atomic_store_explicit(&session->cleanup_error, error, memory_order_relaxed);
+    atomic_store_explicit(&session->cleanup_stage, stage, memory_order_release);
+    return false;
+}
+
+/* The interval belongs to Wi-Fi, so ESP-NOW deinit cannot retire its token.
+ * Record each window attempt before calling the SDK and retain only the failed
+ * cleanup suffix. The caller owns the control lane or the close reservation. */
+static esp_err_t espnow_restore_power_save(espnow_session_t *session, const char **stage)
+{
+    if (session->power_save_cleanup_required && session->close_power_phase == 0U) {
+        if (session->now_initialized) {
+            *stage = "wake-window-restore";
+            esp_err_t err = esp_now_set_wake_window(UINT16_MAX);
+            if (err != ESP_OK) return err;
+        }
+        session->close_power_phase = 1U;
+    }
+    *stage = "wake-interval-restore";
+    esp_err_t err = esp32_mquickjs_wifi_radio_interval_release(
+        &session->radio_lease, &session->interval_token);
+    if (err != ESP_OK) return err;
+    session->power_save_cleanup_required = false;
+    session->close_power_phase = 0U;
+    return ESP_OK;
+}
+
+static esp_err_t espnow_apply_power_save(espnow_session_t *session, bool enabled,
+    uint16_t window, uint16_t interval, const char **stage)
+{
+    if (session->power_save_fault) return ESP_ERR_INVALID_STATE;
+    esp_err_t err;
+    if (enabled) {
+        *stage = "wake-interval-write";
+        err = esp32_mquickjs_wifi_radio_interval_configure(
+            &session->radio_lease, interval, &session->interval_token);
+        if (err != ESP_OK) {
+            esp32_mquickjs_wifi_interval_state_t status;
+            esp32_mquickjs_wifi_radio_interval_status(&status);
+            /* Admission rejection is not an uncertain native write. */
+            if (status.uncertain && session->interval_token.identity != 0U &&
+                status.owner.identity == session->interval_token.identity)
+                session->power_save_fault = true;
+            return err;
+        }
+        session->power_save_cleanup_required = true;
+        session->close_power_phase = 0U;
+        *stage = "wake-window-write";
+        err = esp_now_set_wake_window(window);
+    } else {
+        /* Explicit disable resets this module's window, never the shared baseline. */
+        session->power_save_cleanup_required = true;
+        session->close_power_phase = 0U;
+        err = espnow_restore_power_save(session, stage);
+    }
+    if (err != ESP_OK)
+        session->power_save_fault = true;
+    return err;
+}
+
 static bool espnow_finish_close(espnow_session_t *session)
 {
     esp32_mquickjs_event_queue_t *event_queue;
@@ -1312,15 +1402,21 @@ static bool espnow_finish_close(espnow_session_t *session)
     if (tx_task != NULL &&
         !atomic_load_explicit(&session->tx_task_exited,
                               memory_order_acquire)) {
-        return false;
+        return espnow_close_failure(session, "tx-worker-drain", ESP_ERR_TIMEOUT);
     }
     if (tx_task != NULL) {
         vTaskDelete(tx_task);
         atomic_store_explicit(&session->tx_task, NULL,
                               memory_order_release);
     }
+    if (session->receive_callback_registered) {
+        esp_err_t err = esp_now_unregister_recv_cb();
+        if (err != ESP_OK) return espnow_close_failure(session, "recv-unregister", err);
+        session->receive_callback_registered = false;
+    }
     if (session->send_callback_registered) {
-        (void)esp_now_unregister_send_cb();
+        esp_err_t err = esp_now_unregister_send_cb();
+        if (err != ESP_OK) return espnow_close_failure(session, "send-unregister", err);
         session->send_callback_registered = false;
     }
     if (
@@ -1328,26 +1424,28 @@ static bool espnow_finish_close(espnow_session_t *session)
             atomic_load_explicit(&session->callbacks_active,
                                  memory_order_acquire),
             true)) {
-        return false;
+        return espnow_close_failure(session, "callback-drain", ESP_ERR_TIMEOUT);
     }
+    const char *power_stage = NULL;
+    esp_err_t power_error = espnow_restore_power_save(session, &power_stage);
+    if (power_error != ESP_OK) return espnow_close_failure(session, power_stage, power_error);
     if (session->now_initialized) {
-        if (session->power_save_enabled) {
-            (void)esp_now_set_wake_window(UINT16_MAX);
-            (void)esp_wifi_connectionless_module_set_wake_interval(
-                ESP_WIFI_CONNECTIONLESS_INTERVAL_DEFAULT_MODE);
-        }
-        if (esp_now_deinit() == ESP_OK) {
-            espnow_note_native_deinit();
-        }
+        esp_err_t err = esp_now_deinit();
+        if (err != ESP_OK) return espnow_close_failure(session, "esp-now-deinit", err);
+        espnow_note_native_deinit();
         session->now_initialized = false;
     }
     session->broadcast_peer_added = false;
     esp32_mquickjs_wifi_radio_release(&session->radio_lease);
+    if (session->radio_lease.acquired)
+        return espnow_close_failure(session, "radio-release", ESP_ERR_INVALID_STATE);
     event_queue = session->event_queue;
     event_queue_retained = session->event_queue_retained;
     espnow_reset_session_storage(session);
     session->event_queue_retained = false;
     session->runtime = NULL;
+    atomic_store_explicit(&session->cleanup_error, ESP_OK, memory_order_relaxed);
+    atomic_store_explicit(&session->cleanup_stage, NULL, memory_order_release);
     atomic_store_explicit(&session->lifecycle, ESPNOW_LIFECYCLE_CLOSED,
                           memory_order_release);
     if (event_queue_retained) {
@@ -1359,27 +1457,27 @@ static bool espnow_finish_close(espnow_session_t *session)
 static void espnow_close_worker(void *opaque)
 {
     espnow_session_t *session = opaque;
-    esp32_mquickjs_future_driver_state_t *close_state;
-
-    if (session == NULL) {
-        return;
-    }
+    if (session == NULL) return;
+    /* cleanup_scheduled is held by the submitting path until this worker exits. */
     espnow_begin_close(session);
-    while (!atomic_load_explicit(&session->tx_task_exited,
-                                 memory_order_acquire) ||
-           atomic_load_explicit(&session->callbacks_active,
-                                memory_order_acquire) != 0) {
+    while (!atomic_load_explicit(&session->tx_task_exited, memory_order_acquire)) vTaskDelay(1);
+    bool closed = espnow_finish_close(session);
+    /* Successful unregister fences new callbacks; only the drain suffix waits.
+     * SDK errors return once, with restoration/storage still owned for reaping. */
+    while (!closed && atomic_load_explicit(&session->cleanup_error, memory_order_acquire) == ESP_ERR_TIMEOUT &&
+        strcmp(atomic_load_explicit(&session->cleanup_stage, memory_order_acquire), "callback-drain") == 0) {
         vTaskDelay(1);
+        closed = espnow_finish_close(session);
     }
-    (void)espnow_finish_close(session);
-    close_state = atomic_exchange_explicit(
+    esp32_mquickjs_future_driver_state_t *close_state = atomic_exchange_explicit(
         &session->active_close, NULL, memory_order_acq_rel);
-    atomic_store_explicit(&session->cleanup_scheduled, false,
-                          memory_order_release);
     if (close_state != NULL) {
-        atomic_store_explicit(&close_state->completed, true,
-                              memory_order_release);
+        close_state->err = closed ? ESP_OK : atomic_load_explicit(&session->cleanup_error, memory_order_acquire);
+        close_state->failed_step = atomic_load_explicit(&session->cleanup_stage, memory_order_acquire);
+        close_state->result_bool = closed;
+        atomic_store_explicit(&close_state->completed, true, memory_order_release);
     }
+    atomic_store_explicit(&session->cleanup_scheduled, false, memory_order_release);
 }
 
 static bool espnow_schedule_background_close(espnow_session_t *session)
@@ -1402,22 +1500,18 @@ static bool espnow_schedule_background_close(espnow_session_t *session)
 
 static void espnow_close_native(espnow_session_t *session)
 {
-    if (session == NULL ||
-        session->lifecycle == ESPNOW_LIFECYCLE_CLOSED) {
-        return;
-    }
+    if (session == NULL || session->lifecycle == ESPNOW_LIFECYCLE_CLOSED ||
+        atomic_load_explicit(&session->active_close, memory_order_acquire) != NULL) return;
+    bool expected = false;
+    if (!atomic_compare_exchange_strong_explicit(&session->cleanup_scheduled, &expected, true,
+            memory_order_acq_rel, memory_order_acquire)) return;
     espnow_begin_close(session);
-    if (atomic_load_explicit(&session->active_close,
-                             memory_order_acquire) != NULL) {
-        return;
-    }
-    if (espnow_finish_close(session)) {
-        return;
-    }
-    if (!espnow_schedule_background_close(session)) {
-        ESP_LOGE(TAG,
-                 "ESP-NOW cleanup is pending because the worker queue is full");
-    }
+    bool closed = espnow_finish_close(session);
+    atomic_store_explicit(&session->cleanup_scheduled, false, memory_order_release);
+    if (closed) return;
+    espnow_request_reap(session);
+    if (!espnow_schedule_background_close(session))
+        ESP_LOGE(TAG, "ESP-NOW cleanup is pending because the worker queue is full");
 }
 
 static bool espnow_reap(void *opaque)
@@ -1467,12 +1561,12 @@ static bool espnow_allocate_receive_pool(JSContext *ctx,
 {
     uint32_t i;
 
-    session->rx_slots = esp32_mquickjs_memory_payload_calloc(
+    session->rx_slots = esp32_mquickjs_memory_wireless_calloc(
         "espnow.rx-pool", capacity, sizeof(*session->rx_slots),
-        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL);
-    session->rx_payloads = esp32_mquickjs_memory_payload_calloc(
+        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_POOL);
+    session->rx_payloads = esp32_mquickjs_memory_wireless_calloc(
         "espnow.rx-pool", capacity, max_payload_bytes,
-        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL);
+        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_POOL);
     if (session->rx_slots == NULL || session->rx_payloads == NULL ||
         !esp32_mquickjs_native_pool_init(&session->rx_free, capacity)) {
         JS_ThrowOutOfMemory(ctx);
@@ -1495,33 +1589,33 @@ static bool espnow_allocate_tx_queue(
     esp32_mquickjs_espnow_tx_overflow_t overflow)
 {
     if (capacity == 0) {
-        session->tx_staging = esp32_mquickjs_memory_payload_alloc(
-            "espnow.tx-staging", max_payload_bytes,
-            ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL);
-        session->tx_task_stack = esp32_mquickjs_memory_payload_alloc(
-            "espnow.tx-task-stack", ESPNOW_TX_TASK_STACK_BYTES,
-            ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL);
+        session->tx_staging = esp32_mquickjs_memory_wireless_alloc(
+        "espnow.tx-staging", max_payload_bytes,
+            ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_TX);
+        session->tx_task_stack = esp32_mquickjs_memory_wireless_alloc(
+        "espnow.tx-task-stack", ESPNOW_TX_TASK_STACK_BYTES,
+            ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_STACK);
         if (session->tx_staging == NULL || session->tx_task_stack == NULL) {
             JS_ThrowOutOfMemory(ctx);
             return false;
         }
         return true;
     }
-    session->tx_links = heap_caps_calloc(
-        capacity, sizeof(*session->tx_links),
-        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    session->tx_packets = heap_caps_calloc(
-        capacity, sizeof(*session->tx_packets),
-        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    session->tx_payloads = esp32_mquickjs_memory_payload_alloc(
+    session->tx_links = esp32_mquickjs_memory_wireless_calloc(
+        "espnow.tx-queue", capacity, sizeof(*session->tx_links),
+        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_QUEUE);
+    session->tx_packets = esp32_mquickjs_memory_wireless_calloc(
+        "espnow.tx-queue", capacity, sizeof(*session->tx_packets),
+        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_QUEUE);
+    session->tx_payloads = esp32_mquickjs_memory_wireless_alloc(
         "espnow.tx-queue", (size_t)capacity * max_payload_bytes,
-        ESP32_MQUICKJS_MEMORY_EXTERNAL);
-    session->tx_staging = esp32_mquickjs_memory_payload_alloc(
+        ESP32_MQUICKJS_MEMORY_EXTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_QUEUE);
+    session->tx_staging = esp32_mquickjs_memory_wireless_alloc(
         "espnow.tx-staging", max_payload_bytes,
-        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL);
-    session->tx_task_stack = esp32_mquickjs_memory_payload_alloc(
+        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_TX);
+    session->tx_task_stack = esp32_mquickjs_memory_wireless_alloc(
         "espnow.tx-task-stack", ESPNOW_TX_TASK_STACK_BYTES,
-        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL);
+        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_STACK);
     if (session->tx_links == NULL || session->tx_packets == NULL ||
         session->tx_payloads == NULL || session->tx_staging == NULL ||
         session->tx_task_stack == NULL ||
@@ -1782,7 +1876,7 @@ static bool espnow_parse_open_options(
         uint8_t *owned = NULL;
         JSValue error = JS_UNDEFINED;
 
-        if (!esp32_mquickjs_get_byte_source(
+        if (!esp32_mquickjs_get_wireless_byte_source("espnow",
                 ctx, *property, "espNow.open({ pmk })", &source, &owned,
                 &error)) {
             goto fail;
@@ -1852,6 +1946,14 @@ static void espnow_open_release(
     esp32_mquickjs_wireless_secure_zero(state->pmk, sizeof(state->pmk));
 }
 
+static bool espnow_closed_and_quiescent(const espnow_session_t *session)
+{
+    return session != NULL && session->lifecycle == ESPNOW_LIFECYCLE_CLOSED &&
+        !atomic_load_explicit(&session->cleanup_scheduled, memory_order_acquire) &&
+        atomic_load_explicit(&session->active_close, memory_order_acquire) == NULL &&
+        !session->reaper_registered;
+}
+
 static bool espnow_open_capture(
     JSContext *ctx,
     JSGCRef *this_ref,
@@ -1869,11 +1971,13 @@ static bool espnow_open_capture(
         return false;
     }
     *out_state = NULL;
-    if (session->lifecycle != ESPNOW_LIFECYCLE_CLOSED) {
+    if (!espnow_closed_and_quiescent(session)) {
         JS_ThrowReferenceError(ctx, "ESPNOW_ALREADY_OPEN: an ESP-NOW session already exists");
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -1882,7 +1986,14 @@ static bool espnow_open_capture(
     atomic_init(&state->completed, false);
     if (!espnow_parse_open_options(ctx, argc, argv, state)) {
         esp32_mquickjs_wireless_secure_zero(state->pmk, sizeof(state->pmk));
-        heap_caps_free(state);
+        esp32_mquickjs_memory_payload_free(state);
+        return false;
+    }
+    /* Option getters can execute JS and change the singleton after preflight. */
+    if (!espnow_closed_and_quiescent(session)) {
+        esp32_mquickjs_wireless_secure_zero(state->pmk, sizeof(state->pmk));
+        esp32_mquickjs_memory_payload_free(state);
+        JS_ThrowReferenceError(ctx, "ESPNOW_ALREADY_OPEN: session changed during option capture");
         return false;
     }
     generation = atomic_fetch_add_explicit(
@@ -1930,6 +2041,8 @@ static bool espnow_open_capture(
     atomic_init(&session->tx_last_error, ESP_OK);
     atomic_init(&session->callbacks_active, 0);
     atomic_init(&session->cleanup_scheduled, false);
+    atomic_init(&session->cleanup_error, ESP_OK);
+    atomic_init(&session->cleanup_stage, NULL);
     atomic_init(&session->active_close, NULL);
     atomic_init(&session->sequence, 0);
     atomic_init(&session->received_packets, 0);
@@ -1950,24 +2063,24 @@ static bool espnow_open_capture(
             ctx, session, state->receive_capacity,
             state->max_payload_bytes)) {
         espnow_open_release(state);
-        heap_caps_free(state);
+        esp32_mquickjs_memory_payload_free(state);
         return false;
     }
     if (!espnow_allocate_tx_queue(
             ctx, session, state->tx_queue_capacity,
             state->max_payload_bytes, state->tx_overflow)) {
         espnow_open_release(state);
-        heap_caps_free(state);
+        esp32_mquickjs_memory_payload_free(state);
         return false;
     }
-    event_queue = esp32_mquickjs_event_queue_new(
+    event_queue = esp32_mquickjs_event_queue_new_wireless("espnow",
         ctx, session->runtime, sizeof(espnow_receive_event_t),
         state->receive_capacity, ESP32_MQUICKJS_EVENT_QUEUE_DROP_NEWEST,
         espnow_receive_event_to_js, espnow_receive_event_drop,
         espnow_event_queue_close, session);
     if (JS_IsException(event_queue)) {
         espnow_open_release(state);
-        heap_caps_free(state);
+        esp32_mquickjs_memory_payload_free(state);
         return false;
     }
     *JS_AddGCRef(ctx, &state->event_queue_ref) = event_queue;
@@ -1980,7 +2093,7 @@ static bool espnow_open_capture(
             JS_ThrowInternalError(ctx, "failed to retain ESP-NOW event queue");
         }
         espnow_open_release(state);
-        heap_caps_free(state);
+        esp32_mquickjs_memory_payload_free(state);
         return false;
     }
     session->event_queue_retained = true;
@@ -1991,7 +2104,7 @@ static bool espnow_open_capture(
             JS_ThrowInternalError(ctx, "failed to reserve ESP-NOW radio resources");
         }
         espnow_open_release(state);
-        heap_caps_free(state);
+        esp32_mquickjs_memory_payload_free(state);
         return false;
     }
     *out_state = state;
@@ -2028,7 +2141,11 @@ static void espnow_open_initialize(
     if (state->err == ESP_OK) {
         state->failed_step = "wifi_radio_get_channel";
         state->err = esp32_mquickjs_wifi_radio_get_channel(
-            &session->channel, &secondary, &session->channel_generation);
+            &actual_channel, &secondary, &actual_generation);
+        if (state->err == ESP_OK) {
+            session->channel = actual_channel;
+            session->channel_generation = actual_generation;
+        }
     }
     if (state->err == ESP_OK) {
         state->failed_step = "esp_now_init";
@@ -2065,13 +2182,8 @@ static void espnow_open_initialize(
             s_broadcast_address, &session->broadcast_rate_config);
     }
     if (state->err == ESP_OK && session->power_save_enabled) {
-        state->failed_step = "esp_now_set_wake_window";
-        state->err = esp_now_set_wake_window(session->wake_window_ms);
-        if (state->err == ESP_OK) {
-            state->failed_step = "esp_now_set_wake_interval";
-            state->err = esp_wifi_connectionless_module_set_wake_interval(
-                session->wake_interval_ms);
-        }
+        state->err = espnow_apply_power_save(session, true,
+            session->wake_window_ms, session->wake_interval_ms, &state->failed_step);
     }
     if (state->err == ESP_OK) {
         TaskHandle_t tx_task = NULL;
@@ -2183,7 +2295,7 @@ static JSValue espnow_open_finish(
     if (JS_IsException(*object)) {
         goto fail;
     }
-    ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
+    ref = esp32_mquickjs_memory_wireless_calloc("espnow", 1, sizeof(*ref), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (ref == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto fail;
@@ -2193,7 +2305,7 @@ static JSValue espnow_open_finish(
     if (!esp32_mquickjs_set_property_ref(
             ctx, object, "_eventQueue", state->event_queue_ref.val)) {
         JS_SetOpaque(ctx, *object, NULL);
-        heap_caps_free(ref);
+        esp32_mquickjs_memory_payload_free(ref);
         goto fail;
     }
     state->transferred = true;
@@ -2223,7 +2335,7 @@ static void espnow_open_destroy(
         return;
     }
     espnow_open_release(state);
-    heap_caps_free(state);
+    esp32_mquickjs_memory_payload_free(state);
 }
 
 static esp32_mquickjs_resource_key_t espnow_open_resource_key(
@@ -2234,7 +2346,7 @@ static esp32_mquickjs_resource_key_t espnow_open_resource_key(
 }
 
 static const esp32_mquickjs_future_driver_t s_espnow_open_driver = {
-    .capture = espnow_open_capture,
+    .memory_owner = "wireless.future", .capture = espnow_open_capture,
     .start = espnow_open_start,
     .poll = espnow_open_poll,
     .finish = espnow_open_finish,
@@ -2490,7 +2602,7 @@ static bool espnow_parse_peer_options(
         uint8_t *owned = NULL;
         JSValue error = JS_UNDEFINED;
 
-        if (!esp32_mquickjs_get_byte_source(
+        if (!esp32_mquickjs_get_wireless_byte_source("espnow",
                 ctx, *property, "ESP-NOW LMK", &source, &owned, &error)) {
             goto done;
         }
@@ -2557,7 +2669,9 @@ static bool espnow_peer_add_capture(
         }
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -2614,7 +2728,7 @@ static bool espnow_peer_add_capture(
 
 fail:
     esp32_mquickjs_wireless_secure_zero(state->lmk, sizeof(state->lmk));
-    heap_caps_free(state);
+    esp32_mquickjs_memory_payload_free(state);
     return false;
 }
 
@@ -2635,7 +2749,9 @@ static bool espnow_peer_update_capture(
         }
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -2649,14 +2765,14 @@ static bool espnow_peer_update_capture(
     if (!espnow_parse_peer_options(
             ctx, argv[0].val, true, peer, state)) {
         esp32_mquickjs_wireless_secure_zero(state->lmk, sizeof(state->lmk));
-        heap_caps_free(state);
+        esp32_mquickjs_memory_payload_free(state);
         return false;
     }
     if (!peer->encrypted && state->encrypted &&
         s_espnow_session.encrypted_peer_count >=
             CONFIG_ESP_WIFI_ESPNOW_MAX_ENCRYPT_NUM) {
         esp32_mquickjs_wireless_secure_zero(state->lmk, sizeof(state->lmk));
-        heap_caps_free(state);
+        esp32_mquickjs_memory_payload_free(state);
         espnow_throw_error(ctx, "ESPNOW_ENCRYPTED_PEER_LIMIT",
                            ESP_ERR_ESPNOW_FULL, peer->address,
                            s_espnow_session.channel);
@@ -2684,7 +2800,9 @@ static bool espnow_peer_remove_capture(
     if (peer == NULL) {
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -2715,7 +2833,9 @@ static bool espnow_power_save_capture(
         }
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -2725,7 +2845,7 @@ static bool espnow_power_save_capture(
     state->generation = s_espnow_session.generation;
     atomic_init(&state->completed, false);
     if (!espnow_parse_power_save(ctx, argv[0].val, state)) {
-        heap_caps_free(state);
+        esp32_mquickjs_memory_payload_free(state);
         return false;
     }
     espnow_retain_owner(ctx, this_ref->val, state);
@@ -2747,7 +2867,9 @@ static bool espnow_session_close_capture(
         JS_ThrowTypeError(ctx, "EspNowSession.close() expects no arguments");
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -2757,7 +2879,8 @@ static bool espnow_session_close_capture(
     state->generation = ref->generation;
     state->result_bool = ref->generation == s_espnow_session.generation &&
                          (s_espnow_session.lifecycle == ESPNOW_LIFECYCLE_ACTIVE ||
-                          s_espnow_session.lifecycle == ESPNOW_LIFECYCLE_FAILED);
+                          s_espnow_session.lifecycle == ESPNOW_LIFECYCLE_FAILED ||
+                          s_espnow_session.lifecycle == ESPNOW_LIFECYCLE_CLOSING);
     atomic_init(&state->completed, false);
     *JS_AddGCRef(ctx, &state->event_queue_ref) =
         JS_GetPropertyStr(ctx, this_ref->val, "_eventQueue");
@@ -2766,7 +2889,7 @@ static bool espnow_session_close_capture(
         JS_GetClassID(ctx, state->event_queue_ref.val) !=
             JS_CLASS_EVENT_QUEUE) {
         JS_DeleteGCRef(ctx, &state->event_queue_ref);
-        heap_caps_free(state);
+        esp32_mquickjs_memory_payload_free(state);
         if (!JS_HasException(ctx)) {
             JS_ThrowInternalError(ctx,
                                   "ESP-NOW session event queue is unavailable");
@@ -2930,13 +3053,11 @@ static bool espnow_control_start(
         }
         break;
     case ESPNOW_OPERATION_SET_POWER_SAVE:
-        state->err = esp_now_set_wake_window(
-            state->power_save_enabled ? state->wake_window_ms : UINT16_MAX);
-        if (state->err == ESP_OK) {
-            state->err = esp_wifi_connectionless_module_set_wake_interval(
-                state->power_save_enabled
-                    ? state->wake_interval_ms
-                    : ESP_WIFI_CONNECTIONLESS_INTERVAL_DEFAULT_MODE);
+        state->err = espnow_apply_power_save(session, state->power_save_enabled,
+            state->wake_window_ms, state->wake_interval_ms, &state->failed_step);
+        if (session->power_save_fault) {
+            session->lifecycle = ESPNOW_LIFECYCLE_FAILED;
+            espnow_notify_tx_worker(session);
         }
         if (state->err == ESP_OK) {
             session->power_save_enabled = state->power_save_enabled;
@@ -2948,22 +3069,19 @@ static bool espnow_control_start(
     case ESPNOW_OPERATION_CLOSE_SESSION:
         if (state->result_bool) {
             bool expected = false;
-
-            atomic_store_explicit(&session->active_close, state,
-                                  memory_order_release);
-            (void)esp32_mquickjs_event_queue_close(session->event_queue);
-            if (!atomic_compare_exchange_strong_explicit(
-                    &session->cleanup_scheduled, &expected, true,
-                    memory_order_acq_rel, memory_order_acquire) ||
-                !esp32_mquickjs_future_submit_worker(
-                    runtime, token, espnow_close_worker, session)) {
-                atomic_store_explicit(&session->cleanup_scheduled, false,
-                                      memory_order_release);
-                atomic_store_explicit(&session->active_close, NULL,
-                                      memory_order_release);
-                (void)espnow_schedule_background_close(session);
-                JS_ThrowInternalError(
-                    ctx, "ESPNOW_CLEANUP_PENDING: close worker queue is full");
+            if (!atomic_compare_exchange_strong_explicit(&session->cleanup_scheduled, &expected, true,
+                    memory_order_acq_rel, memory_order_acquire)) {
+                espnow_request_reap(session);
+                espnow_throw_error(ctx, "ESPNOW_CLEANUP_PENDING", ESP_ERR_INVALID_STATE, NULL, -1);
+                return false;
+            }
+            atomic_store_explicit(&session->active_close, state, memory_order_release);
+            espnow_begin_close(session);
+            if (!esp32_mquickjs_future_submit_worker(runtime, token, espnow_close_worker, session)) {
+                atomic_store_explicit(&session->active_close, NULL, memory_order_release);
+                atomic_store_explicit(&session->cleanup_scheduled, false, memory_order_release);
+                espnow_request_reap(session);
+                espnow_throw_error(ctx, "ESPNOW_CLEANUP_PENDING", ESP_ERR_NO_MEM, NULL, -1);
                 return false;
             }
             return true;
@@ -2986,7 +3104,7 @@ static bool espnow_control_start(
                    state->err == ESP_ERR_ESPNOW_NOT_FOUND) {
             code = "ESPNOW_PEER_NOT_FOUND";
         } else if (state->operation == ESPNOW_OPERATION_SET_POWER_SAVE) {
-            code = "ESPNOW_NOT_SUPPORTED";
+            code = "ESPNOW_POWER_SAVE_FAILED";
         }
         espnow_throw_error(ctx, code, state->err,
                            state->address, session->channel);
@@ -3013,6 +3131,10 @@ static JSValue espnow_control_finish(
 
     if (state == NULL || state->cancelled) {
         return JS_ThrowInternalError(ctx, "ESP-NOW control operation cancelled");
+    }
+    if (state->operation == ESPNOW_OPERATION_CLOSE_SESSION && state->err != ESP_OK) {
+        if (state->generation == s_espnow_session.generation) espnow_request_reap(&s_espnow_session);
+        return espnow_throw_error(ctx, "ESPNOW_CLEANUP_PENDING", state->err, NULL, -1);
     }
     if (state->operation == ESPNOW_OPERATION_ADD_PEER) {
         peer = state->peer_index < CONFIG_ESP32_MQUICKJS_ESPNOW_MAX_PEERS
@@ -3061,8 +3183,13 @@ static void espnow_control_destroy(
             espnow_clear_peer(peer);
         }
     }
+    bool close_finished = state->operation == ESPNOW_OPERATION_CLOSE_SESSION &&
+        (state->generation != s_espnow_session.generation ||
+         s_espnow_session.lifecycle == ESPNOW_LIFECYCLE_CLOSED);
+    if (state->operation == ESPNOW_OPERATION_CLOSE_SESSION && !close_finished)
+        espnow_request_reap(&s_espnow_session);
     if (state->event_queue_rooted) {
-        if (state->operation == ESPNOW_OPERATION_CLOSE_SESSION) {
+        if (close_finished) {
             (void)esp32_mquickjs_event_queue_dispose(
                 state->ctx, state->event_queue_ref.val);
         }
@@ -3070,7 +3197,7 @@ static void espnow_control_destroy(
         state->event_queue_rooted = false;
     }
     if (state->owner_rooted) {
-        if (state->operation == ESPNOW_OPERATION_CLOSE_SESSION) {
+        if (close_finished) {
             espnow_retire_handle(state->ctx, state->owner_ref.val,
                                  JS_CLASS_ESPNOW_SESSION,
                                  &s_espnow_closed_session_ref);
@@ -3084,7 +3211,7 @@ static void espnow_control_destroy(
         state->owner_rooted = false;
     }
     esp32_mquickjs_wireless_secure_zero(state->lmk, sizeof(state->lmk));
-    heap_caps_free(state);
+    esp32_mquickjs_memory_payload_free(state);
 }
 
 static esp32_mquickjs_resource_key_t espnow_control_resource_key(
@@ -3115,7 +3242,7 @@ static JSValue espnow_close_on_timeout(
 }
 
 static const esp32_mquickjs_future_driver_t s_espnow_peer_add_driver = {
-    .capture = espnow_peer_add_capture,
+    .memory_owner = "wireless.future", .capture = espnow_peer_add_capture,
     .start = espnow_control_start,
     .poll = espnow_control_poll,
     .finish = espnow_control_finish,
@@ -3125,7 +3252,7 @@ static const esp32_mquickjs_future_driver_t s_espnow_peer_add_driver = {
 };
 
 static const esp32_mquickjs_future_driver_t s_espnow_peer_update_driver = {
-    .capture = espnow_peer_update_capture,
+    .memory_owner = "wireless.future", .capture = espnow_peer_update_capture,
     .start = espnow_control_start,
     .poll = espnow_control_poll,
     .finish = espnow_control_finish,
@@ -3135,7 +3262,7 @@ static const esp32_mquickjs_future_driver_t s_espnow_peer_update_driver = {
 };
 
 static const esp32_mquickjs_future_driver_t s_espnow_peer_remove_driver = {
-    .capture = espnow_peer_remove_capture,
+    .memory_owner = "wireless.future", .capture = espnow_peer_remove_capture,
     .start = espnow_control_start,
     .poll = espnow_control_poll,
     .finish = espnow_control_finish,
@@ -3145,7 +3272,7 @@ static const esp32_mquickjs_future_driver_t s_espnow_peer_remove_driver = {
 };
 
 static const esp32_mquickjs_future_driver_t s_espnow_power_save_driver = {
-    .capture = espnow_power_save_capture,
+    .memory_owner = "wireless.future", .capture = espnow_power_save_capture,
     .start = espnow_control_start,
     .poll = espnow_control_poll,
     .finish = espnow_control_finish,
@@ -3155,7 +3282,7 @@ static const esp32_mquickjs_future_driver_t s_espnow_power_save_driver = {
 };
 
 static const esp32_mquickjs_future_driver_t s_espnow_session_close_driver = {
-    .capture = espnow_session_close_capture,
+    .memory_owner = "wireless.future", .capture = espnow_session_close_capture,
     .start = espnow_control_start,
     .poll = espnow_control_poll,
     .finish = espnow_control_finish,
@@ -3241,7 +3368,9 @@ static bool espnow_send_capture(
                           "ESP-NOW send requires an EspNowPeer or EspNowSession receiver");
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -3267,7 +3396,7 @@ static bool espnow_send_capture(
             &state->send_timeout_ms)) {
         goto fail;
     }
-    if (!esp32_mquickjs_get_byte_source(
+    if (!esp32_mquickjs_get_wireless_byte_source("espnow",
             ctx, argv[0].val, "ESP-NOW send(data)", &source, &owned,
             &error)) {
         goto fail;
@@ -3280,9 +3409,9 @@ static bool espnow_send_capture(
                            session->channel);
         goto fail;
     }
-    state->payload = esp32_mquickjs_memory_payload_alloc(
+    state->payload = esp32_mquickjs_memory_wireless_alloc(
         "espnow.tx-tracked", source.length > 0 ? source.length : 1U,
-        ESP32_MQUICKJS_MEMORY_EXTERNAL);
+        ESP32_MQUICKJS_MEMORY_EXTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_TX);
     if (state->payload == NULL) {
         esp32_mquickjs_release_byte_source(owned);
         owned = NULL;
@@ -3295,7 +3424,8 @@ static bool espnow_send_capture(
     }
     esp32_mquickjs_release_byte_source(owned);
     owned = NULL;
-    if (esp32_mquickjs_wifi_radio_get_channel(
+    if (espnow_channel_admit(session, true) != ESP_OK ||
+        esp32_mquickjs_wifi_radio_get_channel(
             &actual_channel, &secondary, &channel_generation) != ESP_OK ||
         actual_channel != session->channel ||
         channel_generation != session->channel_generation ||
@@ -3316,7 +3446,7 @@ static bool espnow_send_capture(
 fail:
     esp32_mquickjs_release_byte_source(owned);
     esp32_mquickjs_memory_payload_free(state->payload);
-    heap_caps_free(state);
+    esp32_mquickjs_memory_payload_free(state);
     return false;
 }
 
@@ -3370,6 +3500,9 @@ static bool espnow_send_start(
 
 static esp_err_t espnow_restore_native_session(espnow_session_t *session)
 {
+    if (session->power_save_fault || session->now_initialized ||
+        session->receive_callback_registered || session->send_callback_registered)
+        return ESP_ERR_INVALID_STATE;
     esp_now_peer_info_t peer_info = {0};
     esp_err_t err;
     uint32_t i;
@@ -3435,12 +3568,9 @@ static esp_err_t espnow_restore_native_session(espnow_session_t *session)
     if (!session->power_save_enabled) {
         return ESP_OK;
     }
-    err = esp_now_set_wake_window(session->wake_window_ms);
-    if (err == ESP_OK) {
-        err = esp_wifi_connectionless_module_set_wake_interval(
-            session->wake_interval_ms);
-    }
-    return err;
+    const char *stage = NULL;
+    return espnow_apply_power_save(session, true,
+        session->wake_window_ms, session->wake_interval_ms, &stage);
 }
 
 static esp_err_t espnow_begin_timeout_recovery(
@@ -3469,12 +3599,12 @@ static esp_err_t espnow_begin_timeout_recovery(
     espnow_notify_tx_worker(session);
     if (session->receive_callback_registered) {
         err = esp_now_unregister_recv_cb();
-        session->receive_callback_registered = false;
+        if (err == ESP_OK) session->receive_callback_registered = false;
     }
     if (session->send_callback_registered) {
         esp_err_t send_err = esp_now_unregister_send_cb();
 
-        session->send_callback_registered = false;
+        if (send_err == ESP_OK) session->send_callback_registered = false;
         if (err == ESP_OK) {
             err = send_err;
         }
@@ -3492,19 +3622,20 @@ static void espnow_send_recovery_worker(void *opaque)
     if (state == NULL) {
         return;
     }
-    while (atomic_load_explicit(&session->callbacks_active,
+    while (!session->receive_callback_registered && !session->send_callback_registered &&
+           atomic_load_explicit(&session->callbacks_active,
                                 memory_order_acquire) != 0) {
         vTaskDelay(1);
     }
     err = state->err;
     if (session->generation != state->generation) {
         err = ESP_ERR_INVALID_STATE;
-    } else if (session->now_initialized) {
+    } else if (err == ESP_OK && session->now_initialized) {
         esp_err_t deinit_err = esp_now_deinit();
 
-        session->now_initialized = false;
-        session->broadcast_peer_added = false;
         if (deinit_err == ESP_OK) {
+            session->now_initialized = false;
+            session->broadcast_peer_added = false;
             espnow_note_native_deinit();
         }
         if (err == ESP_OK) {
@@ -3655,7 +3786,7 @@ static void espnow_send_destroy(
         JS_DeleteGCRef(state->ctx, &state->owner_ref);
     }
     esp32_mquickjs_memory_payload_free(state->payload);
-    heap_caps_free(state);
+    esp32_mquickjs_memory_payload_free(state);
 }
 
 static uint32_t espnow_send_timeout_ms(
@@ -3716,7 +3847,7 @@ static esp32_mquickjs_resource_key_t espnow_send_resource_key(
 }
 
 static const esp32_mquickjs_future_driver_t s_espnow_send_driver = {
-    .capture = espnow_send_capture,
+    .memory_owner = "wireless.future", .capture = espnow_send_capture,
     .start = espnow_send_start,
     .poll = espnow_send_poll,
     .finish = espnow_send_finish,
@@ -3742,6 +3873,7 @@ static bool espnow_recover_capture(
         return false;
     }
     if (ref->generation != s_espnow_session.generation ||
+        s_espnow_session.power_save_fault ||
         s_espnow_session.lifecycle != ESPNOW_LIFECYCLE_FAILED ||
         s_espnow_session.tx_state != ESP32_MQUICKJS_WIRELESS_TX_FAILED) {
         espnow_throw_error(ctx, "ESPNOW_RECOVERY_FAILED",
@@ -3749,7 +3881,9 @@ static bool espnow_recover_capture(
                            s_espnow_session.channel);
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -3769,16 +3903,17 @@ static esp_err_t espnow_cleanup_failed_restore(espnow_session_t *session)
 
     if (session->receive_callback_registered) {
         err = esp_now_unregister_recv_cb();
-        session->receive_callback_registered = false;
+        if (err == ESP_OK) session->receive_callback_registered = false;
     }
     if (session->send_callback_registered) {
         esp_err_t send_err = esp_now_unregister_send_cb();
 
-        session->send_callback_registered = false;
+        if (send_err == ESP_OK) session->send_callback_registered = false;
         if (err == ESP_OK) {
             err = send_err;
         }
     }
+    if (err != ESP_OK) return err;
     while (atomic_load_explicit(&session->callbacks_active,
                                 memory_order_acquire) != 0) {
         vTaskDelay(1);
@@ -3786,9 +3921,9 @@ static esp_err_t espnow_cleanup_failed_restore(espnow_session_t *session)
     if (session->now_initialized) {
         esp_err_t deinit_err = esp_now_deinit();
 
-        session->now_initialized = false;
-        session->broadcast_peer_added = false;
         if (deinit_err == ESP_OK) {
+            session->now_initialized = false;
+            session->broadcast_peer_added = false;
             espnow_note_native_deinit();
         }
         if (err == ESP_OK) {
@@ -3868,7 +4003,7 @@ static JSValue espnow_recover_finish(
 }
 
 static const esp32_mquickjs_future_driver_t s_espnow_recover_driver = {
-    .capture = espnow_recover_capture,
+    .memory_owner = "wireless.future", .capture = espnow_recover_capture,
     .start = espnow_recover_start,
     .poll = espnow_control_poll,
     .finish = espnow_recover_finish,
@@ -3966,7 +4101,7 @@ bool esp32_mquickjs_init_espnow_runtime(
     esp32_mquickjs_runtime_t *runtime)
 {
     if (ctx == NULL || runtime == NULL ||
-        s_espnow_session.lifecycle != ESPNOW_LIFECYCLE_CLOSED) {
+        !espnow_closed_and_quiescent(&s_espnow_session)) {
         return false;
     }
     return espnow_register_future_drivers(ctx, runtime);
@@ -3997,7 +4132,7 @@ void js_espnow_session_finalizer(JSContext *ctx, void *opaque)
         ref->generation == s_espnow_session.generation) {
         espnow_request_reap(&s_espnow_session);
     }
-    if (ref != &s_espnow_closed_session_ref) heap_caps_free(ref);
+    if (ref != &s_espnow_closed_session_ref) esp32_mquickjs_memory_payload_free(ref);
 }
 
 JSValue js_espnow_session_receive(JSContext *ctx, JSValue *this_val,
@@ -4179,7 +4314,7 @@ static bool espnow_payload_source_length(JSContext *ctx, JSValue value,
         uint8_t *owned = NULL;
         JSValue error = JS_UNDEFINED;
 
-        if (!esp32_mquickjs_get_byte_source(
+        if (!esp32_mquickjs_get_wireless_byte_source("espnow",
                 ctx, value, "ESP-NOW enqueue payload", &source, &owned,
                 &error)) {
             return false;
@@ -4241,7 +4376,7 @@ static bool espnow_copy_payload_source(JSContext *ctx, JSValue value,
         uint8_t *owned = NULL;
         JSValue error = JS_UNDEFINED;
 
-        if (!esp32_mquickjs_get_byte_source(
+        if (!esp32_mquickjs_get_wireless_byte_source("espnow",
                 ctx, value, "ESP-NOW enqueue payload", &source, &owned,
                 &error)) {
             return false;
@@ -4515,7 +4650,8 @@ static JSValue espnow_enqueue(JSContext *ctx, JSValue receiver,
         lengths[packet_index] = (uint16_t)length;
         total_bytes += (uint32_t)length;
     }
-    if (esp32_mquickjs_wifi_radio_get_channel(
+    if (espnow_channel_admit(session, true) != ESP_OK ||
+        esp32_mquickjs_wifi_radio_get_channel(
             &actual_channel, &secondary, &channel_generation) != ESP_OK ||
         actual_channel != session->channel ||
         channel_generation != session->channel_generation ||
@@ -4742,7 +4878,7 @@ JSValue js_espnow_peer_constructor(JSContext *ctx, JSValue *this_val,
 void js_espnow_peer_finalizer(JSContext *ctx, void *opaque)
 {
     (void)ctx;
-    if (opaque != &s_espnow_closed_peer_ref) heap_caps_free(opaque);
+    if (opaque != &s_espnow_closed_peer_ref) esp32_mquickjs_memory_payload_free(opaque);
 }
 
 JSValue js_espnow_peer_status(JSContext *ctx, JSValue *this_val,
@@ -4895,7 +5031,8 @@ static JSValue espnow_status_to_js(JSContext *ctx,
                                      &queued_packets);
         portEXIT_CRITICAL(&session->lock);
     }
-    if (esp32_mquickjs_wifi_radio_get_channel(
+    if (espnow_channel_admit(session, true) == ESP_OK &&
+        esp32_mquickjs_wifi_radio_get_channel(
             &channel, &secondary, &channel_generation) == ESP_OK) {
         synchronized = channel == session->channel &&
                        channel_generation == session->channel_generation;
@@ -5067,6 +5204,9 @@ static JSValue espnow_status_to_js(JSContext *ctx,
                                     : JS_NewInt32(ctx, tx_last_error)) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "txQueue",
                                          *tx_queue) ||
+        !esp32_mquickjs_set_property_ref(ctx, power_save, "faulted", JS_NewBool(session->power_save_fault)) ||
+        !esp32_mquickjs_set_property_ref(ctx, power_save, "restorePending",
+            JS_NewBool(session->power_save_cleanup_required || session->interval_token.identity != 0U)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, power_save, "enabled",
             JS_NewBool(session->power_save_enabled)) ||

@@ -20,6 +20,7 @@ typedef struct {
 typedef struct {
     const esp32_mquickjs_byte_span_source_object_ops_t *ops;
     void *opaque;
+    const char *memory_owner;
     uint16_t read_leases;
     bool closed;
 } esp32_mquickjs_byte_span_source_object_t;
@@ -30,6 +31,16 @@ typedef struct {
     JSGCRef owner_ref;
     bool owner_rooted;
 } esp32_mquickjs_leased_byte_span_source_t;
+
+static void *byte_source_allocate(const char *memory_owner, size_t size,
+                                 esp32_mquickjs_memory_budget_role_t role)
+{
+    if (memory_owner != NULL) {
+        return esp32_mquickjs_memory_wireless_calloc(memory_owner, 1, size,
+            ESP32_MQUICKJS_MEMORY_DEFAULT, role);
+    }
+    return heap_caps_calloc(1, size, MALLOC_CAP_8BIT);
+}
 
 static bool leased_byte_span_source_next(
     JSContext *ctx,
@@ -56,7 +67,7 @@ static void leased_byte_span_source_close(JSContext *ctx, void *opaque)
     if (source->owner_rooted) {
         JS_DeleteGCRef(ctx, &source->owner_ref);
     }
-    heap_caps_free(source);
+    esp32_mquickjs_memory_payload_free(source);
 }
 
 static bool js_value_to_u32(JSContext *ctx, JSValue value, uint32_t *out_value)
@@ -142,7 +153,8 @@ static void byte_view_release(esp32_mquickjs_byte_view_t *view)
     }
 }
 
-static JSValue byte_view_make(JSContext *ctx,
+static JSValue byte_view_make(const char *memory_owner,
+                              JSContext *ctx,
                               const uint8_t *data,
                               size_t length,
                               esp32_mquickjs_byte_view_release_fn release,
@@ -163,7 +175,8 @@ static JSValue byte_view_make(JSContext *ctx,
         return JS_EXCEPTION;
     }
 
-    view = heap_caps_malloc(sizeof(*view), MALLOC_CAP_8BIT);
+    view = byte_source_allocate(memory_owner, sizeof(*view),
+                                ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (view == NULL) {
         JS_PopGCRef(ctx, &object_ref);
         if (release != NULL) {
@@ -181,7 +194,8 @@ static JSValue byte_view_make(JSContext *ctx,
     return JS_PopGCRef(ctx, &object_ref);
 }
 
-static bool js_value_to_array_bytes(JSContext *ctx,
+static bool js_value_to_array_bytes(const char *memory_owner,
+                                    JSContext *ctx,
                                     JSValue *value,
                                     const char *api_name,
                                     esp32_mquickjs_byte_source_t *out,
@@ -216,7 +230,8 @@ static bool js_value_to_array_bytes(JSContext *ctx,
         return true;
     }
 
-    bytes = heap_caps_malloc(length, MALLOC_CAP_8BIT);
+    bytes = byte_source_allocate(memory_owner, length,
+                                 ESP32_MQUICKJS_MEMORY_BUDGET_COPY);
     if (bytes == NULL) {
         *out_error = JS_ThrowOutOfMemory(ctx);
         return false;
@@ -230,7 +245,7 @@ static bool js_value_to_array_bytes(JSContext *ctx,
         *item = JS_GetPropertyUint32(ctx, *value, i);
         if (JS_IsException(*item) || !js_value_to_u32(ctx, *item, &raw_byte) || raw_byte > 0xffU) {
             JS_PopGCRef(ctx, &item_ref);
-            heap_caps_free(bytes);
+            esp32_mquickjs_memory_payload_free(bytes);
             *out_error = JS_ThrowTypeError(ctx, "%s expects byte values in the range 0-255", api_name);
             return false;
         }
@@ -245,7 +260,8 @@ static bool js_value_to_array_bytes(JSContext *ctx,
     return true;
 }
 
-bool esp32_mquickjs_get_byte_source(JSContext *ctx,
+bool esp32_mquickjs_get_wireless_byte_source(const char *memory_owner,
+                                    JSContext *ctx,
                                     JSValue value,
                                     const char *api_name,
                                     esp32_mquickjs_byte_source_t *out,
@@ -280,10 +296,20 @@ bool esp32_mquickjs_get_byte_source(JSContext *ctx,
             result = true;
         }
     } else {
-        result = js_value_to_array_bytes(ctx, rooted_value, api_name, out, out_owned, out_error);
+        result = js_value_to_array_bytes(memory_owner, ctx, rooted_value,
+                                         api_name, out, out_owned, out_error);
     }
     JS_PopGCRef(ctx, &value_ref);
     return result;
+}
+
+bool esp32_mquickjs_get_byte_source(JSContext *ctx, JSValue value,
+                                    const char *api_name,
+                                    esp32_mquickjs_byte_source_t *out,
+                                    uint8_t **out_owned, JSValue *out_error)
+{
+    return esp32_mquickjs_get_wireless_byte_source(NULL, ctx, value, api_name,
+                                                  out, out_owned, out_error);
 }
 
 bool esp32_mquickjs_get_byte_source_array_length(JSContext *ctx,
@@ -413,7 +439,8 @@ bool esp32_mquickjs_open_byte_span_source(JSContext *ctx,
             ctx, "%s could not acquire a ByteSpanSource read lease", api_name);
         return false;
     }
-    lease = heap_caps_calloc(1, sizeof(*lease), MALLOC_CAP_8BIT);
+    lease = byte_source_allocate(source->memory_owner, sizeof(*lease),
+                                 ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (lease == NULL) {
         *out_error = JS_ThrowOutOfMemory(ctx);
         return false;
@@ -423,13 +450,13 @@ bool esp32_mquickjs_open_byte_span_source(JSContext *ctx,
     if (!source->ops->open(ctx, value, source->opaque, &lease->inner,
                            out_error)) {
         JS_DeleteGCRef(ctx, &lease->owner_ref);
-        heap_caps_free(lease);
+        esp32_mquickjs_memory_payload_free(lease);
         return false;
     }
     if (lease->inner.next == NULL) {
         esp32_mquickjs_byte_span_source_close(ctx, &lease->inner);
         JS_DeleteGCRef(ctx, &lease->owner_ref);
-        heap_caps_free(lease);
+        esp32_mquickjs_memory_payload_free(lease);
         *out_error = JS_ThrowInternalError(
             ctx, "%s received a ByteSpanSource without an iterator", api_name);
         return false;
@@ -478,7 +505,8 @@ void *esp32_mquickjs_byte_span_source_get_opaque(
     return source->opaque;
 }
 
-JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx,
+JSValue esp32_mquickjs_new_wireless_byte_span_source(const char *memory_owner,
+                                            JSContext *ctx,
                                             JSValue owner,
                                             const esp32_mquickjs_byte_span_source_object_ops_t *ops,
                                             void *opaque)
@@ -518,7 +546,8 @@ JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx,
         return JS_EXCEPTION;
     }
 
-    source = heap_caps_malloc(sizeof(*source), MALLOC_CAP_8BIT);
+    source = byte_source_allocate(memory_owner, sizeof(*source),
+                                  ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (source == NULL) {
         if (ops->destroy != NULL) {
             ops->destroy(ctx, opaque);
@@ -529,6 +558,7 @@ JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx,
     }
     source->ops = ops;
     source->opaque = opaque;
+    source->memory_owner = memory_owner;
     source->read_leases = 0;
     source->closed = false;
     JS_SetOpaque(ctx, *object, source);
@@ -539,7 +569,7 @@ JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx,
         if (ops->destroy != NULL) {
             ops->destroy(ctx, opaque);
         }
-        heap_caps_free(source);
+        esp32_mquickjs_memory_payload_free(source);
         JS_PopGCRef(ctx, &owner_ref);
         JS_PopGCRef(ctx, &object_ref);
         return JS_EXCEPTION;
@@ -549,19 +579,21 @@ JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx,
     return JS_PopGCRef(ctx, &object_ref);
 }
 
-JSValue esp32_mquickjs_new_owned_byte_view(JSContext *ctx,
+JSValue esp32_mquickjs_new_wireless_owned_byte_view(const char *memory_owner,
+                                           JSContext *ctx,
                                            uint8_t *data,
                                            size_t length)
 {
     if (data == NULL && length > 0) {
         return JS_ThrowInternalError(ctx, "ByteView data pointer is null");
     }
-    return byte_view_make(ctx, data, length,
+    return byte_view_make(memory_owner, ctx, data, length,
                           esp32_mquickjs_memory_payload_free,
                           data);
 }
 
-JSValue esp32_mquickjs_new_retained_byte_view(
+JSValue esp32_mquickjs_new_wireless_retained_byte_view(
+    const char *memory_owner,
     JSContext *ctx,
     const uint8_t *data,
     size_t length,
@@ -575,7 +607,28 @@ JSValue esp32_mquickjs_new_retained_byte_view(
         return JS_ThrowInternalError(
             ctx, "retained ByteView requires data and a release callback");
     }
-    return byte_view_make(ctx, data, length, release, release_opaque);
+    return byte_view_make(memory_owner, ctx, data, length, release, release_opaque);
+}
+
+JSValue esp32_mquickjs_new_byte_span_source(JSContext *ctx, JSValue owner,
+    const esp32_mquickjs_byte_span_source_object_ops_t *ops, void *opaque)
+{
+    return esp32_mquickjs_new_wireless_byte_span_source(NULL, ctx, owner,
+                                                        ops, opaque);
+}
+
+JSValue esp32_mquickjs_new_owned_byte_view(JSContext *ctx, uint8_t *data,
+                                           size_t length)
+{
+    return esp32_mquickjs_new_wireless_owned_byte_view(NULL, ctx, data, length);
+}
+
+JSValue esp32_mquickjs_new_retained_byte_view(JSContext *ctx,
+    const uint8_t *data, size_t length,
+    esp32_mquickjs_byte_view_release_fn release, void *release_opaque)
+{
+    return esp32_mquickjs_new_wireless_retained_byte_view(NULL, ctx, data,
+        length, release, release_opaque);
 }
 
 bool esp32_mquickjs_byte_view_is_open(JSContext *ctx, JSValue value)
@@ -628,14 +681,14 @@ void esp32_mquickjs_byte_view_release_read(JSContext *ctx, JSValue value)
         if (view->read_leases == 0 && view->closed) {
             JS_SetOpaque(ctx, value, NULL);
             byte_view_release(view);
-            heap_caps_free(view);
+            esp32_mquickjs_memory_payload_free(view);
         }
     }
 }
 
 void esp32_mquickjs_release_byte_source(uint8_t *owned)
 {
-    heap_caps_free(owned);
+    esp32_mquickjs_memory_payload_free(owned);
 }
 
 JSValue js_byte_view_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -671,7 +724,7 @@ JSValue js_byte_view_close(JSContext *ctx, JSValue *this_val, int argc, JSValue 
     if (view->read_leases == 0) {
         JS_SetOpaque(ctx, *this_val, NULL);
         byte_view_release(view);
-        heap_caps_free(view);
+        esp32_mquickjs_memory_payload_free(view);
     }
     return JS_TRUE;
 }
@@ -707,7 +760,7 @@ JSValue js_byte_span_source_close(JSContext *ctx, JSValue *this_val, int argc, J
                                      ESP32_MQUICKJS_BYTE_SPAN_SOURCE_OWNER_KEY,
                                      JS_UNDEFINED);
     JS_SetOpaque(ctx, *this_val, NULL);
-    heap_caps_free(source);
+    esp32_mquickjs_memory_payload_free(source);
     return JS_IsException(owner_result) ? JS_EXCEPTION : JS_TRUE;
 }
 
@@ -747,7 +800,7 @@ void js_byte_view_finalizer(JSContext *ctx, void *opaque)
         return;
     }
     byte_view_release(view);
-    heap_caps_free(view);
+    esp32_mquickjs_memory_payload_free(view);
 }
 
 void js_byte_span_source_finalizer(JSContext *ctx, void *opaque)
@@ -761,7 +814,7 @@ void js_byte_span_source_finalizer(JSContext *ctx, void *opaque)
         source->ops->destroy(ctx, source->opaque);
     }
     source->closed = true;
-    heap_caps_free(source);
+    esp32_mquickjs_memory_payload_free(source);
 }
 
 JSValue js_byte_view_get_length(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)

@@ -1,0 +1,1019 @@
+{
+  "schema": 1,
+  "idfRevision": "fff9895c82d744c7237be8847347bdd1b07c6643",
+  "headerSha256": "8e398a8d22b18c199ea6d48e42784e8a897c22000a09ee9ac7d22cf0f5110e5c",
+  "contract": "contract-pending",
+  "structures": {
+    "wifi_sta_config_t": {
+      "jsType": "WiFiStationDriverConfig",
+      "fields": {
+        "ssid": {
+          "declaration": "uint8_t ssid[32]",
+          "disposition": "input",
+          "jsPath": "ssid",
+          "tsType": "string | ByteSource",
+          "unit": "bytes",
+          "constraints": "Required 1..32 UTF-8 bytes or raw bytes without NUL, captured by value; STA has no separate SSID length field.",
+          "gate": "base",
+          "secret": false,
+          "direction": "write",
+          "required": true,
+          "readback": {
+            "jsPath": "ssidBytes",
+            "codec": "bytes",
+            "tsType": "number[]"
+          }
+        },
+        "password": {
+          "declaration": "uint8_t password[64]",
+          "disposition": "input",
+          "jsPath": "password",
+          "tsType": "string",
+          "unit": "UTF-8 bytes",
+          "constraints": "No embedded NUL; empty only for a compatible auth mode; WPA2 8..63 bytes or 64 hex PSK, pure SAE 1..63 bytes. Validate against auth/PWE before any mutation.",
+          "gate": "base",
+          "secret": true,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "passwordBytes",
+            "codec": "bytes",
+            "tsType": "number[] | null"
+          }
+        },
+        "scan_method": {
+          "declaration": "wifi_scan_method_t scan_method",
+          "disposition": "input",
+          "jsPath": "scanMethod",
+          "tsType": "\"fast\" | \"all-channel\"",
+          "unit": "enum",
+          "constraints": "Default all-channel; nonzero failureRetryCount requires all-channel.",
+          "gate": "base",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "scanMethod",
+            "codec": "enum",
+            "tsType": "WiFiDriverEnumValue",
+            "enum": "scan"
+          }
+        },
+        "bssid_set": {
+          "declaration": "bool bssid_set",
+          "disposition": "derived",
+          "jsPath": null,
+          "tsType": null,
+          "unit": "boolean",
+          "constraints": "Derived from bssid presence; no independently writable flag.",
+          "gate": "base",
+          "secret": false,
+          "direction": "none",
+          "required": false,
+          "readback": {
+            "jsPath": "bssidSet",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "bssid": {
+          "declaration": "uint8_t bssid[6]",
+          "disposition": "input",
+          "jsPath": "bssid",
+          "tsType": "string",
+          "unit": "MAC address",
+          "constraints": "Optional six-octet unicast MAC; mutually exclusive with BTM/MBO roaming.",
+          "gate": "base",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "bssidBytes",
+            "codec": "bytes",
+            "tsType": "number[]"
+          }
+        },
+        "channel": {
+          "declaration": "uint8_t channel",
+          "disposition": "input",
+          "jsPath": "channel",
+          "tsType": "number",
+          "unit": "802.11 channel",
+          "constraints": "Integer 0 for default selection, otherwise a target-supported regulatory channel; driver-config start must enforce shared channel admission.",
+          "gate": "target band + current country",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "channel",
+            "codec": "number",
+            "tsType": "number"
+          }
+        },
+        "listen_interval": {
+          "declaration": "uint16_t listen_interval",
+          "disposition": "input",
+          "jsPath": "listenInterval",
+          "tsType": "number",
+          "unit": "AP beacon intervals",
+          "constraints": "Integer 0..65535; 0 selects SDK default 3. Applies to maximum modem power save.",
+          "gate": "base",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "listenInterval",
+            "codec": "number",
+            "tsType": "number"
+          }
+        },
+        "sort_method": {
+          "declaration": "wifi_sort_method_t sort_method",
+          "disposition": "input",
+          "jsPath": "sortMethod",
+          "tsType": "\"signal\" | \"security\"",
+          "unit": "enum",
+          "constraints": "Default signal.",
+          "gate": "base",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "sortMethod",
+            "codec": "enum",
+            "tsType": "WiFiDriverEnumValue",
+            "enum": "sort"
+          }
+        },
+        "threshold.rssi": {
+          "declaration": "int8_t rssi",
+          "disposition": "input",
+          "jsPath": "minimumRssi",
+          "tsType": "number",
+          "unit": "dBm",
+          "constraints": "Integer -127..0, default -127.",
+          "gate": "base",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "minimumRssi",
+            "codec": "number",
+            "tsType": "number"
+          }
+        },
+        "threshold.authmode": {
+          "declaration": "wifi_auth_mode_t authmode",
+          "disposition": "input",
+          "jsPath": "minimumAuthMode",
+          "tsType": "\"open\" | \"wep\" | \"wpa\" | \"wpa2\" | \"wpa/wpa2\" | \"wpa2-enterprise\" | \"wpa3\" | \"wpa2/wpa3\" | \"wapi\" | \"owe\" | \"wpa3-ent-192\" | \"dpp\" | \"wpa3-enterprise\" | \"wpa2/wpa3-enterprise\" | \"wpa-enterprise\"",
+          "unit": "enum",
+          "constraints": "Default open; enforce security dependencies; reserved/dummy/unknown/max enum values are not inputs. Enterprise/DPP/WAPI require their separately configured credential owner.",
+          "gate": "per-auth build + credential owner",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "minimumAuthMode",
+            "codec": "enum",
+            "tsType": "WiFiDriverEnumValue",
+            "enum": "auth"
+          }
+        },
+        "threshold.rssi_5g_adjustment": {
+          "declaration": "uint8_t rssi_5g_adjustment",
+          "disposition": "input",
+          "jsPath": "rssi5gAdjustment",
+          "tsType": "number",
+          "unit": "dB",
+          "constraints": "Integer 0..255, default 0; prioritizes 5 GHz APs within this RSSI difference.",
+          "gate": "SOC_WIFI_SUPPORT_5G",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "rssi5gAdjustment",
+            "codec": "number",
+            "tsType": "number"
+          }
+        },
+        "pmf_cfg.capable": {
+          "declaration": "bool capable",
+          "disposition": "derived",
+          "jsPath": null,
+          "tsType": null,
+          "unit": "boolean",
+          "constraints": "Derived from pmf: false only for explicit disabled. Dedicated esp_wifi_disable_pmf_config runs after set_config and before START; writing this deprecated SDK input alone does not disable PMF.",
+          "gate": "base",
+          "secret": false,
+          "direction": "none",
+          "required": false,
+          "readback": {
+            "jsPath": "pmfCapable",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "pmf_cfg.required": {
+          "declaration": "bool required",
+          "disposition": "input",
+          "jsPath": "pmf",
+          "tsType": "\"disabled\" | \"optional\" | \"required\"",
+          "unit": "policy",
+          "constraints": "Three-state PMF policy. Defaults follow authentication. disabled invokes the dedicated SDK operation in the stopped transaction and rejects mandatory-PMF authentication or WPA3 compatible policy; Station requires disableWpa3CompatibleMode=true. Required protection is never silently weakened.",
+          "gate": "base",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "pmfRequired",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "rm_enabled": {
+          "declaration": "uint32_t rm_enabled : 1",
+          "disposition": "input",
+          "jsPath": "rmEnabled",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Default false; MBO implies true.",
+          "gate": "CONFIG_ESP_WIFI_11KV_SUPPORT + CONFIG_ESP_WIFI_RRM_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "rmEnabled",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "btm_enabled": {
+          "declaration": "uint32_t btm_enabled : 1",
+          "disposition": "input",
+          "jsPath": "btmEnabled",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Default false; reject BSSID/nonzero channel; MBO implies true.",
+          "gate": "CONFIG_ESP_WIFI_11KV_SUPPORT + CONFIG_ESP_WIFI_WNM_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "btmEnabled",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "mbo_enabled": {
+          "declaration": "uint32_t mbo_enabled : 1",
+          "disposition": "input",
+          "jsPath": "mboEnabled",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Default false; enables RM/BTM; explicit false dependency or BSSID/nonzero channel conflicts.",
+          "gate": "CONFIG_ESP_WIFI_MBO_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "mboEnabled",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "ft_enabled": {
+          "declaration": "uint32_t ft_enabled : 1",
+          "disposition": "input",
+          "jsPath": "ftEnabled",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Default false; driver FT enablement, not a roaming-policy implementation.",
+          "gate": "CONFIG_ESP_WIFI_11R_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "ftEnabled",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "owe_enabled": {
+          "declaration": "uint32_t owe_enabled : 1",
+          "disposition": "input",
+          "jsPath": "oweEnabled",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Default false; requires no password, OWE threshold and required PMF; reject weaker explicit settings.",
+          "gate": "CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_STA",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "oweEnabled",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "transition_disable": {
+          "declaration": "uint32_t transition_disable : 1",
+          "disposition": "input",
+          "jsPath": "transitionDisable",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false; true enables native transition-disable handling, not a stronger initial authentication threshold; false accepted without the feature.",
+          "gate": "CONFIG_ESP_WIFI_ENABLE_WPA3_SAE or CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_STA",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "transitionDisable",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "disable_wpa3_compatible_mode": {
+          "declaration": "uint32_t disable_wpa3_compatible_mode : 1",
+          "disposition": "input",
+          "jsPath": "disableWpa3CompatibleMode",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false; true disables RSN override and can select WPA2 unless threshold excludes it. Explicit security choice, never an automatic fallback; false accepted without feature.",
+          "gate": "CONFIG_ESP_WIFI_WPA3_COMPATIBLE_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "disableWpa3CompatibleMode",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "reserved1": {
+          "declaration": "uint32_t reserved1 : 25",
+          "disposition": "reserved",
+          "jsPath": null,
+          "tsType": null,
+          "unit": "bits",
+          "constraints": "Reserved bits always zero; never accept or export as a user field.",
+          "gate": "base",
+          "secret": false,
+          "direction": "none",
+          "required": false,
+          "readback": null
+        },
+        "sae_pwe_h2e": {
+          "declaration": "wifi_sae_pwe_method_t sae_pwe_h2e",
+          "disposition": "input",
+          "jsPath": "saePwe",
+          "tsType": "\"hunting-and-pecking\" | \"hash-to-element\" | \"both\"",
+          "unit": "enum",
+          "constraints": "Omitted uses SDK unspecified; explicit mode requires SAE credentials. H2E modes require H2E support.",
+          "gate": "CONFIG_ESP_WIFI_ENABLE_WPA3_SAE + per-role SAE gate; CONFIG_ESP_WIFI_ENABLE_SAE_H2E for H2E",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "saePwe",
+            "codec": "enum",
+            "tsType": "WiFiDriverEnumValue",
+            "enum": "pwe"
+          }
+        },
+        "sae_pk_mode": {
+          "declaration": "wifi_sae_pk_mode_t sae_pk_mode",
+          "disposition": "input",
+          "jsPath": "saePkMode",
+          "tsType": "\"automatic\" | \"only\" | \"disabled\"",
+          "unit": "enum",
+          "constraints": "Automatic where built; disabled always accepted. Only requires a 1..63-byte password, WPA3 threshold, required PMF and H2E; reject explicit weaker dependencies. Native authentication validates password checksum and PK/H2E peer support.",
+          "gate": "CONFIG_ESP_WIFI_ENABLE_SAE_PK; disabled allowed without PK",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "saePkMode",
+            "codec": "enum",
+            "tsType": "WiFiDriverEnumValue",
+            "enum": "pk"
+          }
+        },
+        "failure_retry_cnt": {
+          "declaration": "uint8_t failure_retry_cnt",
+          "disposition": "input",
+          "jsPath": "failureRetryCount",
+          "tsType": "number",
+          "unit": "retries per AP",
+          "constraints": "Integer 0..255, default 0; nonzero requires all-channel scan and increases connection latency.",
+          "gate": "base",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "failureRetryCount",
+            "codec": "number",
+            "tsType": "number"
+          }
+        },
+        "he_dcm_set": {
+          "declaration": "uint32_t he_dcm_set : 1",
+          "disposition": "input",
+          "jsPath": "heDcmSet",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false. Explicit HE controls require HE support; no implicit protocol/mode change.",
+          "gate": "SOC_WIFI_HE_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "heDcmSet",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "he_dcm_max_constellation_tx": {
+          "declaration": "uint32_t he_dcm_max_constellation_tx : 2",
+          "disposition": "input",
+          "jsPath": "heDcmMaxConstellationTx",
+          "tsType": "0 | 1 | 2 | 3",
+          "unit": "constellation enum",
+          "constraints": "0 unsupported, 1 BPSK, 2 QPSK, 3 16-QAM; explicit value requires heDcmSet=true. When set, omitted TX/RX defaults to 3.",
+          "gate": "SOC_WIFI_HE_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "heDcmMaxConstellationTx",
+            "codec": "number",
+            "tsType": "number"
+          }
+        },
+        "he_dcm_max_constellation_rx": {
+          "declaration": "uint32_t he_dcm_max_constellation_rx : 2",
+          "disposition": "input",
+          "jsPath": "heDcmMaxConstellationRx",
+          "tsType": "0 | 1 | 2 | 3",
+          "unit": "constellation enum",
+          "constraints": "0 unsupported, 1 BPSK, 2 QPSK, 3 16-QAM; explicit value requires heDcmSet=true. When set, omitted TX/RX defaults to 3.",
+          "gate": "SOC_WIFI_HE_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "heDcmMaxConstellationRx",
+            "codec": "number",
+            "tsType": "number"
+          }
+        },
+        "he_mcs9_enabled": {
+          "declaration": "uint32_t he_mcs9_enabled : 1",
+          "disposition": "input",
+          "jsPath": "heMcs9Enabled",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false. Explicit HE controls require HE support; no implicit protocol/mode change.",
+          "gate": "SOC_WIFI_HE_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "heMcs9Enabled",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "he_su_beamformee_disabled": {
+          "declaration": "uint32_t he_su_beamformee_disabled : 1",
+          "disposition": "input",
+          "jsPath": "heSuBeamformeeDisabled",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false. Explicit HE controls require HE support; no implicit protocol/mode change.",
+          "gate": "SOC_WIFI_HE_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "heSuBeamformeeDisabled",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "he_trig_su_bmforming_feedback_disabled": {
+          "declaration": "uint32_t he_trig_su_bmforming_feedback_disabled : 1",
+          "disposition": "input",
+          "jsPath": "heTrigSuBeamformingFeedbackDisabled",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false. Explicit HE controls require HE support; no implicit protocol/mode change.",
+          "gate": "SOC_WIFI_HE_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "heTrigSuBeamformingFeedbackDisabled",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "he_trig_mu_bmforming_partial_feedback_disabled": {
+          "declaration": "uint32_t he_trig_mu_bmforming_partial_feedback_disabled : 1",
+          "disposition": "input",
+          "jsPath": "heTrigMuBeamformingPartialFeedbackDisabled",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false. Explicit HE controls require HE support; no implicit protocol/mode change.",
+          "gate": "SOC_WIFI_HE_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "heTrigMuBeamformingPartialFeedbackDisabled",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "he_trig_cqi_feedback_disabled": {
+          "declaration": "uint32_t he_trig_cqi_feedback_disabled : 1",
+          "disposition": "input",
+          "jsPath": "heTrigCqiFeedbackDisabled",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false. Explicit HE controls require HE support; no implicit protocol/mode change.",
+          "gate": "SOC_WIFI_HE_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "heTrigCqiFeedbackDisabled",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "vht_su_beamformee_disabled": {
+          "declaration": "uint32_t vht_su_beamformee_disabled : 1",
+          "disposition": "input",
+          "jsPath": "vhtSuBeamformeeDisabled",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false; explicit VHT controls require VHT support and never switch protocols implicitly.",
+          "gate": "CONFIG_SOC_WIFI_SUPPORT_5G (pinned SDK VHT target)",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "vhtSuBeamformeeDisabled",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "vht_mu_beamformee_disabled": {
+          "declaration": "uint32_t vht_mu_beamformee_disabled : 1",
+          "disposition": "input",
+          "jsPath": "vhtMuBeamformeeDisabled",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false; explicit VHT controls require VHT support and never switch protocols implicitly.",
+          "gate": "CONFIG_SOC_WIFI_SUPPORT_5G (pinned SDK VHT target)",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "vhtMuBeamformeeDisabled",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "vht_mcs8_enabled": {
+          "declaration": "uint32_t vht_mcs8_enabled : 1",
+          "disposition": "input",
+          "jsPath": "vhtMcs8Enabled",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false; explicit VHT controls require VHT support and never switch protocols implicitly.",
+          "gate": "CONFIG_SOC_WIFI_SUPPORT_5G (pinned SDK VHT target)",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "vhtMcs8Enabled",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "reserved2": {
+          "declaration": "uint32_t reserved2 : 19",
+          "disposition": "reserved",
+          "jsPath": null,
+          "tsType": null,
+          "unit": "bits",
+          "constraints": "Reserved bits always zero; never accept or export as a user field.",
+          "gate": "base",
+          "secret": false,
+          "direction": "none",
+          "required": false,
+          "readback": null
+        },
+        "sae_h2e_identifier": {
+          "declaration": "uint8_t sae_h2e_identifier[32]",
+          "disposition": "input",
+          "jsPath": "saeH2eIdentifier",
+          "tsType": "string",
+          "unit": "UTF-8 bytes",
+          "constraints": "1..32 bytes without NUL; requires H2E and 1..63-byte SAE password; copied and wiped with credentials.",
+          "gate": "CONFIG_ESP_WIFI_ENABLE_WPA3_SAE + CONFIG_ESP_WIFI_ENABLE_SAE_H2E",
+          "secret": true,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "saeH2eIdentifierBytes",
+            "codec": "bytes",
+            "tsType": "number[] | null"
+          }
+        }
+      },
+      "readbackType": "WiFiStationDriverConfigSnapshot"
+    },
+    "wifi_ap_config_t": {
+      "jsType": "WiFiAccessPointDriverConfig",
+      "fields": {
+        "ssid": {
+          "declaration": "uint8_t ssid[32]",
+          "disposition": "input",
+          "jsPath": "ssid",
+          "tsType": "string | ByteSource",
+          "unit": "bytes",
+          "constraints": "Required 1..32 UTF-8 bytes without NUL, or 1..32 raw bytes captured by value.",
+          "gate": "base",
+          "secret": false,
+          "direction": "write",
+          "required": true,
+          "readback": {
+            "jsPath": "ssidBytes",
+            "codec": "bytes",
+            "tsType": "number[]"
+          }
+        },
+        "password": {
+          "declaration": "uint8_t password[64]",
+          "disposition": "input",
+          "jsPath": "password",
+          "tsType": "string",
+          "unit": "UTF-8 bytes",
+          "constraints": "No embedded NUL; empty only for open/OWE; WPA/WPA2 8..63 bytes, pure SAE 1..63 bytes. Validate auth/cipher/PMF before mutation; no 64-byte passphrase truncation.",
+          "gate": "base",
+          "secret": true,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "passwordBytes",
+            "codec": "bytes",
+            "tsType": "number[] | null"
+          }
+        },
+        "ssid_len": {
+          "declaration": "uint8_t ssid_len",
+          "disposition": "derived",
+          "jsPath": null,
+          "tsType": null,
+          "unit": "boolean",
+          "constraints": "Derived from captured SSID byte length; always set explicitly, including raw SSIDs with NUL bytes.",
+          "gate": "base",
+          "secret": false,
+          "direction": "none",
+          "required": false,
+          "readback": {
+            "jsPath": "ssidLength",
+            "codec": "number",
+            "tsType": "number"
+          }
+        },
+        "channel": {
+          "declaration": "uint8_t channel",
+          "disposition": "input",
+          "jsPath": "channel",
+          "tsType": "number",
+          "unit": "802.11 channel",
+          "constraints": "Integer 0 for default selection, otherwise a target-supported regulatory channel; driver-config start must enforce shared channel admission.",
+          "gate": "target band + current country",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "channel",
+            "codec": "number",
+            "tsType": "number"
+          }
+        },
+        "authmode": {
+          "declaration": "wifi_auth_mode_t authmode",
+          "disposition": "input",
+          "jsPath": "authMode",
+          "tsType": "\"open\" | \"wpa\" | \"wpa2\" | \"wpa/wpa2\" | \"wpa3\" | \"wpa2/wpa3\" | \"owe\"",
+          "unit": "enum",
+          "constraints": "Default WPA2 with password, open otherwise; saeExt selects pure WPA3 when auth is omitted. Reject unsupported modes and enforce password/cipher/PMF dependencies.",
+          "gate": "CONFIG_ESP_WIFI_SOFTAP_SUPPORT + per-auth gate",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "authMode",
+            "codec": "enum",
+            "tsType": "WiFiDriverEnumValue",
+            "enum": "auth"
+          }
+        },
+        "ssid_hidden": {
+          "declaration": "uint8_t ssid_hidden",
+          "disposition": "input",
+          "jsPath": "hidden",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false; only 0/1 SDK values emitted.",
+          "gate": "base",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "hidden",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "max_connection": {
+          "declaration": "uint8_t max_connection",
+          "disposition": "input",
+          "jsPath": "maxConnections",
+          "tsType": "number",
+          "unit": "clients",
+          "constraints": "Integer 1..actual framework/build shared key budget; default framework maximum.",
+          "gate": "SoftAP and ESP-NOW shared encryption key capacity",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "maxConnections",
+            "codec": "number",
+            "tsType": "number"
+          }
+        },
+        "beacon_interval": {
+          "declaration": "uint16_t beacon_interval",
+          "disposition": "input",
+          "jsPath": "beaconIntervalTu",
+          "tsType": "number",
+          "unit": "TU (1024 microseconds)",
+          "constraints": "Integer 100..60000, multiple of 100; default 100. Raw driver config uses TU, high-level startAP uses milliseconds.",
+          "gate": "base",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "beaconIntervalTu",
+            "codec": "number",
+            "tsType": "number"
+          }
+        },
+        "csa_count": {
+          "declaration": "uint8_t csa_count",
+          "disposition": "input",
+          "jsPath": "csaCount",
+          "tsType": "number",
+          "unit": "beacons",
+          "constraints": "Integer 1..255; default 3.",
+          "gate": "base",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "csaCount",
+            "codec": "number",
+            "tsType": "number"
+          }
+        },
+        "dtim_period": {
+          "declaration": "uint8_t dtim_period",
+          "disposition": "input",
+          "jsPath": "dtimPeriod",
+          "tsType": "number",
+          "unit": "beacon intervals",
+          "constraints": "Integer 1..10; default 1.",
+          "gate": "base",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "dtimPeriod",
+            "codec": "number",
+            "tsType": "number"
+          }
+        },
+        "pairwise_cipher": {
+          "declaration": "wifi_cipher_type_t pairwise_cipher",
+          "disposition": "input",
+          "jsPath": "pairwiseCipher",
+          "tsType": "\"tkip\" | \"ccmp\" | \"tkip/ccmp\" | \"gcmp\" | \"gcmp-256\"",
+          "unit": "enum",
+          "constraints": "Auth-dependent default; require validated readback, reject incompatible or weaker security combinations.",
+          "gate": "cipher hardware/SDK support",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "pairwiseCipher",
+            "codec": "enum",
+            "tsType": "WiFiDriverEnumValue",
+            "enum": "cipher"
+          }
+        },
+        "ftm_responder": {
+          "declaration": "bool ftm_responder",
+          "disposition": "input",
+          "jsPath": "ftmResponder",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false; only responder configuration, not FTM session API.",
+          "gate": "CONFIG_ESP_WIFI_FTM_RESPONDER_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "ftmResponder",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "pmf_cfg.capable": {
+          "declaration": "bool capable",
+          "disposition": "derived",
+          "jsPath": null,
+          "tsType": null,
+          "unit": "boolean",
+          "constraints": "Derived from pmf: false only for explicit disabled. Dedicated esp_wifi_disable_pmf_config runs after set_config and before START; writing this deprecated SDK input alone does not disable PMF.",
+          "gate": "base",
+          "secret": false,
+          "direction": "none",
+          "required": false,
+          "readback": {
+            "jsPath": "pmfCapable",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "pmf_cfg.required": {
+          "declaration": "bool required",
+          "disposition": "input",
+          "jsPath": "pmf",
+          "tsType": "\"disabled\" | \"optional\" | \"required\"",
+          "unit": "policy",
+          "constraints": "Three-state PMF policy. Defaults follow authentication. disabled invokes the dedicated SDK operation in the stopped transaction and rejects mandatory-PMF authentication or WPA3 compatible policy; Station requires disableWpa3CompatibleMode=true. Required protection is never silently weakened.",
+          "gate": "base",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "pmfRequired",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "sae_pwe_h2e": {
+          "declaration": "wifi_sae_pwe_method_t sae_pwe_h2e",
+          "disposition": "input",
+          "jsPath": "saePwe",
+          "tsType": "\"hunting-and-pecking\" | \"hash-to-element\" | \"both\"",
+          "unit": "enum",
+          "constraints": "Omitted uses SDK unspecified; explicit mode requires SAE credentials. H2E modes require H2E support.",
+          "gate": "CONFIG_ESP_WIFI_ENABLE_WPA3_SAE + per-role SAE gate; CONFIG_ESP_WIFI_ENABLE_SAE_H2E for H2E",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "saePwe",
+            "codec": "enum",
+            "tsType": "WiFiDriverEnumValue",
+            "enum": "pwe"
+          }
+        },
+        "transition_disable": {
+          "declaration": "uint8_t transition_disable : 1",
+          "disposition": "input",
+          "jsPath": "transitionDisable",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false; true requires WPA3/WPA2-WPA3 or compatible mode and retains requested security on readback.",
+          "gate": "SAE/security mode support",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "transitionDisable",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "sae_ext": {
+          "declaration": "uint8_t sae_ext : 1",
+          "disposition": "input",
+          "jsPath": "saeExt",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false; true requires pure WPA3, GCMP-256, required PMF and H2E. Supply omitted defaults, reject explicit conflicts and compatible mode; require exact flag readback.",
+          "gate": "CONFIG_ESP_WIFI_ENABLE_WPA3_SAE + CONFIG_ESP_WIFI_SOFTAP_SAE_SUPPORT + CONFIG_ESP_WIFI_ENABLE_SAE_H2E + CONFIG_SOC_WIFI_GCMP_SUPPORT + CONFIG_ESP_WIFI_GCMP_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "saeExt",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "wpa3_compatible_mode": {
+          "declaration": "uint8_t wpa3_compatible_mode : 1",
+          "disposition": "input",
+          "jsPath": "wpa3CompatibleMode",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false; true explicitly authorizes WPA2/CCMP base override for WPA2/WPA3/WPA2-WPA3 input. Requires 8..63-byte password; preserve requested PMF strength and verify base/flag readback.",
+          "gate": "CONFIG_ESP_WIFI_ENABLE_WPA3_SAE + CONFIG_ESP_WIFI_SOFTAP_SAE_SUPPORT + CONFIG_ESP_WIFI_WPA3_COMPATIBLE_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "wpa3CompatibleMode",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "reserved": {
+          "declaration": "uint8_t reserved : 5",
+          "disposition": "reserved",
+          "jsPath": null,
+          "tsType": null,
+          "unit": "bits",
+          "constraints": "Reserved bits always zero; never accept or export as a user field.",
+          "gate": "base",
+          "secret": false,
+          "direction": "none",
+          "required": false,
+          "readback": null
+        },
+        "bss_max_idle_cfg.period": {
+          "declaration": "uint16_t period",
+          "disposition": "input",
+          "jsPath": "bssMaxIdlePeriod",
+          "tsType": "number",
+          "unit": "1000 TU (1.024 seconds)",
+          "constraints": "Integer 0 (disabled) or 10..65535; default 0. Verify exact period readback; explicit 0 remains valid without feature.",
+          "gate": "CONFIG_ESP_WIFI_BSS_MAX_IDLE_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "bssMaxIdlePeriod",
+            "codec": "number",
+            "tsType": "number"
+          }
+        },
+        "bss_max_idle_cfg.protected_keep_alive": {
+          "declaration": "bool protected_keep_alive",
+          "disposition": "input",
+          "jsPath": "bssMaxIdleProtectedKeepAlive",
+          "tsType": "boolean",
+          "unit": "boolean",
+          "constraints": "Boolean, default false; true requires nonzero idle period and encrypted AP authentication; independent PMF policy remains enforced. Verify exact flag readback.",
+          "gate": "CONFIG_ESP_WIFI_BSS_MAX_IDLE_SUPPORT",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "bssMaxIdleProtectedKeepAlive",
+            "codec": "boolean",
+            "tsType": "boolean"
+          }
+        },
+        "gtk_rekey_interval": {
+          "declaration": "uint16_t gtk_rekey_interval",
+          "disposition": "input",
+          "jsPath": "gtkRekeyIntervalSeconds",
+          "tsType": "number",
+          "unit": "seconds",
+          "constraints": "Integer 0 (disabled) or 60..65535; reject an unsupported auth combination.",
+          "gate": "base",
+          "secret": false,
+          "direction": "write",
+          "required": false,
+          "readback": {
+            "jsPath": "gtkRekeyIntervalSeconds",
+            "codec": "number",
+            "tsType": "number"
+          }
+        }
+      },
+      "readbackType": "WiFiAccessPointDriverConfigSnapshot"
+    }
+  }
+}

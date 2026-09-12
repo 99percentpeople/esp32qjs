@@ -48,9 +48,8 @@ test("wireless_core/lifecycle-existing-api", function () {
       check(now.status().open === true, "ESP-NOW open");
       now.close();
       now = null;
-      csi = wifi.csi.open({ source: "associated", channel: "current",
-        conflict: "fail", capture: capture,
-        queue: { capacity: 1, overflow: "drop-newest" } });
+      csi = wifi.csi.open({ source: { mode: "associated" }, capture: capture,
+        buffering: { poolCapacity: 1, queueCapacity: 1, overflow: "drop-newest" } });
       csi.close();
       check(csi.stats().leasedFrames === 0, "CSI owner balance");
       csi = null;

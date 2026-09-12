@@ -59,16 +59,38 @@ power-save control, and explicit timeout recovery.
   counters. Each admitted packet makes at most one native `esp_now_send()`
   call. A native admission failure, including `ESP_ERR_ESPNOW_NO_MEM`, marks
   that packet failed immediately; the queue does not delay and resubmit it.
-- `session.setPowerSave(options)` updates the station wake window and interval;
-  `{ enabled: false }` restores the ESP-IDF always-awake/default interval
-  settings. Closing an enabled session also restores those defaults before
-  native deinitialization.
+- `session.setPowerSave(options)` borrows the shared Radio interval and sets the
+  ESP-NOW wake window. `{ enabled: false }` restores the always-awake window and
+  the captured Radio interval; it does not unconditionally overwrite the interval
+  with zero. Close uses the same restoration suffix, including after failed open
+  or partial configuration. Successful window restoration is not repeated if
+  interval restoration fails. Interval ownership survives native ESP-NOW deinit.
+  Errors use `ESPNOW_POWER_SAVE_FAILED` with the original `espCode`. If a native
+  setting is uncertain, the Session becomes failed and must close; `recover()`
+  cannot repair this policy fault. Admission rejection before mutation preserves
+  a healthy Session. `status().powerSave.faulted` and `restorePending` describe
+  these obligations; the enabled/window/interval fields describe the last accepted
+  request, not actual hardware state after failure.
 - `session.recover()` explicitly rebuilds a faulted native session after send
-  timeout cleanup has reached callback quiescence. Each call makes one explicit
+  timeout cleanup has reached callback quiescence and successful native deinitialization. Each call makes one explicit
   rebuild attempt while preserving the shared Wi-Fi service and other radio
   owners.
 - `session.close()` closes receive delivery, unregisters callbacks, deinitializes
   ESP-NOW, releases the shared radio lease, clears keys, and invalidates peers.
+  It reports success only after those native steps finish. A failed unregister,
+  power-save cleanup, deinit or Radio release reports `ESPNOW_CLEANUP_PENDING`
+  with the underlying `details.espCode`; native state, queue retention and the
+  unfinished cleanup suffix remain owned. Successful earlier steps are not
+  repeated. The session stays closing, blocks normal operations/reopen, and a
+  later `close()` can retry. The retained handle is retired only after closure;
+  garbage collection requests native reaping without pretending cleanup succeeded.
+  Background reaping and explicit close share one cleanup reservation. If another
+  cleaner already owns it or the worker queue is full, close reports pending and
+  preserves that cleaner. Reopen/runtime initialization also waits for the old
+  cleanup reservation, close Future pointer and reaper to retire. Public Future
+  timeout still ends waiting, not native
+  ownership. Native callback drain follows successful unregister; deinit failure
+  does not clear `now_initialized` or free queue/session storage.
 
 `EspNowSession` is the generation-checked session handle returned by `open()`;
 `EspNowPeer` is the generation-checked peer handle returned by `addPeer()` or
@@ -79,7 +101,23 @@ as described above.
 
 Use `channel: "current"` when Wi-Fi is connected. A conflicting explicit
 channel returns `ESPNOW_CHANNEL_CONFLICT` while preserving the active shared
-radio channel. A send callback timeout reports
+radio channel. Observed channel drift latches a fixed owner's conflict:
+`status().channelSynchronized` becomes false, receive publication is rejected,
+and new send/enqueue admission fails with the existing channel-mismatch error.
+Tracked sends and queued packets recheck the Radio immediately before their
+native submission. A conflict completes them as failed without calling
+`esp_now_send()`; already submitted sends still finish through their original
+callback/timeout path. Queue/flush accounting therefore remains bounded and
+complete. A raw channel-observation failure retains its native error for TX.
+Close and reopen a fixed session to explicitly revalidate its channel; driver
+movement back to the old channel does not clear the conflict.
+
+A `"current"` session updates its channel and channelGeneration on receive,
+status, send/enqueue admission and worker dispatch. A peer's explicit channel
+constraint still applies. These checks cannot make RF channel movement atomic
+with an already accepted native send and do not establish over-the-air delivery.
+
+A send callback timeout reports
 `ESPNOW_RECOVERY_PENDING` while its native Future state and transmit lane remain
 retained. A worker waits for callbacks to become quiescent, deinitializes the
 native driver, and only then completes the Future with a timeout. The session

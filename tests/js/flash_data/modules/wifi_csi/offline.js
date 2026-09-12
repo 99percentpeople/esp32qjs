@@ -22,6 +22,10 @@ test("wifi_csi/offline", function () {
     "associated capture should always be available");
   test.ok(caps.limits.maxPoolCapacity >= 2,
     "the fixed pool capacity should be visible");
+  test.equal(caps.limits.maxTotalPoolCapacity, caps.limits.maxPoolCapacity,
+    "all CSI generations should share the configured total slot budget");
+  test.equal(caps.limits.maxPoolGenerations, 8,
+    "the native registry should have a bounded generation count");
   test.ok(caps.limits.maxQueueCapacity <= caps.limits.maxPoolCapacity,
     "the queue must fit within the pool");
 
@@ -67,9 +71,7 @@ test("wifi_csi/offline", function () {
     "open should reject unknown options");
 
   options = {
-    source: "associated",
-    channel: "current",
-    conflict: "fail",
+    source: { mode: "associated" },
     capture: capture,
     filter: {
       minimumRssi: -100,
@@ -77,7 +79,7 @@ test("wifi_csi/offline", function () {
       maximumRateHz: 1000,
       validOnly: true
     },
-    queue: { capacity: 2, overflow: "drop-newest" },
+    buffering: { poolCapacity: 2, queueCapacity: 2, overflow: "drop-newest" },
     powerSavePolicy: "preserve"
   };
   try { wifi.disconnect(); } catch (ignoredDisconnectError) {}
@@ -89,6 +91,13 @@ test("wifi_csi/offline", function () {
       "effective schema should match capabilities");
     test.equal(status.effective.queueCapacity, 2,
       "effective queue capacity should match the request");
+    test.equal(status.effective.poolCapacity, 2,
+      "the native pool should use the requested capacity");
+    var pools = wifi.diagnostics.snapshot().csi;
+    test.equal(pools.reservedSlots, 2, "the pool should reserve only its requested capacity");
+    test.equal(pools.generations.length, 1, "the open pool should be registered");
+    test.equal(pools.generations[0].generation, status.generation,
+      "diagnostics should identify the same pool generation");
     test.equal(session.receive(0), null,
       "an empty queue should return null without blocking");
     stats = session.stats();
@@ -107,6 +116,8 @@ test("wifi_csi/offline", function () {
   test.equal(session.status().state, "closed",
     "closed-session status should remain observable until reopen");
 
+  test.equal(wifi.diagnostics.snapshot().csi.reservedSlots, 0,
+    "a closed pool with no payload owners should return its reservation");
   replacement = wifi.csi.open(options);
   try {
     errorText = "";
@@ -125,6 +136,6 @@ test("wifi_csi/offline", function () {
   return {
     target: caps.target,
     schema: caps.configSchema,
-    maxFrameBytes: caps.limits.maxFrameBytes
+    maxCsiBytes: caps.limits.maxCsiBytes
   };
 });

@@ -15,14 +15,29 @@ def run(command):
 
 def extract(source,name):
     import re
-    match=re.search(r'(?:static )?[^;{}\n]+\b'+name+r'\([^;{}]*\)\n\{',source)
+    literals=r'''"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|//[^\n]*|/\*[\s\S]*?\*/'''
+    # A documentation comment may mention name() before the definition. Mask
+    # literals/comments without changing offsets before matching declarations.
+    masked=re.sub(literals,lambda m:re.sub(r'[^\n]',' ',m.group()),source)
+    match=re.search(r'^[ \t]*[^;{}\n()]+\b'+re.escape(name)+r'\([^;{}]*\)\s*\{',masked,re.M)
     if not match:raise AssertionError(name)
-    return source[match.start():source.index('\n}\n',match.start())+3]
+    # A closing brace can share a line with a return statement. Looking for
+    # '\n}\n' then silently includes following production functions twice.
+    # Ignore braces in C strings, character literals and comments.
+    tokens=literals+r'|[{}]'
+    depth=1
+    for token in re.finditer(tokens,source[match.end():]):
+        if token.group()=='{':depth+=1
+        elif token.group()=='}':
+            depth-=1
+            if not depth:return source[match.start():match.end()+token.end()]+'\n'
+    raise AssertionError('unterminated function: '+name)
 
 INJECTION=r'''
 #include <assert.h>
 #include <stdbool.h>
 #include <limits.h>
+#include <math.h>
 #include <stdatomic.h>
 static JSContext *test_ctx;
 static int calls,fail_at,moved_roots,root_count,native_live;
@@ -55,14 +70,31 @@ static void heap_caps_free(void *p) {
     assert(!"double free or unknown native allocation");
 }
 static void esp32_mquickjs_memory_payload_free(void *p) { heap_caps_free(p); }
+#include "esp32_mquickjs_memory_budget.h"
+/* Allocation/GC boundary only. Aggregate quota and allocator-return ordering
+ * are exercised by test_memory_wireless against the complete production manager. */
+#define esp32_mquickjs_memory_wireless_alloc(owner,n,policy,role) heap_caps_malloc(n,MALLOC_CAP_8BIT)
+#define esp32_mquickjs_memory_wireless_calloc(owner,n,size,policy,role) heap_caps_calloc(n,size,MALLOC_CAP_8BIT)
+#define esp32_mquickjs_event_queue_new_wireless(owner,...) esp32_mquickjs_event_queue_new(__VA_ARGS__)
 static JSValue new_class(JSContext *ctx,int cls) { if(step(ctx))return JS_ThrowOutOfMemory(ctx);return JS_NewObjectClassUser(ctx,cls); }
 static JSValue new_object(JSContext *ctx) { if(step(ctx))return JS_ThrowOutOfMemory(ctx);return JS_NewObject(ctx); }
 static JSValue new_array(JSContext *ctx,int n) { if(step(ctx))return JS_ThrowOutOfMemory(ctx);return JS_NewArray(ctx,n); }
 static JSValue new_string(JSContext *ctx,const char *s) { if(step(ctx))return JS_ThrowOutOfMemory(ctx);return JS_NewString(ctx,s); }
 static JSValue new_string_len(JSContext *ctx,const char *s,size_t n) { if(step(ctx))return JS_ThrowOutOfMemory(ctx);return JS_NewStringLen(ctx,s,n); }
-static JSValue new_uint32(JSContext *ctx,uint32_t n) { if(step(ctx))return JS_ThrowOutOfMemory(ctx);return JS_NewUint32(ctx,n); }
-static JSValue new_float64(JSContext *ctx,double n) { if(step(ctx))return JS_ThrowOutOfMemory(ctx);return JS_NewFloat64(ctx,n); }
-static JSValue new_int64(JSContext *ctx,int64_t n) { if(step(ctx))return JS_ThrowOutOfMemory(ctx);return JS_NewInt64(ctx,n); }
+/* Match the linked VM's numeric allocation boundary: 31-bit integers are
+ * immediate, -0 is a preallocated context constant, and 64-bit Hosts also
+ * encode short floats inline. Injecting GC for a byte constructor invents a
+ * relocation before an enclosing setter has received its by-value owner. */
+static bool number_allocates(double n) {
+    if(n==0 || (n>=-1073741824.0 && n<=1073741823.0 && n==(double)(int32_t)n))return false;
+#ifdef JS_USE_SHORT_FLOAT
+    if(fabs(n)>=0x1p-127 && fabs(n)<=0x1p+128)return false;
+#endif
+    return true;
+}
+static JSValue new_uint32(JSContext *ctx,uint32_t n) { if(number_allocates(n) && step(ctx))return JS_ThrowOutOfMemory(ctx);return JS_NewUint32(ctx,n); }
+static JSValue new_float64(JSContext *ctx,double n) { if(number_allocates(n) && step(ctx))return JS_ThrowOutOfMemory(ctx);return JS_NewFloat64(ctx,n); }
+static JSValue new_int64(JSContext *ctx,int64_t n) { if(number_allocates(n) && step(ctx))return JS_ThrowOutOfMemory(ctx);return JS_NewInt64(ctx,n); }
 /* VM setters root their by-value inputs internally. Inject allocation failure at
  * entry; do not collect before those API entry points root their arguments. */
 static JSValue set_property(JSContext *ctx,JSValue obj,const char *key,JSValue value) {
@@ -123,7 +155,7 @@ def build(directory,extra,main,classes_extra="",globals_extra="",declarations=""
     (directory/'esp32_mquickjs_memory.h').write_text('#pragma once\n')
     (directory/'esp_heap_caps.h').write_text('#pragma once\n#define MALLOC_CAP_8BIT 1\n')
     prefix=(ROOT/'scripts/mquickjs_syntax_check.c').read_text().split('#define CHECKER_HEAP_SIZE')[0]
-    prefix=prefix.replace('#include "mqjs_stdlib.h"','#include "utils/esp32_mquickjs_byte_source.h"\nenum { JS_CLASS_BYTE_VIEW=JS_CLASS_USER+11, JS_CLASS_BYTE_SPAN_SOURCE, JS_CLASS_BITMAP_SPAN_SOURCE };\n#define JS_CLASS_COUNT (JS_CLASS_USER+45)\n#include "mqjs_stdlib.h"')
+    prefix=prefix.replace('#include "mqjs_stdlib.h"','#include "utils/esp32_mquickjs_byte_source.h"\nenum { JS_CLASS_BYTE_VIEW=JS_CLASS_USER+11, JS_CLASS_BYTE_SPAN_SOURCE, JS_CLASS_BITMAP_SPAN_SOURCE };\n#define JS_CLASS_COUNT (JS_CLASS_USER+52)\n#include "mqjs_stdlib.h"')
     helper=extract((CORE/'esp32_mquickjs.c').read_text(),'esp32_mquickjs_set_property_ref')
     prefix=prefix.replace('#include "mqjs_stdlib.h"',declarations+'\n#include "mqjs_stdlib.h"')
     source=prefix+INJECTION+(CORE/'esp32_mquickjs_byte_span.c').read_text()+(CORE/'esp32_mquickjs_byte_source.c').read_text()+helper+extra+RESET_MACROS+main

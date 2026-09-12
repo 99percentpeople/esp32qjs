@@ -279,26 +279,6 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("memory_order_release", fs_worker)
         self.assertIn("memory_order_release", nvs_worker)
 
-    def test_future_worker_pool_initialization_is_all_or_nothing(self):
-        future = (
-            MQUICKJS / "src/core/esp32_mquickjs_future.c"
-        ).read_text(encoding="utf-8")
-        init_start = future.index("static bool future_init_worker_pool(void)")
-        init_end = future.index("\nstatic future_runtime_t *future_runtime(", init_start)
-        init = future[init_start:init_end]
-
-        self.assertIn("TaskHandle_t workers[", init)
-        self.assertIn(
-            "started != CONFIG_ESP32_MQUICKJS_FUTURE_WORKER_POOL_SIZE", init
-        )
-        self.assertIn(
-            "esp32_mquickjs_future_worker_pool_cleanup_partial", init
-        )
-        self.assertIn("vTaskDelete(cleanup->workers[worker_index])", future)
-        self.assertIn("vQueueDelete(cleanup->queue)", future)
-        self.assertIn("s_future_worker_queue = NULL", init)
-        self.assertNotIn("started > 0", init)
-
     def test_future_runtime_resources_are_created_all_or_nothing(self):
         future = (
             MQUICKJS / "src/core/esp32_mquickjs_future.c"
@@ -1187,7 +1167,7 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         self.assertIn("websocket_cleanup_client_resources", cleanup)
         self.assertNotIn("waits++ <", websocket)
 
-    def test_wifi_callbacks_only_publish_bounded_driver_events(self):
+    def test_wifi_callbacks_preserve_control_before_bounded_observations(self):
         wifi = (
             MQUICKJS / "src/modules/wifi/esp32_mquickjs_wifi.c"
         ).read_text(encoding="utf-8")
@@ -1204,9 +1184,14 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
 
         for callback in (handler, timer_callback):
             self.assertIn("wifi_publish_driver_event_from_callback(", callback)
-            self.assertNotIn("wifi_lock()", callback)
             self.assertNotIn("portMAX_DELAY", callback)
             self.assertNotIn("heap_caps_", callback)
+            self.assertNotIn("JS_New", callback)
+        self.assertNotIn("wifi_lock()", timer_callback)
+        self.assertLess(handler.index("observation_generation ="),
+                        handler.index("wifi_publish_driver_event_from_callback("))
+        self.assertLess(handler.index("wifi_publish_driver_event_from_callback("),
+                        handler.index("esp32_mquickjs_wifi_watch_capture("))
         self.assertIn("static bool wifi_driver_event_poller(", wifi)
         self.assertIn("callbacks_active", wifi)
 
@@ -1435,7 +1420,7 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
         resources = (
             MQUICKJS / "src/core/esp32_mquickjs_event_queue_resources.c"
         ).read_text(encoding="utf-8")
-        create_start = event_queue.index("JSValue esp32_mquickjs_event_queue_new(")
+        create_start = event_queue.index("static JSValue event_queue_new(")
         create_end = event_queue.index(
             "\nJSValue js_event_queue_constructor(", create_start
         )
@@ -1494,7 +1479,7 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             "\nbool esp32_mquickjs_event_queue_send_from_isr(", send_start
         )
         send = event_queue[send_start:send_end]
-        create_start = event_queue.index("JSValue esp32_mquickjs_event_queue_new(")
+        create_start = event_queue.index("static JSValue event_queue_new(")
         create_end = event_queue.index(
             "\nJSValue js_event_queue_constructor(", create_start
         )

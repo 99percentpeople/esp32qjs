@@ -20,6 +20,8 @@ SUPPORTED_PROFILES = (
     "representative-psram",
     "disabled",
     "wireless-inventory",
+    "wireless-ftm",
+    "wireless-roaming",
 )
 
 
@@ -68,10 +70,20 @@ def sdkconfig_text(
         f"CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC={'n' if psram_mode != 'none' else 'y'}",
         f"CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC={'y' if psram_mode != 'none' else 'n'}",
         f"CONFIG_ESP32QJS_JS_HEAP_SIZE={heap_size}",
+        # Explicit software-check limits, not board/RF qualification.
+        "CONFIG_ESP32_MQUICKJS_WIRELESS_INTERNAL_BUDGET_BYTES=131072",
+        f"CONFIG_ESP32_MQUICKJS_WIRELESS_PSRAM_BUDGET_BYTES={4194304 if psram_mode != 'none' else 0}",
+        "CONFIG_ESP32_MQUICKJS_WIRELESS_CONTROL_RESERVE_BYTES=16384",
     ]
     native_features: list[str] = []
     if profile == "wireless-inventory":
         lines.append("CONFIG_ESP_WIFI_NAN_SYNC_ENABLE=y")
+    if profile == "wireless-roaming":
+        lines.extend(["CONFIG_ESP_WIFI_11KV_SUPPORT=y", "CONFIG_ESP_WIFI_RRM_SUPPORT=y",
+                      "CONFIG_ESP_WIFI_WNM_SUPPORT=y", "CONFIG_ESP_WIFI_11R_SUPPORT=y"])
+    if profile == "wireless-ftm":
+        lines.extend(["CONFIG_ESP_WIFI_FTM_ENABLE=y", "CONFIG_ESP_WIFI_FTM_INITIATOR_SUPPORT=y",
+                      "CONFIG_ESP_WIFI_FTM_RESPONDER_SUPPORT=y"])
     for feature in features:
         feature_id = str(feature["id"])
         kconfig = str(feature["kconfig"])

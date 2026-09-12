@@ -77,6 +77,39 @@ FEATURE_DOCUMENTS = {
 }
 
 OWNER_DOCUMENTS = {
+    "wifi.smartConfig": "docs/api/wifi-smartconfig.md",
+    "wifi.wps": "docs/api/wifi-wps.md",
+    "wifi.mesh": "docs/api/wifi-mesh.md",
+    "WiFiMeshSession": "docs/api/wifi-mesh.md",
+    "wifi.nan": "docs/api/wifi-nan.md",
+    "WiFiNanSession": "docs/api/wifi-nan.md",
+    "WiFiNanService": "docs/api/wifi-nan.md",
+    "WiFiNanDataPath": "docs/api/wifi-nan.md",
+    "WiFiNanPairing": "docs/api/wifi-nan.md",
+    "wifi.dpp": "docs/api/wifi-dpp.md",
+    "WiFiDppSession": "docs/api/wifi-dpp.md",
+    "WiFiSmartConfigSession": "docs/api/wifi-smartconfig.md",
+    "WiFiWpsSession": "docs/api/wifi-wps.md",
+    "WiFiWpsAPSession": "docs/api/wifi-wps.md",
+    "wifi.twt": "docs/api/wifi-twt.md",
+    "WiFiTwtAgreement": "docs/api/wifi-twt.md",
+    "wifi.roaming": "docs/api/wifi-roaming.md",
+    "wifi.enterprise": "docs/api/wifi-enterprise.md",
+    "wifi.wapi": "docs/api/wifi-wapi.md",
+    "wifi.ftm": "docs/api/wifi-ftm.md",
+    "WiFiFtmSession": "docs/api/wifi-ftm.md",
+    "WiFiNeighborReportRequest": "docs/api/wifi-roaming.md",
+    "wifi.action": "docs/api/wifi-action.md",
+    "WiFiRocSession": "docs/api/wifi-action.md",
+    "wifi.vendorIe": "docs/api/wifi-vendor-ie.md",
+    "wifi.rawTx": "docs/api/wifi-raw-tx.md",
+    "WiFiRawTxSession": "docs/api/wifi-raw-tx.md",
+    "WiFiRawPeriodicTx": "docs/api/wifi-raw-tx.md",
+    "wifi.monitor": "docs/api/wifi-monitor.md",
+    "wifi.diagnostics": "docs/api/wifi.md",
+    "WiFiMonitorSession": "docs/api/wifi-monitor.md",
+    "WiFiMonitorFrame": "docs/api/wifi-monitor.md",
+    "WiFiMonitorBatch": "docs/api/wifi-monitor.md",
     "Global Helpers": "docs/api/global-helpers.md",
     "Future": "docs/api/futures.md",
     "EventQueue": "docs/api/event-queues.md",
@@ -93,6 +126,21 @@ OWNER_DOCUMENTS = {
 
 # table: (surface, TypeScript declaration, feature, documentation owner token)
 SURFACES = {
+    "js_wifi_diagnostics": ("wifi.diagnostics", "WiFiDiagnosticsModule", "wifi", "wifi.diagnostics"),
+    "js_wifi_smartconfig": ("wifi.smartConfig", "WiFiSmartConfigModule", "wifi", "wifi.smartConfig"),
+    "js_wifi_mesh": ("wifi.mesh", "WiFiMeshModule", "wifi", "wifi.mesh"),
+    "js_wifi_mesh_proto": ("WiFiMeshSession.prototype", "WiFiMeshSession", "wifi", "WiFiMeshSession"),
+    "js_wifi_nan": ("wifi.nan", "WiFiNanModule", "wifi", "wifi.nan"),
+    "js_wifi_nan_proto": ("WiFiNanSession.prototype", "WiFiNanSession", "wifi", "WiFiNanSession"),
+    "js_wifi_nan_service_proto": ("WiFiNanService.prototype", "WiFiNanService", "wifi", "WiFiNanService"),
+    "js_wifi_nan_path_proto": ("WiFiNanDataPath.prototype", "WiFiNanDataPath", "wifi", "WiFiNanDataPath"),
+    "js_wifi_nan_pairing_proto": ("WiFiNanPairing.prototype", "WiFiNanPairing", "wifi", "WiFiNanPairing"),
+    "js_wifi_dpp": ("wifi.dpp", "WiFiDppModule", "wifi", "wifi.dpp"),
+    "js_wifi_dpp_proto": ("WiFiDppSession.prototype", "WiFiDppSession", "wifi", "WiFiDppSession"),
+    "js_wifi_wps": ("wifi.wps", "WiFiWpsModule", "wifi", "wifi.wps"),
+    "js_wifi_smartconfig_proto": ("WiFiSmartConfigSession.prototype", "WiFiSmartConfigSession", "wifi", "WiFiSmartConfigSession"),
+    "js_wifi_wps_proto": ("WiFiWpsSession.prototype", "WiFiWpsSession", "wifi", "WiFiWpsSession"),
+    "js_wifi_wps_ap_proto": ("WiFiWpsAPSession.prototype", "WiFiWpsAPSession", "wifi", "WiFiWpsAPSession"),
     "js_headers_proto": ("Headers.prototype", "Headers", CORE, "Headers"),
     "js_request_proto": ("Request.prototype", "Request", CORE, "Request"),
     "js_response": ("Response", "Response", CORE, "Response"),
@@ -185,6 +233,38 @@ SURFACES = {
         "websocketClient"
     ),
     "js_wifi": ("wifi", "WiFiModule", "wifi", "wifi"),
+    "js_wifi_twt": ("wifi.twt", "WiFiTwtModule", "wifi", "wifi.twt"),
+    "js_wifi_twt_agreement_proto": ("WiFiTwtAgreement.prototype", "WiFiTwtAgreement", "wifi", "WiFiTwtAgreement"),
+    "js_wifi_ftm_proto": ("WiFiFtmSession.prototype", "WiFiFtmSession", "wifi", "WiFiFtmSession"),
+    "js_wifi_neighbor_proto": ("WiFiNeighborReportRequest.prototype", "WiFiNeighborReportRequest", "wifi", "WiFiNeighborReportRequest"),
+    "js_wifi_ftm": ("wifi.ftm", "WiFiFtmModule", "wifi", "wifi.ftm"),
+    "js_wifi_roc_proto": ("WiFiRocSession.prototype", "WiFiRocSession", "wifi", "WiFiRocSession"),
+    "js_wifi_action": ("wifi.action", "WiFiActionModule", "wifi", "wifi.action"),
+    "js_wifi_raw_tx": ("wifi.rawTx", "WiFiRawTxModule", "wifi", "wifi.rawTx"),
+    "js_wifi_enterprise": ("wifi.enterprise", "WiFiEnterpriseModule", "wifi", "wifi.enterprise"),
+    "js_wifi_wapi": ("wifi.wapi", "WiFiWapiModule", "wifi", "wifi.wapi"),
+    "js_wifi_roaming": ("wifi.roaming", "WiFiRoamingModule", "wifi", "wifi.roaming"),
+    "js_wifi_vendor_ie": ("wifi.vendorIe", "WiFiVendorIeModule", "wifi", "wifi.vendorIe"),
+    "js_wifi_driver": ("wifi.driver", "WiFiDriverModule", "wifi", "wifi.driver"),
+    "js_wifi_raw_periodic_proto": (
+        "WiFiRawPeriodicTx.prototype", "WiFiRawPeriodicTx", "wifi", "WiFiRawPeriodicTx"
+    ),
+    "js_wifi_raw_tx_session_proto": (
+        "WiFiRawTxSession.prototype", "WiFiRawTxSession", "wifi", "WiFiRawTxSession"
+    ),
+    "js_wifi_monitor": ("wifi.monitor", "WiFiMonitorModule", "wifi", "wifi.monitor"),
+    "js_wifi_monitor_session_proto": (
+        "WiFiMonitorSession.prototype", "WiFiMonitorSession", "wifi", "WiFiMonitorSession"
+    ),
+    "js_wifi_monitor_batch_proto": (
+        "WiFiMonitorBatch.prototype", "WiFiMonitorBatch", "wifi", "WiFiMonitorBatch"
+    ),
+    "js_wifi_monitor_frame_proto": (
+        "WiFiMonitorFrame.prototype", "WiFiMonitorFrame", "wifi", "WiFiMonitorFrame"
+    ),
+    "js_wifi_wake_lock_proto": (
+        "WiFiWakeLock.prototype", "WiFiWakeLock", "wifi", "WiFiWakeLock"
+    ),
     "js_wifi_csi_session_proto": (
         "WiFiCsiSession.prototype", "WiFiCsiSession", "wifiCsi",
         "WiFiCsiSession"
@@ -284,6 +364,25 @@ CLASSES = {
     "WiFiCsiFrame": (
         "WiFiCsiFrame", "WiFiCsiFrame", "wifiCsi", "WiFiCsiFrame"
     ),
+    "WiFiWakeLock": ("WiFiWakeLock", "WiFiWakeLock", "wifi", "WiFiWakeLock"),
+    "WiFiMonitorSession": ("WiFiMonitorSession", "WiFiMonitorSession", "wifi", "WiFiMonitorSession"),
+    "WiFiFtmSession": ("WiFiFtmSession", "WiFiFtmSession", "wifi", "WiFiFtmSession"),
+    "WiFiSmartConfigSession": ("WiFiSmartConfigSession", "WiFiSmartConfigSession", "wifi", "WiFiSmartConfigSession"),
+    "WiFiMeshSession": ("WiFiMeshSession", "WiFiMeshSession", "wifi", "WiFiMeshSession"),
+    "WiFiNanSession": ("WiFiNanSession", "WiFiNanSession", "wifi", "WiFiNanSession"),
+    "WiFiNanService": ("WiFiNanService", "WiFiNanService", "wifi", "WiFiNanService"),
+    "WiFiNanDataPath": ("WiFiNanDataPath", "WiFiNanDataPath", "wifi", "WiFiNanDataPath"),
+    "WiFiNanPairing": ("WiFiNanPairing", "WiFiNanPairing", "wifi", "WiFiNanPairing"),
+    "WiFiDppSession": ("WiFiDppSession", "WiFiDppSession", "wifi", "WiFiDppSession"),
+    "WiFiWpsSession": ("WiFiWpsSession", "WiFiWpsSession", "wifi", "WiFiWpsSession"),
+    "WiFiWpsAPSession": ("WiFiWpsAPSession", "WiFiWpsAPSession", "wifi", "WiFiWpsAPSession"),
+    "WiFiTwtAgreement": ("WiFiTwtAgreement", "WiFiTwtAgreement", "wifi", "WiFiTwtAgreement"),
+    "WiFiNeighborReportRequest": ("WiFiNeighborReportRequest", "WiFiNeighborReportRequest", "wifi", "WiFiNeighborReportRequest"),
+    "WiFiRocSession": ("WiFiRocSession", "WiFiRocSession", "wifi", "WiFiRocSession"),
+    "WiFiRawTxSession": ("WiFiRawTxSession", "WiFiRawTxSession", "wifi", "WiFiRawTxSession"),
+    "WiFiRawPeriodicTx": ("WiFiRawPeriodicTx", "WiFiRawPeriodicTx", "wifi", "WiFiRawPeriodicTx"),
+    "WiFiMonitorFrame": ("WiFiMonitorFrame", "WiFiMonitorFrame", "wifi", "WiFiMonitorFrame"),
+    "WiFiMonitorBatch": ("WiFiMonitorBatch", "WiFiMonitorBatch", "wifi", "WiFiMonitorBatch"),
     "WiFiCsiBatch": (
         "WiFiCsiBatch", "WiFiCsiBatch", "wifiCsi", "WiFiCsiBatch"
     ),
@@ -322,7 +421,7 @@ METHOD_FEATURES = {
     ("Bitmap.prototype", "decode"): "bitmapJpeg",
 }
 
-INTERNAL_METHODS = {("sys", "_deferIdle")}
+INTERNAL_METHODS = {("sys", "_deferIdle"), ("WiFiMonitorSession.prototype", "_eventQueue")}
 
 BASE_GLOBALS = (
     ("print", 1, "js_print"),
@@ -344,6 +443,161 @@ def register_future(
         FUTURE_REGISTRATIONS[(surface, method)] = (source, function)
 
 
+register_future(
+    "WiFiSmartConfigSession.prototype", ("receive", "close"),
+    "components/esp32_mquickjs/src/modules/wifi_smartconfig/esp32_mquickjs_wifi_smartconfig.c",
+    "esp32_mquickjs_init_wifi_smartconfig_runtime",
+)
+register_future(
+    "WiFiMeshSession.prototype", ("ready", "close", "recover", "receive", "send", "routingTable", "groups", "addGroups", "removeGroups", "setToDSState", "connect", "disconnect", "flushUpstream", "configuration", "setRouter", "setMeshId", "setType", "setSelfOrganized", "setFixedRoot", "setRootConflicts", "setAssociationExpiry", "setRootHealingDelay", "setIEEncryption", "waiveRoot", "switchChannel", "setDeviceDuty", "setNetworkDuty", "signalDuty", "subnet", "hasGroup", "upstreamCapacity", "powerStatus", "tsfTime", "setParent", "scan", "receiveScan", "flushScan"),
+    "components/esp32_mquickjs/src/modules/wifi_mesh/esp32_mquickjs_wifi_mesh.c",
+    "esp32_mquickjs_init_wifi_mesh_runtime",
+)
+register_future(
+    "WiFiNanSession.prototype", ("ready", "close"),
+    "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan.c",
+    "esp32_mquickjs_init_wifi_nan_runtime",
+)
+register_future(
+    "WiFiNanService.prototype", ("ready", "close", "send", "receiveDataPath", "pairingCredentials", "receivePairing"),
+    "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan.c",
+    "esp32_mquickjs_init_wifi_nan_runtime",
+)
+register_future(
+    "WiFiNanPairing.prototype", ("ready", "close"),
+    "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan.c",
+    "esp32_mquickjs_init_wifi_nan_runtime",
+)
+register_future(
+    "WiFiNanDataPath.prototype", ("ready", "respond", "close"),
+    "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan.c",
+    "esp32_mquickjs_init_wifi_nan_runtime",
+)
+register_future(
+    "WiFiDppSession.prototype", ("receive", "connect", "close"),
+    "components/esp32_mquickjs/src/modules/wifi_dpp/esp32_mquickjs_wifi_dpp.c",
+    "esp32_mquickjs_init_wifi_dpp_runtime",
+)
+register_future(
+    "WiFiWpsSession.prototype", ("receive", "close"),
+    "components/esp32_mquickjs/src/modules/wifi_wps/esp32_mquickjs_wifi_wps.c",
+    "esp32_mquickjs_init_wifi_wps_runtime",
+)
+register_future(
+    "WiFiWpsAPSession.prototype", ("receive", "close"),
+    "components/esp32_mquickjs/src/modules/wifi_wps/esp32_mquickjs_wifi_wps_ap.c",
+    "esp32_mquickjs_init_wifi_wps_ap_runtime",
+)
+register_future(
+    "wifi.enterprise", ("enable", "disable", "clear"),
+    "components/esp32_mquickjs/src/modules/wifi_enterprise/esp32_mquickjs_wifi_enterprise.c",
+    "esp32_mquickjs_init_wifi_enterprise_runtime",
+)
+register_future(
+    "wifi.roaming", ("requestNeighborReport",),
+    "components/esp32_mquickjs/src/modules/wifi_roaming/esp32_mquickjs_wifi_neighbor_request.c",
+    "esp32_mquickjs_init_wifi_neighbor_runtime",
+)
+register_future(
+    "WiFiNeighborReportRequest.prototype", ("receive",),
+    "components/esp32_mquickjs/src/modules/wifi_roaming/esp32_mquickjs_wifi_neighbor_request.c",
+    "esp32_mquickjs_init_wifi_neighbor_runtime",
+)
+register_future(
+    "wifi.ftm", ("start",),
+    "components/esp32_mquickjs/src/modules/wifi_ftm/esp32_mquickjs_wifi_ftm.c",
+    "esp32_mquickjs_init_wifi_ftm_runtime",
+)
+register_future(
+    "wifi.ftm", ("recover",),
+    "components/esp32_mquickjs/src/modules/wifi_common/esp32_mquickjs_wifi_recovery.c",
+    "recovery_register",
+)
+register_future(
+    "WiFiFtmSession.prototype", ("receive", "end", "close"),
+    "components/esp32_mquickjs/src/modules/wifi_ftm/esp32_mquickjs_wifi_ftm.c",
+    "esp32_mquickjs_init_wifi_ftm_runtime",
+)
+register_future(
+    "wifi.action", ("remainOnChannel",),
+    "components/esp32_mquickjs/src/modules/wifi_action/esp32_mquickjs_wifi_roc.c",
+    "esp32_mquickjs_init_wifi_roc_runtime",
+)
+register_future(
+    "WiFiRocSession.prototype", ("wait", "close"),
+    "components/esp32_mquickjs/src/modules/wifi_action/esp32_mquickjs_wifi_roc.c",
+    "esp32_mquickjs_init_wifi_roc_runtime",
+)
+register_future(
+    "wifi.action", ("recover",),
+    "components/esp32_mquickjs/src/modules/wifi_common/esp32_mquickjs_wifi_recovery.c",
+    "recovery_register",
+)
+register_future(
+    "wifi.twt", ("setupIndividual", "setupBroadcast"),
+    "components/esp32_mquickjs/src/modules/wifi_twt/esp32_mquickjs_wifi_twt_agreement.c",
+    "esp32_mquickjs_init_wifi_twt_agreement_runtime",
+)
+register_future(
+    "wifi.twt", ("recover",),
+    "components/esp32_mquickjs/src/modules/wifi_common/esp32_mquickjs_wifi_recovery.c",
+    "recovery_register",
+)
+register_future(
+    "wifi.twt", ("closeAll",),
+    "components/esp32_mquickjs/src/modules/wifi_twt/esp32_mquickjs_wifi_twt_close.c",
+    "esp32_mquickjs_init_wifi_twt_close_runtime",
+)
+register_future(
+    "wifi.twt", ("broadcasts",),
+    "components/esp32_mquickjs/src/modules/wifi_twt/esp32_mquickjs_wifi_twt_broadcast.c",
+    "esp32_mquickjs_init_wifi_twt_broadcast_runtime",
+)
+register_future(
+    "WiFiTwtAgreement.prototype", ("close", "suspend", "resume"),
+    "components/esp32_mquickjs/src/modules/wifi_twt/esp32_mquickjs_wifi_twt_agreement.c",
+    "esp32_mquickjs_init_wifi_twt_agreement_runtime",
+)
+register_future(
+    "wifi.twt", ("probe",),
+    "components/esp32_mquickjs/src/modules/wifi_twt/esp32_mquickjs_wifi_twt.c",
+    "esp32_mquickjs_init_wifi_twt_runtime",
+)
+register_future(
+    "wifi.action", ("send",),
+    "components/esp32_mquickjs/src/modules/wifi_action/esp32_mquickjs_wifi_action.c",
+    "esp32_mquickjs_init_wifi_action_runtime",
+)
+register_future(
+    "WiFiRawTxSession.prototype", ("startPeriodic",),
+    "components/esp32_mquickjs/src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx_public_periodic.c",
+    "esp32_mquickjs_init_wifi_raw_tx_periodic_runtime",
+)
+register_future(
+    "WiFiRawPeriodicTx.prototype", ("close",),
+    "components/esp32_mquickjs/src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx_public_periodic.c",
+    "esp32_mquickjs_init_wifi_raw_tx_periodic_runtime",
+)
+register_future(
+    "wifi.rawTx", ("recover",),
+    "components/esp32_mquickjs/src/modules/wifi_common/esp32_mquickjs_wifi_recovery.c",
+    "recovery_register",
+)
+register_future(
+    "wifi.rawTx", ("open",),
+    "components/esp32_mquickjs/src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx_public_session.c",
+    "esp32_mquickjs_init_wifi_raw_tx_session_runtime",
+)
+register_future(
+    "WiFiRawTxSession.prototype", ("send", "flush", "close"),
+    "components/esp32_mquickjs/src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx_public_session.c",
+    "esp32_mquickjs_init_wifi_raw_tx_session_runtime",
+)
+register_future(
+    "WiFiMonitorSession.prototype", ("receive",),
+    "components/esp32_mquickjs/src/modules/wifi_monitor/esp32_mquickjs_wifi_monitor.c",
+    "js_wifi_monitor_open",
+)
 register_future(
     "EventQueue.prototype", ("receive",),
     "components/esp32_mquickjs/src/core/esp32_mquickjs_event_queue.c",

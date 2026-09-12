@@ -1,5 +1,38 @@
 #include "esp32_mquickjs_wifi_csi_resources.h"
 
+void esp32_mquickjs_wifi_csi_resources_reset_counters(esp32_mquickjs_wifi_csi_resources_t *resources)
+{
+    if (resources == NULL) return;
+#define CSI_RESET(name) atomic_store_explicit(&resources->counters.name, 0, memory_order_relaxed)
+    CSI_RESET(callbacks);
+    CSI_RESET(accepted);
+    CSI_RESET(delivered_frames);
+    CSI_RESET(delivered_batches);
+    CSI_RESET(filtered_mac);
+    CSI_RESET(filtered_bssid);
+    CSI_RESET(filtered_frame_type);
+    CSI_RESET(filtered_frame_subtype);
+    CSI_RESET(dropped_identity_exhausted);
+    CSI_RESET(filtered_rssi);
+    CSI_RESET(filtered_decimation);
+    CSI_RESET(filtered_rate_limit);
+    CSI_RESET(filtered_first_word_invalid);
+    CSI_RESET(filtered_channel_estimate_invalid);
+    CSI_RESET(invalid_callback_data);
+    CSI_RESET(dropped_pool_full);
+    CSI_RESET(dropped_queue_full);
+    CSI_RESET(dropped_frame_too_large);
+    CSI_RESET(dropped_closing);
+    CSI_RESET(received_bytes);
+    CSI_RESET(packet_unavailable);
+    CSI_RESET(packet_malformed);
+    CSI_RESET(packet_truncated);
+    CSI_RESET(dropped_packet_required);
+    CSI_RESET(dropped_packet_incomplete);
+    CSI_RESET(received_packet_bytes);
+#undef CSI_RESET
+}
+
 #include <limits.h>
 #include <string.h>
 
@@ -9,33 +42,52 @@ static void wifi_csi_resources_clear(
     memset(resources, 0, sizeof(*resources));
 }
 
+bool esp32_mquickjs_wifi_csi_resources_size(uint32_t capacity, uint32_t max_frame_bytes,
+    uint32_t max_packet_bytes, size_t *slots_bytes, size_t *payload_bytes)
+{
+    if (slots_bytes == NULL || payload_bytes == NULL || capacity == 0 ||
+        capacity > ESP32_MQUICKJS_NATIVE_POOL_MAX_CAPACITY || max_frame_bytes == 0 ||
+        max_packet_bytes > ESP32_MQUICKJS_WIFI_CSI_MAX_PACKET_BYTES) return false;
+    size_t slot_stride = sizeof(esp32_mquickjs_wifi_csi_slot_t) +
+        (max_packet_bytes != 0 ? sizeof(esp32_mquickjs_wifi_csi_packet_t) : 0);
+    size_t data_stride = (size_t)max_frame_bytes + max_packet_bytes;
+    if (data_stride < (size_t)max_frame_bytes ||
+        capacity > SIZE_MAX / slot_stride || capacity > SIZE_MAX / data_stride)
+        return false;
+    *slots_bytes = capacity * slot_stride;
+    *payload_bytes = capacity * data_stride;
+    return true;
+}
+
 bool esp32_mquickjs_wifi_csi_resources_init(
     esp32_mquickjs_wifi_csi_resources_t *resources,
     uint32_t generation,
     uint32_t capacity,
     uint32_t max_frame_bytes,
+    uint32_t max_packet_bytes,
     const esp32_mquickjs_wifi_csi_allocator_t *allocator)
 {
     uint32_t index;
+    size_t slots_bytes, payload_bytes;
 
     if (resources == NULL || allocator == NULL ||
         allocator->calloc_fn == NULL || allocator->malloc_fn == NULL ||
         allocator->free_fn == NULL || generation == 0U || capacity == 0U ||
         capacity > ESP32_MQUICKJS_NATIVE_POOL_MAX_CAPACITY ||
-        max_frame_bytes == 0U ||
-        (size_t)capacity > SIZE_MAX / (size_t)max_frame_bytes) {
+        !esp32_mquickjs_wifi_csi_resources_size(capacity, max_frame_bytes,
+            max_packet_bytes, &slots_bytes, &payload_bytes)) {
         return false;
     }
     wifi_csi_resources_clear(resources);
     resources->allocator = *allocator;
     resources->slots = allocator->calloc_fn(
-        capacity, sizeof(*resources->slots), allocator->opaque);
+        1, slots_bytes, allocator->opaque);
     if (resources->slots == NULL) {
         wifi_csi_resources_clear(resources);
         return false;
     }
     resources->payload_storage = allocator->malloc_fn(
-        (size_t)capacity * (size_t)max_frame_bytes, allocator->opaque);
+        payload_bytes, allocator->opaque);
     if (resources->payload_storage == NULL) {
         allocator->free_fn(resources->slots, allocator->opaque);
         wifi_csi_resources_clear(resources);
@@ -50,11 +102,19 @@ bool esp32_mquickjs_wifi_csi_resources_init(
     resources->generation = generation;
     resources->capacity = capacity;
     resources->max_frame_bytes = max_frame_bytes;
+    resources->max_packet_bytes = max_packet_bytes;
     resources->filter.sample_every = 1U;
     resources->filter.valid_only = true;
+    _Static_assert(_Alignof(esp32_mquickjs_wifi_csi_slot_t) >=
+        _Alignof(esp32_mquickjs_wifi_csi_packet_t), "CSI packet records need aligned slot tail");
+    esp32_mquickjs_wifi_csi_packet_t *packets = (void *)(resources->slots + capacity);
     for (index = 0; index < capacity; ++index) {
         resources->slots[index].payload = resources->payload_storage +
-            ((size_t)index * (size_t)max_frame_bytes);
+            ((size_t)index * ((size_t)max_frame_bytes + max_packet_bytes));
+        if (max_packet_bytes != 0) {
+            resources->slots[index].packet = &packets[index];
+            packets[index].bytes = resources->slots[index].payload + max_frame_bytes;
+        }
         atomic_init(&resources->slots[index].return_accounted, true);
         atomic_init(&resources->slots[index].owner,
                     ESP32_MQUICKJS_WIFI_CSI_OWNER_NONE);
@@ -62,6 +122,7 @@ bool esp32_mquickjs_wifi_csi_resources_init(
     atomic_init(&resources->callbacks_active, 0U);
     atomic_init(&resources->sequence, 0U);
     atomic_init(&resources->accepting, false);
+    atomic_init(&resources->identity_exhausted, false);
     return true;
 }
 
@@ -90,7 +151,8 @@ void esp32_mquickjs_wifi_csi_resources_set_accepting(
     esp32_mquickjs_wifi_csi_resources_t *resources, bool accepting)
 {
     if (resources != NULL) {
-        atomic_store_explicit(&resources->accepting, accepting,
+        atomic_store_explicit(&resources->accepting, accepting &&
+            !atomic_load_explicit(&resources->identity_exhausted, memory_order_acquire),
                               memory_order_release);
     }
 }
@@ -105,6 +167,10 @@ bool esp32_mquickjs_wifi_csi_callback_enter(
                               memory_order_acq_rel);
     atomic_fetch_add_explicit(&resources->counters.callbacks, 1U,
                               memory_order_relaxed);
+    if (atomic_load_explicit(&resources->identity_exhausted, memory_order_acquire)) {
+        atomic_fetch_add_explicit(&resources->counters.dropped_identity_exhausted, 1, memory_order_relaxed);
+        return false;
+    }
     if (!atomic_load_explicit(&resources->accepting, memory_order_acquire)) {
         atomic_fetch_add_explicit(&resources->counters.dropped_closing, 1U,
                                   memory_order_relaxed);
@@ -141,22 +207,43 @@ bool esp32_mquickjs_wifi_csi_filter_accept(
     const esp32_mquickjs_wifi_csi_metadata_t *metadata)
 {
     esp32_mquickjs_wifi_csi_filter_t *filter;
-    uint32_t qualified;
+    uint32_t phase;
 
     if (resources == NULL || metadata == NULL) {
         return false;
     }
     filter = &resources->filter;
+    if (filter->source_mac_count > ESP32_MQUICKJS_WIFI_CSI_MAX_MAC_FILTERS ||
+        filter->destination_mac_count > ESP32_MQUICKJS_WIFI_CSI_MAX_MAC_FILTERS ||
+        filter->bssid_count > ESP32_MQUICKJS_WIFI_CSI_MAX_MAC_FILTERS ||
+        filter->sample_every == 0 || filter->maximum_rate_hz > 1000000U ||
+        (filter->frame_types & ~31U) != 0) return false;
     if ((filter->source_mac_count > 0U &&
-         !wifi_csi_mac_in_list(metadata->source_mac, filter->source_macs,
-                               filter->source_mac_count)) ||
+         (!(metadata->address_mask & (1U << ESP32_MQUICKJS_WIFI_RX_SOURCE)) ||
+          !wifi_csi_mac_in_list(metadata->addresses[ESP32_MQUICKJS_WIFI_RX_SOURCE],
+                               filter->source_macs, filter->source_mac_count))) ||
         (filter->destination_mac_count > 0U &&
-         (!metadata->destination_mac_available ||
-          !wifi_csi_mac_in_list(metadata->destination_mac,
-                                filter->destination_macs,
-                                filter->destination_mac_count)))) {
-        atomic_fetch_add_explicit(&resources->counters.filtered_mac, 1U,
-                                  memory_order_relaxed);
+         (!(metadata->address_mask & (1U << ESP32_MQUICKJS_WIFI_RX_DESTINATION)) ||
+          !wifi_csi_mac_in_list(metadata->addresses[ESP32_MQUICKJS_WIFI_RX_DESTINATION],
+                               filter->destination_macs, filter->destination_mac_count)))) {
+        atomic_fetch_add_explicit(&resources->counters.filtered_mac, 1U, memory_order_relaxed);
+        return false;
+    }
+    if (filter->bssid_count > 0 &&
+        (!(metadata->address_mask & (1U << ESP32_MQUICKJS_WIFI_RX_BSSID)) ||
+         !wifi_csi_mac_in_list(metadata->addresses[ESP32_MQUICKJS_WIFI_RX_BSSID],
+                              filter->bssids, filter->bssid_count))) {
+        atomic_fetch_add_explicit(&resources->counters.filtered_bssid, 1, memory_order_relaxed);
+        return false;
+    }
+    if (filter->frame_types_set && ((unsigned)metadata->frame_type > ESP32_MQUICKJS_WIFI_PACKET_UNKNOWN ||
+        !(filter->frame_types & (1U << metadata->frame_type)))) {
+        atomic_fetch_add_explicit(&resources->counters.filtered_frame_type, 1, memory_order_relaxed);
+        return false;
+    }
+    if (filter->frame_subtypes_set && (!metadata->frame_subtype_available ||
+        metadata->frame_subtype > 15 || !(filter->frame_subtypes & (1U << metadata->frame_subtype)))) {
+        atomic_fetch_add_explicit(&resources->counters.filtered_frame_subtype, 1, memory_order_relaxed);
         return false;
     }
     if (filter->minimum_rssi_set && metadata->rssi < filter->minimum_rssi) {
@@ -182,9 +269,9 @@ bool esp32_mquickjs_wifi_csi_filter_accept(
         }
         if (invalid) return false;
     }
-    qualified = resources->filter_qualified++;
-    if (filter->sample_every > 1U &&
-        (qualified % filter->sample_every) != 0U) {
+    phase = resources->filter_phase;
+    resources->filter_phase = phase >= filter->sample_every - 1U ? 0 : phase + 1U;
+    if (phase != 0U) {
         atomic_fetch_add_explicit(
             &resources->counters.filtered_decimation, 1U,
             memory_order_relaxed);
@@ -192,11 +279,11 @@ bool esp32_mquickjs_wifi_csi_filter_accept(
     }
     if (filter->maximum_rate_hz > 0U &&
         resources->last_accepted_timestamp_set) {
-        uint32_t minimum_interval = 1000000U / filter->maximum_rate_hz;
+        uint32_t minimum_interval = (1000000U + filter->maximum_rate_hz - 1U) / filter->maximum_rate_hz;
         uint64_t elapsed = metadata->timestamp_us -
             resources->last_accepted_timestamp_us;
 
-        if (minimum_interval > 0U && elapsed < minimum_interval) {
+        if (metadata->timestamp_us < resources->last_accepted_timestamp_us || elapsed < minimum_interval) {
             atomic_fetch_add_explicit(
                 &resources->counters.filtered_rate_limit, 1U,
                 memory_order_relaxed);
@@ -206,27 +293,6 @@ bool esp32_mquickjs_wifi_csi_filter_accept(
     resources->last_accepted_timestamp_us = metadata->timestamp_us;
     resources->last_accepted_timestamp_set = true;
     return true;
-}
-
-static uint64_t wifi_csi_extend_driver_timestamp(
-    esp32_mquickjs_wifi_csi_resources_t *resources, uint32_t timestamp_us)
-{
-    if (!resources->driver_timestamp_set) {
-        resources->driver_timestamp_set = true;
-        resources->last_driver_timestamp_us = timestamp_us;
-        return timestamp_us;
-    }
-    if (timestamp_us < resources->last_driver_timestamp_us &&
-        resources->last_driver_timestamp_us - timestamp_us >
-            (UINT32_MAX / 2U)) {
-        resources->driver_timestamp_epoch_us += 1ULL << 32U;
-    }
-    if (!(timestamp_us < resources->last_driver_timestamp_us &&
-          resources->last_driver_timestamp_us - timestamp_us <=
-              (UINT32_MAX / 2U))) {
-        resources->last_driver_timestamp_us = timestamp_us;
-    }
-    return resources->driver_timestamp_epoch_us + timestamp_us;
 }
 
 static void wifi_csi_slot_account_return(
@@ -244,12 +310,22 @@ static void wifi_csi_slot_account_return(
     }
 }
 
+static esp32_mquickjs_wifi_csi_publish_result_t wifi_csi_identity_exhausted(
+    esp32_mquickjs_wifi_csi_resources_t *resources)
+{
+    atomic_store_explicit(&resources->identity_exhausted, true, memory_order_release);
+    atomic_store_explicit(&resources->accepting, false, memory_order_release);
+    atomic_fetch_add_explicit(&resources->counters.dropped_identity_exhausted, 1, memory_order_relaxed);
+    return ESP32_MQUICKJS_WIFI_CSI_PUBLISH_IDENTITY_EXHAUSTED;
+}
+
 esp32_mquickjs_wifi_csi_publish_result_t
 esp32_mquickjs_wifi_csi_callback_publish(
     esp32_mquickjs_wifi_csi_resources_t *resources,
     const esp32_mquickjs_wifi_csi_metadata_t *metadata,
     const uint8_t *payload,
     size_t length,
+    const esp32_mquickjs_wifi_csi_packet_input_t *packet_input,
     esp32_mquickjs_wifi_csi_publish_fn publish,
     void *publish_opaque)
 {
@@ -259,18 +335,37 @@ esp32_mquickjs_wifi_csi_callback_publish(
     uint16_t slot_index;
     uint32_t slot_generation;
 
-    if (resources == NULL || metadata == NULL || publish == NULL ||
-        (payload == NULL && length > 0U)) {
+    if (resources == NULL || metadata == NULL || publish == NULL)
+        return ESP32_MQUICKJS_WIFI_CSI_PUBLISH_INVALID;
+    if (payload == NULL || length == 0) {
+        atomic_fetch_add_explicit(&resources->counters.invalid_callback_data, 1, memory_order_relaxed);
         return ESP32_MQUICKJS_WIFI_CSI_PUBLISH_INVALID;
     }
+    if (atomic_load_explicit(&resources->identity_exhausted, memory_order_acquire))
+        return wifi_csi_identity_exhausted(resources);
     if (!atomic_load_explicit(&resources->accepting, memory_order_acquire)) {
         atomic_fetch_add_explicit(&resources->counters.dropped_closing, 1U,
                                   memory_order_relaxed);
         return ESP32_MQUICKJS_WIFI_CSI_PUBLISH_CLOSING;
     }
     normalized_metadata = *metadata;
-    normalized_metadata.timestamp_us = wifi_csi_extend_driver_timestamp(
-        resources, normalized_metadata.driver_timestamp_us);
+    normalized_metadata.address_mask = 0;
+    memset(normalized_metadata.addresses, 0, sizeof(normalized_metadata.addresses));
+    normalized_metadata.frame_type = ESP32_MQUICKJS_WIFI_PACKET_UNKNOWN;
+    normalized_metadata.frame_subtype_available = false;
+    normalized_metadata.rx_sequence = UINT32_MAX;
+    esp32_mquickjs_wifi_csi_packet_t packet = {0};
+    esp32_mquickjs_wifi_csi_packet_result_t prepared = esp32_mquickjs_wifi_csi_packet_prepare(
+        &resources->packet_options, packet_input, &packet);
+    if (prepared == ESP32_MQUICKJS_WIFI_CSI_PACKET_OK) {
+        normalized_metadata.address_mask = packet.header.address_mask;
+        memcpy(normalized_metadata.addresses, packet.header.addresses, sizeof(normalized_metadata.addresses));
+        normalized_metadata.frame_type = packet.header.type;
+        normalized_metadata.frame_subtype = packet.header.subtype;
+        normalized_metadata.frame_subtype_available = packet.header.frame_control_valid;
+        if (packet.header.sequence_valid)
+            normalized_metadata.rx_sequence = packet.header.sequence_control >> 4;
+    }
     if (!esp32_mquickjs_wifi_csi_filter_accept(
             resources, &normalized_metadata)) {
         return ESP32_MQUICKJS_WIFI_CSI_PUBLISH_FILTERED;
@@ -281,22 +376,47 @@ esp32_mquickjs_wifi_csi_callback_publish(
             memory_order_relaxed);
         return ESP32_MQUICKJS_WIFI_CSI_PUBLISH_TOO_LARGE;
     }
+    if (resources->packet_options.mode != ESP32_MQUICKJS_WIFI_CSI_PACKET_NONE) {
+        if (prepared == ESP32_MQUICKJS_WIFI_CSI_PACKET_INCOMPLETE) {
+            atomic_fetch_add_explicit(&resources->counters.dropped_packet_incomplete, 1, memory_order_relaxed);
+            return ESP32_MQUICKJS_WIFI_CSI_PUBLISH_PACKET_INCOMPLETE;
+        }
+        if (prepared != ESP32_MQUICKJS_WIFI_CSI_PACKET_OK) {
+            atomic_fetch_add_explicit(&resources->counters.packet_unavailable, 1, memory_order_relaxed);
+            if (prepared == ESP32_MQUICKJS_WIFI_CSI_PACKET_MALFORMED)
+                atomic_fetch_add_explicit(&resources->counters.packet_malformed, 1, memory_order_relaxed);
+            if (resources->packet_options.required || resources->packet_options.require_complete) {
+                atomic_fetch_add_explicit(&resources->counters.dropped_packet_required, 1, memory_order_relaxed);
+                return ESP32_MQUICKJS_WIFI_CSI_PUBLISH_PACKET_REQUIRED;
+            }
+        }
+    }
+    if (packet.length > resources->max_packet_bytes) return ESP32_MQUICKJS_WIFI_CSI_PUBLISH_INVALID;
+    if (atomic_load_explicit(&resources->sequence, memory_order_relaxed) == UINT32_MAX)
+        return wifi_csi_identity_exhausted(resources);
     if (!esp32_mquickjs_native_pool_acquire(&resources->pool, &slot_index)) {
         atomic_fetch_add_explicit(&resources->counters.dropped_pool_full, 1U,
                                   memory_order_relaxed);
         return ESP32_MQUICKJS_WIFI_CSI_PUBLISH_POOL_FULL;
     }
     slot = &resources->slots[slot_index];
-    slot_generation = slot->slot_generation + 1U;
-    if (slot_generation == 0U) {
-        slot_generation = 1U;
+    if (slot->slot_generation == UINT32_MAX) {
+        (void)esp32_mquickjs_native_pool_release(&resources->pool, slot_index);
+        return wifi_csi_identity_exhausted(resources);
     }
+    slot_generation = slot->slot_generation + 1U;
     slot->session_generation = resources->generation;
     slot->slot_generation = slot_generation;
     slot->sequence = atomic_fetch_add_explicit(
         &resources->sequence, 1U, memory_order_relaxed) + 1U;
     slot->metadata = normalized_metadata;
     slot->length = length;
+    if (slot->packet != NULL) {
+        uint8_t *destination = slot->packet->bytes;
+        if (packet.length != 0) memcpy(destination, packet.bytes, packet.length);
+        *slot->packet = packet;
+        slot->packet->bytes = destination;
+    }
     if (length > 0U) {
         memcpy(slot->payload, payload, length);
     }
@@ -324,6 +444,9 @@ esp32_mquickjs_wifi_csi_callback_publish(
                                   memory_order_relaxed);
         return ESP32_MQUICKJS_WIFI_CSI_PUBLISH_QUEUE_FULL;
     }
+    if (packet.truncated)
+        atomic_fetch_add_explicit(&resources->counters.packet_truncated, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&resources->counters.received_packet_bytes, packet.length, memory_order_relaxed);
     atomic_fetch_add_explicit(&resources->counters.accepted, 1U,
                               memory_order_relaxed);
     atomic_fetch_add_explicit(&resources->counters.received_bytes,

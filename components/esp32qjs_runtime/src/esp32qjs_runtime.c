@@ -847,11 +847,16 @@ static bool runtime_cooperate(void *opaque)
     if (runtime == NULL) {
         return false;
     }
-    if (runtime->watchdog_registered) {
-        esp_task_wdt_reset();
-    }
-    if (runtime->engine.native_wait_depth > 0) {
-        runtime_feed_js_watchdog(runtime);
+    /* Native Radio workers may cooperate while retiring SDK operations. The
+     * registration belongs to the runtime task, not whichever worker calls us;
+     * a worker also cannot keep a stuck JS task's user watchdog alive. */
+    if (runtime->task == xTaskGetCurrentTaskHandle()) {
+        if (runtime->watchdog_registered) {
+            esp_task_wdt_reset();
+        }
+        if (runtime->engine.native_wait_depth > 0) {
+            runtime_feed_js_watchdog(runtime);
+        }
     }
     return !runtime->stop_requested && !runtime_control_due(runtime);
 }

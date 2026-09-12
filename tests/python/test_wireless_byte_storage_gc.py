@@ -26,18 +26,19 @@ static const esp32_mquickjs_byte_span_source_object_ops_t ops={.open=open_inner,
 MAIN = r'''
 int main(int argc,char **argv) {
     (void)argc;int mode=atoi(argv[1]);collect=atoi(argv[2]);int total=1;
+    const char *memory_owner=atoi(argv[3])?"wifi.csi":NULL;
     for(int nth=0;nth<=total;nth++) {
         void *heap=malloc(128*1024);JSContext *ctx=JS_NewContext(heap,128*1024,&js_stdlib);assert(ctx);test_ctx=ctx;
         inject=false;released=destroyed=opened=closed=0;calls=0;fail_at=nth;moved_roots=0;open_mode=0;
         JSGCRef result_ref,owner_ref;JSValue *result=JS_PushGCRef(ctx,&result_ref),*owner=JS_PushGCRef(ctx,&owner_ref);
         *result=*owner=JS_UNDEFINED;
-        if(mode>=2) *owner=esp32_mquickjs_new_retained_byte_view(ctx,bytes,4,release,bytes);
-        if(mode>=3) *result=esp32_mquickjs_new_byte_span_source(ctx,*owner,&ops,bytes);
+        if(mode>=2) *owner=esp32_mquickjs_new_wireless_retained_byte_view(memory_owner,ctx,bytes,4,release,bytes);
+        if(mode>=3) *result=esp32_mquickjs_new_wireless_byte_span_source(memory_owner,ctx,*owner,&ops,bytes);
         uint8_t *owned=NULL;if(mode==0) { owned=heap_caps_malloc(4,1);memcpy(owned,bytes,4); }
         inject=true;JSValue value=JS_UNDEFINED;
-        if(mode==0) value=esp32_mquickjs_new_owned_byte_view(ctx,owned,4);
-        if(mode==1) value=esp32_mquickjs_new_retained_byte_view(ctx,bytes,4,release,bytes);
-        if(mode==2) value=esp32_mquickjs_new_byte_span_source(ctx,*owner,&ops,bytes);
+        if(mode==0) value=esp32_mquickjs_new_wireless_owned_byte_view(memory_owner,ctx,owned,4);
+        if(mode==1) value=esp32_mquickjs_new_wireless_retained_byte_view(memory_owner,ctx,bytes,4,release,bytes);
+        if(mode==2) value=esp32_mquickjs_new_wireless_byte_span_source(memory_owner,ctx,*owner,&ops,bytes);
         esp32_mquickjs_byte_span_source_t span={0};
         if(mode>=3 && mode<=5) {
             open_mode=mode-3;
@@ -77,23 +78,24 @@ int main(int argc,char **argv) {
 }
 '''
 INPUT_MAIN = r"""
-int main(void) {
+int main(int argc,char **argv) {
+    (void)argc;const char *memory_owner=atoi(argv[1])?"ble":NULL;
     void *heap=malloc(128*1024);JSContext *ctx=JS_NewContext(heap,128*1024,&js_stdlib);assert(ctx);test_ctx=ctx;
     JSGCRef array_ref,view_ref;JSValue *array=JS_PushGCRef(ctx,&array_ref),*view=JS_PushGCRef(ctx,&view_ref);
-    *array=JS_NewObject(ctx);*view=esp32_mquickjs_new_retained_byte_view(ctx,bytes,4,release,bytes);
+    *array=JS_NewObject(ctx);*view=esp32_mquickjs_new_wireless_retained_byte_view(memory_owner,ctx,bytes,4,release,bytes);
     double invalid[]={-1,1.5,4294967297.0,NAN,INFINITY};
     for(unsigned i=0;i<sizeof(invalid)/sizeof(*invalid);i++) {
         JSValue value=JS_NewFloat64(ctx,invalid[i]);
         assert(JS_IsException(js_byte_view_get_uint8(ctx,view,1,&value)));(void)JS_GetException(ctx);
         JS_SetPropertyStr(ctx,*array,"length",JS_NewFloat64(ctx,invalid[i]));JS_SetPropertyUint32(ctx,*array,0,JS_NewInt32(ctx,7));
         esp32_mquickjs_byte_source_t source;uint8_t *owned=NULL;JSValue error;
-        if(esp32_mquickjs_get_byte_source(ctx,*array,"test",&source,&owned,&error)) {
+        if(esp32_mquickjs_get_wireless_byte_source(memory_owner,ctx,*array,"test",&source,&owned,&error)) {
             fprintf(stderr,"invalid array length accepted: %g\n",invalid[i]);return 1;
         }
         assert(JS_HasException(ctx) && !owned);(void)JS_GetException(ctx);
         JS_SetPropertyStr(ctx,*array,"length",JS_NewInt32(ctx,1));
         JS_SetPropertyUint32(ctx,*array,0,JS_NewFloat64(ctx,invalid[i]));
-        if(esp32_mquickjs_get_byte_source(ctx,*array,"test",&source,&owned,&error)) {
+        if(esp32_mquickjs_get_wireless_byte_source(memory_owner,ctx,*array,"test",&source,&owned,&error)) {
             fprintf(stderr,"invalid byte accepted: %g\n",invalid[i]);return 1;
         }
         assert(JS_HasException(ctx) && !owned);(void)JS_GetException(ctx);
@@ -112,8 +114,10 @@ class WirelessByteStorageGc(unittest.TestCase):
     def test_construction_close_read_lease_and_finalizer(self):
         for mode in range(7):
             for gc in (0,1):
-                with self.subTest(mode=mode,gc=gc):
-                    run([str(self.binary),str(mode),str(gc)])
+                for wireless in (0,1):
+                    with self.subTest(mode=mode,gc=gc,wireless=wireless):
+                        run([str(self.binary),str(mode),str(gc),str(wireless)])
 
     def test_invalid_length_byte_and_offset_are_rejected_before_transfer(self):
-        run([str(self.input_binary)])
+        for wireless in (0,1):
+            run([str(self.input_binary),str(wireless)])

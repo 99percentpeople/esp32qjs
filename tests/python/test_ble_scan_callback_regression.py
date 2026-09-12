@@ -10,6 +10,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 BLE = ROOT / 'components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble.c'
 
 FIXTURE = r'''
+#define esp32_mquickjs_memory_payload_free heap_caps_free
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>

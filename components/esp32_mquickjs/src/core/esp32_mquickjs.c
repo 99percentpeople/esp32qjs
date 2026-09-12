@@ -1,4 +1,5 @@
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_wifi_wapi.h"
 #include "utils/esp32_mquickjs_byte_source.h"
 #include "esp32_mquickjs_sys.h"
 #include "esp32_mquickjs_adc.h"
@@ -15,6 +16,24 @@
 #include "esp32_mquickjs_rmt.h"
 #include "esp32_mquickjs_espnow.h"
 #include "esp32_mquickjs_wifi_csi.h"
+#include "esp32_mquickjs_wifi_monitor_session.h"
+#include "esp32_mquickjs_wifi_raw_tx.h"
+#include "esp32_mquickjs_wifi_action.h"
+#include "esp32_mquickjs_wifi_ftm_session.h"
+#include "esp32_mquickjs_wifi_twt.h"
+#include "esp32_mquickjs_wifi_rrm_request.h"
+#include "esp32_mquickjs_wifi_eap_radio.h"
+#include "esp32_mquickjs_wifi_smartconfig_session.h"
+#include "esp32_mquickjs_wifi_wps_session.h"
+#include "esp32_mquickjs_wifi_dpp_session.h"
+#include "esp32_mquickjs_wifi_nan_session.h"
+#include "esp32_mquickjs_wifi_nan.h"
+#include "esp32_mquickjs_wifi_mesh.h"
+#include "esp32_mquickjs_wifi_mesh_session.h"
+#include "esp32_mquickjs_wifi_dpp.h"
+#include "esp32_mquickjs_wifi_wps_ap_session.h"
+#include "esp32_mquickjs_wifi_wps.h"
+#include "esp32_mquickjs_wifi_wps_ap.h"
 #include "esp32_mquickjs_ble.h"
 #include "esp32_mquickjs_camera.h"
 #include "esp32_mquickjs_bitmap.h"
@@ -402,12 +421,21 @@ void esp32_mquickjs_set_cooperate_hook(esp32_mquickjs_runtime_t *runtime,
     runtime->cooperate_opaque = opaque;
 }
 
+static bool esp32_mquickjs_runtime_task_is_current(esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_async_state_t *state = esp32_mquickjs_async_state(runtime);
+    return state != NULL && state->task_handle != NULL &&
+           state->task_handle == xTaskGetCurrentTaskHandle();
+}
+
 bool esp32_mquickjs_cooperate(esp32_mquickjs_runtime_t *runtime)
 {
     if (runtime == NULL) {
         return true;
     }
-    if (runtime->scoped_deadline_us > 0 &&
+    /* Background driver cleanup has its own deadline. It must still observe
+     * runtime stop/control, but cannot inherit an unrelated JS exec budget. */
+    if (esp32_mquickjs_runtime_task_is_current(runtime) && runtime->scoped_deadline_us > 0 &&
         (uint64_t)esp_timer_get_time() >= runtime->scoped_deadline_us) {
         return false;
     }
@@ -420,10 +448,12 @@ void esp32_mquickjs_native_wait_begin(esp32_mquickjs_runtime_t *runtime,
     if (wait == NULL) {
         return;
     }
-    wait->saved_deadline_us = runtime != NULL ? runtime->deadline_us : 0;
+    /* Radio event waits also run on native workers. Only the attached runtime
+     * task may suspend/extend its JS execution deadline or enter a JS wait. */
+    wait->active = esp32_mquickjs_runtime_task_is_current(runtime);
+    wait->saved_deadline_us = wait->active ? runtime->deadline_us : 0;
     wait->started_us = (uint64_t)esp_timer_get_time();
-    wait->active = runtime != NULL;
-    if (runtime != NULL) {
+    if (wait->active) {
         runtime->deadline_us = 0;
         if (runtime->native_wait_depth < UINT16_MAX) {
             runtime->native_wait_depth++;
@@ -436,7 +466,8 @@ void esp32_mquickjs_native_wait_end(esp32_mquickjs_runtime_t *runtime,
 {
     uint64_t elapsed_us;
 
-    if (runtime == NULL || wait == NULL || !wait->active) {
+    if (runtime == NULL || wait == NULL || !wait->active ||
+        !esp32_mquickjs_runtime_task_is_current(runtime)) {
         return;
     }
     wait->active = false;
@@ -939,6 +970,9 @@ bool esp32_mquickjs_get_resource_status(
     status->futures_internal_reserve = future_status.internal_reserve;
     status->event_queues_open = event_status.open;
     status->event_queues_dropped = event_status.dropped;
+    status->event_queues_queued = event_status.queued;
+    status->event_queues_capacity = event_status.capacity;
+    status->event_queues_high_water = event_status.high_water;
     return true;
 }
 
@@ -1336,9 +1370,67 @@ static bool esp32_mquickjs_destroy_internal(JSContext *ctx,
     if (runtime == NULL) {
         return false;
     }
-    if (!esp32_mquickjs_prepare_future_runtime_destroy(ctx, runtime)) {
+#if CONFIG_ESP32_MQUICKJS_WIFI_RADIO
+    if (!esp32_mquickjs_prepare_wifi_monitor_runtime_destroy(runtime)) {
         return false;
     }
+#endif
+    bool futures_drained = esp32_mquickjs_prepare_future_runtime_destroy(ctx, runtime);
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
+    /* Future prepare requests cancellation before any helper is retired. An
+     * original native owner may still need the admitted recovery's physical
+     * cleanup to finish; progress both sides before testing the drain gates. */
+    bool recovery_drained = esp32_mquickjs_prepare_wifi_recovery_runtime_destroy();
+    bool action_drained = esp32_mquickjs_prepare_wifi_action_runtime_destroy();
+    bool raw_tx_drained = esp32_mquickjs_prepare_wifi_raw_tx_runtime_destroy();
+    bool ftm_drained = true;
+#if CONFIG_ESP_WIFI_FTM_ENABLE && CONFIG_ESP_WIFI_FTM_INITIATOR_SUPPORT
+    ftm_drained = esp32_mquickjs_wifi_ftm_prepare_runtime_destroy();
+#endif
+    bool twt_drained = true;
+#if CONFIG_SOC_WIFI_HE_SUPPORT && CONFIG_IDF_TARGET_ESP32C5
+    twt_drained = esp32_mquickjs_prepare_wifi_twt_runtime_destroy();
+#endif
+    bool rrm_drained = true;
+#if CONFIG_ESP_WIFI_RRM_SUPPORT
+    rrm_drained = esp32_mquickjs_wifi_rrm_prepare_runtime_destroy();
+#endif
+    bool enterprise_drained = true;
+#if CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT
+    enterprise_drained = esp32_mquickjs_wifi_eap_prepare_runtime_destroy();
+#endif
+    bool smartconfig_drained = true;
+    bool wps_drained = true;
+    bool dpp_drained = true;
+    bool mesh_drained = true;
+#if ESP32_MQUICKJS_WIFI_MESH_AVAILABLE
+    (void)esp32_mquickjs_wifi_mesh_poll_observations(true);
+    mesh_drained = esp32_mquickjs_wifi_mesh_prepare_runtime_destroy();
+#endif
+    bool nan_drained = true;
+#if CONFIG_ESP_WIFI_NAN_SYNC_ENABLE || CONFIG_ESP_WIFI_NAN_USD_ENABLE
+    nan_drained = esp32_mquickjs_wifi_nan_prepare_runtime_destroy();
+#endif
+#if CONFIG_ESP_NETIF_USES_TCPIP_WITH_BSD_API && CONFIG_LWIP_IPV4
+    (void)esp32_mquickjs_wifi_smartconfig_poll_observations(true);
+    smartconfig_drained = esp32_mquickjs_wifi_smartconfig_prepare_runtime_destroy();
+    (void)esp32_mquickjs_wifi_wps_poll_observations(true);
+#if CONFIG_ESP_WIFI_WPS_SOFTAP_REGISTRAR
+    (void)esp32_mquickjs_wifi_wps_ap_poll_observations(true);
+#endif
+    wps_drained = esp32_mquickjs_wifi_wps_prepare_runtime_destroy();
+#if CONFIG_ESP_WIFI_DPP_SUPPORT
+    (void)esp32_mquickjs_wifi_dpp_poll_observations(true);
+    dpp_drained = esp32_mquickjs_wifi_dpp_prepare_runtime_destroy();
+#endif
+#if CONFIG_ESP_WIFI_WPS_SOFTAP_REGISTRAR
+    bool wps_ap_drained = esp32_mquickjs_wifi_wps_ap_prepare_runtime_destroy();
+    wps_drained = wps_drained && wps_ap_drained;
+#endif
+#endif
+    if (!recovery_drained || !action_drained || !raw_tx_drained || !ftm_drained || !twt_drained || !rrm_drained || !enterprise_drained || !smartconfig_drained || !wps_drained || !dpp_drained || !nan_drained || !mesh_drained) return false;
+#endif
+    if (!futures_drained) return false;
     (void)esp32_mquickjs_poll_reapers(runtime);
     if (esp32_mquickjs_reapers_pending(runtime) > 0) {
         return false;

@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "esp32_mquickjs_memory_dma_accounting.h"
+#include "esp32_mquickjs_memory_budget.h"
 #include "esp32_mquickjs_memory_owner_accounting.h"
 
 typedef enum {
@@ -56,6 +57,7 @@ typedef struct {
     size_t migration_bytes;
     uint32_t eviction_count;
     uint32_t allocation_failures;
+    esp32_mquickjs_memory_budget_t wireless;
     size_t allocation_count;
     esp32_mquickjs_memory_owner_entry_t
         allocations[ESP32_MQUICKJS_MEMORY_MAX_OWNER_ENTRIES];
@@ -96,6 +98,9 @@ bool esp32_mquickjs_memory_release_driver_pinned(
     esp32_mquickjs_memory_dma_reservation_t *reservation);
 
 void esp32_mquickjs_memory_get_status(esp32_mquickjs_memory_status_t *out);
+/* Global framework observation histories, including wireless peaks/denials.
+ * No allocator, owner/DMA reservation, use sequence or cleanup state is reset. */
+void esp32_mquickjs_memory_reset_counters(void);
 const char *esp32_mquickjs_memory_pressure_name(
     esp32_mquickjs_memory_pressure_t pressure);
 const char *esp32_mquickjs_memory_class_name(
@@ -121,6 +126,20 @@ void *esp32_mquickjs_memory_payload_realloc(
     size_t size,
     esp32_mquickjs_memory_class_t memory_class);
 void esp32_mquickjs_memory_payload_free(void *data);
+
+/* Fixed wireless storage: DEFAULT, PINNED_INTERNAL or EXTERNAL only. The
+ * requested payload and its tracking node reserve quota before allocation.
+ * Ownership transfers use payload_free(); payload_realloc() rejects these
+ * fixed reservations. Use a separately admitted allocate/copy/free instead.
+ */
+void *esp32_mquickjs_memory_wireless_alloc(const char *owner, size_t size,
+    esp32_mquickjs_memory_class_t memory_class,
+    esp32_mquickjs_memory_budget_role_t role);
+void *esp32_mquickjs_memory_wireless_calloc(const char *owner, size_t count,
+    size_t size, esp32_mquickjs_memory_class_t memory_class,
+    esp32_mquickjs_memory_budget_role_t role);
+/* Caller must own/pin the exact allocation until this call returns. */
+bool esp32_mquickjs_memory_wireless_retire(void *data);
 
 /*
  * Movable blocks expose a stable handle. Raw data may only be retained while

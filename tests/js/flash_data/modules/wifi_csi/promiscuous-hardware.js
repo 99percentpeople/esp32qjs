@@ -18,18 +18,17 @@ test("wifi_csi/promiscuous-hardware", function () {
     });
     before = wifi.status().radio.channel;
     session = wifi.csi.open({
-      source: "promiscuous",
-      channel: "current",
-      conflict: "fail",
+      source: { mode: "promiscuous", channel: "current" },
       capture: capture,
       filter: { sampleEvery: 1, validOnly: true },
-      queue: { capacity: 8, overflow: "drop-newest" }
+      buffering: { queueCapacity: 8, overflow: "drop-newest" }
     });
     wifi.scan({
       channel: session.status().effective.channel,
       showHidden: true,
-      passive: false,
-      dwellMs: 250,
+      mode: "active",
+      activeMinMs: 250,
+      activeMaxMs: 250,
       timeoutMs: 3000
     });
     frame = session.receive(8000);

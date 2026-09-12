@@ -2,6 +2,9 @@
 #define ESP32_MQUICKJS_WIFI_CSI_RESOURCES_H
 
 #include "esp32_mquickjs_native_lease.h"
+#include "esp32_mquickjs_wifi_csi_layout.h"
+#include "esp32_mquickjs_wifi_csi_packet.h"
+#include "esp32_mquickjs_wifi_rx_wire_metadata.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -13,96 +16,30 @@ extern "C" {
 #endif
 
 #define ESP32_MQUICKJS_WIFI_CSI_MAX_MAC_FILTERS 8U
-#define ESP32_MQUICKJS_WIFI_CSI_MAX_SEGMENTS 3U
-#define ESP32_MQUICKJS_WIFI_CSI_MAX_SUBCARRIER_RANGES 2U
-#define ESP32_MQUICKJS_WIFI_CSI_MAX_NULL_SUBCARRIERS 3U
-
-typedef enum {
-    ESP32_MQUICKJS_WIFI_CSI_PHY_LEGACY = 0,
-    ESP32_MQUICKJS_WIFI_CSI_PHY_HT,
-    ESP32_MQUICKJS_WIFI_CSI_PHY_VHT,
-    ESP32_MQUICKJS_WIFI_CSI_PHY_HE_SU,
-    ESP32_MQUICKJS_WIFI_CSI_PHY_HE_MU,
-    ESP32_MQUICKJS_WIFI_CSI_PHY_HE_ER_SU,
-    ESP32_MQUICKJS_WIFI_CSI_PHY_HE_TB,
-    ESP32_MQUICKJS_WIFI_CSI_PHY_UNKNOWN,
-} esp32_mquickjs_wifi_csi_phy_t;
-
-typedef enum {
-    ESP32_MQUICKJS_WIFI_CSI_SECONDARY_NONE = 0,
-    ESP32_MQUICKJS_WIFI_CSI_SECONDARY_ABOVE,
-    ESP32_MQUICKJS_WIFI_CSI_SECONDARY_BELOW,
-} esp32_mquickjs_wifi_csi_secondary_t;
-
-typedef enum {
-    ESP32_MQUICKJS_WIFI_CSI_SAMPLE_ENCODING_UNKNOWN = 0,
-    ESP32_MQUICKJS_WIFI_CSI_SAMPLE_ENCODING_SIGNED_INT8,
-    ESP32_MQUICKJS_WIFI_CSI_SAMPLE_ENCODING_SIGNED_INT12_LE,
-    ESP32_MQUICKJS_WIFI_CSI_SAMPLE_ENCODING_SIGNED_INT12_PACKED,
-} esp32_mquickjs_wifi_csi_sample_encoding_t;
-
-typedef enum {
-    ESP32_MQUICKJS_WIFI_CSI_SEGMENT_UNKNOWN = 0,
-    ESP32_MQUICKJS_WIFI_CSI_SEGMENT_LLTF,
-    ESP32_MQUICKJS_WIFI_CSI_SEGMENT_HT_LTF,
-    ESP32_MQUICKJS_WIFI_CSI_SEGMENT_STBC_HT_LTF2,
-    ESP32_MQUICKJS_WIFI_CSI_SEGMENT_VHT_LTF,
-    ESP32_MQUICKJS_WIFI_CSI_SEGMENT_HE_LTF1,
-    ESP32_MQUICKJS_WIFI_CSI_SEGMENT_HE_LTF2,
-    ESP32_MQUICKJS_WIFI_CSI_SEGMENT_MIXED,
-} esp32_mquickjs_wifi_csi_segment_type_t;
-
-typedef enum {
-    ESP32_MQUICKJS_WIFI_CSI_LAYOUT_SCHEMA_UNKNOWN = 0,
-    ESP32_MQUICKJS_WIFI_CSI_LAYOUT_SCHEMA_LEGACY,
-    ESP32_MQUICKJS_WIFI_CSI_LAYOUT_SCHEMA_HE,
-} esp32_mquickjs_wifi_csi_layout_schema_t;
 
 typedef struct {
-    int16_t start;
-    int16_t end;
-} esp32_mquickjs_wifi_csi_subcarrier_range_t;
-
-typedef struct {
-    esp32_mquickjs_wifi_csi_segment_type_t type;
-    uint32_t offset_bytes;
-    uint32_t length_bytes;
-    uint32_t iq_pair_count;
-    uint8_t subcarrier_range_count;
-    esp32_mquickjs_wifi_csi_subcarrier_range_t
-        subcarrier_ranges[ESP32_MQUICKJS_WIFI_CSI_MAX_SUBCARRIER_RANGES];
-    uint8_t null_subcarrier_count;
-    int16_t null_subcarriers[ESP32_MQUICKJS_WIFI_CSI_MAX_NULL_SUBCARRIERS];
-} esp32_mquickjs_wifi_csi_segment_t;
-
-typedef struct {
-    esp32_mquickjs_wifi_csi_layout_schema_t schema;
-    esp32_mquickjs_wifi_csi_sample_encoding_t sample_encoding;
-    uint8_t sample_bits;
-    uint32_t byte_length;
-    uint32_t iq_pair_count;
-    uint16_t trailing_padding_bytes;
-    uint8_t segment_count;
-    bool known;
-    esp32_mquickjs_wifi_csi_segment_t
-        segments[ESP32_MQUICKJS_WIFI_CSI_MAX_SEGMENTS];
-} esp32_mquickjs_wifi_csi_layout_t;
-
-typedef struct {
-    uint8_t source_mac[6];
-    uint8_t destination_mac[6];
+    /* Logical address roles from a parsed, proven same-callback MAC header. */
+    uint8_t addresses[ESP32_MQUICKJS_WIFI_RX_ADDRESS_COUNT][6];
+    uint8_t address_mask;
+    esp32_mquickjs_wifi_packet_type_t frame_type;
+    uint8_t frame_subtype;
+    bool frame_subtype_available;
     int8_t rssi;
     int8_t noise_floor;
     uint8_t channel;
     uint8_t antenna;
     uint8_t mcs;
     uint8_t bandwidth_mhz;
+    uint16_t guard_interval_ns; /* 0 unavailable; nanoseconds, not timestamp accuracy. */
     esp32_mquickjs_wifi_csi_phy_t phy;
     esp32_mquickjs_wifi_csi_secondary_t secondary;
     uint32_t driver_timestamp_us;
-    uint64_t timestamp_us;
+    uint64_t timestamp_us; /* Monotonic time sampled at CSI callback entry. */
+    uint32_t radio_generation; /* Physical Radio lease generation, not channel revision. */
     uint32_t rx_sequence;
-    bool destination_mac_available;
+    uint32_t phy_flags; /* Optional common RX boolean value/availability pairs. */
+    uint8_t ampdu_count;
+    bool ampdu_count_available;
     bool noise_floor_available;
     bool antenna_available;
     bool mcs_available;
@@ -112,12 +49,19 @@ typedef struct {
     bool first_word_invalid;
     bool channel_estimate_valid;
     bool channel_estimate_valid_available;
+    uint8_t he_ltf_size; /* 0 unavailable; 1x/2x/4x symbol size, not symbol count. */
+    uint8_t dcm_state; /* 0 unavailable, 1 disabled, 2 enabled. */
     esp32_mquickjs_wifi_csi_layout_t layout;
 } esp32_mquickjs_wifi_csi_metadata_t;
 
 typedef struct {
     uint8_t source_macs[ESP32_MQUICKJS_WIFI_CSI_MAX_MAC_FILTERS][6];
     uint8_t destination_macs[ESP32_MQUICKJS_WIFI_CSI_MAX_MAC_FILTERS][6];
+    uint8_t bssids[ESP32_MQUICKJS_WIFI_CSI_MAX_MAC_FILTERS][6];
+    uint8_t bssid_count;
+    uint8_t frame_types;
+    uint16_t frame_subtypes;
+    bool frame_types_set, frame_subtypes_set;
     uint8_t source_mac_count;
     uint8_t destination_mac_count;
     int8_t minimum_rssi;
@@ -147,6 +91,7 @@ typedef struct {
     esp32_mquickjs_wifi_csi_metadata_t metadata;
     size_t length;
     uint8_t *payload;
+    esp32_mquickjs_wifi_csi_packet_t *packet;
     esp32_mquickjs_native_lease_t lease;
     _Atomic uint8_t owner;
     _Atomic bool return_accounted;
@@ -158,6 +103,10 @@ typedef struct {
     _Atomic uint32_t delivered_frames;
     _Atomic uint32_t delivered_batches;
     _Atomic uint32_t filtered_mac;
+    _Atomic uint32_t filtered_bssid;
+    _Atomic uint32_t filtered_frame_type;
+    _Atomic uint32_t filtered_frame_subtype;
+    _Atomic uint32_t dropped_identity_exhausted;
     _Atomic uint32_t filtered_rssi;
     _Atomic uint32_t filtered_decimation;
     _Atomic uint32_t filtered_rate_limit;
@@ -169,6 +118,12 @@ typedef struct {
     _Atomic uint32_t dropped_frame_too_large;
     _Atomic uint32_t dropped_closing;
     _Atomic uint32_t received_bytes;
+    _Atomic uint32_t packet_unavailable;
+    _Atomic uint32_t packet_malformed;
+    _Atomic uint32_t packet_truncated;
+    _Atomic uint32_t dropped_packet_required;
+    _Atomic uint32_t dropped_packet_incomplete;
+    _Atomic uint32_t received_packet_bytes;
     _Atomic uint32_t leased_frames;
 } esp32_mquickjs_wifi_csi_counters_t;
 
@@ -183,6 +138,9 @@ typedef struct {
     esp32_mquickjs_wifi_csi_malloc_fn malloc_fn;
     esp32_mquickjs_wifi_csi_free_fn free_fn;
     void *opaque;
+    /* Optional accounting notification, called while the store control pin
+     * still owns all allocations. No allocation is freed by this hook. */
+    esp32_mquickjs_wifi_csi_free_fn retire_fn;
 } esp32_mquickjs_wifi_csi_allocator_t;
 
 typedef struct {
@@ -195,16 +153,19 @@ typedef struct {
     uint32_t generation;
     uint32_t capacity;
     uint32_t max_frame_bytes;
+    uint32_t max_packet_bytes;
+    esp32_mquickjs_wifi_csi_packet_options_t packet_options;
     _Atomic uint32_t callbacks_active;
     _Atomic uint32_t sequence;
     _Atomic bool accepting;
-    uint32_t filter_qualified;
+    _Atomic bool identity_exhausted;
+    uint32_t filter_phase; /* Cyclic 0..sample_every-1, independent of counters. */
     uint64_t last_accepted_timestamp_us;
     bool last_accepted_timestamp_set;
-    uint32_t last_driver_timestamp_us;
-    uint64_t driver_timestamp_epoch_us;
-    bool driver_timestamp_set;
 } esp32_mquickjs_wifi_csi_resources_t;
+/* The caller pins resources against final free. Per-counter atomic reset;
+ * leases, callback activity, sequence and filter scheduling remain intact. */
+void esp32_mquickjs_wifi_csi_resources_reset_counters(esp32_mquickjs_wifi_csi_resources_t *resources);
 
 typedef bool (*esp32_mquickjs_wifi_csi_publish_fn)(
     const esp32_mquickjs_wifi_csi_event_t *event, void *opaque);
@@ -217,13 +178,20 @@ typedef enum {
     ESP32_MQUICKJS_WIFI_CSI_PUBLISH_TOO_LARGE,
     ESP32_MQUICKJS_WIFI_CSI_PUBLISH_CLOSING,
     ESP32_MQUICKJS_WIFI_CSI_PUBLISH_INVALID,
+    ESP32_MQUICKJS_WIFI_CSI_PUBLISH_PACKET_REQUIRED,
+    ESP32_MQUICKJS_WIFI_CSI_PUBLISH_PACKET_INCOMPLETE,
+    ESP32_MQUICKJS_WIFI_CSI_PUBLISH_IDENTITY_EXHAUSTED,
 } esp32_mquickjs_wifi_csi_publish_result_t;
+
+bool esp32_mquickjs_wifi_csi_resources_size(uint32_t capacity, uint32_t max_frame_bytes,
+    uint32_t max_packet_bytes, size_t *slots_bytes, size_t *payload_bytes);
 
 bool esp32_mquickjs_wifi_csi_resources_init(
     esp32_mquickjs_wifi_csi_resources_t *resources,
     uint32_t generation,
     uint32_t capacity,
     uint32_t max_frame_bytes,
+    uint32_t max_packet_bytes,
     const esp32_mquickjs_wifi_csi_allocator_t *allocator);
 bool esp32_mquickjs_wifi_csi_resources_deinit(
     esp32_mquickjs_wifi_csi_resources_t *resources);
@@ -242,6 +210,7 @@ esp32_mquickjs_wifi_csi_callback_publish(
     const esp32_mquickjs_wifi_csi_metadata_t *metadata,
     const uint8_t *payload,
     size_t length,
+    const esp32_mquickjs_wifi_csi_packet_input_t *packet_input,
     esp32_mquickjs_wifi_csi_publish_fn publish,
     void *publish_opaque);
 esp32_mquickjs_wifi_csi_slot_t *esp32_mquickjs_wifi_csi_slot_from_event(

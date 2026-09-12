@@ -89,7 +89,7 @@ class EspNowArchitectureTests(unittest.TestCase):
 
         self.assertIn("espnow_receive_event_drop", source)
         self.assertIn("esp32_mquickjs_native_pool_release", source)
-        self.assertIn("esp32_mquickjs_new_owned_byte_view", source)
+        self.assertIn("esp32_mquickjs_new_wireless_owned_byte_view", source)
         self.assertIn("esp_now_unregister_recv_cb", source)
         self.assertLess(
             source.index("esp_now_unregister_recv_cb"),
@@ -112,12 +112,13 @@ class EspNowArchitectureTests(unittest.TestCase):
             )
         ]
 
-        self.assertIn("esp_now_unregister_recv_cb", begin)
+        self.assertNotIn("esp_now_unregister_recv_cb", begin)
+        self.assertIn("esp_now_unregister_recv_cb", finish)
         self.assertNotIn("esp_now_unregister_send_cb", begin)
         self.assertNotIn("espnow_reset_session_storage", begin)
         self.assertIn("tx_task_stop", begin)
         self.assertIn("tx_task", worker)
-        self.assertIn("callbacks_active", worker)
+        self.assertIn("callback-drain", worker)
         self.assertIn("espnow_finish_close(session)", worker)
         self.assertIn("callbacks_active", finish)
         self.assertIn("esp_now_unregister_send_cb", finish)
@@ -139,7 +140,11 @@ class EspNowArchitectureTests(unittest.TestCase):
 
         self.assertIn("config ESP32_MQUICKJS_ESPNOW_TX_MAX_QUEUE_LEN", kconfig)
         self.assertIn("espnow_allocate_tx_queue", source)
-        self.assertIn("MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT", source)
+        allocation = source[source.index("static bool espnow_allocate_tx_queue("):
+                            source.index("static bool espnow_parse_power_save(")]
+        self.assertIn("ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_TX", allocation)
+        self.assertIn("ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_STACK", allocation)
+        self.assertIn("ESP32_MQUICKJS_MEMORY_EXTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_QUEUE", allocation)
         self.assertIn("espnow_tx_worker", source)
         self.assertIn("espnow_notify_tx_worker", source)
         self.assertIn("enqueueBroadcastBatch", source)
@@ -172,6 +177,7 @@ class EspNowArchitectureTests(unittest.TestCase):
 
         self.assertIn("esp_now_unregister_recv_cb", begin)
         self.assertIn("esp_now_unregister_send_cb", begin)
+        self.assertNotIn("esp_now_deinit", begin)
         self.assertNotIn("state->completed", begin)
         self.assertNotRegex(begin + worker, r"waits\s*\+\+\s*<")
         self.assertIn("callbacks_active", worker)
@@ -294,11 +300,12 @@ class EspNowArchitectureTests(unittest.TestCase):
             "esp_now_register_send_cb",
             "esp_now_set_pmk",
             "esp_now_add_broadcast_peer",
-            "esp_now_set_wake_window",
-            "esp_now_set_wake_interval",
             "wifi_radio_confirm_channel",
         ):
             self.assertIn(f'failed_step = "{step}"', open_initialize)
+        self.assertIn("espnow_apply_power_save(session, true", open_initialize)
+        self.assertIn('"wake-window-write"', source)
+        self.assertIn('"wake-interval-write"', source)
         self.assertIn("ESP_LOGE", open_initialize)
         self.assertIn('espnow_throw_error(ctx, "ESPNOW_NOT_OPEN"', open_finish)
 
@@ -373,8 +380,12 @@ class EspNowArchitectureTests(unittest.TestCase):
         ]
 
         self.assertIn('"enabled"', parser)
-        self.assertIn("ESP_WIFI_CONNECTIONLESS_INTERVAL_DEFAULT_MODE", source)
-        self.assertIn("UINT16_MAX", close_native)
+        restore = source[source.index("static esp_err_t espnow_restore_power_save("):
+                         source.index("static esp_err_t espnow_apply_power_save(")]
+        self.assertIn("espnow_restore_power_save(session", close_native)
+        self.assertIn("UINT16_MAX", restore)
+        self.assertIn("esp32_mquickjs_wifi_radio_interval_release", restore)
+        self.assertNotIn("esp_wifi_connectionless_module_set_wake_interval", source)
         self.assertIn("state->power_save_enabled", control)
         self.assertIn("session->power_save_enabled =", control)
         self.assertIn("enabled: false", types)

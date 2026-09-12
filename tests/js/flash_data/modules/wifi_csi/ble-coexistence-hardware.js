@@ -34,11 +34,9 @@ test("wifi_csi/ble-coexistence-hardware", function () {
       capacity: 8
     }]).wait(5000);
     session = wifi.csi.open({
-      source: "promiscuous",
-      channel: "current",
-      conflict: "fail",
+      source: { mode: "promiscuous", channel: "current" },
       capture: capture,
-      queue: { capacity: 8, overflow: "drop-newest" }
+      buffering: { queueCapacity: 8, overflow: "drop-newest" }
     });
 
     startMs = sys.millis();

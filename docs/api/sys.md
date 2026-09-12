@@ -148,6 +148,11 @@ sys.status.memory = {
     migrationBytes: number,
     evictionCount: number,
     allocationFailures: number,
+    wireless: {
+      internal: WirelessMemoryRegion,
+      psram: WirelessMemoryRegion,
+      rejectedReservations: number
+    },
     allocations: Array<{
       owner: string,
       class: "pinned-internal" | "dma-internal" | "dma-external" |
@@ -205,7 +210,10 @@ sys.status.runtime = {
       userCapacity: number,
       internalReserve: number
     },
-    eventQueues: { open: number, dropped: number },
+    eventQueues: {
+      open: number, dropped: number, queued: number,
+      capacity: number, highWater: number
+    },
     asyncPollers: { registered: number, capacity: number },
     orphans: { pending: number, capacity: number }
   },
@@ -259,6 +267,107 @@ manager. `pinnedBytes` includes managed pinned blocks, registered driver DMA
 payloads, and reusable staging pools. Opaque ESP-IDF metadata and unregistered
 third-party allocations remain in the physical heap views. `allocations` is
 sorted by owner, class, and actual region.
+
+`memory.manager.wireless` is the boot-scoped admission ledger shared by registered
+Wi-Fi and BLE allocations. Each `WirelessMemoryRegion` contains `limitBytes`,
+`controlReserveBytes`, `reservedBytes`, `highWaterBytes`, and `roles` with byte
+counts for `control`, `pool`, `retiredPool`, `queue`, `tx`, `stack`, and `copy`.
+The same snapshot is available in `wifi.diagnostics.snapshot().memory.wireless`.
+The `CONFIG_ESP32_MQUICKJS_WIRELESS_INTERNAL_BUDGET_BYTES`,
+`CONFIG_ESP32_MQUICKJS_WIRELESS_PSRAM_BUDGET_BYTES`, and
+`CONFIG_ESP32_MQUICKJS_WIRELESS_CONTROL_RESERVE_BYTES` Build Context settings select
+the limits. Wireless-enabled contexts must specify all three as nonnegative
+decimal integers, with `0 < control reserve < internal limit`. The context
+loader and CMake reject missing/duplicate/out-of-range quotas, PSRAM mode/size
+contradictions, quota above physical PSRAM, and resolved SDK quota/target/PSRAM
+values that disagree with immutable inputs. Recreate stale Build Context or
+configuration outputs; do not silently accept Kconfig clamping.
+
+The configured Future worker stack payload must fit the internal data quota;
+a target C assertion also includes actual static TCB sizes. This is a necessary
+lower bound, not a guarantee that all configured pools, metadata and queues fit
+concurrently. Per-module size/overflow checks and shared runtime admission still
+apply. Allocator headers, SDK/JS/TLS memory and whole-device peaks require their
+own accounting and warmed-device measurements. Check resolved inputs directly
+with `python scripts/validate_wireless_budget.py --build-context PATH --sdkconfig BUILD/config/sdkconfig.json`.
+Firmware CI
+contexts explicitly select 128 KiB internal, 16 KiB control, and 4 MiB PSRAM when
+configured; these are software-check inputs, not measured board capacity.
+
+Admission reserves requested payload bytes plus the memory manager's tracking
+node before either allocator call. Metadata keeps its PSRAM preference; its
+bytes consume the same role as the payload in its own region. Failed allocations
+roll back after freeing partial storage. Final release returns quota only after
+both allocator frees return. Consequently `reservedBytes` may exceed live
+published payload counts; `highWaterBytes` includes subsequently failed attempts.
+`rejectedReservations` counts denied region-pair attempts, including fallback
+attempts, and saturates at UINT32_MAX. Runtime restart preserves outstanding
+fixed allocations and these counters. Explicit
+`wifi.diagnostics.resetFrameworkCounters()` clears denial/allocation-failure,
+migration and eviction histories, and restarts wireless peaks at current
+reservations. It does not change owner, DMA, pending alloc/free or role accounting.
+Registered runtime EventQueue peaks/drops are also reset; the runtime aggregate
+peak is a sum of individual queue peaks, not a simultaneous global high-water.
+Retiring a pool reclassifies
+its bytes without releasing quota; retained View/Source storage remains charged.
+
+Current coverage includes CSI pool/control storage, Monitor pool and Session
+control, ESP-NOW RX pools/copies and TX queue/staging/tracked payload/worker
+stack, and existing BLE scan/subscription pools. Wireless EventQueues also charge
+their native control, drain/overflow scratch, static RTOS mutex and complete
+static RTOS queue/control storage to `queue`. Their pending receive capture state
+and one event buffer use `control`, so data reservations cannot consume that
+headroom. Deleting the RTOS objects precedes freeing their owned allocation;
+closing a queue retains its charge until all native references are released.
+
+Registered Wi-Fi/ESP-NOW/BLE drivers charge per-call argument-root arrays, public
+Future handles, and their native capture states to `wireless.future` / `control`.
+Each allocation follows its own lifetime: releasing argument roots does not
+release the public handle or native operation state. Raw TX one-shot copies,
+broker/quarantine data and queued/periodic payloads use `tx`; Session/periodic
+control and handles use `control`, slot arrays use `queue`, and temporary batch
+arrays use `copy`, under `wifi.raw-tx`. Existing PSRAM payload policies remain.
+
+Module-owned controls, public handles, configuration/credential snapshots,
+scan/discovery results, FTM/RRM storage and protocol timer/worker contexts now
+participate in the same admission ledger. Existing BLE server definitions,
+attribute/event pools and read/write/notification copies are included. Secret
+storage keeps its existing secure-zero-before-release behavior.
+
+CSI/Monitor Frame, Batch, retained references, ByteView and ByteSpanSource wrappers
+use `control`; wire-directory buffers and copied bytes use `copy`. A Source's
+read-lease wrapper inherits its wireless owner. Closing a ByteView while a read
+lease exists keeps both wrapper and retained payload charged until the last
+read releases them. Source close remains busy until its read leases finish.
+BLE/ESP-NOW array-like input conversion copies also use `copy`; borrowing an
+existing ByteView does not charge its data a second time. Non-wireless users of
+the generic byte factories retain their existing allocation policy.
+
+Wi-Fi helper mutex/event-group and native completion queues use `control`;
+watch ingress uses `queue`. Static RTOS control and queue payload bytes are
+reserved together, and SDK deletion precedes freeing their storage. Producers,
+waiters and queued callbacks must already be retired by the owning lifecycle.
+
+Builds enabling Wi-Fi, BLE or ESP-NOW also admit the shared Future service as
+`wireless.runtime`: runtime/driver registry, slot table, dispatch/ready queues,
+EventQueue runtime registry, common per-call handles/roots/combinator inputs,
+and the boot worker pool. Common controls include calls for non-wireless drivers
+and shared EventQueue receive aliases; registered wireless drivers retain their
+explicit per-call owner. No extra JS receiver/property read is required.
+Worker queue uses `control`, and the fixed stack/TCB allocation uses `stack`.
+Created workers have boot lifetime, including across runtime restart. A partial
+creation failure keeps created tasks, queue and admitted storage; the next
+initialization retries only the uncreated suffix. Failure before any worker
+exists frees the allocation. These retained boot bytes belong in warmed baselines.
+Builds disabling all three wireless features retain unbudgeted shared allocation.
+
+Opaque SDK/NimBLE timer/task/storage, allocator headers/alignment, JavaScript,
+TLS, other modules' own queues and unrelated heaps are outside this admission
+ledger. Static firmware sections are part of linked RAM usage, not heap admission.
+They must be reported separately when assessing total device memory, as required
+by the wireless budget contract. The outer
+`managedInternalBytes`/`managedPsramBytes` count managed payloads, excluding tracking
+nodes. Logical control headroom does not guarantee a physical heap allocation.
 
 ## Configuration and lightweight helpers
 

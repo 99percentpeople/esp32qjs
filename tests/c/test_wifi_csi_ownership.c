@@ -31,21 +31,24 @@ int main(void)
     esp32_mquickjs_wifi_csi_slot_t *slot;
 
     assert(esp32_mquickjs_wifi_csi_resources_init(
-        &resources, 9U, 3U, sizeof(payload), &allocator));
+        &resources, 9U, 3U, sizeof(payload),0, &allocator));
     esp32_mquickjs_wifi_csi_resources_set_accepting(&resources, true);
 
     metadata.driver_timestamp_us = 0xfffffff0U;
+    metadata.timestamp_us = UINT64_C(0x200000010);
+    metadata.radio_generation = 17;
     assert(esp32_mquickjs_wifi_csi_callback_publish(
-        &resources, &metadata, payload, sizeof(payload),
+        &resources, &metadata, payload, sizeof(payload),NULL,
         fake_queue_publish, &queue) ==
         ESP32_MQUICKJS_WIFI_CSI_PUBLISH_ACCEPTED);
     metadata.driver_timestamp_us = 0x20U;
+    metadata.timestamp_us = UINT64_C(0x500000020); /* Long silence crossed multiple wraps. */
     assert(esp32_mquickjs_wifi_csi_callback_publish(
-        &resources, &metadata, payload, sizeof(payload),
+        &resources, &metadata, payload, sizeof(payload),NULL,
         fake_queue_publish, &queue) ==
         ESP32_MQUICKJS_WIFI_CSI_PUBLISH_ACCEPTED);
     assert(esp32_mquickjs_wifi_csi_callback_publish(
-        &resources, &metadata, payload, sizeof(payload),
+        &resources, &metadata, payload, sizeof(payload),NULL,
         fake_queue_publish, &queue) ==
         ESP32_MQUICKJS_WIFI_CSI_PUBLISH_QUEUE_FULL);
     assert(queue.count == 2U);
@@ -55,7 +58,7 @@ int main(void)
     slot = esp32_mquickjs_wifi_csi_slot_from_event(
         &resources, &queue.events[0]);
     assert(slot != NULL);
-    assert(slot->metadata.timestamp_us == 0xfffffff0ULL);
+    assert(slot->metadata.timestamp_us == UINT64_C(0x200000010));
     assert(esp32_mquickjs_wifi_csi_slot_take_event_owner(
         &resources, &queue.events[0]));
     assert(!esp32_mquickjs_wifi_csi_slot_take_event_owner(
@@ -80,7 +83,7 @@ int main(void)
     slot = esp32_mquickjs_wifi_csi_slot_from_event(
         &resources, &queue.events[1]);
     assert(slot != NULL);
-    assert(slot->metadata.timestamp_us == 0x100000020ULL);
+    assert(slot->metadata.timestamp_us == UINT64_C(0x500000020));
 
     assert(esp32_mquickjs_wifi_csi_slot_discard_event(
         &resources, &queue.events[1]));

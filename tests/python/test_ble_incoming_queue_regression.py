@@ -44,8 +44,8 @@ static bool esp32_mquickjs_wireless_native_operation_complete(int *s) { *s=0;ret
 static void ble_advertise_callbacks_quiesce(void) { quiesced++; }
 static void ble_release_event_queue(void *ctx,void **q,int *r,bool *rooted) { (void)ctx;(void)q;(void)r;(void)rooted;assert(quiesced); }
 static void ble_advertiser_event_to_js(void) {}
-static void *esp32_mquickjs_event_queue_new(void *ctx,void *runtime,size_t size,unsigned capacity,int overflow,void (*convert)(void),void (*drop)(void *,void *),void *unused,void *opaque) {
-    (void)ctx;(void)runtime;(void)size;(void)capacity;(void)overflow;(void)convert;(void)unused;
+static void *esp32_mquickjs_event_queue_new_wireless(const char *owner,void *ctx,void *runtime,size_t size,unsigned capacity,int overflow,void (*convert)(void),void (*drop)(void *,void *),void *unused,void *opaque) {
+    (void)owner;(void)ctx;(void)runtime;(void)size;(void)capacity;(void)overflow;(void)convert;(void)unused;
     registered_drop=drop;registered_opaque=opaque;return (void *)1;
 }
 '''
@@ -60,7 +60,7 @@ class BleIncomingQueueRegression(unittest.TestCase):
     def factory(self):
         source=BLE.read_text()
         capture=function(source,'ble_advertise_capture')
-        start=capture.index('    queue = esp32_mquickjs_event_queue_new(')
+        start=capture.index('    queue = esp32_mquickjs_event_queue_new_wireless(')
         call=capture[start:capture.index(';',start)+1]
         return 'static void create(void) { void *ctx=NULL,*queue;unsigned capacity=2;ble_adapter_t *adapter=&s_ble;ble_advertiser_t *advertiser=&s_ble.advertiser;'+call+' (void)queue; }\n'
 
@@ -249,6 +249,7 @@ static void esp_timer_stop(void *p) { (void)p; }
 static void esp_timer_delete(void *p) { (void)p; }
 static void JS_DeleteGCRef(void *ctx,JSGCRef *ref) { (void)ctx;(void)ref; }
 static void heap_caps_free(void *p) { (void)p;released_storage++; }
+static void event_queue_resource_release(void *p,void *queue) { (void)queue;heap_caps_free(p); }
 static void esp32_mquickjs_event_queue_release(void *q) { (void)q;released_queue++; }
 '''+function(source,'event_queue_future_finish')+function(source,'event_queue_future_destroy')
 

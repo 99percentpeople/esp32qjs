@@ -36,12 +36,10 @@ test("wifi_csi/soak-hardware", function () {
   try {
     try { wifi.disconnect(); } catch (ignoredDisconnectError) {}
     session = wifi.csi.open({
-      source: "promiscuous",
-      channel: "current",
-      conflict: "fail",
+      source: { mode: "promiscuous", channel: "current" },
       capture: capture,
-      queue: {
-        capacity: caps.limits.maxQueueCapacity < 16
+      buffering: {
+        queueCapacity: caps.limits.maxQueueCapacity < 16
           ? caps.limits.maxQueueCapacity : 16,
         overflow: "drop-newest"
       }

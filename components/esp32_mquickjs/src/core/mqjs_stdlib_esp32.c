@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "mquickjs_build.h"
+#include "esp32_mquickjs_wifi_mesh_feature.h"
 
 #define JS_CLASS_HEADERS (JS_CLASS_USER + 0)
 #define JS_CLASS_REQUEST (JS_CLASS_USER + 1)
@@ -47,7 +48,48 @@
 #define JS_CLASS_WIFI_CSI_SESSION (JS_CLASS_USER + 42)
 #define JS_CLASS_WIFI_CSI_FRAME (JS_CLASS_USER + 43)
 #define JS_CLASS_WIFI_CSI_BATCH (JS_CLASS_USER + 44)
-#define JS_CLASS_COUNT (JS_CLASS_USER + 45)
+#define JS_CLASS_WIFI_WAKE_LOCK (JS_CLASS_USER + 45)
+#define JS_CLASS_WIFI_MONITOR_SESSION (JS_CLASS_USER + 46)
+#define JS_CLASS_WIFI_MONITOR_FRAME (JS_CLASS_USER + 47)
+#define JS_CLASS_WIFI_MONITOR_BATCH (JS_CLASS_USER + 48)
+#define JS_CLASS_WIFI_RAW_TX_SESSION (JS_CLASS_USER + 49)
+#define JS_CLASS_WIFI_RAW_PERIODIC_TX (JS_CLASS_USER + 50)
+#define JS_CLASS_WIFI_ROC_SESSION (JS_CLASS_USER + 51)
+#define JS_CLASS_WIFI_FTM_SESSION (JS_CLASS_USER + 52)
+#define JS_CLASS_WIFI_NEIGHBOR_REQUEST (JS_CLASS_USER + 53)
+#define JS_CLASS_WIFI_TWT_AGREEMENT (JS_CLASS_USER + 54)
+#define JS_CLASS_WIFI_SMARTCONFIG_SESSION (JS_CLASS_USER + 55)
+#define JS_CLASS_WIFI_WPS_SESSION (JS_CLASS_USER + 56)
+#define JS_CLASS_WIFI_WPS_AP_SESSION (JS_CLASS_USER + 57)
+#define JS_CLASS_WIFI_DPP_SESSION (JS_CLASS_USER + 58)
+#define JS_CLASS_WIFI_NAN_SESSION (JS_CLASS_USER + 59)
+#define JS_CLASS_WIFI_NAN_SERVICE (JS_CLASS_USER + 60)
+#define JS_CLASS_WIFI_NAN_PATH (JS_CLASS_USER + 61)
+#define JS_CLASS_WIFI_NAN_PAIRING (JS_CLASS_USER + 62)
+#define JS_CLASS_WIFI_MESH_SESSION (JS_CLASS_USER + 63)
+#if ESP32_MQUICKJS_WIFI_MESH_AVAILABLE
+#define JS_CLASS_COUNT (JS_CLASS_USER + 64)
+#elif CONFIG_ESP32_MQUICKJS_FEATURE_WIFI && CONFIG_ESP_WIFI_NAN_PAIRING
+#define JS_CLASS_COUNT (JS_CLASS_USER + 63)
+#elif CONFIG_ESP32_MQUICKJS_FEATURE_WIFI && CONFIG_ESP_WIFI_NAN_SYNC_ENABLE
+#define JS_CLASS_COUNT (JS_CLASS_USER + 62)
+#elif CONFIG_ESP32_MQUICKJS_FEATURE_WIFI && CONFIG_ESP_WIFI_NAN_USD_ENABLE
+#define JS_CLASS_COUNT (JS_CLASS_USER + 61)
+#elif CONFIG_ESP32_MQUICKJS_FEATURE_WIFI && CONFIG_ESP_WIFI_DPP_SUPPORT && CONFIG_ESP_NETIF_USES_TCPIP_WITH_BSD_API && CONFIG_LWIP_IPV4
+#define JS_CLASS_COUNT (JS_CLASS_USER + 59)
+#elif CONFIG_ESP32_MQUICKJS_FEATURE_WIFI && CONFIG_ESP_NETIF_USES_TCPIP_WITH_BSD_API && CONFIG_LWIP_IPV4 && CONFIG_ESP_WIFI_WPS_SOFTAP_REGISTRAR
+#define JS_CLASS_COUNT (JS_CLASS_USER + 58)
+#elif CONFIG_ESP32_MQUICKJS_FEATURE_WIFI && CONFIG_ESP_NETIF_USES_TCPIP_WITH_BSD_API && CONFIG_LWIP_IPV4
+#define JS_CLASS_COUNT (JS_CLASS_USER + 57)
+#elif CONFIG_ESP32_MQUICKJS_FEATURE_WIFI && CONFIG_SOC_WIFI_HE_SUPPORT && CONFIG_IDF_TARGET_ESP32C5
+#define JS_CLASS_COUNT (JS_CLASS_USER + 55)
+#elif CONFIG_ESP32_MQUICKJS_FEATURE_WIFI && CONFIG_ESP_WIFI_RRM_SUPPORT
+#define JS_CLASS_COUNT (JS_CLASS_USER + 54)
+#elif CONFIG_ESP32_MQUICKJS_FEATURE_WIFI && CONFIG_ESP_WIFI_FTM_ENABLE && CONFIG_ESP_WIFI_FTM_INITIATOR_SUPPORT
+#define JS_CLASS_COUNT (JS_CLASS_USER + 53)
+#else
+#define JS_CLASS_COUNT (JS_CLASS_USER + 52)
+#endif
 
 #define js_global_object js_global_object_base
 #define js_c_function_decl js_c_function_decl_base
@@ -838,6 +880,7 @@ static const JSClassDef js_rmt_obj = JS_OBJECT_DEF("rmt", js_rmt);
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI
 static const JSPropDef js_wifi_csi_session_proto[] = {
     JS_CFUNC_DEF("status", 0, js_wifi_csi_session_status),
+    JS_CFUNC_DEF("getCaptureConfig", 0, js_wifi_csi_session_get_capture_config),
     JS_CFUNC_DEF("stats", 0, js_wifi_csi_session_stats),
     JS_CFUNC_DEF("receive", 1, js_wifi_csi_session_receive),
     JS_CFUNC_DEF("receiveBatch", 2, js_wifi_csi_session_receive_batch),
@@ -857,7 +900,11 @@ static const JSClassDef js_wifi_csi_session_class =
 static const JSPropDef js_wifi_csi_frame_proto[] = {
     JS_CFUNC_DEF("samples", 0, js_wifi_csi_frame_samples),
     JS_CFUNC_DEF("copySamples", 0, js_wifi_csi_frame_copy_samples),
-    JS_CFUNC_DEF("source", 0, js_wifi_csi_frame_source),
+    JS_CFUNC_DEF("sampleSource", 0, js_wifi_csi_frame_sample_source),
+    JS_CFUNC_DEF("packetBytes", 0, js_wifi_csi_frame_packet_bytes),
+    JS_CFUNC_DEF("copyPacketBytes", 0, js_wifi_csi_frame_copy_packet_bytes),
+    JS_CFUNC_DEF("packetSource", 0, js_wifi_csi_frame_packet_source),
+    JS_CFUNC_DEF("source", 1, js_wifi_csi_frame_source),
     JS_CFUNC_DEF("close", 0, js_wifi_csi_frame_close),
     JS_PROP_END,
 };
@@ -870,6 +917,7 @@ static const JSClassDef js_wifi_csi_frame_class =
 static const JSPropDef js_wifi_csi_batch_proto[] = {
     JS_CFUNC_DEF("info", 1, js_wifi_csi_batch_info),
     JS_CFUNC_DEF("samples", 1, js_wifi_csi_batch_samples),
+    JS_CFUNC_DEF("packetBytes", 1, js_wifi_csi_batch_packet_bytes),
     JS_CFUNC_DEF("source", 1, js_wifi_csi_batch_source),
     JS_CFUNC_DEF("close", 0, js_wifi_csi_batch_close),
     JS_PROP_END,
@@ -1273,7 +1321,556 @@ static const JSClassDef js_websocket_client_obj =
 #endif
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
+static const JSPropDef js_wifi_wake_lock_proto[] = {
+    JS_CGETSET_DEF("acquired", js_wifi_wake_lock_acquired, NULL),
+    JS_CFUNC_DEF("close", 0, js_wifi_wake_lock_close),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_wake_lock_class =
+    JS_CLASS_DEF("WiFiWakeLock", 0, js_wifi_wake_lock_constructor,
+                 JS_CLASS_WIFI_WAKE_LOCK, NULL, js_wifi_wake_lock_proto,
+                 NULL, js_wifi_wake_lock_finalizer);
+
+static const JSPropDef js_wifi_monitor_session_proto[] = {
+    JS_CGETSET_DEF("_eventQueue", js_wifi_monitor_session_get_queue, NULL),
+    JS_CFUNC_DEF("configure", 1, js_wifi_monitor_session_configure),
+    JS_CFUNC_DEF("status", 0, js_wifi_monitor_session_status),
+    JS_CFUNC_DEF("stats", 0, js_wifi_monitor_session_stats),
+    JS_CFUNC_DEF("receive", 1, js_wifi_monitor_session_receive),
+    JS_CFUNC_DEF("receiveBatch", 1, js_wifi_monitor_session_receive_batch),
+    JS_CFUNC_DEF("start", 0, js_wifi_monitor_session_start),
+    JS_CFUNC_DEF("stop", 0, js_wifi_monitor_session_stop),
+    JS_CFUNC_DEF("close", 0, js_wifi_monitor_session_close),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_monitor_session_class =
+    JS_CLASS_DEF("WiFiMonitorSession", 0, js_wifi_monitor_session_constructor,
+                 JS_CLASS_WIFI_MONITOR_SESSION, NULL, js_wifi_monitor_session_proto,
+                 NULL, js_wifi_monitor_session_finalizer);
+static const JSPropDef js_wifi_monitor_frame_proto[] = {
+    JS_CFUNC_DEF("bytes", 0, js_wifi_monitor_frame_bytes),
+    JS_CFUNC_DEF("copyBytes", 0, js_wifi_monitor_frame_copy_bytes),
+    JS_CFUNC_DEF("source", 0, js_wifi_monitor_frame_source),
+    JS_CFUNC_DEF("close", 0, js_wifi_monitor_frame_close),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_monitor_frame_class =
+    JS_CLASS_DEF("WiFiMonitorFrame", 0, js_wifi_monitor_frame_constructor,
+                 JS_CLASS_WIFI_MONITOR_FRAME, NULL, js_wifi_monitor_frame_proto,
+                 NULL, js_wifi_monitor_frame_finalizer);
+static const JSPropDef js_wifi_monitor_batch_proto[] = {
+    JS_CFUNC_DEF("info", 1, js_wifi_monitor_batch_info),
+    JS_CFUNC_DEF("bytes", 1, js_wifi_monitor_batch_bytes),
+    JS_CFUNC_DEF("source", 1, js_wifi_monitor_batch_source),
+    JS_CFUNC_DEF("close", 0, js_wifi_monitor_batch_close),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_monitor_batch_class =
+    JS_CLASS_DEF("WiFiMonitorBatch", 0, js_wifi_monitor_batch_constructor,
+                 JS_CLASS_WIFI_MONITOR_BATCH, NULL, js_wifi_monitor_batch_proto,
+                 NULL, js_wifi_monitor_batch_finalizer);
+static const JSPropDef js_wifi_monitor[] = {
+    JS_CFUNC_DEF("capabilities", 0, js_wifi_monitor_capabilities),
+    JS_CFUNC_DEF("open", 1, js_wifi_monitor_open),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_monitor_obj = JS_OBJECT_DEF("monitor", js_wifi_monitor);
+
+static const JSPropDef js_wifi_raw_tx_session_proto[] = {
+    JS_CFUNC_DEF("startPeriodic", 1, js_wifi_raw_tx_start_periodic),
+    JS_CFUNC_DEF("send", 2, js_wifi_raw_tx_session_send),
+    JS_CFUNC_DEF("enqueue", 1, js_wifi_raw_tx_session_enqueue),
+    JS_CFUNC_DEF("enqueueBatch", 1, js_wifi_raw_tx_session_enqueue_batch),
+    JS_CFUNC_DEF("flush", 1, js_wifi_raw_tx_session_flush),
+    JS_CFUNC_DEF("status", 0, js_wifi_raw_tx_session_status),
+    JS_CFUNC_DEF("stats", 0, js_wifi_raw_tx_session_stats),
+    JS_CFUNC_DEF("close", 0, js_wifi_raw_tx_session_close),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_raw_tx_session_class =
+    JS_CLASS_DEF("WiFiRawTxSession", 0, js_wifi_raw_tx_session_constructor,
+                 JS_CLASS_WIFI_RAW_TX_SESSION, NULL, js_wifi_raw_tx_session_proto,
+                 NULL, js_wifi_raw_tx_session_finalizer);
+static const JSPropDef js_wifi_raw_periodic_proto[] = {
+    JS_CFUNC_DEF("status", 0, js_wifi_raw_periodic_status),
+    JS_CFUNC_DEF("stop", 0, js_wifi_raw_periodic_stop),
+    JS_CFUNC_DEF("close", 0, js_wifi_raw_periodic_close),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_raw_periodic_class =
+    JS_CLASS_DEF("WiFiRawPeriodicTx", 0, js_wifi_raw_periodic_constructor,
+                 JS_CLASS_WIFI_RAW_PERIODIC_TX, NULL, js_wifi_raw_periodic_proto,
+                 NULL, js_wifi_raw_periodic_finalizer);
+#if CONFIG_ESP_WIFI_FTM_ENABLE && CONFIG_ESP_WIFI_FTM_INITIATOR_SUPPORT
+static const JSPropDef js_wifi_ftm_proto[] = {
+    JS_CFUNC_DEF("status", 0, js_wifi_ftm_status),
+    JS_CFUNC_DEF("receive", 1, js_wifi_ftm_receive),
+    JS_CFUNC_DEF("end", 1, js_wifi_ftm_end),
+    JS_CFUNC_DEF("close", 1, js_wifi_ftm_close),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_ftm_class =
+    JS_CLASS_DEF("WiFiFtmSession", 0, js_wifi_ftm_constructor,
+                 JS_CLASS_WIFI_FTM_SESSION, NULL, js_wifi_ftm_proto, NULL, js_wifi_ftm_finalizer);
+#endif
+#if CONFIG_ESP_WIFI_FTM_ENABLE && (CONFIG_ESP_WIFI_FTM_INITIATOR_SUPPORT || (CONFIG_ESP_WIFI_FTM_RESPONDER_SUPPORT && CONFIG_ESP_WIFI_SOFTAP_SUPPORT))
+static const JSPropDef js_wifi_ftm[] = {
+    JS_CFUNC_DEF("capabilities", 0, js_wifi_ftm_capabilities),
+#if CONFIG_ESP_WIFI_FTM_INITIATOR_SUPPORT
+    JS_CFUNC_DEF("start", 1, js_wifi_ftm_start),
+    JS_CFUNC_DEF("status", 0, js_wifi_ftm_global_status),
+    JS_CFUNC_DEF("recover", 1, js_wifi_ftm_recover),
+#endif
+#if CONFIG_ESP_WIFI_FTM_RESPONDER_SUPPORT && CONFIG_ESP_WIFI_SOFTAP_SUPPORT
+    JS_CFUNC_DEF("setResponderOffsetCm", 1, js_wifi_ftm_set_responder_offset),
+    JS_CFUNC_DEF("responderOffsetStatus", 0, js_wifi_ftm_responder_offset_status),
+#endif
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_ftm_obj = JS_OBJECT_DEF("ftm", js_wifi_ftm);
+#endif
+static const JSPropDef js_wifi_roc_proto[] = {
+    JS_CFUNC_DEF("status", 0, js_wifi_roc_status),
+    JS_CFUNC_DEF("wait", 1, js_wifi_roc_wait),
+    JS_CFUNC_DEF("close", 1, js_wifi_roc_close),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_roc_class =
+    JS_CLASS_DEF("WiFiRocSession", 0, js_wifi_roc_constructor,
+                 JS_CLASS_WIFI_ROC_SESSION, NULL, js_wifi_roc_proto, NULL, js_wifi_roc_finalizer);
+static const JSPropDef js_wifi_action[] = {
+    JS_CFUNC_DEF("recover", 1, js_wifi_action_recover),
+    JS_CFUNC_DEF("remainOnChannel", 1, js_wifi_action_remain_on_channel),
+    JS_CFUNC_DEF("capabilities", 0, js_wifi_action_capabilities),
+    JS_CFUNC_DEF("send", 1, js_wifi_action_send),
+    JS_CFUNC_DEF("status", 0, js_wifi_action_status),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_action_obj = JS_OBJECT_DEF("action", js_wifi_action);
+
+static const JSPropDef js_wifi_raw_tx[] = {
+    JS_CFUNC_DEF("capabilities", 0, js_wifi_raw_tx_capabilities),
+    JS_CFUNC_DEF("send", 2, js_wifi_raw_tx_send),
+    JS_CFUNC_DEF("open", 1, js_wifi_raw_tx_open),
+    JS_CFUNC_DEF("recover", 1, js_wifi_raw_tx_recover),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_raw_tx_obj = JS_OBJECT_DEF("rawTx", js_wifi_raw_tx);
+
+static const JSPropDef js_wifi_vendor_ie[] = {
+    JS_CFUNC_DEF("watch", 1, js_wifi_vendor_ie_watch),
+    JS_CFUNC_DEF("set", 1, js_wifi_vendor_ie_set),
+    JS_CFUNC_DEF("clear", 1, js_wifi_vendor_ie_clear),
+    JS_CFUNC_DEF("status", 0, js_wifi_vendor_ie_status),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_vendor_ie_obj = JS_OBJECT_DEF("vendorIe", js_wifi_vendor_ie);
+
+static const JSPropDef js_wifi_driver[] = {
+    JS_CFUNC_DEF("restore", 0, js_wifi_driver_restore),
+    JS_CFUNC_DEF("capabilities", 0, js_wifi_driver_capabilities),
+    JS_CFUNC_DEF("status", 0, js_wifi_driver_status),
+    JS_CFUNC_DEF("restart", 1, js_wifi_driver_restart),
+    JS_CFUNC_DEF("setDynamicCarrierSense", 1, js_wifi_driver_set_dynamic_carrier_sense),
+    JS_CFUNC_DEF("setBssColorCollisionReporting", 1, js_wifi_driver_set_bss_color_collision_reporting),
+    JS_CFUNC_DEF("configure11bRate", 2, js_wifi_driver_configure_11b_rate),
+    JS_CFUNC_DEF("setCoexistencePowerManagement", 1, js_wifi_driver_set_coexistence_power_management),
+    JS_CFUNC_DEF("getEventMask", 0, js_wifi_driver_get_event_mask),
+    JS_CFUNC_DEF("setEventMask", 1, js_wifi_driver_set_event_mask),
+    JS_CFUNC_DEF("setStorage", 1, js_wifi_driver_set_storage),
+    JS_CFUNC_DEF("disablePmf", 1, js_wifi_driver_disable_pmf),
+    JS_CFUNC_DEF("setMode", 1, js_wifi_driver_set_mode),
+    JS_CFUNC_DEF("getAntenna", 0, js_wifi_driver_get_antenna),
+    JS_CFUNC_DEF("getAntennaGpio", 0, js_wifi_driver_get_antenna_gpio),
+    JS_CFUNC_DEF("setAntenna", 1, js_wifi_driver_set_antenna),
+    JS_CFUNC_DEF("setAntennaGpio", 1, js_wifi_driver_set_antenna_gpio),
+    JS_CFUNC_DEF("setConnectionlessWakeInterval", 1, js_wifi_driver_set_connectionless_wake_interval),
+    JS_CFUNC_DEF("getMode", 0, js_wifi_driver_get_mode),
+    JS_CFUNC_DEF("getCountry", 0, js_wifi_driver_get_country),
+    JS_CFUNC_DEF("setCountryDetails", 1, js_wifi_driver_set_country_details),
+    JS_CFUNC_DEF("getInterfaceConfig", 1, js_wifi_driver_get_interface_config),
+    JS_CFUNC_DEF("setInterfaceConfig", 2, js_wifi_driver_set_interface_config),
+    JS_CFUNC_DEF("getChannel", 0, js_wifi_driver_get_channel),
+    JS_CFUNC_DEF("getHomeChannel", 0, js_wifi_driver_get_home_channel),
+    JS_CFUNC_DEF("getBand", 0, js_wifi_driver_get_band),
+    JS_CFUNC_DEF("getBandMode", 0, js_wifi_driver_get_band_mode),
+    JS_CFUNC_DEF("setBand", 1, js_wifi_driver_set_band),
+    JS_CFUNC_DEF("setBandMode", 1, js_wifi_driver_set_band_mode),
+    JS_CFUNC_DEF("getPowerSave", 0, js_wifi_driver_get_power_save),
+    JS_CFUNC_DEF("getTxPower", 0, js_wifi_driver_get_tx_power),
+    JS_CFUNC_DEF("getRssi", 0, js_wifi_driver_get_rssi),
+    JS_CFUNC_DEF("getAid", 0, js_wifi_driver_get_aid),
+    JS_CFUNC_DEF("getNegotiatedPhy", 0, js_wifi_driver_get_negotiated_phy),
+    JS_CFUNC_DEF("getTsfTime", 1, js_wifi_driver_get_tsf_time),
+    JS_CFUNC_DEF("getInactiveTime", 1, js_wifi_driver_get_inactive_time),
+    JS_CFUNC_DEF("setInactiveTime", 2, js_wifi_driver_set_inactive_time),
+    JS_CFUNC_DEF("getScanParameters", 0, js_wifi_driver_get_scan_parameters),
+    JS_CFUNC_DEF("getStatisticsConfig", 0, js_wifi_driver_get_statistics_config),
+    JS_CFUNC_DEF("configureRxStatistics", 1, js_wifi_driver_configure_rx_statistics),
+    JS_CFUNC_DEF("setTxStatistics", 2, js_wifi_driver_set_tx_statistics),
+    JS_CFUNC_DEF("setScanParameters", 1, js_wifi_driver_set_scan_parameters),
+    JS_CFUNC_DEF("setRssiThreshold", 1, js_wifi_driver_set_rssi_threshold),
+    JS_CFUNC_DEF("getProtocol", 1, js_wifi_driver_get_protocol),
+    JS_CFUNC_DEF("getProtocols", 1, js_wifi_driver_get_protocols),
+    JS_CFUNC_DEF("getBandwidth", 1, js_wifi_driver_get_bandwidth),
+    JS_CFUNC_DEF("getBandwidths", 1, js_wifi_driver_get_bandwidths),
+    JS_CFUNC_DEF("setProtocol", 2, js_wifi_driver_set_protocol),
+    JS_CFUNC_DEF("setProtocols", 2, js_wifi_driver_set_protocols),
+    JS_CFUNC_DEF("setBandwidth", 2, js_wifi_driver_set_bandwidth),
+    JS_CFUNC_DEF("setBandwidths", 2, js_wifi_driver_set_bandwidths),
+    JS_CFUNC_DEF("configureTxRate", 2, js_wifi_driver_configure_tx_rate),
+    JS_CFUNC_DEF("txRateStatus", 1, js_wifi_driver_tx_rate_status),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_driver_obj = JS_OBJECT_DEF("driver", js_wifi_driver);
+
+#if CONFIG_ESP_WIFI_RRM_SUPPORT || CONFIG_ESP_WIFI_WNM_SUPPORT || CONFIG_ESP_WIFI_11R_SUPPORT
+#if CONFIG_ESP_WIFI_RRM_SUPPORT
+static const JSPropDef js_wifi_neighbor_proto[] = {
+    JS_CFUNC_DEF("status", 0, js_wifi_neighbor_status),
+    JS_CFUNC_DEF("receive", 1, js_wifi_neighbor_receive),
+    JS_CFUNC_DEF("cancel", 0, js_wifi_neighbor_cancel),
+    JS_CFUNC_DEF("close", 0, js_wifi_neighbor_close),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_neighbor_class =
+    JS_CLASS_DEF("WiFiNeighborReportRequest", 0, js_wifi_neighbor_constructor,
+                 JS_CLASS_WIFI_NEIGHBOR_REQUEST, NULL, js_wifi_neighbor_proto, NULL, js_wifi_neighbor_finalizer);
+#endif
+static const JSPropDef js_wifi_roaming[] = {
+    JS_CFUNC_DEF("watch", 1, js_wifi_roaming_watch),
+    JS_CFUNC_DEF("capabilities", 0, js_wifi_roaming_capabilities),
+#if CONFIG_ESP_WIFI_RRM_SUPPORT
+    JS_CFUNC_DEF("isRrmSupported", 0, js_wifi_roaming_is_rrm_supported),
+    JS_CFUNC_DEF("requestNeighborReport", 1, js_wifi_neighbor_request),
+    JS_CFUNC_DEF("status", 0, js_wifi_neighbor_module_status),
+#endif
+#if CONFIG_ESP_WIFI_WNM_SUPPORT
+    JS_CFUNC_DEF("isBtmSupported", 0, js_wifi_roaming_is_btm_supported),
+    JS_CFUNC_DEF("sendBtmQuery", 1, js_wifi_roaming_send_btm_query),
+#endif
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_roaming_obj = JS_OBJECT_DEF("roaming", js_wifi_roaming);
+#endif
+#if CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT
+static const JSPropDef js_wifi_enterprise[] = {
+    JS_CFUNC_DEF("capabilities", 0, js_wifi_enterprise_capabilities),
+    JS_CFUNC_DEF("configure", 1, js_wifi_enterprise_configure),
+    JS_CFUNC_DEF("status", 0, js_wifi_enterprise_status),
+    JS_CFUNC_DEF("enable", 1, js_wifi_enterprise_enable),
+    JS_CFUNC_DEF("disable", 1, js_wifi_enterprise_disable),
+    JS_CFUNC_DEF("clear", 1, js_wifi_enterprise_clear),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_enterprise_obj = JS_OBJECT_DEF("enterprise", js_wifi_enterprise);
+#endif
+#if CONFIG_SOC_WIFI_HE_SUPPORT && CONFIG_IDF_TARGET_ESP32C5
+static const JSPropDef js_wifi_twt_agreement_proto[] = {
+    JS_CFUNC_DEF("status", 0, js_wifi_twt_agreement_status),
+    JS_CFUNC_DEF("close", 1, js_wifi_twt_agreement_close),
+    JS_CFUNC_DEF("suspend", 1, js_wifi_twt_agreement_suspend),
+    JS_CFUNC_DEF("resume", 1, js_wifi_twt_agreement_resume),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_twt_agreement_class =
+    JS_CLASS_DEF("WiFiTwtAgreement", 0, js_wifi_twt_agreement_constructor,
+        JS_CLASS_WIFI_TWT_AGREEMENT, NULL, js_wifi_twt_agreement_proto, NULL, js_wifi_twt_agreement_finalizer);
+static const JSPropDef js_wifi_twt[] = {
+    JS_CFUNC_DEF("getConfig", 0, js_wifi_twt_get_config),
+    JS_CFUNC_DEF("configure", 1, js_wifi_twt_configure),
+    JS_CFUNC_DEF("getFlowStatus", 0, js_wifi_twt_get_flow_status),
+    JS_CFUNC_DEF("setTargetWakeTimeOffset", 1, js_wifi_twt_set_target_wake_time_offset),
+    JS_CFUNC_DEF("capabilities", 0, js_wifi_twt_capabilities),
+    JS_CFUNC_DEF("status", 0, js_wifi_twt_status),
+    JS_CFUNC_DEF("probe", 1, js_wifi_twt_probe),
+    JS_CFUNC_DEF("broadcasts", 1, js_wifi_twt_broadcasts),
+    JS_CFUNC_DEF("setupIndividual", 1, js_wifi_twt_setup_individual),
+    JS_CFUNC_DEF("setupBroadcast", 1, js_wifi_twt_setup_broadcast),
+    JS_CFUNC_DEF("agreements", 0, js_wifi_twt_agreements),
+    JS_CFUNC_DEF("closeAll", 1, js_wifi_twt_close_all),
+    JS_CFUNC_DEF("recover", 1, js_wifi_twt_recover),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_twt_obj = JS_OBJECT_DEF("twt", js_wifi_twt);
+#endif
+#if CONFIG_ESP_NETIF_USES_TCPIP_WITH_BSD_API && CONFIG_LWIP_IPV4
+static const JSPropDef js_wifi_smartconfig_proto[] = {
+    JS_CFUNC_DEF("status", 0, js_wifi_smartconfig_status),
+    JS_CFUNC_DEF("watch", 1, js_wifi_smartconfig_watch),
+    JS_CFUNC_DEF("receive", 1, js_wifi_smartconfig_receive),
+    JS_CFUNC_DEF("close", 1, js_wifi_smartconfig_close),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_smartconfig_class =
+    JS_CLASS_DEF("WiFiSmartConfigSession", 0, js_wifi_smartconfig_constructor,
+        JS_CLASS_WIFI_SMARTCONFIG_SESSION, NULL, js_wifi_smartconfig_proto, NULL, js_wifi_smartconfig_finalizer);
+static const JSPropDef js_wifi_smartconfig[] = {
+    JS_CFUNC_DEF("capabilities", 0, js_wifi_smartconfig_capabilities),
+    JS_CFUNC_DEF("status", 0, js_wifi_smartconfig_global_status),
+    JS_CFUNC_DEF("start", 1, js_wifi_smartconfig_start),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_smartconfig_obj = JS_OBJECT_DEF("smartConfig", js_wifi_smartconfig);
+static const JSPropDef js_wifi_wps_proto[] = {
+    JS_CFUNC_DEF("status", 0, js_wifi_wps_status),
+    JS_CFUNC_DEF("watch", 1, js_wifi_wps_watch),
+    JS_CFUNC_DEF("receive", 1, js_wifi_wps_receive),
+    JS_CFUNC_DEF("close", 1, js_wifi_wps_close),
+    JS_CFUNC_DEF("cancel", 0, js_wifi_wps_cancel),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_wps_class =
+    JS_CLASS_DEF("WiFiWpsSession", 0, js_wifi_wps_constructor,
+        JS_CLASS_WIFI_WPS_SESSION, NULL, js_wifi_wps_proto, NULL, js_wifi_wps_finalizer);
+#if CONFIG_ESP_WIFI_WPS_SOFTAP_REGISTRAR
+static const JSPropDef js_wifi_wps_ap_proto[] = {
+    JS_CFUNC_DEF("status", 0, js_wifi_wps_ap_status),
+    JS_CFUNC_DEF("watch", 1, js_wifi_wps_ap_watch),
+    JS_CFUNC_DEF("receive", 1, js_wifi_wps_ap_receive),
+    JS_CFUNC_DEF("close", 1, js_wifi_wps_ap_close),
+    JS_CFUNC_DEF("cancel", 0, js_wifi_wps_ap_cancel),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_wps_ap_class =
+    JS_CLASS_DEF("WiFiWpsAPSession", 0, js_wifi_wps_ap_constructor,
+        JS_CLASS_WIFI_WPS_AP_SESSION, NULL, js_wifi_wps_ap_proto, NULL, js_wifi_wps_ap_finalizer);
+#endif
+static const JSPropDef js_wifi_wps[] = {
+    JS_CFUNC_DEF("capabilities", 0, js_wifi_wps_capabilities),
+    JS_CFUNC_DEF("status", 0, js_wifi_wps_global_status),
+    JS_CFUNC_DEF("start", 1, js_wifi_wps_start),
+#if CONFIG_ESP_WIFI_WPS_SOFTAP_REGISTRAR
+    JS_CFUNC_DEF("startAP", 1, js_wifi_wps_ap_start),
+    JS_CFUNC_DEF("apStatus", 0, js_wifi_wps_ap_global_status),
+#endif
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_wps_obj = JS_OBJECT_DEF("wps", js_wifi_wps);
+#if CONFIG_ESP_WIFI_DPP_SUPPORT
+static const JSPropDef js_wifi_dpp_proto[] = {
+    JS_CFUNC_DEF("status", 0, js_wifi_dpp_status),
+    JS_CFUNC_DEF("watch", 1, js_wifi_dpp_watch),
+    JS_CFUNC_DEF("receive", 1, js_wifi_dpp_receive),
+    JS_CFUNC_DEF("connect", 2, js_wifi_dpp_connect),
+    JS_CFUNC_DEF("recover", 0, js_wifi_dpp_recover),
+    JS_CFUNC_DEF("close", 1, js_wifi_dpp_close),
+    JS_CFUNC_DEF("cancel", 0, js_wifi_dpp_cancel),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_dpp_class =
+    JS_CLASS_DEF("WiFiDppSession", 0, js_wifi_dpp_constructor,
+        JS_CLASS_WIFI_DPP_SESSION, NULL, js_wifi_dpp_proto, NULL, js_wifi_dpp_finalizer);
+static const JSPropDef js_wifi_dpp[] = {
+    JS_CFUNC_DEF("capabilities", 0, js_wifi_dpp_capabilities),
+    JS_CFUNC_DEF("status", 0, js_wifi_dpp_global_status),
+    JS_CFUNC_DEF("startEnrollee", 1, js_wifi_dpp_start),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_dpp_obj = JS_OBJECT_DEF("dpp", js_wifi_dpp);
+#endif
+#endif
+
+#if CONFIG_ESP_WIFI_NAN_SYNC_ENABLE || CONFIG_ESP_WIFI_NAN_USD_ENABLE
+static const JSPropDef js_wifi_nan_proto[] = {
+#if CONFIG_ESP_WIFI_NAN_SYNC_ENABLE
+    JS_CFUNC_DEF("getServiceInfo", 1, js_wifi_nan_get_service_info),
+    JS_CFUNC_DEF("getPeerInfo", 2, js_wifi_nan_get_peer_info),
+    JS_CFUNC_DEF("getPeerRecords", 1, js_wifi_nan_get_peer_records),
+#endif
+    JS_CFUNC_DEF("publish", 1, js_wifi_nan_publish),
+    JS_CFUNC_DEF("subscribe", 1, js_wifi_nan_subscribe),
+    JS_CFUNC_DEF("status", 0, js_wifi_nan_status),
+    JS_CFUNC_DEF("ready", 1, js_wifi_nan_ready),
+    JS_CFUNC_DEF("close", 1, js_wifi_nan_close),
+    JS_CFUNC_DEF("cancel", 0, js_wifi_nan_cancel),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_nan_class =
+    JS_CLASS_DEF("WiFiNanSession", 0, js_wifi_nan_constructor,
+        JS_CLASS_WIFI_NAN_SESSION, NULL, js_wifi_nan_proto, NULL, js_wifi_nan_finalizer);
+static const JSPropDef js_wifi_nan_service_proto[] = {
+#if CONFIG_ESP_WIFI_NAN_PAIRING
+    JS_CFUNC_DEF("preparePairing", 1, js_wifi_nan_pairing_prepare),
+    JS_CFUNC_DEF("requestPairing", 1, js_wifi_nan_pairing_request),
+    JS_CFUNC_DEF("receivePairing", 1, js_wifi_nan_pairing_receive),
+    JS_CFUNC_DEF("pairingCredentials", 1, js_wifi_nan_pairing_credentials),
+#endif
+#if CONFIG_ESP_WIFI_NAN_SYNC_ENABLE
+    JS_CFUNC_DEF("requestDataPath", 1, js_wifi_nan_path_request),
+    JS_CFUNC_DEF("receiveDataPath", 1, js_wifi_nan_path_receive),
+#endif
+    JS_CFUNC_DEF("status", 0, js_wifi_nan_service_status),
+    JS_CFUNC_DEF("ready", 1, js_wifi_nan_service_ready),
+    JS_CFUNC_DEF("send", 1, js_wifi_nan_service_send),
+    JS_CFUNC_DEF("close", 1, js_wifi_nan_service_close),
+    JS_CFUNC_DEF("cancel", 0, js_wifi_nan_service_cancel),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_nan_service_class =
+    JS_CLASS_DEF("WiFiNanService", 0, js_wifi_nan_service_constructor,
+        JS_CLASS_WIFI_NAN_SERVICE, NULL, js_wifi_nan_service_proto, NULL, js_wifi_nan_service_finalizer);
+#if CONFIG_ESP_WIFI_NAN_SYNC_ENABLE
+static const JSPropDef js_wifi_nan_path_proto[] = {
+    JS_CFUNC_DEF("status", 0, js_wifi_nan_path_status),
+    JS_CFUNC_DEF("ready", 1, js_wifi_nan_path_ready),
+    JS_CFUNC_DEF("respond", 1, js_wifi_nan_path_respond),
+    JS_CFUNC_DEF("close", 1, js_wifi_nan_path_close),
+    JS_CFUNC_DEF("cancel", 0, js_wifi_nan_path_cancel),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_nan_path_class =
+    JS_CLASS_DEF("WiFiNanDataPath", 0, js_wifi_nan_path_constructor,
+        JS_CLASS_WIFI_NAN_PATH, NULL, js_wifi_nan_path_proto, NULL, js_wifi_nan_path_finalizer);
+#endif
+#if CONFIG_ESP_WIFI_NAN_PAIRING
+static const JSPropDef js_wifi_nan_pairing_proto[] = {
+    JS_CFUNC_DEF("status", 0, js_wifi_nan_pairing_status),
+    JS_CFUNC_DEF("confirm", 1, js_wifi_nan_pairing_confirm),
+    JS_CFUNC_DEF("ready", 1, js_wifi_nan_pairing_ready),
+    JS_CFUNC_DEF("close", 1, js_wifi_nan_pairing_close),
+    JS_CFUNC_DEF("cancel", 0, js_wifi_nan_pairing_cancel),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_nan_pairing_class =
+    JS_CLASS_DEF("WiFiNanPairing", 0, js_wifi_nan_pairing_constructor,
+        JS_CLASS_WIFI_NAN_PAIRING, NULL, js_wifi_nan_pairing_proto, NULL, js_wifi_nan_pairing_finalizer);
+#endif
+static const JSPropDef js_wifi_nan[] = {
+    JS_CFUNC_DEF("capabilities", 0, js_wifi_nan_capabilities),
+    JS_CFUNC_DEF("status", 0, js_wifi_nan_global_status),
+    JS_CFUNC_DEF("open", 1, js_wifi_nan_open),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_nan_obj = JS_OBJECT_DEF("nan", js_wifi_nan);
+#endif
+
+static const JSPropDef js_wifi_diagnostics[] = {
+    JS_CFUNC_DEF("snapshot", 0, js_wifi_diagnostics_snapshot),
+    JS_CFUNC_DEF("dumpDriverStats", 1, js_wifi_diagnostics_dump_driver_stats),
+    JS_CFUNC_DEF("idfApiCoverage", 0, js_wifi_diagnostics_idf_api_coverage),
+    JS_CFUNC_DEF("resetFrameworkCounters", 0, js_wifi_diagnostics_reset_counters),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_diagnostics_obj = JS_OBJECT_DEF("diagnostics", js_wifi_diagnostics);
+
+#if CONFIG_ESP_WIFI_WAPI_PSK
+static const JSPropDef js_wifi_wapi[] = {
+    JS_CFUNC_DEF("capabilities", 0, js_wifi_wapi_capabilities),
+    JS_CFUNC_DEF("status", 0, js_wifi_wapi_status),
+    JS_CFUNC_DEF("enable", 1, js_wifi_wapi_enable),
+    JS_CFUNC_DEF("disable", 1, js_wifi_wapi_disable),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_wapi_obj = JS_OBJECT_DEF("wapi", js_wifi_wapi);
+#endif
+
+#if ESP32_MQUICKJS_WIFI_MESH_AVAILABLE
+static const JSPropDef js_wifi_mesh_proto[] = {
+    JS_CFUNC_DEF("ready", 1, js_wifi_mesh_ready),
+    JS_CFUNC_DEF("close", 1, js_wifi_mesh_close),
+    JS_CFUNC_DEF("recover", 1, js_wifi_mesh_recover),
+    JS_CFUNC_DEF("receive", 1, js_wifi_mesh_receive),
+    JS_CFUNC_DEF("send", 1, js_wifi_mesh_send),
+    JS_CFUNC_DEF("routingTable", 1, js_wifi_mesh_routing_table),
+    JS_CFUNC_DEF("groups", 1, js_wifi_mesh_groups),
+    JS_CFUNC_DEF("addGroups", 1, js_wifi_mesh_add_groups),
+    JS_CFUNC_DEF("removeGroups", 1, js_wifi_mesh_remove_groups),
+    JS_CFUNC_DEF("setToDSState", 1, js_wifi_mesh_set_tods),
+    JS_CFUNC_DEF("connect", 1, js_wifi_mesh_connect),
+    JS_CFUNC_DEF("disconnect", 1, js_wifi_mesh_disconnect),
+    JS_CFUNC_DEF("flushUpstream", 1, js_wifi_mesh_flush_upstream),
+    JS_CFUNC_DEF("configuration", 1, js_wifi_mesh_configuration),
+    JS_CFUNC_DEF("setRouter", 1, js_wifi_mesh_set_router),
+    JS_CFUNC_DEF("setMeshId", 1, js_wifi_mesh_set_mesh_id),
+    JS_CFUNC_DEF("setType", 1, js_wifi_mesh_set_type),
+    JS_CFUNC_DEF("setSelfOrganized", 1, js_wifi_mesh_set_self_organized),
+    JS_CFUNC_DEF("setFixedRoot", 1, js_wifi_mesh_set_fixed_root),
+    JS_CFUNC_DEF("setRootConflicts", 1, js_wifi_mesh_set_root_conflicts),
+    JS_CFUNC_DEF("setAssociationExpiry", 1, js_wifi_mesh_set_association_expiry),
+    JS_CFUNC_DEF("setRootHealingDelay", 1, js_wifi_mesh_set_root_healing_delay),
+    JS_CFUNC_DEF("setIEEncryption", 1, js_wifi_mesh_set_ie_encryption),
+    JS_CFUNC_DEF("waiveRoot", 1, js_wifi_mesh_waive_root),
+    JS_CFUNC_DEF("switchChannel", 1, js_wifi_mesh_switch_channel),
+    JS_CFUNC_DEF("setDeviceDuty", 1, js_wifi_mesh_set_device_duty),
+    JS_CFUNC_DEF("setNetworkDuty", 1, js_wifi_mesh_set_network_duty),
+    JS_CFUNC_DEF("signalDuty", 1, js_wifi_mesh_signal_duty),
+    JS_CFUNC_DEF("subnet", 1, js_wifi_mesh_subnet),
+    JS_CFUNC_DEF("hasGroup", 1, js_wifi_mesh_has_group),
+    JS_CFUNC_DEF("upstreamCapacity", 1, js_wifi_mesh_upstream_capacity),
+    JS_CFUNC_DEF("powerStatus", 1, js_wifi_mesh_power_status),
+    JS_CFUNC_DEF("tsfTime", 1, js_wifi_mesh_tsf_time),
+    JS_CFUNC_DEF("setParent", 1, js_wifi_mesh_set_parent),
+    JS_CFUNC_DEF("scan", 1, js_wifi_mesh_scan),
+    JS_CFUNC_DEF("receiveScan", 1, js_wifi_mesh_receive_scan),
+    JS_CFUNC_DEF("flushScan", 1, js_wifi_mesh_flush_scan),
+
+
+    JS_CFUNC_DEF("status", 0, js_wifi_mesh_status),
+    JS_CFUNC_DEF("watch", 1, js_wifi_mesh_watch),
+    JS_CFUNC_DEF("cancel", 0, js_wifi_mesh_cancel),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_mesh_class =
+    JS_CLASS_DEF("WiFiMeshSession", 0, js_wifi_mesh_constructor,
+        JS_CLASS_WIFI_MESH_SESSION, NULL, js_wifi_mesh_proto, NULL, js_wifi_mesh_finalizer);
+static const JSPropDef js_wifi_mesh[] = {
+    JS_CFUNC_DEF("capabilities", 0, js_wifi_mesh_capabilities),
+    JS_CFUNC_DEF("open", 1, js_wifi_mesh_open),
+    JS_PROP_END,
+};
+static const JSClassDef js_wifi_mesh_obj = JS_OBJECT_DEF("mesh", js_wifi_mesh);
+#endif
+
 static const JSPropDef js_wifi[] = {
+#if ESP32_MQUICKJS_WIFI_MESH_AVAILABLE
+    JS_PROP_CLASS_DEF("mesh", &js_wifi_mesh_obj),
+#endif
+#if CONFIG_ESP_WIFI_WAPI_PSK
+    JS_PROP_CLASS_DEF("wapi", &js_wifi_wapi_obj),
+#endif
+    JS_PROP_CLASS_DEF("diagnostics", &js_wifi_diagnostics_obj),
+#if CONFIG_ESP_WIFI_NAN_SYNC_ENABLE || CONFIG_ESP_WIFI_NAN_USD_ENABLE
+    JS_PROP_CLASS_DEF("nan", &js_wifi_nan_obj),
+#endif
+#if CONFIG_ESP_NETIF_USES_TCPIP_WITH_BSD_API && CONFIG_LWIP_IPV4
+    JS_PROP_CLASS_DEF("smartConfig", &js_wifi_smartconfig_obj),
+    JS_PROP_CLASS_DEF("wps", &js_wifi_wps_obj),
+#if CONFIG_ESP_WIFI_DPP_SUPPORT
+    JS_PROP_CLASS_DEF("dpp", &js_wifi_dpp_obj),
+#endif
+#endif
+#if CONFIG_SOC_WIFI_HE_SUPPORT && CONFIG_IDF_TARGET_ESP32C5
+    JS_PROP_CLASS_DEF("twt", &js_wifi_twt_obj),
+#endif
+#if CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT
+    JS_PROP_CLASS_DEF("enterprise", &js_wifi_enterprise_obj),
+#endif
+#if CONFIG_ESP_WIFI_RRM_SUPPORT || CONFIG_ESP_WIFI_WNM_SUPPORT || CONFIG_ESP_WIFI_11R_SUPPORT
+    JS_PROP_CLASS_DEF("roaming", &js_wifi_roaming_obj),
+#endif
+#if CONFIG_ESP_WIFI_FTM_ENABLE && (CONFIG_ESP_WIFI_FTM_INITIATOR_SUPPORT || (CONFIG_ESP_WIFI_FTM_RESPONDER_SUPPORT && CONFIG_ESP_WIFI_SOFTAP_SUPPORT))
+    JS_PROP_CLASS_DEF("ftm", &js_wifi_ftm_obj),
+#endif
+    JS_PROP_CLASS_DEF("driver", &js_wifi_driver_obj),
+    JS_PROP_CLASS_DEF("action", &js_wifi_action_obj),
+    JS_PROP_CLASS_DEF("rawTx", &js_wifi_raw_tx_obj),
+    JS_PROP_CLASS_DEF("vendorIe", &js_wifi_vendor_ie_obj),
+    JS_PROP_CLASS_DEF("monitor", &js_wifi_monitor_obj),
+    JS_CFUNC_DEF("capabilities", 0, js_wifi_capabilities),
+    JS_CFUNC_DEF("watch", 1, js_wifi_watch),
+    JS_CFUNC_DEF("acquireWakeLock", 0, js_wifi_acquire_wake_lock),
+    JS_CFUNC_DEF("configure", 1, js_wifi_configure),
+    JS_CFUNC_DEF("startAP", 1, js_wifi_start_ap),
+    JS_CFUNC_DEF("stopAP", 1, js_wifi_stop_ap),
+    JS_CFUNC_DEF("apClients", 1, js_wifi_ap_clients),
+    JS_CFUNC_DEF("deauthClient", 1, js_wifi_deauth_client),
+    JS_CFUNC_DEF("getMac", 1, js_wifi_get_mac),
+    JS_CFUNC_DEF("setMac", 2, js_wifi_set_mac),
+    JS_CFUNC_DEF("setCountry", 2, js_wifi_set_country),
+    JS_CFUNC_DEF("setChannel", 2, js_wifi_set_channel),
+    JS_CFUNC_DEF("start", 1, js_wifi_start),
+    JS_CFUNC_DEF("stop", 1, js_wifi_stop),
     JS_CGETSET_DEF("DEFAULT_TIMEOUT_MS", js_wifi_get_default_timeout_ms, NULL),
     JS_CFUNC_DEF("connect", 2, js_wifi_connect),
     JS_CFUNC_DEF("disconnect", 1, js_wifi_disconnect),
@@ -1402,6 +1999,47 @@ static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("espNow", &js_espnow_obj),
     JS_PROP_CLASS_DEF("EspNowSession", &js_espnow_session_class),
     JS_PROP_CLASS_DEF("EspNowPeer", &js_espnow_peer_class),
+#endif
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
+    JS_PROP_CLASS_DEF("WiFiWakeLock", &js_wifi_wake_lock_class),
+    JS_PROP_CLASS_DEF("WiFiMonitorSession", &js_wifi_monitor_session_class),
+    JS_PROP_CLASS_DEF("WiFiMonitorFrame", &js_wifi_monitor_frame_class),
+    JS_PROP_CLASS_DEF("WiFiMonitorBatch", &js_wifi_monitor_batch_class),
+    JS_PROP_CLASS_DEF("WiFiRocSession", &js_wifi_roc_class),
+#if ESP32_MQUICKJS_WIFI_MESH_AVAILABLE
+    JS_PROP_CLASS_DEF("WiFiMeshSession", &js_wifi_mesh_class),
+#endif
+#if CONFIG_ESP_WIFI_NAN_SYNC_ENABLE || CONFIG_ESP_WIFI_NAN_USD_ENABLE
+    JS_PROP_CLASS_DEF("WiFiNanSession", &js_wifi_nan_class),
+    JS_PROP_CLASS_DEF("WiFiNanService", &js_wifi_nan_service_class),
+#if CONFIG_ESP_WIFI_NAN_PAIRING
+    JS_PROP_CLASS_DEF("WiFiNanPairing", &js_wifi_nan_pairing_class),
+#endif
+#if CONFIG_ESP_WIFI_NAN_SYNC_ENABLE
+    JS_PROP_CLASS_DEF("WiFiNanDataPath", &js_wifi_nan_path_class),
+#endif
+#endif
+#if CONFIG_ESP_WIFI_RRM_SUPPORT
+    JS_PROP_CLASS_DEF("WiFiNeighborReportRequest", &js_wifi_neighbor_class),
+#endif
+#if CONFIG_ESP_WIFI_FTM_ENABLE && CONFIG_ESP_WIFI_FTM_INITIATOR_SUPPORT
+    JS_PROP_CLASS_DEF("WiFiFtmSession", &js_wifi_ftm_class),
+#endif
+#if CONFIG_ESP_NETIF_USES_TCPIP_WITH_BSD_API && CONFIG_LWIP_IPV4
+    JS_PROP_CLASS_DEF("WiFiSmartConfigSession", &js_wifi_smartconfig_class),
+    JS_PROP_CLASS_DEF("WiFiWpsSession", &js_wifi_wps_class),
+#if CONFIG_ESP_WIFI_DPP_SUPPORT
+    JS_PROP_CLASS_DEF("WiFiDppSession", &js_wifi_dpp_class),
+#endif
+#if CONFIG_ESP_WIFI_WPS_SOFTAP_REGISTRAR
+    JS_PROP_CLASS_DEF("WiFiWpsAPSession", &js_wifi_wps_ap_class),
+#endif
+#endif
+#if CONFIG_SOC_WIFI_HE_SUPPORT && CONFIG_IDF_TARGET_ESP32C5
+    JS_PROP_CLASS_DEF("WiFiTwtAgreement", &js_wifi_twt_agreement_class),
+#endif
+    JS_PROP_CLASS_DEF("WiFiRawTxSession", &js_wifi_raw_tx_session_class),
+    JS_PROP_CLASS_DEF("WiFiRawPeriodicTx", &js_wifi_raw_periodic_class),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI
     JS_PROP_CLASS_DEF("WiFiCsiSession", &js_wifi_csi_session_class),

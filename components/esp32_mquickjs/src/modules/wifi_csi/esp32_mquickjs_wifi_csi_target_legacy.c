@@ -50,7 +50,8 @@ static esp32_mquickjs_wifi_csi_secondary_t legacy_secondary(uint8_t value)
 {
     return value == 1U ? ESP32_MQUICKJS_WIFI_CSI_SECONDARY_ABOVE :
            value == 2U ? ESP32_MQUICKJS_WIFI_CSI_SECONDARY_BELOW :
-                         ESP32_MQUICKJS_WIFI_CSI_SECONDARY_NONE;
+           value == 0U ? ESP32_MQUICKJS_WIFI_CSI_SECONDARY_NONE :
+                         (esp32_mquickjs_wifi_csi_secondary_t)3;
 }
 
 void esp32_mquickjs_wifi_csi_target_normalize_metadata(
@@ -61,37 +62,47 @@ void esp32_mquickjs_wifi_csi_target_normalize_metadata(
     const wifi_pkt_rx_ctrl_t *rx = &info->rx_ctrl;
 
     memset(metadata, 0, sizeof(*metadata));
-    memcpy(metadata->source_mac, info->mac, 6U);
-    memcpy(metadata->destination_mac, info->dmac, 6U);
-    metadata->destination_mac_available = true;
+    /* SDK mac/dmac are transmitter/receiver, not DS-aware logical roles.
+     * rx_seq is not initialized on every SDK error path. Publication derives
+     * address roles and sequence only from the proven same-callback header. */
+    metadata->frame_type = ESP32_MQUICKJS_WIFI_PACKET_UNKNOWN;
+    metadata->rx_sequence = UINT32_MAX;
     metadata->rssi = rx->rssi;
     metadata->noise_floor = rx->noise_floor;
     metadata->noise_floor_available = true;
     metadata->channel = rx->channel;
     metadata->secondary = legacy_secondary(rx->secondary_channel);
     metadata->driver_timestamp_us = rx->timestamp;
-    metadata->rx_sequence = info->rx_seq;
     metadata->antenna = rx->ant;
     metadata->antenna_available = true;
     metadata->first_word_invalid = info->first_word_invalid;
-    metadata->stbc = rx->stbc != 0U;
-    metadata->stbc_available = true;
     if (rx->sig_mode == 1U) {
+        metadata->guard_interval_ns = rx->sgi ? 400U : 800U;
         metadata->phy = ESP32_MQUICKJS_WIFI_CSI_PHY_HT;
         metadata->mcs = rx->mcs;
-        metadata->mcs_available = true;
+        metadata->mcs_available = rx->mcs <= 76;
         metadata->bandwidth_mhz = rx->cwb ? 40U : 20U;
         metadata->bandwidth_available = true;
-    } else if (rx->sig_mode == 3U) {
-        metadata->phy = ESP32_MQUICKJS_WIFI_CSI_PHY_VHT;
-        metadata->mcs = rx->mcs;
-        metadata->mcs_available = true;
-        metadata->bandwidth_mhz = rx->cwb ? 40U : 20U;
-        metadata->bandwidth_available = true;
-    } else {
+        metadata->stbc = rx->stbc != 0;
+        metadata->stbc_available = true;
+#define PHY_BOOL(value, name, available) do { \
+    metadata->phy_flags |= ESP32_MQUICKJS_WIFI_RX_WIRE_##available; \
+    if (value) metadata->phy_flags |= ESP32_MQUICKJS_WIFI_RX_WIRE_##name; \
+} while (0)
+        PHY_BOOL(rx->sgi, SGI, SGI_AVAILABLE);
+        PHY_BOOL(rx->fec_coding, LDPC, FEC_AVAILABLE);
+        PHY_BOOL(rx->aggregation, AGGREGATION, AGGREGATION_AVAILABLE);
+        PHY_BOOL(rx->smoothing, SMOOTHING, SMOOTHING_AVAILABLE);
+        PHY_BOOL(!rx->not_sounding, SOUNDING, SOUNDING_AVAILABLE);
+#undef PHY_BOOL
+        metadata->ampdu_count = rx->ampdu_cnt;
+        metadata->ampdu_count_available = rx->ampdu_cnt != UINT8_MAX;
+    } else if (rx->sig_mode == 0U) {
         metadata->phy = ESP32_MQUICKJS_WIFI_CSI_PHY_LEGACY;
         metadata->bandwidth_mhz = 20U;
         metadata->bandwidth_available = true;
+    } else {
+        metadata->phy = ESP32_MQUICKJS_WIFI_CSI_PHY_UNKNOWN;
     }
     esp32_mquickjs_wifi_csi_target_build_legacy_layout(
         metadata, config, info->len);

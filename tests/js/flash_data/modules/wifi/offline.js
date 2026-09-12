@@ -106,11 +106,19 @@ test("wifi/offline", function () {
   try {
     wifi.connect(1234);
   } catch (connectTypeFailure) {
+    test.ok(connectTypeFailure instanceof TypeError,
+      "a numeric SSID should raise TypeError");
     connectTypeError = String(connectTypeFailure && connectTypeFailure.message
       ? connectTypeFailure.message : connectTypeFailure);
   }
-  test.ok(connectTypeError.indexOf("string SSID") >= 0,
-    "wifi.connect should not coerce a non-string SSID");
+  test.ok(connectTypeError.indexOf("SSID") >= 0,
+    "wifi.connect should not coerce a numeric SSID");
+  test.equal(wifi.status().radio.generation, status.radio.generation,
+    "invalid connect input should preserve Radio identity");
+  test.equal(wifi.status().radio.clients.total, status.radio.clients.total,
+    "invalid connect input should not acquire a Radio owner");
+  test.equal(wifi.status().started, status.started,
+    "invalid connect input should not start Wi-Fi");
   try {
     wifi.connect("");
   } catch (connectSsidRangeFailure) {
@@ -118,7 +126,7 @@ test("wifi/offline", function () {
       connectSsidRangeFailure.message
       ? connectSsidRangeFailure.message : connectSsidRangeFailure);
   }
-  test.ok(connectSsidRangeError.indexOf("expects 1..32 bytes") >= 0,
+  test.ok(connectSsidRangeError.indexOf("1..32") >= 0,
     "wifi.connect should require a non-empty SSID");
   test.ok(typeof status.connected === "boolean", "connected should be boolean");
   test.ok(typeof status.scanning === "boolean", "scanning should be boolean");
@@ -138,9 +146,11 @@ test("wifi/offline", function () {
   try {
     wifi.connect({ ssid: "ssid" });
   } catch (connectFailure) {
+    test.ok(connectFailure instanceof TypeError,
+      "an options object in place of SSID should raise TypeError");
     connectError = connectFailure && connectFailure.message ? connectFailure.message : String(connectFailure);
   }
-  test.ok(connectError.indexOf("string SSID") >= 0,
+  test.ok(connectError.indexOf("SSID") >= 0,
     "wifi.connect should reject the superseded options-only form");
 
   try {

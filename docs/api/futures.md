@@ -1,5 +1,21 @@
 # Futures
 
+In a build enabling Wi-Fi, BLE or ESP-NOW, the shared Future service reserves
+storage in the `wireless.runtime` budget described in [system memory](sys.md).
+This includes shared receive bookkeeping and non-wireless Future calls; individual
+wireless drivers can have their own allocation owner. Combinator roots and public
+handles remain charged until released. Worker stacks have boot lifetime and remain
+in the ledger across runtime restart. The shared pool accepts work only after all
+workers have been created; partial initialization retains created workers and
+retries only the remaining creations. Runtime/RF validation is pending.
+
+Native method registrations use stable chunks of 16 entries, allocated through
+the same runtime control allocator as methods are registered, with a maximum of
+256 registrations. Growing the registry does not move existing GC references;
+small feature sets do not reserve the full maximum. Registration OOM or capacity
+failure fails initialization visibly. Teardown removes roots and returns chunks
+after active native Futures have retired.
+
 - `Future.call(fn, thisValue?, args?)`
   Queue a callable without invoking it before return. It starts at the next
   scheduler idle point and remains runtime-owned through settlement. For a
@@ -37,6 +53,12 @@ settlement, status and result move to the JavaScript handle so the scheduler
 slot is immediately reusable. Synchronous native adapters use a separate
 reserved slot pool, keeping transport and cancellation paths responsive when
 public Future capacity is full.
+
+A native method can define an empty receive timeout as a successful `null`
+result, or report its own structured timeout error. The shared scheduler roots
+that result before cancellation/cleanup and preserves the native driver's
+storage retirement rules. This does not change `Future.timeout()` or
+`future.wait(timeoutMs)`: their deadlines retain the semantics described above.
 
 A native driver may expose a non-null resource key. Operations with equal keys
 enter a bounded FIFO lane: the core captures their arguments and leases at

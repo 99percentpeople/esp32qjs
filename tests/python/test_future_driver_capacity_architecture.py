@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -18,9 +19,12 @@ class FutureDriverCapacityArchitectureTests(SourceContractTestCase):
         )
 
         self.assertIsNotNone(match)
-        # The current all-feature runtime registers 91 distinct native methods.
-        # Keep deliberate headroom so adding one method cannot brick startup.
-        self.assertGreaterEqual(int(match.group(1)), 128)
+        # The reviewed union is an upper bound for any feature-gated ROM.
+        # Counting the actual registration declarations avoids a stale comment
+        # silently accepting a limit smaller than the newly added API surface.
+        manifest = json.loads((ROOT / "api-manifest.json").read_text())
+        registrations = [item for item in manifest["functions"] if item.get("futureRegistration")]
+        self.assertGreaterEqual(int(match.group(1)), len(registrations))
 
     def test_capacity_failure_is_visible_in_boot_logs(self):
         source = (
@@ -28,20 +32,6 @@ class FutureDriverCapacityArchitectureTests(SourceContractTestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("Future driver registry exhausted", source)
-
-    def test_partial_worker_pool_failure_uses_tested_rollback_helper(self):
-        source = (
-            MQUICKJS / "src/core/esp32_mquickjs_future.c"
-        ).read_text(encoding="utf-8")
-        helper = (
-            MQUICKJS / "src/core/esp32_mquickjs_future_worker_pool.c"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn(
-            "esp32_mquickjs_future_worker_pool_cleanup_partial", source
-        )
-        self.assertIn("while (started_workers > 0)", helper)
-        self.assertIn("cleanup_queue(opaque)", helper)
 
     def test_runtime_reports_the_global_initialization_stage(self):
         source = (

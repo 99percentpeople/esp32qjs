@@ -9,6 +9,7 @@ test("wifi_csi/associated-hardware", function () {
   var samples = null;
   var copy = null;
   var source = null;
+  var wireSource = null;
   var trafficClient = null;
   var trafficResponse = null;
   var trafficRequestText =
@@ -22,6 +23,16 @@ test("wifi_csi/associated-hardware", function () {
   var requestIndex;
   var status;
   var stats;
+  var capacity = Math.min(8, Math.floor(caps.limits.maxTotalPoolCapacity / 2));
+  var options = {
+    source: { mode: "associated" }, capture: capture,
+    buffering: { poolCapacity: capacity, queueCapacity: capacity, overflow: "drop-newest" }
+  };
+  var oldGeneration;
+  var budgetError;
+  var rejectedSession = null;
+  var byteIndex;
+  test.ok(capacity >= 1, "retained-generation hardware test requires at least two pool slots");
 
   try {
     try { wifi.disconnect(); } catch (ignoredDisconnectError) {}
@@ -29,13 +40,7 @@ test("wifi_csi/associated-hardware", function () {
       password: cfg.wifiPassword,
       timeoutMs: 15000
     });
-    session = wifi.csi.open({
-      source: "associated",
-      channel: "current",
-      conflict: "fail",
-      capture: capture,
-      queue: { capacity: 8, overflow: "drop-newest" }
-    });
+    session = wifi.csi.open(options);
     status = session.status();
     test.equal(status.state, "running", "associated CSI should start");
     test.ok(wifi.status().radio.clients.wifiCsi >= 1,
@@ -75,11 +80,14 @@ test("wifi_csi/associated-hardware", function () {
     test.equal(frame.info.layout.componentOrder, "imaginary-real",
       "raw component order should be explicit");
     frameBytes = frame.info.layout.byteLength;
-    frameSourceMac = frame.info.sourceMac;
-    frameRssi = frame.info.rssi;
+    frameSourceMac = frame.info.addresses.source;
+    frameRssi = frame.info.signal.rssi;
     samples = frame.samples();
     copy = frame.copySamples();
-    source = frame.source();
+    source = frame.sampleSource();
+    wireSource = frame.source({ format: "esp32qjs-csi/1" });
+    test.equal(wireSource.byteLength, 32 + 40 + 256 + Math.ceil(frameBytes / 4) * 4,
+      "single Frame wire includes metadata and aligned CSI bytes");
     test.equal(samples.byteLength, frame.info.layout.byteLength,
       "retained samples should expose the complete pool payload");
     test.equal(copy.byteLength, frame.info.layout.byteLength,
@@ -93,13 +101,46 @@ test("wifi_csi/associated-hardware", function () {
     stats = session.stats();
     test.ok(stats.callbacks >= stats.accepted,
       "callback counters should dominate accepted frames");
+    oldGeneration = session.status().generation;
+    test.equal(session.close(), true, "native capture should close while old data remains retained");
+    test.equal(wifi.status().radio.clients.wifiCsi, 0,
+      "retained data should not keep the Radio lease");
+    budgetError = "";
+    try {
+      rejectedSession = wifi.csi.open({ source: { mode: "associated" }, capture: capture });
+    } catch (error) {
+      budgetError = String(error && error.message ? error.message : error);
+    }
+    if (rejectedSession !== null) { rejectedSession.close(); rejectedSession = null; }
+    test.ok(budgetError.indexOf("WIFI_CSI_RESOURCE_EXHAUSTED") >= 0,
+      "a default full pool must not overcommit slots retained by the old generation");
+    session = wifi.csi.open(options);
+    test.ok(session.status().generation !== oldGeneration,
+      "reopen should allocate a fresh pool generation");
+    gc();
+    test.equal(session.status().state, "running",
+      "the old Session finalizer must not close the new generation");
+    for (byteIndex = 0; byteIndex < frameBytes; byteIndex += 1) {
+      test.equal(samples.getUint8(byteIndex), copy.getUint8(byteIndex),
+        "old retained sample bytes must survive reopen and GC");
+    }
+    test.equal(wifi.diagnostics.snapshot().csi.reservedSlots, capacity * 2,
+      "both generations must count toward the total slot budget");
+    wireSource.close(); wireSource = null;
+    source.close(); source = null;
+    samples.close(); samples = null;
+    test.equal(wifi.diagnostics.snapshot().csi.reservedSlots, capacity,
+      "the last old owner must return its pool without closing the new Session");
+
   } finally {
+    if (wireSource !== null) wireSource.close();
     if (source !== null) source.close();
     if (samples !== null) samples.close();
     if (copy !== null) copy.close();
     if (frame !== null) frame.close();
     if (trafficResponse !== null) trafficResponse.close();
     if (trafficClient !== null) trafficClient.close();
+    if (rejectedSession !== null) rejectedSession.close();
     if (session !== null) session.close();
     try { wifi.disconnect(); } catch (ignoredFinalDisconnectError) {}
   }

@@ -4,26 +4,21 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from wireless_allocator_fixture import allocation_boundary
+from wireless_vm_fixture import extract as function
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 MODULES = ROOT/'components/esp32_mquickjs/src/modules'
 
 
-def function(source, name):
-    import re
-    match = re.search(r'static [^;{}]*\b' + name + r'\([^;{}]*\)\n\{', source)
-    assert match, name
-    return source[match.start():source.index('\n}\n', match.start())+3]
-
-
-def compile_run(case, content):
+def compile_run(case, content, cflags=()):
     compiler = shutil.which('cc')
     if compiler is None:
         case.skipTest('C compiler unavailable')
     with tempfile.TemporaryDirectory() as tmp:
         c = pathlib.Path(tmp)/'fixture.c'
-        c.write_text(content)
-        result = subprocess.run([compiler, '-std=c11', str(c), '-o', tmp+'/test'], capture_output=True, text=True)
+        c.write_text(allocation_boundary(content))
+        result = subprocess.run([compiler, '-std=c11', *cflags, str(c), '-o', tmp+'/test'], capture_output=True, text=True)
         case.assertEqual(result.returncode, 0, result.stderr)
         result = subprocess.run([tmp+'/test'], capture_output=True, text=True)
         case.assertEqual(result.returncode, 0, result.stderr)
@@ -41,10 +36,11 @@ class WirelessControlRegression(unittest.TestCase):
 #define pdTRUE 1
 #define WIFI_DRIVER_EVENT_CONNECT_TIMEOUT 5
 static int processed, wakes;
-typedef struct { int kind, reason; unsigned status; } esp32_mquickjs_wifi_driver_event_t;
+typedef struct { int kind, reason; unsigned status, generation; } esp32_mquickjs_wifi_driver_event_t;
 static struct { void *driver_event_queue; atomic_uint dropped_driver_events; } s_wifi_state;
-static void *s_wifi_runtime = (void *)1;
-static atomic_bool s_wifi_timeout_pending;
+typedef int esp32_mquickjs_runtime_t;
+static _Atomic(esp32_mquickjs_runtime_t *) s_wifi_runtime = (void *)1;
+static atomic_uint s_wifi_timeout_pending;
 static int xQueueSend(void *q, const void *event, int wait) { (void)q; (void)event; (void)wait; return 0; }
 static void esp32_mquickjs_notify_activity(void *r) { (void)r; wakes++; }
 static void wifi_process_driver_event(const esp32_mquickjs_wifi_driver_event_t *e) { processed = e->kind; }
@@ -56,9 +52,9 @@ int main(void) {
     e.kind=3;
     assert(wifi_publish_driver_event_from_callback(&e));
     assert(processed==3);
-    e.kind=WIFI_DRIVER_EVENT_CONNECT_TIMEOUT;
+    e.kind=WIFI_DRIVER_EVENT_CONNECT_TIMEOUT;e.generation=7;
     assert(wifi_publish_driver_event_from_callback(&e));
-    assert(atomic_load(&s_wifi_timeout_pending));
+    assert(atomic_load(&s_wifi_timeout_pending)==7);
 }
 ''')
 
@@ -72,8 +68,10 @@ int main(void) {
 #include <stdlib.h>
 #include <string.h>
 #define WIFI_FUTURE_DISCONNECT 2
-typedef struct { bool started, completed; int kind; struct { struct { unsigned char password[64]; } sta; } connect_config; } esp32_mquickjs_future_driver_state_t;
+#define WIFI_FUTURE_SCAN 0
+typedef struct { bool started, completed; unsigned generation; int kind; struct { struct { unsigned char password[64]; } sta; } connect_config; } esp32_mquickjs_future_driver_state_t;
 static void esp32_mquickjs_wifi_clear_connect_future(void) {}
+static int esp32_mquickjs_wifi_cancel_scan(unsigned generation) { (void)generation;return 0; }
 static int wifi_future_cancel(esp32_mquickjs_future_driver_state_t *s) { (void)s; return 0; }
 static void esp32_mquickjs_wireless_secure_zero(void *p, size_t n) { volatile unsigned char *v=p; while(n--) *v++=0; }
 static void heap_caps_free(esp32_mquickjs_future_driver_state_t *s) {

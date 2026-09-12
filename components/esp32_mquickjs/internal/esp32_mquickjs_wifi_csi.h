@@ -4,6 +4,8 @@
 #include "esp32_mquickjs_types.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI
+JSValue esp32_mquickjs_wifi_csi_diagnostics(JSContext *ctx);
+uint32_t esp32_mquickjs_wifi_csi_reset_counters(void);
 
 bool esp32_mquickjs_init_wifi_csi_runtime(
     JSContext *ctx, esp32_mquickjs_runtime_t *runtime);
@@ -19,6 +21,8 @@ JSValue js_wifi_csi_session_constructor(JSContext *ctx, JSValue *this_val,
 void js_wifi_csi_session_finalizer(JSContext *ctx, void *opaque);
 JSValue js_wifi_csi_session_status(JSContext *ctx, JSValue *this_val,
                                    int argc, JSValue *argv);
+JSValue js_wifi_csi_session_get_capture_config(JSContext *ctx, JSValue *this_val,
+                                               int argc, JSValue *argv);
 JSValue js_wifi_csi_session_stats(JSContext *ctx, JSValue *this_val,
                                   int argc, JSValue *argv);
 JSValue js_wifi_csi_session_receive(JSContext *ctx, JSValue *this_val,
@@ -41,6 +45,12 @@ JSValue js_wifi_csi_frame_samples(JSContext *ctx, JSValue *this_val,
                                   int argc, JSValue *argv);
 JSValue js_wifi_csi_frame_copy_samples(JSContext *ctx, JSValue *this_val,
                                        int argc, JSValue *argv);
+JSValue js_wifi_csi_frame_sample_source(JSContext *ctx, JSValue *this_val,
+                                 int argc, JSValue *argv);
+JSValue js_wifi_csi_frame_packet_bytes(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_wifi_csi_frame_copy_packet_bytes(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_wifi_csi_frame_packet_source(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_wifi_csi_batch_packet_bytes(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_wifi_csi_frame_source(JSContext *ctx, JSValue *this_val,
                                  int argc, JSValue *argv);
 JSValue js_wifi_csi_frame_close(JSContext *ctx, JSValue *this_val,

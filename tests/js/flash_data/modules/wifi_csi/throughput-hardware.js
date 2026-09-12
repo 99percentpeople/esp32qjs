@@ -32,12 +32,10 @@ test("wifi_csi/throughput-hardware", function () {
     gc();
     before = test.memorySnapshot();
     session = wifi.csi.open({
-      source: "promiscuous",
-      channel: "current",
-      conflict: "fail",
+      source: { mode: "promiscuous", channel: "current" },
       capture: capture,
-      queue: {
-        capacity: caps.limits.maxQueueCapacity < 16
+      buffering: {
+        queueCapacity: caps.limits.maxQueueCapacity < 16
           ? caps.limits.maxQueueCapacity : 16,
         overflow: "drop-newest"
       }
@@ -50,8 +48,9 @@ test("wifi_csi/throughput-hardware", function () {
         wifi.scan({
           channel: status.effective.channel,
           showHidden: true,
-          passive: false,
-          dwellMs: 250,
+          mode: "active",
+          activeMinMs: 250,
+          activeMaxMs: 250,
           timeoutMs: 3000
         });
         batch = session.receiveBatch({ maximumFrames: batchFrames, timeoutMs: 1000 });

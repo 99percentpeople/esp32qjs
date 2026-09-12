@@ -17,6 +17,35 @@ config ESP32_MQUICKJS_PSRAM_MODE
     help
         Hardware-profile PSRAM mode returned by sys.info.hardware.psram.mode.
 
+menu "Wireless native memory admission"
+
+config ESP32_MQUICKJS_WIRELESS_INTERNAL_BUDGET_BYTES
+    int "Internal requested-byte limit for managed wireless allocations"
+    range 0 16777216
+    default 131072
+    help
+        Boot-scoped aggregate admission limit shared by Wi-Fi and BLE.
+        Includes registered payloads and tracking nodes, not allocator headers,
+        SDK heaps or JavaScript. Build Contexts must select explicit limits;
+        these software defaults are not hardware qualification.
+
+config ESP32_MQUICKJS_WIRELESS_PSRAM_BUDGET_BYTES
+    int "PSRAM requested-byte limit for managed wireless allocations"
+    range 0 67108864
+    default 4194304 if SPIRAM
+    default 0
+
+config ESP32_MQUICKJS_WIRELESS_CONTROL_RESERVE_BYTES
+    int "Internal wireless quota reserved for control allocations"
+    range 0 ESP32_MQUICKJS_WIRELESS_INTERNAL_BUDGET_BYTES
+    default 16384
+    help
+        Data pools, queues, copies, TX and worker stacks cannot consume this
+        portion of the internal quota. This is logical admission headroom;
+        unrelated heap users can still cause physical allocation failure.
+
+endmenu
+
 menu "Host API features"
 
 config ESP32_MQUICKJS_FEATURE_FS
@@ -149,6 +178,16 @@ config ESP32_MQUICKJS_FEATURE_WIFI
     help
         Enable Wi-Fi station bindings such as wifi.status(), wifi.scan(), and
         wifi.connect().
+
+config ESP32_MQUICKJS_WIFI_ALLOW_SECRET_READBACK
+    bool "Allow explicit Wi-Fi interface credential readback"
+    default n
+    depends on ESP32_MQUICKJS_FEATURE_WIFI
+    help
+        Permit wifi.driver.getInterfaceConfig(..., {includeSecrets:true}).
+        Default readback and setter results always redact credentials. This
+        option is for explicitly selected development contexts and does not
+        add credentials to status, diagnostics, errors or logs.
 
 config ESP32_MQUICKJS_WIFI_RADIO
     bool

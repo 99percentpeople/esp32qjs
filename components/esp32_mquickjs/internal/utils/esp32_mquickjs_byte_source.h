@@ -95,6 +95,22 @@ JSValue esp32_mquickjs_new_retained_byte_view(
     esp32_mquickjs_byte_view_release_fn release,
     void *release_opaque);
 
+/* Internal allocation policy. Non-NULL labels must have boot lifetime.
+ * Wireless wrappers/read leases use control quota; array input copies use
+ * copy quota. Data ownership and destruction match the generic factories.
+ * NULL selects generic allocation for non-wireless callers. */
+bool esp32_mquickjs_get_wireless_byte_source(const char *memory_owner,
+    JSContext *ctx, JSValue value, const char *api_name,
+    esp32_mquickjs_byte_source_t *out, uint8_t **out_owned, JSValue *out_error);
+JSValue esp32_mquickjs_new_wireless_byte_span_source(const char *memory_owner,
+    JSContext *ctx, JSValue owner,
+    const esp32_mquickjs_byte_span_source_object_ops_t *ops, void *opaque);
+JSValue esp32_mquickjs_new_wireless_owned_byte_view(const char *memory_owner,
+    JSContext *ctx, uint8_t *data, size_t length);
+JSValue esp32_mquickjs_new_wireless_retained_byte_view(const char *memory_owner,
+    JSContext *ctx, const uint8_t *data, size_t length,
+    esp32_mquickjs_byte_view_release_fn release, void *release_opaque);
+
 bool esp32_mquickjs_byte_view_is_open(JSContext *ctx, JSValue value);
 
 bool esp32_mquickjs_byte_view_acquire_read(JSContext *ctx,

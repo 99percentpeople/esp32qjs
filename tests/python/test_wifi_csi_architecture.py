@@ -70,6 +70,8 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
             "wifi_csi_parse_filter",
             "wifi_csi_parse_legacy_capture",
             "wifi_csi_parse_he_capture",
+            "wifi_csi_parse_source",
+            "wifi_csi_parse_buffering",
             "wifi_csi_parse_open_options",
         ):
             start = source.index(f"static bool {name}(")
@@ -96,7 +98,9 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
 
         filtering = publish.index("esp32_mquickjs_wifi_csi_filter_accept")
         acquire = publish.index("esp32_mquickjs_native_pool_acquire")
-        copying = publish.index("memcpy")
+        # Header metadata is normalized before filtering. Pool payload bytes
+        # are copied only after admission and an actual slot acquisition.
+        copying = publish.index("memcpy(slot->payload")
         queue_publish = publish.index("publish(&event")
         self.assertLess(filtering, acquire)
         self.assertLess(acquire, copying)
@@ -127,10 +131,12 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertIn("esp32_mquickjs_submit_background_worker", teardown)
         self.assertIn("wifi_csi_cleanup_worker", teardown)
         self.assertIn("wifi_csi_finish_stop", teardown)
-        self.assertIn("callbacks_active", destroy)
-        self.assertIn("leased_frames", destroy)
-        self.assertIn("resources_destroying = true", destroy)
-        self.assertIn("esp32_mquickjs_wifi_csi_resources_deinit", destroy)
+        self.assertIn("esp32_mquickjs_wifi_csi_store_retire", destroy)
+        store = (MODULE / "esp32_mquickjs_wifi_csi_store.c").read_text()
+        self.assertIn("callbacks_active", store)
+        self.assertIn("leased_frames", store)
+        self.assertIn("ESP32_MQUICKJS_WIFI_CSI_STORE_RETIRING", store)
+        self.assertIn("esp32_mquickjs_wifi_csi_resources_deinit", store)
 
     def test_receive_batch_releases_temporary_gc_roots_in_lifo_order(self):
         source = (MODULE / "esp32_mquickjs_wifi_csi.c").read_text(
@@ -141,7 +147,7 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
             source.index("bool esp32_mquickjs_init_wifi_csi_runtime")
         ]
         success = receive_batch[
-            receive_batch.index("atomic_fetch_add_explicit(") :
+            receive_batch.index("(void)wifi_csi_update_event(&batch->events[0], WIFI_CSI_EVENT_BATCH_DELIVERED)") :
             receive_batch.index("fail_batch:")
         ]
 
@@ -266,15 +272,17 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         )
         parser = (ROOT / "scripts/esp32qjs_csi.py").read_text(encoding="utf-8")
 
-        self.assertIn('memcpy(source->control, "E32QCSI1", 8U)', source)
-        self.assertIn("wifi_csi_write_u16_le", source)
-        self.assertIn("wifi_csi_write_u32_le", source)
-        self.assertIn("wifi_csi_write_u64_le", source)
-        self.assertIn("WIFI_CSI_BATCH_METADATA_BYTES 192U", source)
-        self.assertIn('MAGIC = b"E32QCSI1"', parser)
-        self.assertIn("METADATA_BYTES = 192", parser)
-        self.assertIn('struct.unpack_from("<Q", record, 4)', parser)
-        self.assertIn('struct.unpack_from("<8sHHIII"', parser)
+        common = (ROOT / "components/esp32_mquickjs/src/modules/wifi_common/esp32_mquickjs_wifi_rx_wire.c").read_text()
+        wire_header = (ROOT / "components/esp32_mquickjs/internal/esp32_mquickjs_wifi_rx_wire.h").read_text()
+        decoder = (ROOT / "scripts/esp32qjs_rx.py").read_text()
+        self.assertIn("esp32_mquickjs_wifi_rx_wire_write_control", source)
+        self.assertIn("esp32_mquickjs_wifi_rx_wire_write_metadata", source)
+        self.assertIn('"E32QCSI1"', common)
+        self.assertIn("WIRE_METADATA_BYTES 256U", wire_header)
+        self.assertIn("METADATA_BYTES = 256", decoder)
+        self.assertIn('struct.unpack_from("<Q", record, 4)', decoder)
+        self.assertIn('struct.unpack_from("<8sHHIHHIII"', decoder)
+        self.assertIn('parse_rx_batch(data, kind="csi")', parser)
 
     def test_generic_span_length_contract_is_used_by_csi_hardware_tests(self):
         declarations = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(
@@ -317,7 +325,8 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         self.assertIn('workspaceFs.open(path, "wb")', hardware_test)
         self.assertIn('workspaceFs.open(rpcPath, "wb")', hardware_test)
         self.assertIn("stream.write(source)", hardware_test)
-        self.assertIn("if (sys.info.features.usbSerial)", hardware_test)
+        self.assertIn("if (test.directUsbSerialIdle === true && sys.info.features.usbSerial)",
+                      hardware_test)
         self.assertIn('usbSerial.open({ mode: "binary"', hardware_test)
         self.assertIn("serial.send(usbSource)", hardware_test)
         self.assertIn("codec.encode(1, 1, 0, { data: rpcInputSource })", hardware_test)
@@ -454,7 +463,7 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
             "wifi.status().radio.clients.espNow, 0", espnow
         )
         self.assertIn(
-            'channel: espnowChannel,\n      conflict: "fail"', espnow
+            'source: { mode: "promiscuous", channel: espnowChannel }', espnow
         )
 
     def test_radio_policy_has_explicit_csi_promiscuous_and_channel_owners(self):

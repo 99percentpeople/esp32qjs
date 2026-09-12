@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlsplit, urlunsplit
 
+from .wireless_budget import validate_wireless_budget
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 
@@ -321,6 +323,10 @@ def load_build_context(reference: str | None) -> BuildContextProfile:
         size * 1024 * 1024 for size in SUPPORTED_FLASH_SIZE_MB
     } or psram_mode not in SUPPORTED_PSRAM_MODES or psram_bytes < 0:
         raise SystemExit(f"Build Context manifest selects unsupported hardware: {directory}")
+    try:
+        validate_wireless_budget(directory, manifest)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"Build Context wireless budget is invalid: {exc}") from exc
     board = manifest.get("board", {})
     name = str(board.get("id", directory.name))
     label = str(board.get("label", name))

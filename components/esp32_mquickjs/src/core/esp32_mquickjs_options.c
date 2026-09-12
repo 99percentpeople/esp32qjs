@@ -51,17 +51,18 @@ bool esp32_mquickjs_validate_plain_options(
         JSValue *key_value = JS_PushGCRef(ctx, &key_ref);
         JSCStringBuf key_buffer;
         const char *key;
-        size_t allowed_index;
+        size_t allowed_index, key_length;
         bool matched = false;
 
         *key_value = JS_GetPropertyUint32(ctx, *keys, index);
         key = JS_IsException(*key_value)
                   ? NULL
-                  : JS_ToCString(ctx, *key_value, &key_buffer);
+                  : JS_ToCStringLen(ctx, &key_length, *key_value, &key_buffer);
         if (key != NULL) {
             for (allowed_index = 0; allowed_index < allowed_key_count;
                  ++allowed_index) {
-                if (strcmp(key, allowed_keys[allowed_index]) == 0) {
+                if (key_length == strlen(allowed_keys[allowed_index]) &&
+                    memcmp(key, allowed_keys[allowed_index], key_length) == 0) {
                     matched = true;
                     break;
                 }
@@ -129,14 +130,14 @@ bool esp32_mquickjs_value_to_enum(JSContext *ctx,
 {
     JSCStringBuf buffer;
     const char *text;
-    size_t index;
+    size_t index, length;
 
     if (choices == NULL || out_index == NULL || !JS_IsString(ctx, value) ||
-        (text = JS_ToCString(ctx, value, &buffer)) == NULL) {
+        (text = JS_ToCStringLen(ctx, &length, value, &buffer)) == NULL) {
         return false;
     }
     for (index = 0; index < choice_count; ++index) {
-        if (strcmp(text, choices[index]) == 0) {
+        if (length == strlen(choices[index]) && memcmp(text, choices[index], length) == 0) {
             *out_index = index;
             return true;
         }

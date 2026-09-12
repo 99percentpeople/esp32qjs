@@ -144,6 +144,19 @@ foreach(esp32_mquickjs_feature_config ${ESP32_MQUICKJS_CONFIG_FEATURE_SYMBOLS})
     esp32_mquickjs_append_host_feature_define(${esp32_mquickjs_feature_config})
 endforeach()
 
+# ROM table generation must use the same SDK gates as the target JS bindings.
+list(APPEND MQUICKJS_HOST_CFLAGS "-I${CMAKE_CURRENT_LIST_DIR}/internal")
+foreach(esp32_mquickjs_ftm_config CONFIG_ESP_WIFI_FTM_ENABLE CONFIG_ESP_WIFI_FTM_INITIATOR_SUPPORT
+        CONFIG_ESP_WIFI_FTM_RESPONDER_SUPPORT CONFIG_ESP_WIFI_SOFTAP_SUPPORT
+        CONFIG_ESP_WIFI_RRM_SUPPORT CONFIG_ESP_WIFI_WNM_SUPPORT CONFIG_ESP_WIFI_11R_SUPPORT
+        CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT CONFIG_SOC_WIFI_HE_SUPPORT CONFIG_IDF_TARGET_ESP32C5
+        CONFIG_ESP_NETIF_USES_TCPIP_WITH_BSD_API CONFIG_LWIP_IPV4
+        CONFIG_ESP_WIFI_WPS_SOFTAP_REGISTRAR CONFIG_ESP_WIFI_DPP_SUPPORT CONFIG_ESP_WIFI_NAN_SYNC_ENABLE CONFIG_ESP_WIFI_NAN_USD_ENABLE
+        CONFIG_ESP_WIFI_NAN_PAIRING CONFIG_ESP_WIFI_WAPI_PSK CONFIG_SOC_WIFI_MESH_SUPPORT
+        CONFIG_IDF_TARGET_ESP32C3 CONFIG_IDF_TARGET_ESP32S3 CONFIG_ESP_HOST_WIFI_ENABLED)
+    esp32_mquickjs_append_host_feature_define(${esp32_mquickjs_ftm_config})
+endforeach()
+
 if(DEFINED CONFIG_SOC_SPI_PERIPH_NUM)
     list(APPEND MQUICKJS_HOST_CFLAGS "-DCONFIG_SOC_SPI_PERIPH_NUM=${CONFIG_SOC_SPI_PERIPH_NUM}")
 endif()
@@ -198,6 +211,7 @@ if(NOT CMAKE_SCRIPT_MODE_FILE)
         DEPENDS
             "${MQUICKJS_PATCH_BUILD_SCRIPT}"
             "${MQUICKJS_STDLIB_SOURCE}"
+            "${CMAKE_CURRENT_LIST_DIR}/internal/esp32_mquickjs_wifi_mesh_feature.h"
             "${MQUICKJS_DIR}/mqjs_stdlib.c"
             "${MQUICKJS_DIR}/mquickjs_build.c"
             "${MQUICKJS_DIR}/mquickjs.h"
@@ -245,7 +259,6 @@ set(ESP32_MQUICKJS_SRCS
     "src/core/esp32_mquickjs_future_scheduler.c"
     "src/core/esp32_mquickjs_future_timeout.c"
     "src/core/esp32_mquickjs_timer_resource.c"
-    "src/core/esp32_mquickjs_future_worker_pool.c"
     "src/core/esp32_mquickjs_event_queue.c"
     "src/core/esp32_mquickjs_event_queue_drain.c"
     "src/core/esp32_mquickjs_event_queue_resources.c"
@@ -254,6 +267,8 @@ set(ESP32_MQUICKJS_SRCS
     "src/core/esp32_mquickjs_byte_source.c"
     "src/core/esp32_mquickjs_options.c"
     "src/core/esp32_mquickjs_memory.c"
+    "src/core/esp32_mquickjs_memory_rtos.c"
+    "src/core/esp32_mquickjs_memory_budget.c"
     "src/core/esp32_mquickjs_memory_dma_accounting.c"
     "src/core/esp32_mquickjs_memory_owner_accounting.c"
     "src/core/esp32_mquickjs_dma_transfer.c"
@@ -269,6 +284,114 @@ set(ESP32_MQUICKJS_SRCS
     "src/modules/fs/esp32_mquickjs_fs_stub.c"
     "src/modules/nvs/esp32_mquickjs_nvs_flash_boot.c"
     "src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c"
+    "src/modules/wifi_radio/esp32_mquickjs_wifi_interval.c"
+    "src/modules/wifi_radio/esp32_mquickjs_wifi_policy.c"
+    "src/modules/wifi_radio/esp32_mquickjs_wifi_he_statistics_sdk.c"
+    "src/modules/wifi_radio/esp32_mquickjs_wifi_wait.c"
+    "src/modules/wifi_driver/esp32_mquickjs_wifi_tx_rate.c"
+    "src/modules/wifi_driver/esp32_mquickjs_wifi_tx_rate_sdk.c"
+    "src/modules/wifi_driver/esp32_mquickjs_wifi_driver.c"
+    "src/modules/wifi_action/esp32_mquickjs_wifi_roc_session.c"
+    "src/modules/wifi_action/esp32_mquickjs_wifi_roc.c"
+    "src/modules/wifi_action/esp32_mquickjs_wifi_action.c"
+    "src/modules/wifi_common/esp32_mquickjs_wifi_recovery.c"
+    "src/modules/wifi_ftm/esp32_mquickjs_wifi_ftm_session.c"
+    "src/modules/wifi_ftm/esp32_mquickjs_wifi_ftm_offset.c"
+    "src/modules/wifi_ftm/esp32_mquickjs_wifi_ftm_module.c"
+    "src/modules/wifi_ftm/esp32_mquickjs_wifi_ftm.c"
+    "src/modules/wifi_action/esp32_mquickjs_wifi_action_lane.c"
+    "src/modules/wifi_action/esp32_mquickjs_wifi_action_sdk.c"
+    "src/modules/wifi_action/esp32_mquickjs_wifi_chm_timer.c"
+    "src/modules/wifi_action/esp32_mquickjs_wifi_offchan_frame.c"
+    "src/modules/wifi_roaming/esp32_mquickjs_wifi_roaming.c"
+    "src/modules/wifi_roaming/esp32_mquickjs_wifi_roaming_sdk.c"
+    "src/modules/wifi_roaming/esp32_mquickjs_wifi_rrm_sdk.c"
+    "src/modules/wifi_roaming/esp32_mquickjs_wifi_rrm_request.c"
+    "src/modules/wifi_roaming/esp32_mquickjs_wifi_neighbor_request.c"
+    "src/modules/wifi_smartconfig/esp32_mquickjs_wifi_smartconfig_events.c"
+    "src/modules/wifi_smartconfig/esp32_mquickjs_wifi_smartconfig_timer.c"
+    "src/modules/wifi_smartconfig/esp32_mquickjs_wifi_smartconfig_timer_sdk.c"
+    "src/modules/wifi_smartconfig/esp32_mquickjs_wifi_smartconfig_decoder.c"
+    "src/modules/wifi_smartconfig/esp32_mquickjs_wifi_smartconfig_session.c"
+    "src/modules/wifi_smartconfig/esp32_mquickjs_wifi_smartconfig.c"
+    "src/modules/wifi_wps/esp32_mquickjs_wifi_wps_worker.c"
+    "src/modules/wifi_wps/esp32_mquickjs_wifi_wps_ap_worker.c"
+    "src/modules/wifi_dpp/esp32_mquickjs_wifi_dpp_worker.c"
+    "src/modules/wifi_dpp/esp32_mquickjs_wifi_dpp_session.c"
+    "src/modules/wifi_nan/esp32_mquickjs_wifi_nan.c"
+    "src/modules/wifi_nan/esp32_mquickjs_wifi_nan_session.c"
+    "src/modules/wifi_nan/esp32_mquickjs_wifi_nan_tx.c"
+    "src/modules/wifi_mesh/esp32_mquickjs_wifi_mesh_sdk.c"
+    "src/modules/wifi_mesh/esp32_mquickjs_wifi_mesh_session.c"
+    "src/modules/wifi_mesh/esp32_mquickjs_wifi_mesh.c"
+    "src/modules/wifi_dpp/esp32_mquickjs_wifi_dpp.c"
+    "src/modules/wifi_dpp/esp32_mquickjs_wifi_dpp_connection.c"
+    "src/modules/wifi_wps/esp32_mquickjs_wifi_wps_ap_session.c"
+    "src/modules/wifi_wps/esp32_mquickjs_wifi_wps_session.c"
+    "src/modules/wifi_wps/esp32_mquickjs_wifi_wps.c"
+    "src/modules/wifi_wps/esp32_mquickjs_wifi_wps_ap.c"
+    "src/modules/wifi_enterprise/esp32_mquickjs_wifi_enterprise_profile.c"
+    "src/modules/wifi_enterprise/esp32_mquickjs_wifi_eap_sdk.c"
+    "src/modules/wifi_enterprise/esp32_mquickjs_wifi_eap_install.c"
+    "src/modules/wifi_enterprise/esp32_mquickjs_wifi_eap_options.c"
+    "src/modules/wifi_enterprise/esp32_mquickjs_wifi_eap_config.c"
+    "src/modules/wifi_enterprise/esp32_mquickjs_wifi_enterprise.c"
+    "src/modules/wifi/esp32_mquickjs_wifi_wapi_sdk.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_broadcast.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_broadcast_timer.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_broadcast_event.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_broadcast_rx.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_broadcast_submit.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_broadcast_retire.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_agreement.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_close.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_options.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_lane.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_sdk.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_fence.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_tx.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_probe_timer.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_setup_timer.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_information_timer.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_information.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_setup_result.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_setup_submit.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_setup_retire.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_teardown_tx.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_probe_result.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_probe_wake.c"
+    "src/modules/wifi_twt/esp32_mquickjs_wifi_twt_probe_retire.c"
+    "src/modules/wifi_vendor_ie/esp32_mquickjs_wifi_vendor_ie.c"
+    "src/modules/wifi_vendor_ie/esp32_mquickjs_wifi_vendor_ie_broker.c"
+    "src/modules/wifi_vendor_ie/esp32_mquickjs_wifi_vendor_ie_watch.c"
+    "src/modules/wifi_common/esp32_mquickjs_wifi_rx.c"
+    "src/modules/wifi_common/esp32_mquickjs_wifi_neighbor.c"
+    "src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx_validate.c"
+    "src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx_snapshot.c"
+    "src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx_broker.c"
+    "src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx.c"
+    "src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx_queue.c"
+    "src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx_periodic.c"
+    "src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx_periodic_job.c"
+    "src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx_lane.c"
+    "src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx_session.c"
+    "src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx_public_session.c"
+    "src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx_public_periodic.c"
+    "src/modules/wifi_common/esp32_mquickjs_wifi_rx_wire.c"
+    "src/modules/wifi_common/esp32_mquickjs_wifi_rx_wire_metadata.c"
+    "src/modules/wifi_common/esp32_mquickjs_wifi_rx_target.c"
+    "src/modules/wifi_common/esp32_mquickjs_wifi_rx_filter.c"
+    "src/modules/wifi_common/esp32_mquickjs_wifi_promiscuous_broker.c"
+    "src/modules/wifi_common/esp32_mquickjs_wifi_promiscuous_driver.c"
+    "src/modules/wifi_monitor/esp32_mquickjs_wifi_monitor_resources.c"
+    "src/modules/wifi_monitor/esp32_mquickjs_wifi_monitor_wire.c"
+    "src/modules/wifi_monitor/esp32_mquickjs_wifi_monitor_queue.c"
+    "src/modules/wifi_monitor/esp32_mquickjs_wifi_monitor_capture.c"
+    "src/modules/wifi_monitor/esp32_mquickjs_wifi_monitor_session.c"
+    "src/modules/wifi_monitor/esp32_mquickjs_wifi_monitor_options.c"
+    "src/modules/wifi_monitor/esp32_mquickjs_wifi_monitor_metadata.c"
+    "src/modules/wifi_monitor/esp32_mquickjs_wifi_monitor.c"
     "src/modules/time/esp32_mquickjs_time.c"
     "src/core/js_stdlib.c"
     "${MQUICKJS_DIR}/cutils.c"
@@ -305,6 +428,7 @@ set(ESP32_MQUICKJS_PRIV_REQUIRES
     # possible feature dependencies in the component graph unconditionally;
     # source files and linked code remain gated by their Kconfig symbols.
     joltwallet__littlefs
+    wpa_supplicant
     nvs_flash
     esp_driver_gpio
     esp_driver_ledc
@@ -480,12 +604,23 @@ esp32_mquickjs_append_feature_component(
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
     "src/modules/wifi/esp32_mquickjs_wifi.c"
+    "src/modules/wifi/esp32_mquickjs_wifi_capabilities.c"
+    "src/modules/wifi/esp32_mquickjs_wifi_diagnostics.c"
+    "src/modules/wifi/esp32_mquickjs_wifi_config.c"
+    "src/modules/wifi/esp32_mquickjs_wifi_ap.c"
+    "src/modules/wifi/esp32_mquickjs_wifi_ap_prestart.c"
+    "src/modules/wifi_driver/esp32_mquickjs_wifi_antenna.c"
+    "src/modules/wifi/esp32_mquickjs_wifi_netif.c"
+    "src/modules/wifi/esp32_mquickjs_wifi_wake.c"
+    "src/modules/wifi/esp32_mquickjs_wifi_watch.c"
     "src/modules/wifi/esp32_mquickjs_wifi_future.c"
     "src/modules/wifi/esp32_mquickjs_wifi_runtime_resources.c"
     PRIV_REQUIRES
         esp_event
         esp_netif
         esp_wifi
+        esp_phy
+        ieee802154
         nvs_flash
 )
 
@@ -500,6 +635,11 @@ esp32_mquickjs_append_feature_component(
 esp32_mquickjs_append_feature_component(
     CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI
     "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_resources.c"
+    "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_store.c"
+    "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_packet.c"
+    "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_rx_span.c"
+    "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_rx_native.c"
+    "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_wire.c"
     "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_batch.c"
     "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_config.c"
     "src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_layout.c"
@@ -597,6 +737,13 @@ set(ESP32_MQUICKJS_PRIV_INCLUDE_DIRS
     "${MQUICKJS_GENERATED_BINARY_DIR}"
     "${MQUICKJS_DIR}"
 )
+if(CONFIG_ESP32_MQUICKJS_FEATURE_WIFI)
+    list(APPEND ESP32_MQUICKJS_PRIV_INCLUDE_DIRS "$ENV{IDF_PATH}/components/esp_netif/private_include")
+endif()
+if(CONFIG_ESP32_MQUICKJS_FEATURE_WIFI AND (CONFIG_ESP_WIFI_RRM_SUPPORT OR
+        CONFIG_ESP_WIFI_WNM_SUPPORT OR CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT))
+    list(APPEND ESP32_MQUICKJS_PRIV_INCLUDE_DIRS "$ENV{IDF_PATH}/components/wpa_supplicant/src")
+endif()
 idf_component_register(
     SRCS ${ESP32_MQUICKJS_SRCS}
     INCLUDE_DIRS
@@ -627,3 +774,61 @@ target_compile_options(
         -fno-math-errno
         -fno-trapping-math
 )
+
+if(CONFIG_ESP32_MQUICKJS_FEATURE_WIFI)
+    if(CONFIG_ESP_WIFI_NAN_SYNC_ENABLE)
+        target_link_libraries(${COMPONENT_LIB} INTERFACE
+            "-Wl,--undefined=esp32qjs_wifi_nan_alloc_sdf" "-Wl,--wrap=nan_sdf_txcb"
+            "-Wl,--wrap=nan_start_publish_service" "-Wl,--wrap=nan_start_subscribe_service"
+            "-Wl,--wrap=nan_send_followup_msg" "-Wl,--wrap=nan_naf_txcb"
+            "-Wl,--undefined=esp32qjs_wifi_nan_alloc_action" "-Wl,--wrap=nan_datapath_send_req"
+            "-Wl,--wrap=nan_rx_naf" "-Wl,--wrap=nan_nulldata_txcb"
+            "-Wl,--wrap=nan_dp_post_tx"
+            "-Wl,--wrap=nan_ndp_setup_timeout_process" "-Wl,--wrap=nan_ndp_inactivity_timeout_process")
+        if(CONFIG_ESP_WIFI_NAN_PAIRING)
+            target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=ieee80211_mgmt_output")
+        endif()
+    endif()
+    if(CONFIG_ESP_NETIF_USES_TCPIP_WITH_BSD_API AND CONFIG_LWIP_IPV4)
+        target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_event_post")
+    endif()
+    if(CONFIG_ESP_WIFI_DPP_SUPPORT OR CONFIG_ESP_WIFI_NAN_USD_ENABLE OR (CONFIG_ESP_NETIF_USES_TCPIP_WITH_BSD_API AND CONFIG_LWIP_IPV4))
+        target_link_libraries(${COMPONENT_LIB} INTERFACE
+            "-Wl,--wrap=ets_timer_setfn" "-Wl,--wrap=ets_timer_disarm"
+            "-Wl,--wrap=ets_timer_done" "-Wl,--wrap=ets_timer_arm_us"
+            "-Wl,--wrap=ets_timer_arm")
+    endif()
+    target_link_libraries(${COMPONENT_LIB} INTERFACE
+        "-Wl,--wrap=wifi_action_tx_process" "-Wl,--wrap=wifi_roc_process")
+    if(CONFIG_ESP_WIFI_DPP_SUPPORT OR CONFIG_ESP_WIFI_NAN_USD_ENABLE)
+        # The imported native archive is scanned after the framework archive.
+        target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--undefined=esp32qjs_wifi_offchan_frame_post"
+            "-Wl,--undefined=esp32qjs_wifi_chm_record_reset"
+            "-Wl,--wrap=chm_start_op" "-Wl,--wrap=chm_end_op_timeout_process")
+    endif()
+    if((CONFIG_ESP_WIFI_DPP_SUPPORT OR CONFIG_ESP_WIFI_NAN_USD_ENABLE) AND NOT (CONFIG_SOC_WIFI_HE_SUPPORT AND CONFIG_IDF_TARGET_ESP32C5))
+        target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esf_buf_recycle")
+    endif()
+    if(CONFIG_SOC_WIFI_HE_SUPPORT AND CONFIG_IDF_TARGET_ESP32C5)
+        target_link_libraries(${COMPONENT_LIB} INTERFACE
+            "-Wl,--wrap=wifi_sta_itwt_setup_process" "-Wl,--wrap=wifi_sta_btwt_setup_process"
+            "-Wl,--wrap=ht_action_output" "-Wl,--wrap=esf_buf_recycle"
+            "-Wl,--wrap=wifi_sta_itwt_send_probe_req_process" "-Wl,--wrap=ic_tx_pkt"
+            "-Wl,--wrap=itwt_probe_rc_tx_cb" "-Wl,--wrap=he_twt_setup_txcb"
+            "-Wl,--wrap=he_twt_teardown_txcb"
+            "-Wl,--wrap=ieee80211_itwt_information"
+            "-Wl,--wrap=he_twt_information_txcb"
+            "-Wl,--wrap=esp_coex_common_timer_setfn_wrapper"
+            "-Wl,--wrap=esp_coex_common_timer_disarm_wrapper"
+            "-Wl,--wrap=esp_coex_common_timer_done_wrapper"
+            "-Wl,--wrap=esp_coex_common_timer_arm_us_wrapper" "-Wl,--wrap=ets_timer_arm"
+            "-Wl,--wrap=itwt_probe_timeout_fn_process"
+            "-Wl,--wrap=itwt_setup_timeout_fn_process" "-Wl,--wrap=itwt_setup_dwell_timeout_fn_process"
+            "-Wl,--wrap=itwt_information_timeout_fn_process"
+            "-Wl,--wrap=btwt_setup_timeout_fn_process" "-Wl,--wrap=btwt_setup_dwell_timeout_fn_process"
+            "-Wl,--wrap=ieee80211_close_all_twt_sessions" "-Wl,--wrap=ieee80211_btwt_setup" "-Wl,--wrap=he_recv_action_twt_setup"
+            # Only the later SDK archive references this function-table wrapper.
+            "-Wl,--undefined=__wrap_he_recv_action_twt_setup"
+            "-Wl,--wrap=wifi_event_post")
+    endif()
+endif()

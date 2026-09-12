@@ -11,7 +11,9 @@ test("wifi_csi/espnow-conflict-hardware", function () {
   var during;
 
   test.equal(caps.supports.fixedChannel, true,
-    "ESP-NOW conflict qualification requires the fixed-channel Build Context gate");
+    "ESP-NOW conflict qualification requires fixed-channel support");
+  test.equal(caps.supports.promiscuous, true,
+    "ESP-NOW conflict qualification requires promiscuous CSI for channel requests");
   try {
     try { wifi.disconnect(); } catch (ignoredDisconnectError) {}
     espnowSession = espNow.open({
@@ -24,11 +26,9 @@ test("wifi_csi/espnow-conflict-hardware", function () {
       "ESP-NOW should hold the first fixed-channel radio lease");
     try {
       csiSession = wifi.csi.open({
-        source: "associated",
-        channel: conflictingCsiChannel,
-        conflict: "fail",
+        source: { mode: "promiscuous", channel: conflictingCsiChannel },
         capture: capture,
-        queue: { capacity: 2, overflow: "drop-newest" }
+        buffering: { queueCapacity: 2, overflow: "drop-newest" }
       });
     } catch (error) {
       conflictError = String(error && error.message ? error.message : error);
@@ -47,11 +47,9 @@ test("wifi_csi/espnow-conflict-hardware", function () {
       "ESP-NOW close must release its radio lease before returning");
 
     csiSession = wifi.csi.open({
-      source: "associated",
-      channel: espnowChannel,
-      conflict: "fail",
+      source: { mode: "promiscuous", channel: espnowChannel },
       capture: capture,
-      queue: { capacity: 2, overflow: "drop-newest" }
+      buffering: { queueCapacity: 2, overflow: "drop-newest" }
     });
     test.equal(csiSession.status().effective.channel, espnowChannel,
       "CSI may claim the released channel after ESP-NOW closes");

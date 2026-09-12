@@ -139,6 +139,16 @@ static inline word_t internal(void) {
                      evidence=["production test"], validation={"host": "passed", "build": "passed", "hardware": "not-run"})
         coverage.validate(inventory, mapping, actual)
 
+    def test_reviewed_in_progress_mapping_requires_actual_method_identity(self):
+        inventory, mapping, actual, key = fixture()
+        actual["functions"].append({"qualifiedName": "WiFiExample.prototype.close"})
+        entry = mapping["symbols"][key]
+        entry.update(implementation="in-progress", contract="reviewed", jsPath="WiFiExample.close")
+        with self.assertRaisesRegex(ValueError, "no actual registered API"):
+            coverage.validate(inventory, mapping, actual)
+        entry["jsPath"] = "WiFiExample.prototype.close"
+        coverage.validate(inventory, mapping, actual)
+
     def test_hidden_or_attribute_only_header_changes_require_review(self):
         with tempfile.TemporaryDirectory() as temporary:
             idf = Path(temporary)

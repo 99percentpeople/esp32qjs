@@ -22,12 +22,23 @@ test("wifi/network", function () {
   status = Future.call(wifi.connect, wifi, [cfg.wifiSsid, {
     password: cfg.wifiPassword,
     timeoutMs: 15000,
-    scanMethod: "all",
+    scanMethod: "all-channel",
     sortMethod: "signal",
-    pmf: "capable"
+    pmf: "optional"
   }]).wait(20000);
 
   test.ok(status.connected, "wifi should connect");
+  test.equal(status.ssid, cfg.wifiSsid, "result belongs to the requested connection");
+  test.ok(typeof status.bssid === "string" && status.bssid.length === 17,
+    "result includes the association BSSID");
+  test.ok(status.channel > 0, "result includes the association channel");
+  test.ok(typeof status.elapsedMs === "number" && status.elapsedMs >= 0,
+    "result includes native completion elapsed time");
+  test.ok(status.aid === null || status.aid > 0, "association AID is nullable");
+  test.ok(status.rssi === null || typeof status.rssi === "number",
+    "RSSI is an optional native sample");
+  test.ok(status.negotiatedPhy === null || typeof status.negotiatedPhy === "string",
+    "negotiated PHY is optional");
   network = net.status();
   test.equal(network.ready, true, "net should report network readiness");
   primary = null;
@@ -88,6 +99,12 @@ test("wifi/network", function () {
 
   disconnected = wifi.disconnect();
   test.ok(!disconnected.connected, "wifi should disconnect");
+  test.equal(disconnected.associated, false, "disconnect clears association state");
+  test.equal(disconnected.bssid, null, "disconnect clears the current BSSID");
+  test.equal(disconnected.aid, null, "disconnect clears the current AID");
+  test.equal(status.connected, true, "disconnect does not rewrite the completed result");
+  test.ok(status.bssid.length === 17 && status.channel > 0,
+    "completed result keeps its association identity");
 
   return {
     ip: primary.ipv4.address,

@@ -1,4 +1,5 @@
 #include "esp32_mquickjs_wifi_csi.h"
+#include "esp32_mquickjs_memory.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI_CSI
 
@@ -8,10 +9,13 @@
 #include "esp32_mquickjs_options.h"
 #include "esp32_mquickjs_reaper.h"
 #include "esp32_mquickjs_wifi_csi_resources.h"
+#include "esp32_mquickjs_wifi_csi_store.h"
+#include "esp32_mquickjs_wifi_csi_rx_native.h"
+#include "esp32_mquickjs_wifi_csi_wire.h"
 #include "esp32_mquickjs_wifi_csi_batch.h"
 #include "esp32_mquickjs_wifi_csi_target.h"
 
-#ifdef CONFIG_ESP32_MQUICKJS_WIFI_CSI_ALLOW_PROMISCUOUS
+#if CONFIG_ESP32_MQUICKJS_WIFI_CSI_ALLOW_PROMISCUOUS
 #define WIFI_CSI_PROMISCUOUS_SUPPORTED true
 #else
 #define WIFI_CSI_PROMISCUOUS_SUPPORTED false
@@ -45,12 +49,7 @@
 #endif
 
 #define WIFI_CSI_EVENT_QUEUE_KEY "_eventQueue"
-#define WIFI_CSI_BATCH_HEADER_BYTES 24U
-#define WIFI_CSI_BATCH_DIRECTORY_BYTES 16U
-#define WIFI_CSI_BATCH_METADATA_BYTES 192U
-#define WIFI_CSI_BATCH_SEGMENT_BYTES 40U
-#define WIFI_CSI_BATCH_SEGMENT_BASE 60U
-#define WIFI_CSI_BINARY_VERSION 1U
+#define WIFI_CSI_BATCH_METADATA_BYTES ESP32_MQUICKJS_WIFI_RX_WIRE_METADATA_BYTES
 
 typedef enum {
     WIFI_CSI_CLOSED = 0,
@@ -76,8 +75,10 @@ typedef struct {
     bool fixed_channel;
     uint8_t channel;
     wifi_csi_power_save_policy_t power_save_policy;
+    uint32_t pool_capacity;
     uint32_t queue_capacity;
     esp32_mquickjs_wifi_csi_capture_config_t capture;
+    esp32_mquickjs_wifi_csi_packet_options_t packet;
     esp32_mquickjs_wifi_csi_filter_t filter;
 } wifi_csi_options_t;
 
@@ -87,6 +88,7 @@ typedef struct {
     uint32_t delivered_frames;
     uint32_t delivered_batches;
     uint32_t filtered_mac;
+    uint32_t filtered_bssid, filtered_frame_type, filtered_frame_subtype, dropped_identity_exhausted;
     uint32_t filtered_rssi;
     uint32_t filtered_decimation;
     uint32_t filtered_rate_limit;
@@ -98,6 +100,8 @@ typedef struct {
     uint32_t dropped_frame_too_large;
     uint32_t dropped_closing;
     uint32_t received_bytes;
+    uint32_t packet_unavailable, packet_malformed, packet_truncated;
+    uint32_t dropped_packet_required, dropped_packet_incomplete, received_packet_bytes;
     uint32_t leased_frames;
 } wifi_csi_stats_snapshot_t;
 
@@ -113,11 +117,11 @@ typedef struct {
     bool callback_registered;
     bool csi_enabled;
     bool reaper_registered;
-    bool resources_destroying;
     _Atomic bool cleanup_scheduled;
     _Atomic bool close_requested;
+    _Atomic bool channel_conflicted;
     wifi_csi_options_t options;
-    esp32_mquickjs_wifi_csi_resources_t resources;
+    _Atomic(esp32_mquickjs_wifi_csi_resources_t *) resources;
     wifi_csi_stats_snapshot_t final_stats;
     uint8_t effective_channel;
     wifi_second_chan_t effective_secondary;
@@ -153,14 +157,19 @@ typedef struct {
 typedef struct {
     wifi_csi_lease_ref_t lease;
     size_t offset;
+    bool packet;
     bool opened;
     bool iterator_active;
     bool destroy_requested;
-} wifi_csi_frame_source_t;
+} wifi_csi_sample_source_t;
 
 typedef struct {
     uint16_t frame_count;
     uint16_t payload_index;
+    bool packet_pending;
+    uint16_t retained_count;
+    uint8_t padding_pending;
+    uint32_t total_length;
     uint8_t *control;
     size_t control_length;
     bool control_emitted;
@@ -168,11 +177,37 @@ typedef struct {
     bool iterator_active;
     bool destroy_requested;
     wifi_csi_lease_ref_t leases[];
-} wifi_csi_batch_source_t;
+} wifi_csi_wire_source_t;
+_Static_assert(ESP32_MQUICKJS_WIFI_RX_WIRE_MAX_FRAMES <=
+    (SIZE_MAX - sizeof(wifi_csi_wire_source_t)) / sizeof(wifi_csi_lease_ref_t),
+    "CSI wire Source allocation must fit size_t");
 
 static const char *TAG = "esp32qjs_wifi_csi";
-static wifi_csi_session_t s_wifi_csi;
-static _Atomic uint32_t s_wifi_csi_next_generation = 1U;
+static wifi_csi_session_t s_wifi_csi = {.lock = portMUX_INITIALIZER_UNLOCKED};
+static portMUX_TYPE s_wifi_csi_store_lock = portMUX_INITIALIZER_UNLOCKED;
+static void wifi_csi_store_lock(void *opaque)
+{
+    (void)opaque;
+    taskENTER_CRITICAL(&s_wifi_csi_store_lock);
+}
+static void wifi_csi_store_unlock(void *opaque)
+{
+    (void)opaque;
+    taskEXIT_CRITICAL(&s_wifi_csi_store_lock);
+}
+static esp32_mquickjs_wifi_csi_store_t s_wifi_csi_store = {
+    .lock = wifi_csi_store_lock, .unlock = wifi_csi_store_unlock,
+    .maximum_slots = CONFIG_ESP32_MQUICKJS_WIFI_CSI_POOL_CAPACITY,
+    .max_frame_bytes = CONFIG_ESP32_MQUICKJS_WIFI_CSI_MAX_FRAME_BYTES,
+    .next_generation = 1,
+};
+
+static bool wifi_csi_pool_retirement_pending(void)
+{
+    /* Only the active control's detach suffix blocks runtime/open. Retained
+     * data generations independently consume the store's bounded budget. */
+    return atomic_load_explicit(&s_wifi_csi.resources, memory_order_acquire) != NULL;
+}
 
 static const char *wifi_csi_lifecycle_name(wifi_csi_lifecycle_t lifecycle)
 {
@@ -261,10 +296,11 @@ static bool wifi_csi_string_equals(JSContext *ctx, JSValue value,
                                    const char *expected)
 {
     JSCStringBuf buffer;
+    size_t length = 0;
     const char *text = JS_IsString(ctx, value)
-        ? JS_ToCString(ctx, value, &buffer) : NULL;
+        ? JS_ToCStringLen(ctx, &length, value, &buffer) : NULL;
 
-    return text != NULL && strcmp(text, expected) == 0;
+    return text != NULL && length == strlen(expected) && memcmp(text, expected, length) == 0;
 }
 
 static bool wifi_csi_get_optional_bool(JSContext *ctx, JSValue object,
@@ -287,7 +323,9 @@ static void wifi_csi_default_options(wifi_csi_options_t *options)
     memset(options, 0, sizeof(*options));
     options->source = WIFI_CSI_SOURCE_ASSOCIATED;
     options->power_save_policy = WIFI_CSI_POWER_SAVE_PRESERVE;
+    options->pool_capacity = CONFIG_ESP32_MQUICKJS_WIFI_CSI_POOL_CAPACITY;
     options->queue_capacity = CONFIG_ESP32_MQUICKJS_WIFI_CSI_QUEUE_LEN;
+    options->packet.snap_length = ESP32_MQUICKJS_WIFI_CSI_DEFAULT_PACKET_BYTES;
     options->filter.sample_every = 1U;
     options->filter.valid_only = true;
     if (esp32_mquickjs_wifi_csi_target_is_he()) {
@@ -338,10 +376,11 @@ static bool wifi_csi_parse_mac_values_rooted(
         JSValue entry = array
             ? JS_GetPropertyUint32(ctx, *value, index) : *value;
         JSCStringBuf buffer;
+        size_t text_length = 0;
         const char *text = JS_IsString(ctx, entry)
-            ? JS_ToCString(ctx, entry, &buffer) : NULL;
+            ? JS_ToCStringLen(ctx, &text_length, entry, &buffer) : NULL;
 
-        if (text == NULL || !wifi_csi_parse_mac_text(text, output[index])) {
+        if (text == NULL || text_length != 17 || !wifi_csi_parse_mac_text(text, output[index])) {
             JS_ThrowTypeError(ctx,
                 "%s expects xx:xx:xx:xx:xx:xx or an array of addresses",
                 name);
@@ -367,19 +406,91 @@ static bool wifi_csi_parse_mac_values(
     return result;
 }
 
+static const char *wifi_csi_packet_type_name(unsigned type)
+{
+    static const char *const names[] = {"management", "control", "data", "misc", "unknown"};
+    return names[type < 5 ? type : 4];
+}
+
+static bool wifi_csi_parse_frame_filter(JSContext *ctx, JSValue value,
+    bool subtypes, uint16_t *mask)
+{
+    JSGCRef value_ref, entry_ref;
+    JSValue *root = JS_PushGCRef(ctx, &value_ref);
+    JSValue *entry = JS_PushGCRef(ctx, &entry_ref);
+    *root = value;
+    uint32_t count;
+    uint16_t result = 0;
+    if (!JS_IsArray(ctx, *root)) {
+        JS_ThrowTypeError(ctx, "CSI frameTypes/frameSubtypes must be arrays");
+        goto fail;
+    }
+    JSValue length = JS_GetPropertyStr(ctx, *root, "length");
+    if (JS_IsException(length) || !esp32_mquickjs_value_to_bounded_u32(
+            ctx, length, 0, subtypes ? 16 : 5, &count)) {
+        if (!JS_HasException(ctx)) JS_ThrowRangeError(ctx, "Too many CSI frame types/subtypes");
+        goto fail;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        *entry = JS_GetPropertyUint32(ctx, *root, i);
+        uint32_t index = 0;
+        if (JS_IsException(*entry)) goto fail;
+        if (subtypes) {
+            if (!esp32_mquickjs_value_to_bounded_u32(ctx, *entry, 0, 15, &index)) {
+                if (!JS_HasException(ctx)) JS_ThrowRangeError(ctx, "CSI frame subtype must be 0..15");
+                goto fail;
+            }
+        } else {
+            while (index < 5 && !wifi_csi_string_equals(ctx, *entry, wifi_csi_packet_type_name(index))) ++index;
+            if (JS_HasException(ctx)) goto fail;
+            if (index == 5) { JS_ThrowTypeError(ctx, "Invalid CSI frame type"); goto fail; }
+        }
+        if (result & (1U << index)) {
+            JS_ThrowTypeError(ctx, "Duplicate CSI frame type/subtype"); goto fail;
+        }
+        result |= 1U << index;
+    }
+    *mask = result;
+    JS_PopGCRef(ctx, &entry_ref);
+    JS_PopGCRef(ctx, &value_ref);
+    return true;
+fail:
+    JS_PopGCRef(ctx, &entry_ref);
+    JS_PopGCRef(ctx, &value_ref);
+    return false;
+}
+
+static JSValue wifi_csi_frame_filter_to_js(JSContext *ctx, uint16_t mask, bool subtypes)
+{
+    JSGCRef ref;
+    JSValue *result = JS_PushGCRef(ctx, &ref);
+    *result = JS_NewArray(ctx, 0);
+    if (JS_IsException(*result)) goto fail;
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < (subtypes ? 16U : 5U); ++i) {
+        if (!(mask & (1U << i))) continue;
+        JSValue value = subtypes ? JS_NewUint32(ctx, i) : JS_NewString(ctx, wifi_csi_packet_type_name(i));
+        if (JS_IsException(value) || JS_IsException(JS_SetPropertyUint32(ctx, *result, count++, value))) goto fail;
+    }
+    return JS_PopGCRef(ctx, &ref);
+fail:
+    JS_PopGCRef(ctx, &ref);
+    return JS_EXCEPTION;
+}
+
 static bool wifi_csi_parse_filter_rooted(JSContext *ctx, JSValue *value,
                                   esp32_mquickjs_wifi_csi_filter_t *filter)
 {
     static const char *const allowed[] = {
         "sourceMac", "destinationMac", "minimumRssi", "sampleEvery",
-        "maximumRateHz", "validOnly",
+        "maximumRateHz", "validOnly", "bssid", "frameTypes", "frameSubtypes",
     };
     JSValue property;
     int32_t signed_value;
     uint32_t unsigned_value;
 
     if (!esp32_mquickjs_validate_plain_options(
-            ctx, *value, "wifi.csi.open({ filter })", allowed, 6U)) {
+            ctx, *value, "wifi.csi.open({ filter })", allowed, 9U)) {
         return false;
     }
     property = JS_GetPropertyStr(ctx, *value, "sourceMac");
@@ -394,6 +505,24 @@ static bool wifi_csi_parse_filter_rooted(JSContext *ctx, JSValue *value,
          !wifi_csi_parse_mac_values(ctx, property, "filter.destinationMac",
                                     filter->destination_macs,
                                     &filter->destination_mac_count))) return false;
+    property = JS_GetPropertyStr(ctx, *value, "bssid");
+    if (JS_IsException(property) || (!JS_IsUndefined(property) &&
+        !wifi_csi_parse_mac_values(ctx, property, "filter.bssid", filter->bssids, &filter->bssid_count))) return false;
+    uint16_t mask;
+    property = JS_GetPropertyStr(ctx, *value, "frameTypes");
+    if (JS_IsException(property)) return false;
+    if (!JS_IsUndefined(property)) {
+        if (!wifi_csi_parse_frame_filter(ctx, property, false, &mask)) return false;
+        filter->frame_types = (uint8_t)mask;
+        filter->frame_types_set = true;
+    }
+    property = JS_GetPropertyStr(ctx, *value, "frameSubtypes");
+    if (JS_IsException(property)) return false;
+    if (!JS_IsUndefined(property)) {
+        if (!wifi_csi_parse_frame_filter(ctx, property, true, &mask)) return false;
+        filter->frame_subtypes = mask;
+        filter->frame_subtypes_set = true;
+    }
     property = JS_GetPropertyStr(ctx, *value, "minimumRssi");
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property)) {
@@ -591,40 +720,41 @@ static bool wifi_csi_parse_he_capture(
     return result;
 }
 
-static bool wifi_csi_parse_open_options_rooted(JSContext *ctx, JSValue *value,
-                                        wifi_csi_options_t *options)
+static bool wifi_csi_parse_source(JSContext *ctx, JSValue value,
+                                  wifi_csi_options_t *options)
 {
-    static const char *const allowed[] = {
-        "source", "channel", "conflict", "capture", "filter", "queue",
-        "powerSavePolicy",
-    };
-    static const char *const queue_allowed[] = {"capacity", "overflow"};
+    static const char *const allowed[] = {"mode", "channel"};
+    static const char *const associated_allowed[] = {"mode"};
+    JSGCRef value_ref;
+    JSValue *rooted_value = JS_PushGCRef(ctx, &value_ref);
+    *rooted_value = value;
+    bool result = false;
     JSValue property;
     uint32_t number;
-    esp32_mquickjs_wifi_csi_target_config_result_t target_result;
-
-    wifi_csi_default_options(options);
     if (!esp32_mquickjs_validate_plain_options(
-            ctx, *value, "wifi.csi.open(options)", allowed, 7U)) return false;
-    property = JS_GetPropertyStr(ctx, *value, "source");
-    if (JS_IsException(property)) return false;
-    if (!JS_IsUndefined(property)) {
-        if (wifi_csi_string_equals(ctx, property, "associated")) {
-            options->source = WIFI_CSI_SOURCE_ASSOCIATED;
-        } else if (wifi_csi_string_equals(ctx, property, "promiscuous")) {
-#if CONFIG_ESP32_MQUICKJS_WIFI_CSI_ALLOW_PROMISCUOUS
-            options->source = WIFI_CSI_SOURCE_PROMISCUOUS;
-#else
-            return JS_ThrowTypeError(
-                ctx, "WIFI_CSI_CONFIG_UNSUPPORTED: promiscuous capture is disabled by this Build Context"), false;
-#endif
-        } else {
-            return JS_ThrowTypeError(
-                ctx, "source expects associated or promiscuous"), false;
-        }
+            ctx, *rooted_value, "CSI source", allowed, 2U)) goto done;
+    property = JS_GetPropertyStr(ctx, *rooted_value, "mode");
+    if (JS_IsException(property)) goto done;
+    if (wifi_csi_string_equals(ctx, property, "associated")) {
+        /* No channel key at all, including channel:undefined. */
+        result = esp32_mquickjs_validate_plain_options(
+            ctx, *rooted_value, "associated CSI source", associated_allowed, 1U);
+        if (result) options->source = WIFI_CSI_SOURCE_ASSOCIATED;
+        goto done;
     }
-    property = JS_GetPropertyStr(ctx, *value, "channel");
-    if (JS_IsException(property)) return false;
+    if (!wifi_csi_string_equals(ctx, property, "promiscuous")) {
+        JS_ThrowTypeError(ctx, "source.mode expects associated or promiscuous");
+        goto done;
+    }
+#if CONFIG_ESP32_MQUICKJS_WIFI_CSI_ALLOW_PROMISCUOUS
+    options->source = WIFI_CSI_SOURCE_PROMISCUOUS;
+#else
+    JS_ThrowTypeError(ctx,
+        "WIFI_CSI_CONFIG_UNSUPPORTED: promiscuous capture is disabled by this Build Context");
+    goto done;
+#endif
+    property = JS_GetPropertyStr(ctx, *rooted_value, "channel");
+    if (JS_IsException(property)) goto done;
     if (!JS_IsUndefined(property) &&
         !wifi_csi_string_equals(ctx, property, "current")) {
         if (!esp32_mquickjs_value_to_bounded_u32(
@@ -636,18 +766,134 @@ static bool wifi_csi_parse_open_options_rooted(JSContext *ctx, JSValue *value,
                 false,
 #endif
                 (uint8_t)number)) {
-            return JS_ThrowRangeError(
-                ctx, "channel is not structurally valid for this target"), false;
+            JS_ThrowRangeError(ctx, "source.channel is not structurally valid for this target");
+            goto done;
         }
         options->fixed_channel = true;
         options->channel = (uint8_t)number;
     }
-    property = JS_GetPropertyStr(ctx, *value, "conflict");
-    if (JS_IsException(property) ||
-        (!JS_IsUndefined(property) &&
-         !wifi_csi_string_equals(ctx, property, "fail"))) {
-        return JS_ThrowTypeError(ctx, "conflict only supports fail"), false;
+    result = true;
+done:
+    JS_PopGCRef(ctx, &value_ref);
+    return result;
+}
+
+static bool wifi_csi_parse_buffering(JSContext *ctx, JSValue value,
+                                     wifi_csi_options_t *options)
+{
+    static const char *const allowed[] = {"poolCapacity", "queueCapacity", "overflow"};
+    JSGCRef value_ref;
+    JSValue *rooted_value = JS_PushGCRef(ctx, &value_ref);
+    *rooted_value = value;
+    bool result = false;
+    if (!esp32_mquickjs_validate_plain_options(
+            ctx, *rooted_value, "CSI buffering", allowed, 3U)) goto done;
+    JSValue property = JS_GetPropertyStr(ctx, *rooted_value, "poolCapacity");
+    if (JS_IsException(property)) goto done;
+    if (!JS_IsUndefined(property) &&
+        !esp32_mquickjs_value_to_bounded_u32(ctx, property, 1U,
+            CONFIG_ESP32_MQUICKJS_WIFI_CSI_POOL_CAPACITY, &options->pool_capacity)) {
+        JS_ThrowRangeError(ctx, "buffering.poolCapacity exceeds this Build Context");
+        goto done;
     }
+    /* A small pool remains usable when queueCapacity is omitted. Explicit
+     * queue sizes are checked, never silently clipped. */
+    if (options->queue_capacity > options->pool_capacity)
+        options->queue_capacity = options->pool_capacity;
+    property = JS_GetPropertyStr(ctx, *rooted_value, "queueCapacity");
+    if (JS_IsException(property)) goto done;
+    if (!JS_IsUndefined(property) &&
+        !esp32_mquickjs_value_to_bounded_u32(ctx, property, 1U,
+            options->pool_capacity, &options->queue_capacity)) {
+        JS_ThrowRangeError(ctx, "buffering.queueCapacity must not exceed poolCapacity");
+        goto done;
+    }
+    property = JS_GetPropertyStr(ctx, *rooted_value, "overflow");
+    if (JS_IsException(property)) goto done;
+    if (!JS_IsUndefined(property) && !wifi_csi_string_equals(ctx, property, "drop-newest")) {
+        JS_ThrowTypeError(ctx, "buffering.overflow only supports drop-newest");
+        goto done;
+    }
+    result = true;
+done:
+    JS_PopGCRef(ctx, &value_ref);
+    return result;
+}
+
+static const char *wifi_csi_packet_mode_name(esp32_mquickjs_wifi_csi_packet_mode_t mode)
+{
+    return mode == ESP32_MQUICKJS_WIFI_CSI_PACKET_HEADER ? "header" :
+        mode == ESP32_MQUICKJS_WIFI_CSI_PACKET_FULL ? "full" : "none";
+}
+
+static bool wifi_csi_parse_packet(JSContext *ctx, JSValue value,
+    esp32_mquickjs_wifi_csi_packet_options_t *options)
+{
+    static const char *const allowed[] = {"content", "snapLength", "required", "requireComplete"};
+    JSGCRef ref;
+    JSValue *root = JS_PushGCRef(ctx, &ref);
+    *root = value;
+    bool result = false, content_set = false;
+    if (!esp32_mquickjs_validate_plain_options(ctx, *root, "CSI packet", allowed, 4)) goto done;
+    JSValue property = JS_GetPropertyStr(ctx, *root, "content");
+    if (JS_IsException(property)) goto done;
+    if (!JS_IsUndefined(property)) {
+        content_set = true;
+        if (wifi_csi_string_equals(ctx, property, "none")) options->mode = ESP32_MQUICKJS_WIFI_CSI_PACKET_NONE;
+        else if (wifi_csi_string_equals(ctx, property, "header")) options->mode = ESP32_MQUICKJS_WIFI_CSI_PACKET_HEADER;
+        else if (wifi_csi_string_equals(ctx, property, "full")) options->mode = ESP32_MQUICKJS_WIFI_CSI_PACKET_FULL;
+        else { JS_ThrowTypeError(ctx, "packet.content expects none, header or full"); goto done; }
+    }
+    property = JS_GetPropertyStr(ctx, *root, "snapLength");
+    if (JS_IsException(property)) goto done;
+    if (!JS_IsUndefined(property) && !esp32_mquickjs_value_to_bounded_u32(ctx, property,
+            1, ESP32_MQUICKJS_WIFI_CSI_MAX_PACKET_BYTES, &options->snap_length)) {
+        JS_ThrowRangeError(ctx, "packet.snapLength is outside the supported range"); goto done;
+    }
+    if (!wifi_csi_get_optional_bool(ctx, *root, "required", &options->required) ||
+        !wifi_csi_get_optional_bool(ctx, *root, "requireComplete", &options->require_complete)) goto done;
+    if (options->require_complete) {
+        if (!content_set) options->mode = ESP32_MQUICKJS_WIFI_CSI_PACKET_FULL;
+        options->required = true;
+    }
+    if (!esp32_mquickjs_wifi_csi_packet_options_valid(options)) {
+        JS_ThrowRangeError(ctx, "CSI packet requires a complete header capacity; required needs header/full and requireComplete needs full");
+        goto done;
+    }
+    result = true;
+done:
+    JS_PopGCRef(ctx, &ref);
+    return result;
+}
+
+static JSValue wifi_csi_packet_options_to_js(JSContext *ctx,
+    const esp32_mquickjs_wifi_csi_packet_options_t *options)
+{
+    JSGCRef ref;
+    JSValue *result = JS_PushGCRef(ctx, &ref);
+    *result = JS_NewObject(ctx);
+    bool ok = !JS_IsException(*result) &&
+        esp32_mquickjs_set_property_ref(ctx, result, "content", JS_NewString(ctx, wifi_csi_packet_mode_name(options->mode))) &&
+        esp32_mquickjs_set_property_ref(ctx, result, "snapLength", JS_NewUint32(ctx, options->snap_length)) &&
+        esp32_mquickjs_set_property_ref(ctx, result, "required", JS_NewBool(options->required)) &&
+        esp32_mquickjs_set_property_ref(ctx, result, "requireComplete", JS_NewBool(options->require_complete));
+    JSValue value = JS_PopGCRef(ctx, &ref);
+    return ok ? value : JS_EXCEPTION;
+}
+
+static bool wifi_csi_parse_open_options_rooted(JSContext *ctx, JSValue *value,
+                                        wifi_csi_options_t *options)
+{
+    static const char *const allowed[] = {"source", "capture", "filter", "buffering", "powerSavePolicy", "packet"};
+    JSValue property;
+    esp32_mquickjs_wifi_csi_target_config_result_t target_result;
+
+    wifi_csi_default_options(options);
+    if (!esp32_mquickjs_validate_plain_options(
+            ctx, *value, "wifi.csi.open(options)", allowed, 6U)) return false;
+    property = JS_GetPropertyStr(ctx, *value, "source");
+    if (JS_IsException(property) ||
+        (!JS_IsUndefined(property) && !wifi_csi_parse_source(ctx, property, options))) return false;
     property = JS_GetPropertyStr(ctx, *value, "powerSavePolicy");
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property)) {
@@ -660,39 +906,16 @@ static bool wifi_csi_parse_open_options_rooted(JSContext *ctx, JSValue *value,
                 ctx, "powerSavePolicy expects preserve or require-none"), false;
         }
     }
+    property = JS_GetPropertyStr(ctx, *value, "packet");
+    if (JS_IsException(property) ||
+        (!JS_IsUndefined(property) && !wifi_csi_parse_packet(ctx, property, &options->packet))) return false;
     property = JS_GetPropertyStr(ctx, *value, "filter");
     if (JS_IsException(property) ||
         (!JS_IsUndefined(property) &&
          !wifi_csi_parse_filter(ctx, property, &options->filter))) return false;
-    property = JS_GetPropertyStr(ctx, *value, "queue");
-    if (JS_IsException(property)) return false;
-    if (!JS_IsUndefined(property)) {
-        if (!esp32_mquickjs_validate_plain_options(
-                ctx, property, "wifi.csi.open({ queue })",
-                queue_allowed, 2U)) return false;
-        property = JS_GetPropertyStr(ctx, *value, "queue");
-        if (JS_IsException(property)) return false;
-        JSValue queue_property = JS_GetPropertyStr(ctx, property, "capacity");
-        if (JS_IsException(queue_property)) return false;
-        if (!JS_IsUndefined(queue_property)) {
-            if (!esp32_mquickjs_value_to_bounded_u32(
-                    ctx, queue_property, 1U,
-                    CONFIG_ESP32_MQUICKJS_WIFI_CSI_POOL_CAPACITY, &number)) {
-                return JS_ThrowRangeError(
-                    ctx, "queue.capacity exceeds this Build Context"), false;
-            }
-            options->queue_capacity = number;
-        }
-        property = JS_GetPropertyStr(ctx, *value, "queue");
-        if (JS_IsException(property)) return false;
-        queue_property = JS_GetPropertyStr(ctx, property, "overflow");
-        if (JS_IsException(queue_property) ||
-            (!JS_IsUndefined(queue_property) &&
-             !wifi_csi_string_equals(ctx, queue_property, "drop-newest"))) {
-            return JS_ThrowTypeError(
-                ctx, "queue.overflow only supports drop-newest"), false;
-        }
-    }
+    property = JS_GetPropertyStr(ctx, *value, "buffering");
+    if (JS_IsException(property) ||
+        (!JS_IsUndefined(property) && !wifi_csi_parse_buffering(ctx, property, options))) return false;
     property = JS_GetPropertyStr(ctx, *value, "capture");
     if (JS_IsException(property) || JS_IsUndefined(property)) {
         return JS_ThrowTypeError(ctx, "wifi.csi.open() requires capture"), false;
@@ -749,20 +972,27 @@ static bool wifi_csi_parse_open_options(JSContext *ctx, JSValue value,
 static void *wifi_csi_resource_calloc(size_t count, size_t size, void *opaque)
 {
     (void)opaque;
-    return heap_caps_calloc(count, size,
-                            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    return esp32_mquickjs_memory_wireless_calloc("wifi.csi", count, size,
+        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_POOL);
 }
 
 static void *wifi_csi_resource_malloc(size_t size, void *opaque)
 {
     (void)opaque;
-    return heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    return esp32_mquickjs_memory_wireless_alloc("wifi.csi", size,
+        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_POOL);
 }
 
 static void wifi_csi_resource_free(void *ptr, void *opaque)
 {
     (void)opaque;
-    heap_caps_free(ptr);
+    esp32_mquickjs_memory_payload_free(ptr);
+}
+
+static void wifi_csi_resource_retire(void *ptr, void *opaque)
+{
+    (void)opaque;
+    (void)esp32_mquickjs_memory_wireless_retire(ptr);
 }
 
 static esp32_mquickjs_wifi_csi_allocator_t wifi_csi_resource_allocator(void)
@@ -771,6 +1001,7 @@ static esp32_mquickjs_wifi_csi_allocator_t wifi_csi_resource_allocator(void)
         .calloc_fn = wifi_csi_resource_calloc,
         .malloc_fn = wifi_csi_resource_malloc,
         .free_fn = wifi_csi_resource_free,
+        .retire_fn = wifi_csi_resource_retire,
     };
 
     return allocator;
@@ -779,7 +1010,7 @@ static esp32_mquickjs_wifi_csi_allocator_t wifi_csi_resource_allocator(void)
 static void wifi_csi_snapshot_stats(wifi_csi_session_t *session)
 {
     esp32_mquickjs_wifi_csi_counters_t *counters =
-        &session->resources.counters;
+        &session->resources->counters;
 
 #define WIFI_CSI_SNAPSHOT(name) \
     session->final_stats.name = atomic_load_explicit( \
@@ -789,6 +1020,10 @@ static void wifi_csi_snapshot_stats(wifi_csi_session_t *session)
     WIFI_CSI_SNAPSHOT(delivered_frames);
     WIFI_CSI_SNAPSHOT(delivered_batches);
     WIFI_CSI_SNAPSHOT(filtered_mac);
+    WIFI_CSI_SNAPSHOT(filtered_bssid);
+    WIFI_CSI_SNAPSHOT(filtered_frame_type);
+    WIFI_CSI_SNAPSHOT(filtered_frame_subtype);
+    WIFI_CSI_SNAPSHOT(dropped_identity_exhausted);
     WIFI_CSI_SNAPSHOT(filtered_rssi);
     WIFI_CSI_SNAPSHOT(filtered_decimation);
     WIFI_CSI_SNAPSHOT(filtered_rate_limit);
@@ -800,84 +1035,104 @@ static void wifi_csi_snapshot_stats(wifi_csi_session_t *session)
     WIFI_CSI_SNAPSHOT(dropped_frame_too_large);
     WIFI_CSI_SNAPSHOT(dropped_closing);
     WIFI_CSI_SNAPSHOT(received_bytes);
+    WIFI_CSI_SNAPSHOT(packet_unavailable);
+    WIFI_CSI_SNAPSHOT(packet_malformed);
+    WIFI_CSI_SNAPSHOT(packet_truncated);
+    WIFI_CSI_SNAPSHOT(dropped_packet_required);
+    WIFI_CSI_SNAPSHOT(dropped_packet_incomplete);
+    WIFI_CSI_SNAPSHOT(received_packet_bytes);
     WIFI_CSI_SNAPSHOT(leased_frames);
 #undef WIFI_CSI_SNAPSHOT
 }
 
 static void wifi_csi_maybe_destroy_resources(wifi_csi_session_t *session)
 {
-    bool destroy = false;
-
+    esp32_mquickjs_wifi_csi_resources_t *resources = NULL;
     if (session == NULL) return;
     taskENTER_CRITICAL(&session->lock);
-    if (!session->resources_destroying && session->resources.slots != NULL &&
-        atomic_load_explicit(&session->lifecycle, memory_order_acquire) ==
-            WIFI_CSI_CLOSED &&
-        atomic_load_explicit(&session->resources.callbacks_active,
-                             memory_order_acquire) == 0U &&
-        atomic_load_explicit(&session->resources.counters.leased_frames,
-                             memory_order_acquire) == 0U) {
-        session->resources_destroying = true;
+    if (session->resources != NULL &&
+        atomic_load_explicit(&session->lifecycle, memory_order_acquire) == WIFI_CSI_CLOSED) {
         wifi_csi_snapshot_stats(session);
-        destroy = true;
+        resources = atomic_exchange_explicit(&session->resources, NULL, memory_order_acq_rel);
     }
     taskEXIT_CRITICAL(&session->lock);
-    if (destroy) {
-        if (!esp32_mquickjs_wifi_csi_resources_deinit(&session->resources)) {
-            taskENTER_CRITICAL(&session->lock);
-            session->resources_destroying = false;
-            taskEXIT_CRITICAL(&session->lock);
-        }
+    if (resources != NULL && !esp32_mquickjs_wifi_csi_store_retire(&s_wifi_csi_store, resources)) {
+        /* Unexpected native liveness remains owned and prevents reopen. */
+        atomic_store_explicit(&session->resources, resources, memory_order_release);
     }
 }
 
 static esp32_mquickjs_wifi_csi_slot_t *wifi_csi_resolve_event(
     const esp32_mquickjs_wifi_csi_event_t *event)
 {
-    return esp32_mquickjs_wifi_csi_slot_from_event(
-        &s_wifi_csi.resources, event);
+    if (event == NULL) return NULL;
+    esp32_mquickjs_wifi_csi_resources_t *resources =
+        esp32_mquickjs_wifi_csi_store_acquire(&s_wifi_csi_store, event->session_generation);
+    esp32_mquickjs_wifi_csi_slot_t *slot = esp32_mquickjs_wifi_csi_slot_from_event(resources, event);
+    esp32_mquickjs_wifi_csi_store_release(&s_wifi_csi_store, resources);
+    /* The caller's existing event/public/view/source owner pins this slot. */
+    return slot;
+}
+
+typedef enum {
+    WIFI_CSI_EVENT_RETAIN, WIFI_CSI_EVENT_RELEASE, WIFI_CSI_EVENT_CLOSE,
+    WIFI_CSI_EVENT_TAKE, WIFI_CSI_EVENT_DISCARD, WIFI_CSI_EVENT_DELIVERED,
+    WIFI_CSI_EVENT_BATCH_DELIVERED,
+} wifi_csi_event_action_t;
+
+static bool wifi_csi_update_event(const esp32_mquickjs_wifi_csi_event_t *event,
+    wifi_csi_event_action_t action)
+{
+    if (event == NULL) return false;
+    esp32_mquickjs_wifi_csi_resources_t *resources =
+        esp32_mquickjs_wifi_csi_store_acquire(&s_wifi_csi_store, event->session_generation);
+    esp32_mquickjs_wifi_csi_slot_t *slot = esp32_mquickjs_wifi_csi_slot_from_event(resources, event);
+    bool result = false;
+    if (slot != NULL) {
+        switch (action) {
+            case WIFI_CSI_EVENT_RETAIN:
+                result = esp32_mquickjs_wifi_csi_slot_retain(resources, slot); break;
+            case WIFI_CSI_EVENT_RELEASE:
+                result = esp32_mquickjs_wifi_csi_slot_release(resources, slot); break;
+            case WIFI_CSI_EVENT_CLOSE:
+                result = esp32_mquickjs_wifi_csi_slot_close_public_owner(resources, slot); break;
+            case WIFI_CSI_EVENT_TAKE:
+                result = esp32_mquickjs_wifi_csi_slot_take_event_owner(resources, event); break;
+            case WIFI_CSI_EVENT_DISCARD:
+                result = esp32_mquickjs_wifi_csi_slot_discard_event(resources, event); break;
+            case WIFI_CSI_EVENT_DELIVERED:
+                atomic_fetch_add_explicit(&resources->counters.delivered_frames, 1U, memory_order_relaxed);
+                result = true; break;
+            case WIFI_CSI_EVENT_BATCH_DELIVERED:
+                atomic_fetch_add_explicit(&resources->counters.delivered_batches, 1U, memory_order_relaxed);
+                result = true; break;
+        }
+    }
+    esp32_mquickjs_wifi_csi_store_release(&s_wifi_csi_store, resources);
+    return result;
 }
 
 static void wifi_csi_lease_release(wifi_csi_lease_ref_t *lease)
 {
-    esp32_mquickjs_wifi_csi_slot_t *slot;
-
     if (lease == NULL || lease->released) return;
-    slot = wifi_csi_resolve_event(&lease->event);
-    if (slot != NULL) {
-        (void)esp32_mquickjs_wifi_csi_slot_release(
-            &s_wifi_csi.resources, slot);
-    }
+    (void)wifi_csi_update_event(&lease->event, WIFI_CSI_EVENT_RELEASE);
     lease->released = true;
-    wifi_csi_maybe_destroy_resources(&s_wifi_csi);
 }
 
 static void wifi_csi_lease_request_close(wifi_csi_lease_ref_t *lease)
 {
-    esp32_mquickjs_wifi_csi_slot_t *slot;
-
     if (lease == NULL || lease->released) return;
-    slot = wifi_csi_resolve_event(&lease->event);
-    if (slot != NULL) {
-        (void)esp32_mquickjs_wifi_csi_slot_close_public_owner(
-            &s_wifi_csi.resources, slot);
-    }
+    (void)wifi_csi_update_event(&lease->event, WIFI_CSI_EVENT_CLOSE);
     lease->released = true;
-    wifi_csi_maybe_destroy_resources(&s_wifi_csi);
 }
 
 static wifi_csi_lease_ref_t *wifi_csi_retain_event(
     const esp32_mquickjs_wifi_csi_event_t *event)
 {
-    esp32_mquickjs_wifi_csi_slot_t *slot = wifi_csi_resolve_event(event);
-    wifi_csi_lease_ref_t *lease;
-
-    if (slot == NULL || !esp32_mquickjs_wifi_csi_slot_retain(
-            &s_wifi_csi.resources, slot)) return NULL;
-    lease = heap_caps_calloc(1, sizeof(*lease), MALLOC_CAP_8BIT);
+    if (!wifi_csi_update_event(event, WIFI_CSI_EVENT_RETAIN)) return NULL;
+    wifi_csi_lease_ref_t *lease = esp32_mquickjs_memory_wireless_calloc("wifi.csi", 1, sizeof(*lease), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (lease == NULL) {
-        (void)esp32_mquickjs_wifi_csi_slot_release(
-            &s_wifi_csi.resources, slot);
+        (void)wifi_csi_update_event(event, WIFI_CSI_EVENT_RELEASE);
         return NULL;
     }
     lease->event = *event;
@@ -889,7 +1144,7 @@ static void wifi_csi_byte_view_release(void *opaque)
     wifi_csi_lease_ref_t *lease = opaque;
 
     wifi_csi_lease_release(lease);
-    heap_caps_free(lease);
+    esp32_mquickjs_memory_payload_free(lease);
 }
 
 static bool wifi_csi_publish_event(
@@ -902,52 +1157,116 @@ static bool wifi_csi_publish_event(
             session->event_queue, event);
 }
 
+static bool wifi_csi_channel_admit(wifi_csi_session_t *session)
+{
+    esp32_mquickjs_wifi_radio_channel_status_t channel;
+    esp_err_t err = esp32_mquickjs_wifi_radio_lease_channel_status(&session->radio_lease, &channel);
+    if (channel.conflicted || atomic_load_explicit(&session->channel_conflicted, memory_order_acquire)) {
+        atomic_store_explicit(&session->channel_conflicted, true, memory_order_release);
+        esp32_mquickjs_wifi_csi_resources_set_accepting(session->resources, false);
+        wifi_csi_lifecycle_t expected = WIFI_CSI_RUNNING;
+        (void)atomic_compare_exchange_strong(&session->lifecycle, &expected, WIFI_CSI_FAULTED);
+        return false;
+    }
+    return err == ESP_OK;
+}
+
+/* Runtime-only status refresh; callback admission uses the short Radio snapshot.
+ * Retained Frame/View storage remains valid when a fixed session faults. */
+static void wifi_csi_refresh_channel(wifi_csi_session_t *session)
+{
+    if (session->resources != NULL && atomic_load_explicit(&session->resources->identity_exhausted, memory_order_acquire)) {
+        if (session->last_error == ESP_OK) {
+            session->last_error = ESP_ERR_INVALID_STATE;
+            session->last_error_code = "WIFI_CSI_IDENTITY_EXHAUSTED";
+            session->last_error_stage = "capture-identity";
+        }
+        wifi_csi_lifecycle_t expected = WIFI_CSI_RUNNING;
+        (void)atomic_compare_exchange_strong(&session->lifecycle, &expected, WIFI_CSI_FAULTED);
+    }
+    if (!session->radio_lease.acquired) return;
+    uint8_t primary;
+    wifi_second_chan_t secondary;
+    uint32_t generation;
+    (void)esp32_mquickjs_wifi_radio_get_channel(&primary, &secondary, &generation);
+    esp32_mquickjs_wifi_radio_channel_status_t channel;
+    if (esp32_mquickjs_wifi_radio_lease_channel_status(&session->radio_lease, &channel) == ESP_OK) {
+        session->effective_channel = channel.primary;
+        session->effective_secondary = channel.secondary;
+        session->radio_generation = session->radio_lease.generation;
+    }
+    (void)wifi_csi_channel_admit(session);
+    if (atomic_load_explicit(&session->channel_conflicted, memory_order_acquire) &&
+        session->last_error == ESP_OK) {
+        session->last_error = ESP_ERR_INVALID_STATE;
+        session->last_error_code = "WIFI_CSI_CHANNEL_CONFLICT";
+        session->last_error_stage = "radio-channel-change";
+    }
+}
+
 static void wifi_csi_rx_callback(void *opaque, wifi_csi_info_t *info)
 {
+    uint64_t callback_time_us = (uint64_t)esp_timer_get_time();
+    esp32_mquickjs_wifi_csi_rx_packet_t native_packet = {0};
+    bool packet_available = esp32_mquickjs_wifi_csi_rx_native_take(info, &native_packet);
     wifi_csi_session_t *session = opaque;
     esp32_mquickjs_wifi_csi_metadata_t metadata;
 
-    if (!esp32_mquickjs_wifi_csi_callback_enter(&session->resources)) {
-        esp32_mquickjs_wifi_csi_callback_leave(&session->resources);
+    if (!esp32_mquickjs_wifi_csi_callback_enter(session->resources)) {
+        esp32_mquickjs_wifi_csi_callback_leave(session->resources);
+        return;
+    }
+    if (!wifi_csi_channel_admit(session)) {
+        esp32_mquickjs_wifi_csi_callback_leave(session->resources);
         return;
     }
     if (info == NULL || info->buf == NULL) {
         atomic_fetch_add_explicit(
-            &session->resources.counters.invalid_callback_data, 1U,
+            &session->resources->counters.invalid_callback_data, 1U,
             memory_order_relaxed);
     } else {
         esp32_mquickjs_wifi_csi_target_normalize_metadata(
             info, &session->options.capture, &metadata);
-        (void)esp32_mquickjs_wifi_csi_callback_publish(
-            &session->resources, &metadata, (const uint8_t *)info->buf,
-            info->len, wifi_csi_publish_event, session);
+        metadata.timestamp_us = callback_time_us;
+        metadata.radio_generation = session->radio_lease.generation;
+        /* RX may precede the default-loop home-channel notification. Do not
+         * admit a packet from another primary into a strict fixed session. */
+        if (session->options.fixed_channel && metadata.channel != session->options.channel) {
+            atomic_store_explicit(&session->channel_conflicted, true, memory_order_release);
+            (void)wifi_csi_channel_admit(session);
+            esp32_mquickjs_wifi_csi_callback_leave(session->resources);
+            return;
+        }
+        esp32_mquickjs_wifi_csi_packet_input_t packet = {
+            .bytes = packet_available ? native_packet.bytes : NULL,
+            .copied_length = native_packet.readable_bytes,
+            .driver_packet_length = info->rx_ctrl.sig_len,
+            .driver_payload_length = info->payload_len,
+        };
+        if (esp32_mquickjs_wifi_csi_callback_publish(
+                session->resources, &metadata, (const uint8_t *)info->buf,
+                info->len, &packet, wifi_csi_publish_event, session) ==
+                ESP32_MQUICKJS_WIFI_CSI_PUBLISH_IDENTITY_EXHAUSTED) {
+            wifi_csi_lifecycle_t expected = WIFI_CSI_RUNNING;
+            (void)atomic_compare_exchange_strong(&session->lifecycle, &expected, WIFI_CSI_FAULTED);
+        }
     }
-    esp32_mquickjs_wifi_csi_callback_leave(&session->resources);
+    esp32_mquickjs_wifi_csi_callback_leave(session->resources);
 }
 
 static void wifi_csi_event_drop(void *event, void *opaque)
 {
-    esp32_mquickjs_wifi_csi_event_t *receive_event = event;
-    wifi_csi_session_t *session = opaque;
-    esp32_mquickjs_wifi_csi_slot_t *slot;
-
-    if (receive_event == NULL || session == NULL) return;
-    slot = esp32_mquickjs_wifi_csi_slot_from_event(
-        &session->resources, receive_event);
-    if (slot != NULL) {
-        (void)esp32_mquickjs_wifi_csi_slot_discard_event(
-            &session->resources, receive_event);
-    }
-    wifi_csi_maybe_destroy_resources(session);
+    (void)opaque;
+    (void)wifi_csi_update_event(event, WIFI_CSI_EVENT_DISCARD);
 }
 
 static void wifi_csi_request_reap(wifi_csi_session_t *session);
 
 static void wifi_csi_event_queue_close(void *opaque)
 {
-    wifi_csi_session_t *session = opaque;
+    wifi_csi_session_t *session = &s_wifi_csi;
 
-    if (session != NULL && atomic_load_explicit(
+    if ((uint32_t)(uintptr_t)opaque == session->generation && atomic_load_explicit(
             &session->lifecycle, memory_order_acquire) != WIFI_CSI_CLOSED) {
         wifi_csi_request_reap(session);
     }
@@ -1030,17 +1349,21 @@ static esp_err_t wifi_csi_start_native(wifi_csi_session_t *session)
             &session->radio_lease, &session->promiscuous_lease);
         if (err != ESP_OK) {
             session->last_error_stage = "wifi_radio_acquire_promiscuous";
-            esp32_mquickjs_wifi_radio_release_channel(&session->radio_lease);
+            if (!session->promiscuous_lease.acquired)
+                esp32_mquickjs_wifi_radio_release_channel(&session->radio_lease);
             return err;
         }
     }
+    uint32_t channel_generation;
     err = esp32_mquickjs_wifi_radio_get_channel(
         &session->effective_channel, &session->effective_secondary,
-        &session->radio_generation);
+        &channel_generation);
     if (err != ESP_OK) {
         session->last_error_stage = "wifi_radio_get_channel";
         goto fail_radio_policy;
     }
+    session->radio_generation = session->radio_lease.generation;
+    atomic_store_explicit(&session->channel_conflicted, false, memory_order_release);
     err = esp_wifi_set_csi_rx_cb(wifi_csi_rx_callback, session);
     if (err != ESP_OK) {
         session->last_error_stage = "esp_wifi_set_csi_rx_cb";
@@ -1053,13 +1376,14 @@ static esp_err_t wifi_csi_start_native(wifi_csi_session_t *session)
         session->last_error_stage = "esp_wifi_set_csi_config";
         goto fail_callback;
     }
+    esp32_mquickjs_wifi_csi_rx_native_enable(true); /* Header facts/filters also apply to packet.content=none. */
     esp32_mquickjs_wifi_csi_resources_set_accepting(
-        &session->resources, true);
+        session->resources, true);
     err = esp_wifi_set_csi(true);
     if (err != ESP_OK) {
         session->last_error_stage = "esp_wifi_set_csi";
         esp32_mquickjs_wifi_csi_resources_set_accepting(
-            &session->resources, false);
+            session->resources, false);
         goto fail_callback;
     }
     session->csi_enabled = true;
@@ -1071,6 +1395,7 @@ static esp_err_t wifi_csi_start_native(wifi_csi_session_t *session)
     return ESP_OK;
 
 fail_callback:
+    esp32_mquickjs_wifi_csi_rx_native_enable(false);
     if (esp_wifi_set_csi_rx_cb(NULL, NULL) == ESP_OK) {
         session->callback_registered = false;
     }
@@ -1078,7 +1403,8 @@ fail_radio_policy:
     if (!session->callback_registered) {
         esp32_mquickjs_wifi_radio_release_promiscuous(
             &session->promiscuous_lease);
-        esp32_mquickjs_wifi_radio_release_channel(&session->radio_lease);
+        if (!session->promiscuous_lease.acquired)
+            esp32_mquickjs_wifi_radio_release_channel(&session->radio_lease);
     }
     return err;
 }
@@ -1106,10 +1432,22 @@ static const char *wifi_csi_start_error_code(
     return "WIFI_CSI_DRIVER_ERROR";
 }
 
+static void wifi_csi_radio_cleanup_failed(wifi_csi_session_t *session, const char *stage)
+{
+    esp32_mquickjs_wifi_radio_status_t status;
+    session->last_error = ESP_ERR_INVALID_STATE;
+    session->last_error_stage = stage;
+    if (esp32_mquickjs_wifi_radio_get_status(&status) == ESP_OK && status.cleanup_error != ESP_OK) {
+        session->last_error = status.cleanup_error;
+        if (status.cleanup_stage != NULL) session->last_error_stage = status.cleanup_stage;
+    }
+    atomic_store_explicit(&session->lifecycle, WIFI_CSI_FAULTED, memory_order_release);
+}
+
 static void wifi_csi_finish_stop(wifi_csi_session_t *session)
 {
     if (session == NULL ||
-        atomic_load_explicit(&session->resources.callbacks_active,
+        atomic_load_explicit(&session->resources->callbacks_active,
                              memory_order_acquire) != 0U ||
         session->csi_enabled || session->callback_registered) return;
     if (session->event_queue != NULL) {
@@ -1117,6 +1455,10 @@ static void wifi_csi_finish_stop(wifi_csi_session_t *session)
     }
     esp32_mquickjs_wifi_radio_release_promiscuous(
         &session->promiscuous_lease);
+    if (session->promiscuous_lease.acquired) {
+        wifi_csi_radio_cleanup_failed(session, "wifi_radio_release_promiscuous");
+        return;
+    }
     esp32_mquickjs_wifi_radio_release_channel(&session->radio_lease);
     atomic_store_explicit(&session->lifecycle, WIFI_CSI_STOPPED,
                           memory_order_release);
@@ -1126,10 +1468,16 @@ static void wifi_csi_finish_close(wifi_csi_session_t *session)
 {
     esp32_mquickjs_event_queue_t *queue;
 
-    if (session == NULL || session->csi_enabled ||
+    if (session == NULL || session->csi_enabled || session->promiscuous_lease.acquired ||
+        atomic_load_explicit(&session->lifecycle, memory_order_acquire) != WIFI_CSI_STOPPED ||
         session->callback_registered ||
-        atomic_load_explicit(&session->resources.callbacks_active,
+        atomic_load_explicit(&session->resources->callbacks_active,
                              memory_order_acquire) != 0U) return;
+    esp32_mquickjs_wifi_radio_release(&session->radio_lease);
+    if (session->radio_lease.acquired) {
+        wifi_csi_radio_cleanup_failed(session, "wifi_radio_release");
+        return;
+    }
     queue = session->event_queue;
     session->event_queue = NULL;
     atomic_store_explicit(&session->lifecycle, WIFI_CSI_CLOSED,
@@ -1142,7 +1490,6 @@ static void wifi_csi_finish_close(wifi_csi_session_t *session)
         session->event_queue_retained = false;
         esp32_mquickjs_event_queue_release(queue);
     }
-    esp32_mquickjs_wifi_radio_release(&session->radio_lease);
     wifi_csi_maybe_destroy_resources(session);
 }
 
@@ -1153,7 +1500,7 @@ static void wifi_csi_cleanup_worker(void *opaque)
 
     if (session == NULL) return;
     runtime = session->runtime;
-    while (atomic_load_explicit(&session->resources.callbacks_active,
+    while (atomic_load_explicit(&session->resources->callbacks_active,
                                 memory_order_acquire) != 0U) {
         vTaskDelay(1);
     }
@@ -1194,12 +1541,15 @@ static esp_err_t wifi_csi_begin_stop(wifi_csi_session_t *session)
     if (session == NULL) return ESP_ERR_INVALID_ARG;
     lifecycle = atomic_load_explicit(&session->lifecycle,
                                      memory_order_acquire);
-    if (lifecycle == WIFI_CSI_CLOSED || lifecycle == WIFI_CSI_STOPPED ||
+    if (lifecycle == WIFI_CSI_CLOSED ||
+        (lifecycle == WIFI_CSI_STOPPED && !session->promiscuous_lease.acquired &&
+         !session->csi_enabled && !session->callback_registered) ||
         lifecycle == WIFI_CSI_STOPPING) return ESP_OK;
     atomic_store_explicit(&session->lifecycle, WIFI_CSI_STOPPING,
                           memory_order_release);
     esp32_mquickjs_wifi_csi_resources_set_accepting(
-        &session->resources, false);
+        session->resources, false);
+    esp32_mquickjs_wifi_csi_rx_native_enable(false);
     if (session->csi_enabled) {
         err = esp_wifi_set_csi(false);
         if (err == ESP_OK) {
@@ -1231,7 +1581,7 @@ static bool wifi_csi_poll_stop(wifi_csi_session_t *session)
     if (session == NULL) return false;
     if (atomic_load_explicit(&session->lifecycle, memory_order_acquire) !=
             WIFI_CSI_STOPPING) return true;
-    if (atomic_load_explicit(&session->resources.callbacks_active,
+    if (atomic_load_explicit(&session->resources->callbacks_active,
                              memory_order_acquire) == 0U) {
         wifi_csi_finish_stop(session);
         if (atomic_load_explicit(&session->close_requested,
@@ -1285,7 +1635,8 @@ static bool wifi_csi_close_native(wifi_csi_session_t *session)
 
 static bool wifi_csi_reap(void *opaque)
 {
-    wifi_csi_session_t *session = opaque;
+    wifi_csi_session_t *session = &s_wifi_csi;
+    if ((uint32_t)(uintptr_t)opaque != session->generation) return true;
     wifi_csi_lifecycle_t lifecycle;
 
     if (session == NULL) return true;
@@ -1318,7 +1669,7 @@ static void wifi_csi_request_reap(wifi_csi_session_t *session)
                              memory_order_acquire) == WIFI_CSI_CLOSED) return;
     if (!session->reaper_registered) {
         session->reaper_registered = esp32_mquickjs_register_reaper(
-            session->runtime, wifi_csi_reap, session);
+            session->runtime, wifi_csi_reap, (void *)(uintptr_t)session->generation);
         if (!session->reaper_registered) {
             ESP_LOGE(TAG, "Wi-Fi CSI cleanup registry is full");
         }
@@ -1633,17 +1984,35 @@ fail:
     return JS_EXCEPTION;
 }
 
+static JSValue wifi_csi_source_to_js(JSContext *ctx, const wifi_csi_options_t *options)
+{
+    JSGCRef ref;
+    JSValue *result = JS_PushGCRef(ctx, &ref);
+    *result = JS_NewObject(ctx);
+    if (JS_IsException(*result) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "mode",
+            JS_NewString(ctx, wifi_csi_source_name(options->source)))) goto fail;
+    if (options->source == WIFI_CSI_SOURCE_PROMISCUOUS &&
+        !esp32_mquickjs_set_property_ref(ctx, result, "channel", options->fixed_channel
+            ? JS_NewUint32(ctx, options->channel) : JS_NewString(ctx, "current"))) goto fail;
+    return JS_PopGCRef(ctx, &ref);
+fail:
+    JS_PopGCRef(ctx, &ref);
+    return JS_EXCEPTION;
+}
+
 static JSValue wifi_csi_requested_to_js(JSContext *ctx,
                                         const wifi_csi_options_t *options)
 {
     JSGCRef result_ref, capture_ref, filter_ref, queue_ref;
-    JSGCRef source_macs_ref, destination_macs_ref;
+    JSGCRef source_macs_ref, destination_macs_ref, source_ref;
     JSValue *result = JS_PushGCRef(ctx, &result_ref);
     JSValue *capture = JS_PushGCRef(ctx, &capture_ref);
     JSValue *filter = JS_PushGCRef(ctx, &filter_ref);
     JSValue *queue = JS_PushGCRef(ctx, &queue_ref);
     JSValue *source_macs = JS_PushGCRef(ctx, &source_macs_ref);
     JSValue *destination_macs = JS_PushGCRef(ctx, &destination_macs_ref);
+    JSValue *source = JS_PushGCRef(ctx, &source_ref);
 
     *result = JS_NewObject(ctx);
     *capture = wifi_csi_capture_to_js(ctx, options);
@@ -1654,13 +2023,20 @@ static JSValue wifi_csi_requested_to_js(JSContext *ctx,
     *destination_macs = wifi_csi_mac_array(
         ctx, options->filter.destination_macs,
         options->filter.destination_mac_count);
+    *source = wifi_csi_source_to_js(ctx, options);
     if (JS_IsException(*result) || JS_IsException(*capture) ||
         JS_IsException(*filter) || JS_IsException(*queue) ||
-        JS_IsException(*source_macs) || JS_IsException(*destination_macs) ||
+        JS_IsException(*source_macs) || JS_IsException(*destination_macs) || JS_IsException(*source) ||
         !esp32_mquickjs_set_property_ref(
             ctx, filter, "sourceMac", *source_macs) ||
         !esp32_mquickjs_set_property_ref(
             ctx, filter, "destinationMac", *destination_macs) ||
+        !esp32_mquickjs_set_property_ref(ctx, filter, "bssid",
+            wifi_csi_mac_array(ctx, options->filter.bssids, options->filter.bssid_count)) ||
+        (options->filter.frame_types_set && !esp32_mquickjs_set_property_ref(ctx, filter, "frameTypes",
+            wifi_csi_frame_filter_to_js(ctx, options->filter.frame_types, false))) ||
+        (options->filter.frame_subtypes_set && !esp32_mquickjs_set_property_ref(ctx, filter, "frameSubtypes",
+            wifi_csi_frame_filter_to_js(ctx, options->filter.frame_subtypes, true))) ||
         !esp32_mquickjs_set_property_ref(
             ctx, filter, "minimumRssi",
             options->filter.minimum_rssi_set
@@ -1676,22 +2052,18 @@ static JSValue wifi_csi_requested_to_js(JSContext *ctx,
             ctx, filter, "validOnly",
             JS_NewBool(options->filter.valid_only)) ||
         !esp32_mquickjs_set_property_ref(
-            ctx, queue, "capacity",
+            ctx, queue, "poolCapacity",
+            JS_NewUint32(ctx, options->pool_capacity)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, queue, "queueCapacity",
             JS_NewUint32(ctx, options->queue_capacity)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, queue, "overflow", JS_NewString(ctx, "drop-newest")) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, result, "source",
-            JS_NewString(ctx, wifi_csi_source_name(options->source))) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, result, "channel", options->fixed_channel
-                ? JS_NewUint32(ctx, options->channel)
-                : JS_NewString(ctx, "current")) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, result, "conflict", JS_NewString(ctx, "fail")) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "source", *source) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "capture", *capture) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "filter", *filter) ||
-        !esp32_mquickjs_set_property_ref(ctx, result, "queue", *queue) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "buffering", *queue) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "packet", wifi_csi_packet_options_to_js(ctx, &options->packet)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, result, "powerSavePolicy",
             JS_NewString(ctx,
@@ -1702,6 +2074,7 @@ static JSValue wifi_csi_requested_to_js(JSContext *ctx,
     *queue = JS_UNDEFINED;
     *source_macs = JS_UNDEFINED;
     *destination_macs = JS_UNDEFINED;
+    JS_PopGCRef(ctx, &source_ref);
     JS_PopGCRef(ctx, &destination_macs_ref);
     JS_PopGCRef(ctx, &source_macs_ref);
     JS_PopGCRef(ctx, &queue_ref);
@@ -1710,6 +2083,7 @@ static JSValue wifi_csi_requested_to_js(JSContext *ctx,
     return JS_PopGCRef(ctx, &result_ref);
 
 fail:
+    JS_PopGCRef(ctx, &source_ref);
     JS_PopGCRef(ctx, &destination_macs_ref);
     JS_PopGCRef(ctx, &source_macs_ref);
     JS_PopGCRef(ctx, &queue_ref);
@@ -1891,95 +2265,133 @@ fail:
     return JS_EXCEPTION;
 }
 
+static JSValue wifi_csi_packet_to_js(JSContext *ctx, const esp32_mquickjs_wifi_csi_packet_t *packet)
+{
+    if (packet == NULL || packet->length == 0) return JS_NULL;
+    const esp32_mquickjs_wifi_rx_header_t *header = &packet->header;
+    static const char *const types[] = {"management", "control", "data", "misc", "unknown"};
+    static const char *const flags[] = {"toDs", "fromDs", "moreFragments", "retry",
+        "powerManagement", "moreData", "protected", "order"};
+    JSGCRef result_ref, child_ref;
+    JSValue *result = JS_PushGCRef(ctx, &result_ref);
+    JSValue *child = JS_PushGCRef(ctx, &child_ref);
+    *result = JS_NewObject(ctx);
+    *child = JS_NewObject(ctx);
+#define PACKET_SET(object, key, value) do { if (!esp32_mquickjs_set_property_ref(ctx, object, key, value)) goto fail; } while (0)
+#define PACKET_NUMBER(object, key, value) PACKET_SET(object, key, JS_NewUint32(ctx, value))
+    if (JS_IsException(*result) || JS_IsException(*child)) goto fail;
+    PACKET_SET(result, "type", JS_NewString(ctx, types[(unsigned)header->type < 5 ? header->type : 4]));
+    PACKET_NUMBER(result, "subtype", header->subtype);
+    const char *name = esp32_mquickjs_wifi_rx_subtype_name(header->type, header->subtype);
+    PACKET_SET(result, "subtypeName", name != NULL ? JS_NewString(ctx, name) : JS_NULL);
+    PACKET_NUMBER(result, "frameControl", header->frame_control);
+    PACKET_NUMBER(result, "durationId", header->duration_id);
+    PACKET_SET(result, "sequenceControl", header->sequence_valid ? JS_NewUint32(ctx, header->sequence_control) : JS_NULL);
+    PACKET_SET(result, "qosControl", header->qos_valid ? JS_NewUint32(ctx, header->qos_control) : JS_NULL);
+    for (unsigned i = 0; i < 8; ++i)
+        PACKET_SET(child, flags[i], JS_NewBool((header->frame_control & (1U << (8 + i))) != 0));
+    PACKET_SET(result, "flags", *child);
+    *child = JS_NewObject(ctx);
+    if (JS_IsException(*child)) goto fail;
+    PACKET_SET(child, "mode", JS_NewString(ctx, wifi_csi_packet_mode_name(packet->mode)));
+    PACKET_NUMBER(child, "headerLength", header->header_length);
+    PACKET_NUMBER(child, "payloadLength", packet->readable_length - header->header_length);
+    PACKET_NUMBER(child, "driverLength", packet->driver_packet_length);
+    PACKET_NUMBER(child, "driverPayloadLength", packet->driver_payload_length);
+    PACKET_NUMBER(child, "readableLength", packet->readable_length);
+    PACKET_NUMBER(child, "capturedLength", packet->length);
+    PACKET_NUMBER(child, "payloadCapturedLength", packet->length - header->header_length);
+    PACKET_SET(child, "truncated", JS_NewBool(packet->truncated));
+    PACKET_SET(child, "fcs", JS_NewString(ctx, "unknown"));
+    PACKET_SET(child, "payloadRepresentation", JS_NewString(ctx, "unknown"));
+    PACKET_SET(child, "pointerLayoutValid", JS_TRUE);
+    PACKET_SET(child, "parseValid", JS_TRUE);
+    PACKET_SET(result, "capture", *child);
+    JS_PopGCRef(ctx, &child_ref);
+    return JS_PopGCRef(ctx, &result_ref);
+fail:
+    JS_PopGCRef(ctx, &child_ref);
+    JS_PopGCRef(ctx, &result_ref);
+    return JS_EXCEPTION;
+#undef PACKET_NUMBER
+#undef PACKET_SET
+}
+
 static JSValue wifi_csi_frame_info_to_js(
     JSContext *ctx, const esp32_mquickjs_wifi_csi_slot_t *slot)
 {
-    const esp32_mquickjs_wifi_csi_metadata_t *metadata = &slot->metadata;
-    JSGCRef result_ref, phy_ref, validity_ref, layout_ref;
+    const esp32_mquickjs_wifi_csi_metadata_t *m = &slot->metadata;
+    JSGCRef result_ref, child_ref;
     JSValue *result = JS_PushGCRef(ctx, &result_ref);
-    JSValue *phy = JS_PushGCRef(ctx, &phy_ref);
-    JSValue *validity = JS_PushGCRef(ctx, &validity_ref);
-    JSValue *layout = JS_PushGCRef(ctx, &layout_ref);
-    char source_mac[18];
-    char destination_mac[18];
-
-    wifi_csi_format_mac(metadata->source_mac, source_mac);
-    wifi_csi_format_mac(metadata->destination_mac, destination_mac);
+    JSValue *child = JS_PushGCRef(ctx, &child_ref);
     *result = JS_NewObject(ctx);
-    *phy = JS_NewObject(ctx);
-    *validity = JS_NewObject(ctx);
-    *layout = wifi_csi_layout_to_js(ctx, &metadata->layout);
-    if (JS_IsException(*result) || JS_IsException(*phy) ||
-        JS_IsException(*validity) || JS_IsException(*layout) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, phy, "format",
-            JS_NewString(ctx, wifi_csi_phy_name(metadata->phy))) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, phy, "bandwidthMHz", metadata->bandwidth_available
-                ? JS_NewUint32(ctx, metadata->bandwidth_mhz) : JS_NULL) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, phy, "mcs", metadata->mcs_available
-                ? JS_NewUint32(ctx, metadata->mcs) : JS_NULL) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, phy, "stbc", metadata->stbc_available
-                ? JS_NewBool(metadata->stbc) : JS_NULL) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, validity, "firstWordInvalid",
-            JS_NewBool(metadata->first_word_invalid)) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, validity, "channelEstimateValid",
-            metadata->channel_estimate_valid_available
-                ? JS_NewBool(metadata->channel_estimate_valid) : JS_NULL) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, validity, "truncated", JS_FALSE) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, result, "sequence", JS_NewUint32(ctx, slot->sequence)) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, result, "timestampUs",
-            JS_NewInt64(ctx, (int64_t)metadata->timestamp_us)) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, result, "rxSequence",
-            JS_NewUint32(ctx, metadata->rx_sequence)) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, result, "generation",
-            JS_NewUint32(ctx, slot->session_generation)) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, result, "sourceMac", JS_NewString(ctx, source_mac)) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, result, "destinationMac",
-            JS_NewString(ctx, destination_mac)) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, result, "rssi", JS_NewInt32(ctx, metadata->rssi)) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, result, "noiseFloor", metadata->noise_floor_available
-                ? JS_NewInt32(ctx, metadata->noise_floor) : JS_NULL) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, result, "channel", JS_NewUint32(ctx, metadata->channel)) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, result, "secondaryChannel",
-            JS_NewString(ctx, wifi_csi_secondary_name(metadata->secondary))) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, result, "antenna", metadata->antenna_available
-                ? JS_NewUint32(ctx, metadata->antenna) : JS_NULL) ||
-        !esp32_mquickjs_set_property_ref(ctx, result, "phy", *phy) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, result, "validity", *validity) ||
-        !esp32_mquickjs_set_property_ref(ctx, result, "layout", *layout))
-        goto fail;
-    *phy = JS_UNDEFINED;
-    *validity = JS_UNDEFINED;
-    *layout = JS_UNDEFINED;
-    JS_PopGCRef(ctx, &layout_ref);
-    JS_PopGCRef(ctx, &validity_ref);
-    JS_PopGCRef(ctx, &phy_ref);
+    if (JS_IsException(*result)) goto fail;
+#define INFO_SET(object, key, value) do { if (!esp32_mquickjs_set_property_ref(ctx, object, key, value)) goto fail; } while (0)
+#define INFO_NUMBER(object, key, value) INFO_SET(object, key, JS_NewUint32(ctx, value))
+#define INFO_CHILD() do { *child = JS_NewObject(ctx); if (JS_IsException(*child)) goto fail; } while (0)
+#define PHY_BOOL(key, available, value) INFO_SET(child, key, (m->phy_flags & ESP32_MQUICKJS_WIFI_RX_WIRE_##available) \
+    ? JS_NewBool((m->phy_flags & ESP32_MQUICKJS_WIFI_RX_WIRE_##value) != 0) : JS_NULL)
+    INFO_NUMBER(result, "sequence", slot->sequence);
+    INFO_NUMBER(result, "generation", slot->session_generation);
+    INFO_NUMBER(result, "radioGeneration", m->radio_generation);
+    INFO_SET(result, "timestampUs", JS_NewInt64(ctx, (int64_t)m->timestamp_us));
+    INFO_SET(result, "timestampAccuracy", JS_NewString(ctx, "callback-time"));
+    INFO_SET(result, "rxSequence", m->rx_sequence != UINT32_MAX ? JS_NewUint32(ctx, m->rx_sequence) : JS_NULL);
+    INFO_CHILD();
+    INFO_SET(child, "rssi", JS_NewInt32(ctx, m->rssi));
+    INFO_SET(child, "noiseFloor", m->noise_floor_available ? JS_NewInt32(ctx, m->noise_floor) : JS_NULL);
+    INFO_SET(child, "antenna", m->antenna_available ? JS_NewUint32(ctx, m->antenna) : JS_NULL);
+    INFO_SET(result, "signal", *child);
+    INFO_CHILD();
+    INFO_SET(child, "band", m->channel >= 1 && m->channel <= 14 ? JS_NewString(ctx, "2.4GHz") :
+        m->channel >= 32 && m->channel <= 177 ? JS_NewString(ctx, "5GHz") : JS_NULL);
+    INFO_NUMBER(child, "primary", m->channel);
+    INFO_SET(child, "secondary", (unsigned)m->secondary <= ESP32_MQUICKJS_WIFI_CSI_SECONDARY_BELOW
+        ? JS_NewString(ctx, wifi_csi_secondary_name(m->secondary)) : JS_NULL);
+    INFO_SET(result, "channel", *child);
+    INFO_CHILD();
+    INFO_SET(child, "format", JS_NewString(ctx, wifi_csi_phy_name(m->phy)));
+    INFO_SET(child, "bandwidthMHz", m->bandwidth_available ? JS_NewUint32(ctx, m->bandwidth_mhz) : JS_NULL);
+    INFO_SET(child, "guardIntervalNs", m->guard_interval_ns ? JS_NewUint32(ctx, m->guard_interval_ns) : JS_NULL);
+    INFO_SET(child, "heLtfSize", m->he_ltf_size ? JS_NewUint32(ctx, m->he_ltf_size) : JS_NULL);
+    INFO_SET(child, "dcm", m->dcm_state ? JS_NewBool(m->dcm_state == 2) : JS_NULL);
+    INFO_SET(child, "mcs", m->mcs_available ? JS_NewUint32(ctx, m->mcs) : JS_NULL);
+    INFO_SET(child, "legacyRate", JS_NULL); /* Raw rate codes have no proven bitrate mapping. */
+    INFO_SET(child, "stbc", m->stbc_available ? JS_NewBool(m->stbc) : JS_NULL);
+    PHY_BOOL("shortGuardInterval", SGI_AVAILABLE, SGI);
+    PHY_BOOL("aggregation", AGGREGATION_AVAILABLE, AGGREGATION);
+    PHY_BOOL("smoothingRecommended", SMOOTHING_AVAILABLE, SMOOTHING);
+    PHY_BOOL("sounding", SOUNDING_AVAILABLE, SOUNDING);
+    INFO_SET(child, "fecCoding", (m->phy_flags & ESP32_MQUICKJS_WIFI_RX_WIRE_FEC_AVAILABLE)
+        ? JS_NewString(ctx, (m->phy_flags & ESP32_MQUICKJS_WIFI_RX_WIRE_LDPC) ? "ldpc" : "bcc") : JS_NULL);
+    INFO_SET(child, "ampduCount", m->ampdu_count_available ? JS_NewUint32(ctx, m->ampdu_count) : JS_NULL);
+    INFO_SET(result, "phy", *child);
+    INFO_CHILD();
+    static const char *const roles[] = {"source", "destination", "transmitter", "receiver", "bssid"};
+    for (unsigned i = 0; i < ESP32_MQUICKJS_WIFI_RX_ADDRESS_COUNT; ++i) {
+        char address[18];
+        wifi_csi_format_mac(m->addresses[i], address);
+        INFO_SET(child, roles[i], (m->address_mask & (1U << i)) ? JS_NewString(ctx, address) : JS_NULL);
+    }
+    INFO_SET(result, "addresses", *child);
+    INFO_CHILD();
+    INFO_SET(child, "firstWordInvalid", JS_NewBool(m->first_word_invalid));
+    INFO_SET(child, "channelEstimateValid", m->channel_estimate_valid_available ? JS_NewBool(m->channel_estimate_valid) : JS_NULL);
+    INFO_SET(child, "callbackDataValid", JS_TRUE);
+    INFO_SET(child, "layoutKnown", JS_NewBool(m->layout.known));
+    INFO_SET(result, "validity", *child);
+    INFO_SET(result, "layout", wifi_csi_layout_to_js(ctx, &m->layout));
+    INFO_SET(result, "packet", wifi_csi_packet_to_js(ctx, slot->packet));
+    JS_PopGCRef(ctx, &child_ref);
     return JS_PopGCRef(ctx, &result_ref);
-
 fail:
-    JS_PopGCRef(ctx, &layout_ref);
-    JS_PopGCRef(ctx, &validity_ref);
-    JS_PopGCRef(ctx, &phy_ref);
+    JS_PopGCRef(ctx, &child_ref);
     JS_PopGCRef(ctx, &result_ref);
     return JS_EXCEPTION;
+#undef PHY_BOOL
+#undef INFO_CHILD
+#undef INFO_NUMBER
+#undef INFO_SET
 }
 
 static JSValue wifi_csi_make_frame(
@@ -1998,15 +2410,14 @@ static JSValue wifi_csi_make_frame(
             "WIFI_CSI_STALE_FRAME: receive event is stale");
         goto fail;
     }
-    if (!esp32_mquickjs_wifi_csi_slot_take_event_owner(
-            &s_wifi_csi.resources, event)) {
+    if (!wifi_csi_update_event(event, WIFI_CSI_EVENT_TAKE)) {
         JS_ThrowReferenceError(ctx,
             "WIFI_CSI_STALE_FRAME: receive event owner was already consumed");
         goto fail;
     }
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_WIFI_CSI_FRAME);
     if (JS_IsException(*object)) goto fail_close;
-    ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
+    ref = esp32_mquickjs_memory_wireless_calloc("wifi.csi", 1, sizeof(*ref), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (ref == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto fail_close;
@@ -2019,13 +2430,11 @@ static JSValue wifi_csi_make_frame(
     if (JS_IsException(*info) ||
         !esp32_mquickjs_set_property_ref(ctx, object, "info", *info)) {
         JS_SetOpaque(ctx, *object, NULL);
-        heap_caps_free(ref);
+        esp32_mquickjs_memory_payload_free(ref);
         goto fail_close;
     }
     *info = JS_UNDEFINED;
-    atomic_fetch_add_explicit(
-        &s_wifi_csi.resources.counters.delivered_frames, 1U,
-        memory_order_relaxed);
+    (void)wifi_csi_update_event(event, WIFI_CSI_EVENT_DELIVERED);
     JS_PopGCRef(ctx, &info_ref);
     return JS_PopGCRef(ctx, &object_ref);
 
@@ -2048,40 +2457,41 @@ static JSValue wifi_csi_event_to_js(JSContext *ctx,
     return wifi_csi_make_frame(ctx, event);
 }
 
-static bool wifi_csi_frame_source_next(
+static bool wifi_csi_sample_source_next(
     JSContext *ctx, void *opaque, esp32_mquickjs_byte_span_t *out)
 {
-    wifi_csi_frame_source_t *source = opaque;
+    wifi_csi_sample_source_t *source = opaque;
     esp32_mquickjs_wifi_csi_slot_t *slot;
-
     (void)ctx;
     if (source == NULL || source->lease.released ||
-        (slot = wifi_csi_resolve_event(&source->lease.event)) == NULL ||
-        source->offset >= slot->length) return false;
-    out->data = slot->payload + source->offset;
-    out->length = slot->length - source->offset;
+        (slot = wifi_csi_resolve_event(&source->lease.event)) == NULL) return false;
+    size_t length = source->packet ? (slot->packet != NULL ? slot->packet->length : 0) : slot->length;
+    if (source->offset >= length) return false;
+    const uint8_t *bytes = source->packet ? slot->packet->bytes : slot->payload;
+    out->data = bytes + source->offset;
+    out->length = length - source->offset;
     out->owner = JS_UNDEFINED;
     out->dma_capable = false;
-    source->offset = slot->length;
+    source->offset = length;
     return true;
 }
 
-static void wifi_csi_frame_source_iterator_close(JSContext *ctx, void *opaque)
+static void wifi_csi_sample_source_iterator_close(JSContext *ctx, void *opaque)
 {
-    wifi_csi_frame_source_t *source = opaque;
+    wifi_csi_sample_source_t *source = opaque;
 
     (void)ctx;
     if (source == NULL) return;
     source->iterator_active = false;
     wifi_csi_lease_release(&source->lease);
-    if (source->destroy_requested) heap_caps_free(source);
+    if (source->destroy_requested) esp32_mquickjs_memory_payload_free(source);
 }
 
-static bool wifi_csi_frame_source_open(
+static bool wifi_csi_sample_source_open(
     JSContext *ctx, JSValue source_value, void *opaque,
     esp32_mquickjs_byte_span_source_t *out, JSValue *out_error)
 {
-    wifi_csi_frame_source_t *source = opaque;
+    wifi_csi_sample_source_t *source = opaque;
 
     (void)source_value;
     if (source == NULL || source->opened || source->lease.released ||
@@ -2093,23 +2503,24 @@ static bool wifi_csi_frame_source_open(
     source->opened = true;
     source->iterator_active = true;
     out->opaque = source;
-    out->next = wifi_csi_frame_source_next;
-    out->close = wifi_csi_frame_source_iterator_close;
+    out->next = wifi_csi_sample_source_next;
+    out->close = wifi_csi_sample_source_iterator_close;
     return true;
 }
 
-static size_t wifi_csi_frame_source_known_length(void *opaque)
+static size_t wifi_csi_sample_source_known_length(void *opaque)
 {
-    wifi_csi_frame_source_t *source = opaque;
+    wifi_csi_sample_source_t *source = opaque;
     esp32_mquickjs_wifi_csi_slot_t *slot = source != NULL
         ? wifi_csi_resolve_event(&source->lease.event) : NULL;
 
-    return slot != NULL && !source->lease.released ? slot->length : 0U;
+    return slot != NULL && !source->lease.released
+        ? (source->packet ? (slot->packet != NULL ? slot->packet->length : 0) : slot->length) : 0U;
 }
 
-static void wifi_csi_frame_source_destroy(JSContext *ctx, void *opaque)
+static void wifi_csi_sample_source_destroy(JSContext *ctx, void *opaque)
 {
-    wifi_csi_frame_source_t *source = opaque;
+    wifi_csi_sample_source_t *source = opaque;
 
     (void)ctx;
     if (source == NULL) return;
@@ -2118,213 +2529,69 @@ static void wifi_csi_frame_source_destroy(JSContext *ctx, void *opaque)
         return;
     }
     wifi_csi_lease_release(&source->lease);
-    heap_caps_free(source);
+    esp32_mquickjs_memory_payload_free(source);
 }
 
 static const esp32_mquickjs_byte_span_source_object_ops_t
-    s_wifi_csi_frame_source_ops = {
+    s_wifi_csi_sample_source_ops = {
         .class_id = JS_CLASS_BYTE_SPAN_SOURCE,
-        .open = wifi_csi_frame_source_open,
-        .known_length = wifi_csi_frame_source_known_length,
-        .destroy = wifi_csi_frame_source_destroy,
+        .open = wifi_csi_sample_source_open,
+        .known_length = wifi_csi_sample_source_known_length,
+        .destroy = wifi_csi_sample_source_destroy,
     };
 
-static void wifi_csi_write_u16_le(uint8_t *output, uint16_t value)
+static bool wifi_csi_wire_source_build_control(wifi_csi_wire_source_t *source, bool *invalid)
 {
-    output[0] = (uint8_t)value;
-    output[1] = (uint8_t)(value >> 8U);
-}
-
-static void wifi_csi_write_u32_le(uint8_t *output, uint32_t value)
-{
-    output[0] = (uint8_t)value;
-    output[1] = (uint8_t)(value >> 8U);
-    output[2] = (uint8_t)(value >> 16U);
-    output[3] = (uint8_t)(value >> 24U);
-}
-
-static void wifi_csi_write_u64_le(uint8_t *output, uint64_t value)
-{
-    wifi_csi_write_u32_le(output, (uint32_t)value);
-    wifi_csi_write_u32_le(output + 4U, (uint32_t)(value >> 32U));
-}
-
-static void wifi_csi_write_i16_le(uint8_t *output, int16_t value)
-{
-    wifi_csi_write_u16_le(output, (uint16_t)value);
-}
-
-static uint16_t wifi_csi_metadata_flags(
-    const esp32_mquickjs_wifi_csi_metadata_t *metadata)
-{
-    uint16_t flags = 0U;
-
-    if (metadata->destination_mac_available) flags |= 1U << 0U;
-    if (metadata->noise_floor_available) flags |= 1U << 1U;
-    if (metadata->antenna_available) flags |= 1U << 2U;
-    if (metadata->mcs_available) flags |= 1U << 3U;
-    if (metadata->bandwidth_available) flags |= 1U << 4U;
-    if (metadata->stbc_available) flags |= 1U << 5U;
-    if (metadata->stbc) flags |= 1U << 6U;
-    if (metadata->first_word_invalid) flags |= 1U << 7U;
-    if (metadata->channel_estimate_valid_available) flags |= 1U << 8U;
-    if (metadata->channel_estimate_valid) flags |= 1U << 9U;
-    return flags;
-}
-
-static void wifi_csi_encode_metadata(
-    uint8_t output[WIFI_CSI_BATCH_METADATA_BYTES],
-    const esp32_mquickjs_wifi_csi_slot_t *slot)
-{
-    const esp32_mquickjs_wifi_csi_metadata_t *metadata = &slot->metadata;
-    const esp32_mquickjs_wifi_csi_layout_t *layout = &metadata->layout;
-    uint8_t segment_index;
-
-    memset(output, 0, WIFI_CSI_BATCH_METADATA_BYTES);
-    wifi_csi_write_u32_le(output + 0U, slot->sequence);
-    wifi_csi_write_u64_le(output + 4U, metadata->timestamp_us);
-    wifi_csi_write_u32_le(output + 12U, metadata->rx_sequence);
-    wifi_csi_write_u32_le(output + 16U, slot->session_generation);
-    memcpy(output + 20U, metadata->source_mac, 6U);
-    memcpy(output + 26U, metadata->destination_mac, 6U);
-    output[32] = (uint8_t)metadata->rssi;
-    output[33] = (uint8_t)metadata->noise_floor;
-    output[34] = metadata->channel;
-    output[35] = (uint8_t)metadata->secondary;
-    output[36] = metadata->antenna_available
-        ? metadata->antenna : UINT8_MAX;
-    output[37] = (uint8_t)metadata->phy;
-    output[38] = metadata->bandwidth_available
-        ? metadata->bandwidth_mhz : 0U;
-    output[39] = metadata->mcs_available ? metadata->mcs : UINT8_MAX;
-    wifi_csi_write_u16_le(output + 40U,
-                           wifi_csi_metadata_flags(metadata));
-    output[42] = (uint8_t)layout->sample_encoding;
-    output[43] = layout->sample_bits;
-    wifi_csi_write_u32_le(output + 44U, (uint32_t)slot->length);
-    wifi_csi_write_u32_le(output + 48U, layout->iq_pair_count);
-    wifi_csi_write_u16_le(output + 52U, layout->trailing_padding_bytes);
-    output[54] = layout->segment_count;
-    output[55] = (uint8_t)layout->schema;
-    output[56] = 0U; /* imaginary-real */
-    output[57] = layout->known ? 1U : 0U;
-    for (segment_index = 0U;
-         segment_index < layout->segment_count &&
-         segment_index < ESP32_MQUICKJS_WIFI_CSI_MAX_SEGMENTS;
-         ++segment_index) {
-        const esp32_mquickjs_wifi_csi_segment_t *segment =
-            &layout->segments[segment_index];
-        uint8_t *encoded = output + WIFI_CSI_BATCH_SEGMENT_BASE +
-            ((size_t)segment_index * WIFI_CSI_BATCH_SEGMENT_BYTES);
-        uint8_t range_index;
-        uint8_t null_index;
-
-        encoded[0] = (uint8_t)segment->type;
-        encoded[1] = segment->subcarrier_range_count;
-        encoded[2] = segment->null_subcarrier_count;
-        wifi_csi_write_u32_le(encoded + 4U, segment->offset_bytes);
-        wifi_csi_write_u32_le(encoded + 8U, segment->length_bytes);
-        wifi_csi_write_u32_le(encoded + 12U, segment->iq_pair_count);
-        for (range_index = 0U;
-             range_index < segment->subcarrier_range_count &&
-             range_index < ESP32_MQUICKJS_WIFI_CSI_MAX_SUBCARRIER_RANGES;
-             ++range_index) {
-            wifi_csi_write_i16_le(
-                encoded + 16U + ((size_t)range_index * 4U),
-                segment->subcarrier_ranges[range_index].start);
-            wifi_csi_write_i16_le(
-                encoded + 18U + ((size_t)range_index * 4U),
-                segment->subcarrier_ranges[range_index].end);
-        }
-        for (null_index = 0U;
-             null_index < segment->null_subcarrier_count &&
-             null_index < ESP32_MQUICKJS_WIFI_CSI_MAX_NULL_SUBCARRIERS;
-             ++null_index) {
-            wifi_csi_write_i16_le(
-                encoded + 24U + ((size_t)null_index * 2U),
-                segment->null_subcarriers[null_index]);
-        }
+    *invalid = true;
+    if (source->frame_count == 0 || source->frame_count > ESP32_MQUICKJS_WIFI_RX_WIRE_MAX_FRAMES) return false;
+    esp32_mquickjs_wifi_rx_wire_frame_t *frames = esp32_mquickjs_memory_wireless_calloc("wifi.csi", source->frame_count, sizeof(*frames), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_COPY);
+    if (frames == NULL) { *invalid = false; return false; }
+    bool success = false;
+    for (uint16_t i = 0; i < source->frame_count; ++i) {
+        esp32_mquickjs_wifi_csi_slot_t *slot = wifi_csi_resolve_event(&source->leases[i].event);
+        esp32_mquickjs_wifi_csi_wire_snapshot_t snapshot;
+        if (!esp32_mquickjs_wifi_csi_wire_snapshot(slot, &snapshot)) goto done;
+        frames[i] = snapshot.frame;
     }
+    esp32_mquickjs_wifi_rx_wire_layout_t layout;
+    if (!esp32_mquickjs_wifi_rx_wire_layout(ESP32_MQUICKJS_WIFI_RX_WIRE_CSI, frames, source->frame_count, &layout)) goto done;
+    source->control = esp32_mquickjs_memory_wireless_calloc("wifi.csi", 1, layout.control_bytes, ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_COPY);
+    if (source->control == NULL) { *invalid = false; goto done; }
+    source->control_length = layout.control_bytes;
+    source->total_length = layout.total_bytes;
+    if (!esp32_mquickjs_wifi_rx_wire_write_control(ESP32_MQUICKJS_WIFI_RX_WIRE_CSI, frames,
+            source->frame_count, source->control, source->control_length)) goto done;
+    for (uint16_t i = 0; i < source->frame_count; ++i) {
+        esp32_mquickjs_wifi_csi_slot_t *slot = wifi_csi_resolve_event(&source->leases[i].event);
+        esp32_mquickjs_wifi_csi_wire_snapshot_t snapshot;
+        if (!esp32_mquickjs_wifi_csi_wire_snapshot(slot, &snapshot) ||
+            !esp32_mquickjs_wifi_rx_wire_write_metadata(ESP32_MQUICKJS_WIFI_RX_WIRE_CSI, &frames[i], &snapshot.metadata,
+                source->control + layout.metadata_base + (size_t)i * WIFI_CSI_BATCH_METADATA_BYTES,
+                WIFI_CSI_BATCH_METADATA_BYTES)) goto done;
+    }
+    success = true;
+done:
+    esp32_mquickjs_memory_payload_free(frames);
+    return success;
 }
 
-static bool wifi_csi_batch_source_build_control(
-    wifi_csi_batch_source_t *source)
+static void wifi_csi_wire_source_release(wifi_csi_wire_source_t *source)
 {
-    size_t control_length = WIFI_CSI_BATCH_HEADER_BYTES +
-        ((size_t)source->frame_count * WIFI_CSI_BATCH_DIRECTORY_BYTES) +
-        ((size_t)source->frame_count * WIFI_CSI_BATCH_METADATA_BYTES);
-    size_t metadata_base = WIFI_CSI_BATCH_HEADER_BYTES +
-        ((size_t)source->frame_count * WIFI_CSI_BATCH_DIRECTORY_BYTES);
-    size_t payload_base = control_length;
-    size_t payload_bytes = 0U;
-    uint16_t index;
-
-    for (index = 0; index < source->frame_count; ++index) {
-        esp32_mquickjs_wifi_csi_slot_t *slot =
-            wifi_csi_resolve_event(&source->leases[index].event);
-
-        if (slot == NULL || SIZE_MAX - payload_bytes < slot->length) {
-            return false;
-        }
-        payload_bytes += slot->length;
-    }
-    if (control_length > UINT32_MAX || payload_bytes > UINT32_MAX ||
-        payload_base > UINT32_MAX - payload_bytes) return false;
-    source->control = heap_caps_calloc(
-        1, control_length, MALLOC_CAP_8BIT);
-    if (source->control == NULL) return false;
-    source->control_length = control_length;
-    memcpy(source->control, "E32QCSI1", 8U);
-    wifi_csi_write_u16_le(source->control + 8U, WIFI_CSI_BINARY_VERSION);
-    wifi_csi_write_u16_le(source->control + 10U,
-                           WIFI_CSI_BATCH_HEADER_BYTES);
-    wifi_csi_write_u32_le(source->control + 12U, source->frame_count);
-    wifi_csi_write_u32_le(
-        source->control + 16U,
-        (uint32_t)source->frame_count * WIFI_CSI_BATCH_METADATA_BYTES);
-    wifi_csi_write_u32_le(source->control + 20U, (uint32_t)payload_bytes);
-    payload_bytes = 0U;
-    for (index = 0; index < source->frame_count; ++index) {
-        esp32_mquickjs_wifi_csi_slot_t *slot =
-            wifi_csi_resolve_event(&source->leases[index].event);
-        uint8_t *directory = source->control + WIFI_CSI_BATCH_HEADER_BYTES +
-            ((size_t)index * WIFI_CSI_BATCH_DIRECTORY_BYTES);
-        uint8_t *metadata = source->control + metadata_base +
-            ((size_t)index * WIFI_CSI_BATCH_METADATA_BYTES);
-
-        wifi_csi_write_u32_le(
-            directory + 0U,
-            (uint32_t)(metadata_base +
-                ((size_t)index * WIFI_CSI_BATCH_METADATA_BYTES)));
-        wifi_csi_write_u32_le(
-            directory + 4U,
-            (uint32_t)(payload_base + payload_bytes));
-        wifi_csi_write_u32_le(directory + 8U, (uint32_t)slot->length);
-        wifi_csi_write_u16_le(directory + 12U,
-                              WIFI_CSI_BATCH_METADATA_BYTES);
-        wifi_csi_encode_metadata(metadata, slot);
-        payload_bytes += slot->length;
-    }
-    return true;
-}
-
-static void wifi_csi_batch_source_release(wifi_csi_batch_source_t *source)
-{
-    uint16_t index;
-
     if (source == NULL) return;
-    for (index = 0; index < source->frame_count; ++index) {
+    for (uint16_t index = 0; index < source->retained_count; ++index)
         wifi_csi_lease_release(&source->leases[index]);
-    }
+    source->retained_count = 0;
+    esp32_mquickjs_memory_payload_free(source->control);
+    source->control = NULL;
 }
 
-static bool wifi_csi_batch_source_next(
+static bool wifi_csi_wire_source_next(
     JSContext *ctx, void *opaque, esp32_mquickjs_byte_span_t *out)
 {
-    wifi_csi_batch_source_t *source = opaque;
+    wifi_csi_wire_source_t *source = opaque;
 
     (void)ctx;
-    if (source == NULL) return false;
+    if (source == NULL || source->retained_count == 0) return false;
     if (!source->control_emitted) {
         source->control_emitted = true;
         out->data = source->control;
@@ -2333,77 +2600,83 @@ static bool wifi_csi_batch_source_next(
         out->dma_capable = false;
         return true;
     }
-    while (source->payload_index < source->frame_count) {
-        wifi_csi_lease_ref_t *lease =
-            &source->leases[source->payload_index++];
-        esp32_mquickjs_wifi_csi_slot_t *slot =
-            wifi_csi_resolve_event(&lease->event);
-
-        if (slot == NULL || lease->released) continue;
-        out->data = slot->payload;
-        out->length = slot->length;
+    if (source->padding_pending != 0) {
+        static const uint8_t padding[3] = {0};
+        out->data = padding;
+        out->length = source->padding_pending;
         out->owner = JS_UNDEFINED;
         out->dma_capable = false;
+        source->padding_pending = 0;
+        return true;
+    }
+    while (source->payload_index < source->frame_count) {
+        wifi_csi_lease_ref_t *lease = &source->leases[source->payload_index];
+        esp32_mquickjs_wifi_csi_slot_t *slot = wifi_csi_resolve_event(&lease->event);
+        if (slot == NULL || lease->released) {
+            (void)JS_ThrowReferenceError(ctx, "WIFI_CSI_STALE_FRAME: retained source slot unavailable");
+            return false;
+        }
+        if (!source->packet_pending) {
+            out->data = slot->payload;
+            out->length = slot->length;
+            source->packet_pending = true;
+        } else {
+            ++source->payload_index;
+            source->packet_pending = false;
+            if (slot->packet == NULL || slot->packet->length == 0) continue;
+            out->data = slot->packet->bytes;
+            out->length = slot->packet->length;
+        }
+        out->owner = JS_UNDEFINED;
+        out->dma_capable = false;
+        source->padding_pending = (uint8_t)((4U - (out->length & 3U)) & 3U);
         return true;
     }
     return false;
 }
 
-static void wifi_csi_batch_source_iterator_close(JSContext *ctx, void *opaque)
+static void wifi_csi_wire_source_iterator_close(JSContext *ctx, void *opaque)
 {
-    wifi_csi_batch_source_t *source = opaque;
+    wifi_csi_wire_source_t *source = opaque;
 
     (void)ctx;
     if (source == NULL) return;
     source->iterator_active = false;
-    wifi_csi_batch_source_release(source);
+    wifi_csi_wire_source_release(source);
     if (source->destroy_requested) {
-        heap_caps_free(source->control);
-        heap_caps_free(source);
+        esp32_mquickjs_memory_payload_free(source);
     }
 }
 
-static bool wifi_csi_batch_source_open(
+static bool wifi_csi_wire_source_open(
     JSContext *ctx, JSValue source_value, void *opaque,
     esp32_mquickjs_byte_span_source_t *out, JSValue *out_error)
 {
-    wifi_csi_batch_source_t *source = opaque;
+    wifi_csi_wire_source_t *source = opaque;
 
     (void)source_value;
     if (source == NULL || source->opened) {
         *out_error = JS_ThrowReferenceError(
-            ctx, "WiFiCsiBatch source is closed or consumed");
+            ctx, "CSI wire Source is closed or consumed");
         return false;
     }
     source->opened = true;
     source->iterator_active = true;
     out->opaque = source;
-    out->next = wifi_csi_batch_source_next;
-    out->close = wifi_csi_batch_source_iterator_close;
+    out->next = wifi_csi_wire_source_next;
+    out->close = wifi_csi_wire_source_iterator_close;
     return true;
 }
 
-static size_t wifi_csi_batch_source_known_length(void *opaque)
+static size_t wifi_csi_wire_source_known_length(void *opaque)
 {
-    wifi_csi_batch_source_t *source = opaque;
-    size_t length;
-    uint16_t index;
-
-    if (source == NULL) return 0U;
-    length = source->control_length;
-    for (index = 0; index < source->frame_count; ++index) {
-        esp32_mquickjs_wifi_csi_slot_t *slot =
-            wifi_csi_resolve_event(&source->leases[index].event);
-        if (slot != NULL && !source->leases[index].released) {
-            length += slot->length;
-        }
-    }
-    return length;
+    wifi_csi_wire_source_t *source = opaque;
+    return source != NULL ? source->total_length : 0;
 }
 
-static void wifi_csi_batch_source_destroy(JSContext *ctx, void *opaque)
+static void wifi_csi_wire_source_destroy(JSContext *ctx, void *opaque)
 {
-    wifi_csi_batch_source_t *source = opaque;
+    wifi_csi_wire_source_t *source = opaque;
 
     (void)ctx;
     if (source == NULL) return;
@@ -2411,18 +2684,60 @@ static void wifi_csi_batch_source_destroy(JSContext *ctx, void *opaque)
         source->destroy_requested = true;
         return;
     }
-    wifi_csi_batch_source_release(source);
-    heap_caps_free(source->control);
-    heap_caps_free(source);
+    wifi_csi_wire_source_release(source);
+    esp32_mquickjs_memory_payload_free(source);
 }
 
 static const esp32_mquickjs_byte_span_source_object_ops_t
-    s_wifi_csi_batch_source_ops = {
+    s_wifi_csi_wire_source_ops = {
         .class_id = JS_CLASS_BYTE_SPAN_SOURCE,
-        .open = wifi_csi_batch_source_open,
-        .known_length = wifi_csi_batch_source_known_length,
-        .destroy = wifi_csi_batch_source_destroy,
+        .open = wifi_csi_wire_source_open,
+        .known_length = wifi_csi_wire_source_known_length,
+        .destroy = wifi_csi_wire_source_destroy,
     };
+
+/* Capture before resolving Frame/Batch native adapters. JS property access may
+ * close the owner, collect it, or throw; preserve that exception unchanged. */
+static bool wifi_csi_capture_source_options(JSContext *ctx, int argc, JSValue *argv)
+{
+    static const char *const allowed[] = {"format"};
+    if (argc != 1) {
+        JS_ThrowTypeError(ctx, "CSI Source expects {format: 'esp32qjs-csi/1'}"); return false;
+    }
+    if (!esp32_mquickjs_validate_plain_options(ctx, argv[0], "CSI Source", allowed, 1U)) return false;
+    JSValue format = JS_GetPropertyStr(ctx, argv[0], "format");
+    if (JS_IsException(format)) return false;
+    if (!wifi_csi_string_equals(ctx, format, "esp32qjs-csi/1")) {
+        if (!JS_HasException(ctx)) JS_ThrowTypeError(ctx, "CSI Source format must be esp32qjs-csi/1");
+        return false;
+    }
+    return true;
+}
+
+/* Copies exact event identities before the first JS allocation. Source owns its
+ * leases without retaining the JS Frame/Batch or their copied metadata objects. */
+static JSValue wifi_csi_new_wire_source(JSContext *ctx,
+    const esp32_mquickjs_wifi_csi_event_t *events, uint16_t count)
+{
+    if (events == NULL || count == 0 || count > ESP32_MQUICKJS_WIFI_RX_WIRE_MAX_FRAMES)
+        return JS_ThrowInternalError(ctx, "WIFI_CSI_INVALID_DATA: invalid Source frame count");
+    wifi_csi_wire_source_t *source = esp32_mquickjs_memory_wireless_calloc("wifi.csi", 1, sizeof(*source) + (size_t)count * sizeof(source->leases[0]), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
+    if (source == NULL) return JS_ThrowOutOfMemory(ctx);
+    source->frame_count = count;
+    bool invalid = true;
+    for (uint16_t index = 0; index < count; ++index) {
+        if (!wifi_csi_update_event(&events[index], WIFI_CSI_EVENT_RETAIN)) goto fail;
+        source->leases[index].event = events[index];
+        ++source->retained_count;
+    }
+    if (!wifi_csi_wire_source_build_control(source, &invalid)) goto fail;
+    return esp32_mquickjs_new_wireless_byte_span_source("wifi.csi", ctx, JS_UNDEFINED, &s_wifi_csi_wire_source_ops, source);
+fail:
+    wifi_csi_wire_source_release(source);
+    esp32_mquickjs_memory_payload_free(source);
+    return invalid ? JS_ThrowInternalError(ctx, "WIFI_CSI_INVALID_DATA: retained source metadata is invalid") :
+        JS_ThrowOutOfMemory(ctx);
+}
 
 static wifi_csi_session_t *wifi_csi_session_from_value(
     JSContext *ctx, JSValue value, bool allow_closed)
@@ -2489,10 +2804,29 @@ static wifi_csi_batch_ref_t *wifi_csi_batch_from_value(
     return batch;
 }
 
+static JSValue wifi_csi_packet_capabilities(JSContext *ctx)
+{
+    JSGCRef ref;
+    JSValue *result = JS_PushGCRef(ctx, &ref);
+    *result = JS_NewObject(ctx);
+    bool ok = !JS_IsException(*result) &&
+        esp32_mquickjs_set_property_ref(ctx, result, "header", JS_TRUE) &&
+        esp32_mquickjs_set_property_ref(ctx, result, "full", JS_TRUE) &&
+        esp32_mquickjs_set_property_ref(ctx, result, "required", JS_TRUE) &&
+        esp32_mquickjs_set_property_ref(ctx, result, "requireComplete", JS_TRUE) &&
+        esp32_mquickjs_set_property_ref(ctx, result, "maxHeaderBytes", JS_NewUint32(ctx, ESP32_MQUICKJS_WIFI_CSI_MAX_HEADER_BYTES)) &&
+        esp32_mquickjs_set_property_ref(ctx, result, "maxPacketBytes", JS_NewUint32(ctx, ESP32_MQUICKJS_WIFI_CSI_MAX_PACKET_BYTES)) &&
+        esp32_mquickjs_set_property_ref(ctx, result, "fcs", JS_NewString(ctx, "unknown")) &&
+        esp32_mquickjs_set_property_ref(ctx, result, "payloadRepresentation", JS_NewString(ctx, "unknown")) &&
+        esp32_mquickjs_set_property_ref(ctx, result, "qualification", JS_NewString(ctx, "candidate"));
+    JSValue value = JS_PopGCRef(ctx, &ref);
+    return ok ? value : JS_EXCEPTION;
+}
+
 JSValue js_wifi_csi_capabilities(JSContext *ctx, JSValue *this_val,
                                  int argc, JSValue *argv)
 {
-#ifdef CONFIG_ESP32_MQUICKJS_WIFI_CSI_ALLOW_PROMISCUOUS
+#if CONFIG_ESP32_MQUICKJS_WIFI_CSI_ALLOW_PROMISCUOUS
     static const char *const sources_promiscuous[] = {
         "associated", "promiscuous",
     };
@@ -2526,7 +2860,7 @@ JSValue js_wifi_csi_capabilities(JSContext *ctx, JSValue *this_val,
     (void)argc;
     (void)argv;
     *result = JS_NewObject(ctx);
-#ifdef CONFIG_ESP32_MQUICKJS_WIFI_CSI_ALLOW_PROMISCUOUS
+#if CONFIG_ESP32_MQUICKJS_WIFI_CSI_ALLOW_PROMISCUOUS
     *sources = wifi_csi_string_array(
         ctx, sources_promiscuous, 2U);
 #else
@@ -2555,13 +2889,20 @@ JSValue js_wifi_csi_capabilities(JSContext *ctx, JSValue *this_val,
         JS_IsException(*supports) || JS_IsException(*radio) ||
         JS_IsException(*encodings) ||
         !esp32_mquickjs_set_property_ref(
-            ctx, limits, "maxFrameBytes",
+            ctx, limits, "maxCsiBytes",
             JS_NewUint32(ctx,
                 CONFIG_ESP32_MQUICKJS_WIFI_CSI_MAX_FRAME_BYTES)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, limits, "maxPoolCapacity",
             JS_NewUint32(ctx,
                 CONFIG_ESP32_MQUICKJS_WIFI_CSI_POOL_CAPACITY)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, limits, "maxTotalPoolCapacity",
+            JS_NewUint32(ctx,
+                CONFIG_ESP32_MQUICKJS_WIFI_CSI_POOL_CAPACITY)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, limits, "maxPoolGenerations",
+            JS_NewUint32(ctx, ESP32_MQUICKJS_WIFI_CSI_STORE_MAX_GENERATIONS)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, limits, "maxQueueCapacity",
             JS_NewUint32(ctx,
@@ -2580,7 +2921,7 @@ JSValue js_wifi_csi_capabilities(JSContext *ctx, JSValue *this_val,
             ctx, limits, "shiftMaximum", he ? JS_NULL : JS_NewUint32(ctx, 15U)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, supports, "fixedChannel",
-            JS_TRUE) ||
+            JS_NewBool(WIFI_CSI_PROMISCUOUS_SUPPORTED)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, supports, "promiscuous",
             JS_NewBool(WIFI_CSI_PROMISCUOUS_SUPPORTED)) ||
@@ -2588,6 +2929,9 @@ JSValue js_wifi_csi_capabilities(JSContext *ctx, JSValue *this_val,
             ctx, supports, "sourceMacFilter", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(
             ctx, supports, "destinationMacFilter", JS_TRUE) ||
+        !esp32_mquickjs_set_property_ref(ctx, supports, "bssidFilter", JS_TRUE) ||
+        !esp32_mquickjs_set_property_ref(ctx, supports, "frameTypeFilter", JS_TRUE) ||
+        !esp32_mquickjs_set_property_ref(ctx, supports, "frameSubtypeFilter", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(
             ctx, supports, "rssiFilter", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(
@@ -2601,6 +2945,8 @@ JSValue js_wifi_csi_capabilities(JSContext *ctx, JSValue *this_val,
             ctx, supports, "he", JS_NewBool(he)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, supports, "heStbcSelection", JS_NewBool(he)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, supports, "captureConfigReadback", JS_NewBool(he)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, supports, "manualScaling", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(
@@ -2626,7 +2972,8 @@ JSValue js_wifi_csi_capabilities(JSContext *ctx, JSValue *this_val,
             ctx, result, "sampleEncodings", *encodings) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "limits", *limits) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "supports", *supports) ||
-        !esp32_mquickjs_set_property_ref(ctx, result, "radio", *radio))
+        !esp32_mquickjs_set_property_ref(ctx, result, "radio", *radio) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "packetCapture", wifi_csi_packet_capabilities(ctx)))
         goto fail;
     *sources = JS_UNDEFINED;
     *formats = JS_UNDEFINED;
@@ -2686,42 +3033,42 @@ JSValue js_wifi_csi_open(JSContext *ctx, JSValue *this_val,
             "WIFI_CSI_CLEANUP_PENDING: native cleanup worker is still active");
         goto fail;
     }
-    if (s_wifi_csi.resources.slots != NULL) {
+    if (wifi_csi_pool_retirement_pending()) {
         JS_ThrowReferenceError(ctx,
-            "WIFI_CSI_CLEANUP_PENDING: retained frames still own the previous pool");
+            "WIFI_CSI_CLEANUP_PENDING: previous control has not detached its pool");
         goto fail;
     }
-    generation = atomic_fetch_add_explicit(
-        &s_wifi_csi_next_generation, 1U, memory_order_relaxed);
-    if (generation == 0U) {
-        generation = atomic_fetch_add_explicit(
-            &s_wifi_csi_next_generation, 1U, memory_order_relaxed);
+    allocator = wifi_csi_resource_allocator();
+    esp32_mquickjs_wifi_csi_store_result_t allocation_result;
+    esp32_mquickjs_wifi_csi_resources_t *resources = esp32_mquickjs_wifi_csi_store_open(
+        &s_wifi_csi_store, options.pool_capacity, esp32_mquickjs_wifi_csi_packet_capacity(&options.packet),
+        &allocator, &allocation_result);
+    if (resources == NULL) {
+        if (allocation_result == ESP32_MQUICKJS_WIFI_CSI_STORE_IDENTITY)
+            JS_ThrowInternalError(ctx, "WIFI_CSI_IDENTITY_EXHAUSTED: device reboot required");
+        else if (allocation_result == ESP32_MQUICKJS_WIFI_CSI_STORE_BUDGET)
+            JS_ThrowInternalError(ctx, "WIFI_CSI_RESOURCE_EXHAUSTED: retained CSI pools exhaust the slot or generation budget");
+        else JS_ThrowOutOfMemory(ctx);
+        goto fail;
     }
+    generation = resources->generation;
     memset(&s_wifi_csi, 0, sizeof(s_wifi_csi));
     s_wifi_csi.lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
     atomic_init(&s_wifi_csi.lifecycle, WIFI_CSI_OPENING);
     atomic_init(&s_wifi_csi.cleanup_scheduled, false);
     atomic_init(&s_wifi_csi.close_requested, false);
+    atomic_init(&s_wifi_csi.resources, resources);
     s_wifi_csi.generation = generation;
     s_wifi_csi.runtime = esp32_mquickjs_get_active_runtime();
     s_wifi_csi.options = options;
-    allocator = wifi_csi_resource_allocator();
-    if (!esp32_mquickjs_wifi_csi_resources_init(
-            &s_wifi_csi.resources, generation,
-            CONFIG_ESP32_MQUICKJS_WIFI_CSI_POOL_CAPACITY,
-            CONFIG_ESP32_MQUICKJS_WIFI_CSI_MAX_FRAME_BYTES,
-            &allocator)) {
-        atomic_store(&s_wifi_csi.lifecycle, WIFI_CSI_CLOSED);
-        JS_ThrowOutOfMemory(ctx);
-        goto fail;
-    }
-    s_wifi_csi.resources.filter = options.filter;
-    *queue = esp32_mquickjs_event_queue_new(
+    resources->filter = options.filter;
+    resources->packet_options = options.packet;
+    *queue = esp32_mquickjs_event_queue_new_wireless("wifi.csi",
         ctx, s_wifi_csi.runtime,
         sizeof(esp32_mquickjs_wifi_csi_event_t), options.queue_capacity,
         ESP32_MQUICKJS_EVENT_QUEUE_DROP_NEWEST,
         wifi_csi_event_to_js, wifi_csi_event_drop,
-        wifi_csi_event_queue_close, &s_wifi_csi);
+        wifi_csi_event_queue_close, (void *)(uintptr_t)generation);
     if (JS_IsException(*queue)) goto fail_open;
     s_wifi_csi.event_queue = esp32_mquickjs_event_queue_from_value(ctx, *queue);
     if (s_wifi_csi.event_queue == NULL ||
@@ -2751,7 +3098,7 @@ JSValue js_wifi_csi_open(JSContext *ctx, JSValue *this_val,
     }
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_WIFI_CSI_SESSION);
     if (JS_IsException(*object)) goto fail_open;
-    ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
+    ref = esp32_mquickjs_memory_wireless_calloc("wifi.csi", 1, sizeof(*ref), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (ref == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto fail_open;
@@ -2761,7 +3108,7 @@ JSValue js_wifi_csi_open(JSContext *ctx, JSValue *this_val,
     if (!esp32_mquickjs_set_property_ref(
             ctx, object, WIFI_CSI_EVENT_QUEUE_KEY, *queue)) {
         JS_SetOpaque(ctx, *object, NULL);
-        heap_caps_free(ref);
+        esp32_mquickjs_memory_payload_free(ref);
         ref = NULL;
         goto fail_open;
     }
@@ -2796,6 +3143,7 @@ static const char *wifi_csi_power_save_name(wifi_ps_type_t power_save)
 static JSValue wifi_csi_status_to_js(JSContext *ctx,
                                      wifi_csi_session_t *session)
 {
+    wifi_csi_refresh_channel(session);
     JSGCRef result_ref, requested_ref, effective_ref, error_ref;
     JSGCRef details_ref;
     JSValue *result = JS_PushGCRef(ctx, &result_ref);
@@ -2858,7 +3206,7 @@ static JSValue wifi_csi_status_to_js(JSContext *ctx,
             JS_NewString(ctx,
                 esp32_mquickjs_wifi_csi_target_schema_name())) ||
         !esp32_mquickjs_set_property_ref(
-            ctx, effective, "maxFrameBytes",
+            ctx, effective, "maxCsiBytes",
             JS_NewUint32(ctx,
                 CONFIG_ESP32_MQUICKJS_WIFI_CSI_MAX_FRAME_BYTES)) ||
         !esp32_mquickjs_set_property_ref(
@@ -2866,16 +3214,14 @@ static JSValue wifi_csi_status_to_js(JSContext *ctx,
             JS_NewUint32(ctx, session->options.queue_capacity)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, effective, "poolCapacity",
-            JS_NewUint32(ctx,
-                CONFIG_ESP32_MQUICKJS_WIFI_CSI_POOL_CAPACITY)) ||
+            JS_NewUint32(ctx, session->options.pool_capacity)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, effective, "powerSave",
             JS_NewString(ctx,
                 wifi_csi_power_save_name(session->effective_power_save))) ||
         !esp32_mquickjs_set_property_ref(
             ctx, effective, "timestampAccuracy",
-            JS_NewString(ctx, session->effective_power_save == WIFI_PS_NONE
-                ? "normal" : "power-save-dependent")) ||
+            JS_NewString(ctx, "callback-time")) ||
         !esp32_mquickjs_set_property_ref(
             ctx, result, "generation",
             JS_NewUint32(ctx, session->generation)) ||
@@ -2906,13 +3252,96 @@ fail:
     return JS_EXCEPTION;
 }
 
-static uint32_t wifi_csi_counter_value(
-    wifi_csi_session_t *session,
-    _Atomic uint32_t *live,
-    uint32_t snapshot)
+static const char *wifi_csi_store_state_name(esp32_mquickjs_wifi_csi_store_state_t state)
 {
-    return session->resources.slots != NULL
-        ? atomic_load_explicit(live, memory_order_acquire) : snapshot;
+    switch (state) {
+        case ESP32_MQUICKJS_WIFI_CSI_STORE_ALLOCATING: return "allocating";
+        case ESP32_MQUICKJS_WIFI_CSI_STORE_ACTIVE: return "active";
+        case ESP32_MQUICKJS_WIFI_CSI_STORE_RETAINED: return "retained";
+        case ESP32_MQUICKJS_WIFI_CSI_STORE_RETIRING: return "retiring";
+        default: return "none";
+    }
+}
+
+uint32_t esp32_mquickjs_wifi_csi_reset_counters(void)
+{
+    return esp32_mquickjs_wifi_csi_store_reset_counters(&s_wifi_csi_store);
+}
+
+JSValue esp32_mquickjs_wifi_csi_diagnostics(JSContext *ctx)
+{
+    esp32_mquickjs_wifi_csi_store_snapshot_t entries[ESP32_MQUICKJS_WIFI_CSI_STORE_MAX_GENERATIONS];
+    size_t count = esp32_mquickjs_wifi_csi_store_snapshot(&s_wifi_csi_store, entries);
+    uint32_t generation = s_wifi_csi.generation;
+    wifi_csi_lifecycle_t lifecycle = atomic_load_explicit(&s_wifi_csi.lifecycle, memory_order_acquire);
+    bool cleanup = atomic_load_explicit(&s_wifi_csi.cleanup_scheduled, memory_order_acquire);
+    bool closing = atomic_load_explicit(&s_wifi_csi.close_requested, memory_order_acquire);
+    bool identity_exhausted = atomic_load_explicit(&s_wifi_csi_store.next_generation, memory_order_acquire) == 0;
+    uint64_t active_bytes = 0, retained_bytes = 0, pending_bytes = 0;
+    uint32_t reserved_slots = 0;
+    /* Each entry is a pointer-free native copy before the first JS allocation.
+     * Storage bytes include its resource control, slots and sample allocation;
+     * neither queue/JS/allocator overhead nor a global wireless budget is implied. */
+    JSGCRef result_ref, array_ref, item_ref;
+    JSValue *result = JS_PushGCRef(ctx, &result_ref);
+    JSValue *array = JS_PushGCRef(ctx, &array_ref);
+    JSValue *item = JS_PushGCRef(ctx, &item_ref);
+    *result = JS_NewObject(ctx);
+    *array = JS_NewArray(ctx, 0);
+    *item = JS_UNDEFINED;
+    if (JS_IsException(*result) || JS_IsException(*array)) goto fail;
+#define CSI_DIAG_SET(owner, name, value) do { if (!esp32_mquickjs_set_property_ref(ctx, owner, name, value)) goto fail; } while (0)
+#define CSI_DIAG_NUMBER(owner, name, value) CSI_DIAG_SET(owner, name, JS_NewFloat64(ctx, (double)(value)))
+    for (size_t i = 0; i < count; ++i) {
+        const esp32_mquickjs_wifi_csi_store_snapshot_t *entry = &entries[i];
+        bool readable = entry->state == ESP32_MQUICKJS_WIFI_CSI_STORE_ACTIVE ||
+            entry->state == ESP32_MQUICKJS_WIFI_CSI_STORE_RETAINED;
+        reserved_slots += entry->capacity;
+        if (entry->state == ESP32_MQUICKJS_WIFI_CSI_STORE_ACTIVE) active_bytes += entry->bytes;
+        else if (entry->state == ESP32_MQUICKJS_WIFI_CSI_STORE_RETAINED) retained_bytes += entry->bytes;
+        else pending_bytes += entry->bytes;
+        *item = JS_NewObject(ctx);
+        if (JS_IsException(*item)) goto fail;
+        CSI_DIAG_NUMBER(item, "generation", entry->generation);
+        CSI_DIAG_SET(item, "state", JS_NewString(ctx, wifi_csi_store_state_name(entry->state)));
+        CSI_DIAG_NUMBER(item, "capacity", entry->capacity);
+        CSI_DIAG_NUMBER(item, "storageBytes", entry->bytes);
+        CSI_DIAG_SET(item, "freeSlots", readable ? JS_NewUint32(ctx, entry->free_slots) : JS_NULL);
+        CSI_DIAG_SET(item, "identityExhausted", readable ? JS_NewBool(entry->identity_exhausted) : JS_NULL);
+        CSI_DIAG_SET(item, "droppedIdentityExhausted", readable ? JS_NewUint32(ctx, entry->dropped_identity_exhausted) : JS_NULL);
+        CSI_DIAG_SET(item, "leasedFrames", readable ? JS_NewUint32(ctx, entry->leased_frames) : JS_NULL);
+        CSI_DIAG_SET(item, "callbacks", readable ? JS_NewUint32(ctx, entry->callbacks) : JS_NULL);
+        CSI_DIAG_SET(item, "accepted", readable ? JS_NewUint32(ctx, entry->accepted) : JS_NULL);
+        CSI_DIAG_SET(item, "droppedPoolFull", readable ? JS_NewUint32(ctx, entry->dropped_pool_full) : JS_NULL);
+        CSI_DIAG_SET(item, "droppedQueueFull", readable ? JS_NewUint32(ctx, entry->dropped_queue_full) : JS_NULL);
+        CSI_DIAG_SET(item, "droppedClosing", readable ? JS_NewUint32(ctx, entry->dropped_closing) : JS_NULL);
+        if (JS_IsException(JS_SetPropertyUint32(ctx, *array, (uint32_t)i, *item))) goto fail;
+        *item = JS_UNDEFINED;
+    }
+    CSI_DIAG_NUMBER(result, "generation", generation);
+    CSI_DIAG_SET(result, "state", JS_NewString(ctx, wifi_csi_lifecycle_name(lifecycle)));
+    CSI_DIAG_NUMBER(result, "controlBytes", sizeof(s_wifi_csi) + sizeof(s_wifi_csi_store) + sizeof(s_wifi_csi_store_lock) + esp32_mquickjs_wifi_csi_rx_native_control_bytes());
+    CSI_DIAG_NUMBER(result, "slotBudget", s_wifi_csi_store.maximum_slots);
+    CSI_DIAG_NUMBER(result, "generationBudget", ESP32_MQUICKJS_WIFI_CSI_STORE_MAX_GENERATIONS);
+    CSI_DIAG_NUMBER(result, "reservedSlots", reserved_slots);
+    CSI_DIAG_NUMBER(result, "storageBytes", active_bytes + retained_bytes + pending_bytes);
+    CSI_DIAG_NUMBER(result, "activeStorageBytes", active_bytes);
+    CSI_DIAG_NUMBER(result, "retainedStorageBytes", retained_bytes);
+    CSI_DIAG_NUMBER(result, "pendingStorageBytes", pending_bytes);
+    CSI_DIAG_SET(result, "identityExhausted", JS_NewBool(identity_exhausted));
+    CSI_DIAG_SET(result, "generations", *array);
+    CSI_DIAG_SET(result, "cleanupScheduled", JS_NewBool(cleanup));
+    CSI_DIAG_SET(result, "closeRequested", JS_NewBool(closing));
+#undef CSI_DIAG_NUMBER
+#undef CSI_DIAG_SET
+    JS_PopGCRef(ctx, &item_ref);
+    JS_PopGCRef(ctx, &array_ref);
+    return JS_PopGCRef(ctx, &result_ref);
+fail:
+    JS_PopGCRef(ctx, &item_ref);
+    JS_PopGCRef(ctx, &array_ref);
+    JS_PopGCRef(ctx, &result_ref);
+    return JS_EXCEPTION;
 }
 
 JSValue js_wifi_csi_session_status(JSContext *ctx, JSValue *this_val,
@@ -2933,11 +3362,89 @@ JSValue js_wifi_csi_session_status(JSContext *ctx, JSValue *this_val,
     return wifi_csi_status_to_js(ctx, session);
 }
 
+/* Convert a native observation, independently of requested Session options.
+ * Preserve otherwise inactive shift/enable bits too; no input validation may
+ * silently normalize a driver readback into the requested configuration. */
+static JSValue wifi_csi_native_config_to_js(JSContext *ctx,
+    const wifi_csi_config_t *native, uint32_t generation)
+{
+#if CONFIG_SOC_WIFI_HE_SUPPORT
+    unsigned stbc =
+#if CONFIG_SOC_WIFI_MAC_VERSION_NUM == 3
+        native->acquire_csi_he_stbc_mode;
+#else
+        native->acquire_csi_he_stbc;
+#endif
+    if (stbc > ESP32_MQUICKJS_WIFI_CSI_HE_STBC_ALTERNATE)
+        return wifi_csi_throw_driver_error(ctx, "WIFI_CSI_DRIVER_ERROR", "csi-config-decode", ESP_ERR_INVALID_RESPONSE);
+    JSGCRef result_ref, capture_ref;
+    JSValue *result = JS_PushGCRef(ctx, &result_ref);
+    JSValue *capture = JS_PushGCRef(ctx, &capture_ref);
+    *result = JS_NewObject(ctx);
+    if (JS_IsException(*result)) goto fail;
+    *capture = JS_NewObject(ctx);
+    if (JS_IsException(*capture)) goto fail;
+#define SET(object, name, value) do { \
+    if (!esp32_mquickjs_set_property_ref(ctx, object, name, value)) goto fail; \
+} while (0)
+    SET(result, "radioGeneration", JS_NewUint32(ctx, generation));
+    SET(capture, "schema", JS_NewString(ctx, "wifi-csi-he/1"));
+    SET(capture, "enable", JS_NewBool(native->enable));
+    SET(capture, "enableLegacy", JS_NewBool(native->acquire_csi_legacy));
+#if CONFIG_SOC_WIFI_MAC_VERSION_NUM == 3
+    SET(capture, "forceLegacyLtf", JS_NewBool(native->acquire_csi_force_lltf));
+    SET(capture, "vht", JS_NewBool(native->acquire_csi_vht));
+    SET(capture, "lltfBits", JS_NewUint32(ctx, native->lltf_bit_mode ? 8 : 12));
+#else
+    SET(capture, "forceLegacyLtf", JS_FALSE);
+    SET(capture, "vht", JS_FALSE);
+    SET(capture, "lltfBits", JS_NewUint32(ctx, 8));
+#endif
+    SET(capture, "ht20", JS_NewBool(native->acquire_csi_ht20));
+    SET(capture, "ht40", JS_NewBool(native->acquire_csi_ht40));
+    SET(capture, "heSu", JS_NewBool(native->acquire_csi_su));
+    SET(capture, "heMu", JS_NewBool(native->acquire_csi_mu));
+    SET(capture, "heDcm", JS_NewBool(native->acquire_csi_dcm));
+    SET(capture, "heBeamformed", JS_NewBool(native->acquire_csi_beamformed));
+    SET(capture, "heStbcLtf", JS_NewString(ctx, stbc == 0 ? "first" : stbc == 1 ? "second" : "alternate"));
+    SET(capture, "valueScale", JS_NewUint32(ctx, native->val_scale_cfg));
+    SET(capture, "dumpAck", JS_NewBool(native->dump_ack_en));
+    SET(result, "capture", *capture);
+#undef SET
+    JS_PopGCRef(ctx, &capture_ref);
+    return JS_PopGCRef(ctx, &result_ref);
+fail:
+    JS_PopGCRef(ctx, &capture_ref);
+    JS_PopGCRef(ctx, &result_ref);
+    return JS_EXCEPTION;
+#else
+    (void)native; (void)generation;
+    return wifi_csi_throw_driver_error(ctx, "WIFI_CSI_DRIVER_ERROR", "csi-config-read", ESP_ERR_NOT_SUPPORTED);
+#endif
+}
+
+JSValue js_wifi_csi_session_get_capture_config(JSContext *ctx, JSValue *this_val,
+                                               int argc, JSValue *argv)
+{
+    (void)argv;
+    if (argc != 0 || this_val == NULL)
+        return JS_ThrowTypeError(ctx, "WiFiCsiSession.getCaptureConfig() expects no arguments");
+    wifi_csi_session_t *session = wifi_csi_session_from_value(ctx, *this_val, false);
+    if (session == NULL) return JS_EXCEPTION;
+    wifi_csi_config_t native;
+    uint32_t generation;
+    esp_err_t error = esp32_mquickjs_wifi_radio_read_csi_config(&session->radio_lease, &native, &generation);
+    if (error != ESP_OK)
+        return wifi_csi_throw_driver_error(ctx, "WIFI_CSI_DRIVER_ERROR", "csi-config-read", error);
+    /* Only copied scalars survive any allocation/GC below. */
+    return wifi_csi_native_config_to_js(ctx, &native, generation);
+}
+
 JSValue js_wifi_csi_session_stats(JSContext *ctx, JSValue *this_val,
                                   int argc, JSValue *argv)
 {
     wifi_csi_session_t *session;
-    esp32_mquickjs_wifi_csi_counters_t *counters;
+    wifi_csi_stats_snapshot_t snapshot;
     esp32_mquickjs_event_queue_stats_t queue_stats = {0};
     JSGCRef result_ref, queue_ref;
     JSValue *result = JS_PushGCRef(ctx, &result_ref);
@@ -2950,10 +3457,45 @@ JSValue js_wifi_csi_session_stats(JSContext *ctx, JSValue *this_val,
     if (argc != 0 || this_val == NULL ||
         (session = wifi_csi_session_from_value(
             ctx, *this_val, true)) == NULL) goto fail;
-    counters = &session->resources.counters;
-    if (session->resources.slots != NULL) {
-        free_slots = esp32_mquickjs_native_pool_available(
-            &session->resources.pool);
+    taskENTER_CRITICAL(&session->lock);
+    snapshot = session->final_stats;
+    taskEXIT_CRITICAL(&session->lock);
+    esp32_mquickjs_wifi_csi_resources_t *resources = esp32_mquickjs_wifi_csi_store_acquire(
+        &s_wifi_csi_store, session->generation);
+    if (resources != NULL) {
+#define WIFI_CSI_STATS_COPY(name) snapshot.name = atomic_load_explicit(&resources->counters.name, memory_order_acquire)
+        WIFI_CSI_STATS_COPY(callbacks);
+        WIFI_CSI_STATS_COPY(accepted);
+        WIFI_CSI_STATS_COPY(delivered_frames);
+        WIFI_CSI_STATS_COPY(delivered_batches);
+        WIFI_CSI_STATS_COPY(filtered_mac);
+        WIFI_CSI_STATS_COPY(filtered_bssid);
+        WIFI_CSI_STATS_COPY(filtered_frame_type);
+        WIFI_CSI_STATS_COPY(filtered_frame_subtype);
+        WIFI_CSI_STATS_COPY(dropped_identity_exhausted);
+        WIFI_CSI_STATS_COPY(filtered_rssi);
+        WIFI_CSI_STATS_COPY(filtered_decimation);
+        WIFI_CSI_STATS_COPY(filtered_rate_limit);
+        WIFI_CSI_STATS_COPY(filtered_first_word_invalid);
+        WIFI_CSI_STATS_COPY(filtered_channel_estimate_invalid);
+        WIFI_CSI_STATS_COPY(invalid_callback_data);
+        WIFI_CSI_STATS_COPY(dropped_pool_full);
+        WIFI_CSI_STATS_COPY(dropped_queue_full);
+        WIFI_CSI_STATS_COPY(dropped_frame_too_large);
+        WIFI_CSI_STATS_COPY(dropped_closing);
+        WIFI_CSI_STATS_COPY(received_bytes);
+        WIFI_CSI_STATS_COPY(packet_unavailable);
+        WIFI_CSI_STATS_COPY(packet_malformed);
+        WIFI_CSI_STATS_COPY(packet_truncated);
+        WIFI_CSI_STATS_COPY(dropped_packet_required);
+        WIFI_CSI_STATS_COPY(dropped_packet_incomplete);
+        WIFI_CSI_STATS_COPY(received_packet_bytes);
+        WIFI_CSI_STATS_COPY(leased_frames);
+#undef WIFI_CSI_STATS_COPY
+        free_slots = esp32_mquickjs_native_pool_available(&resources->pool);
+        esp32_mquickjs_wifi_csi_store_release(&s_wifi_csi_store, resources);
+    } else {
+        snapshot.leased_frames = 0;
     }
     if (session->event_queue != NULL) {
         (void)esp32_mquickjs_event_queue_get_stats(
@@ -2961,8 +3503,7 @@ JSValue js_wifi_csi_session_stats(JSContext *ctx, JSValue *this_val,
     }
     *result = JS_NewObject(ctx);
     *queue = JS_NewObject(ctx);
-#define WIFI_CSI_COUNTER(name) wifi_csi_counter_value( \
-    session, &counters->name, session->final_stats.name)
+#define WIFI_CSI_COUNTER(name) snapshot.name
     if (JS_IsException(*result) || JS_IsException(*queue) ||
         !esp32_mquickjs_set_property_ref(
             ctx, queue, "open", JS_NewBool(queue_stats.open)) ||
@@ -2972,6 +3513,8 @@ JSValue js_wifi_csi_session_stats(JSContext *ctx, JSValue *this_val,
             ctx, queue, "capacity", JS_NewUint32(ctx, queue_stats.capacity)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, queue, "dropped", JS_NewUint32(ctx, queue_stats.dropped)) ||
+        !esp32_mquickjs_set_property_ref(
+            ctx, queue, "highWater", JS_NewUint32(ctx, queue_stats.high_water)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, queue, "receiverPending",
             JS_NewBool(queue_stats.receiver_pending)) ||
@@ -2990,6 +3533,10 @@ JSValue js_wifi_csi_session_stats(JSContext *ctx, JSValue *this_val,
         !esp32_mquickjs_set_property_ref(
             ctx, result, "filteredMac",
             JS_NewUint32(ctx, WIFI_CSI_COUNTER(filtered_mac))) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "filteredBssid", JS_NewUint32(ctx, WIFI_CSI_COUNTER(filtered_bssid))) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "filteredFrameType", JS_NewUint32(ctx, WIFI_CSI_COUNTER(filtered_frame_type))) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "filteredFrameSubtype", JS_NewUint32(ctx, WIFI_CSI_COUNTER(filtered_frame_subtype))) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "droppedIdentityExhausted", JS_NewUint32(ctx, WIFI_CSI_COUNTER(dropped_identity_exhausted))) ||
         !esp32_mquickjs_set_property_ref(
             ctx, result, "filteredRssi",
             JS_NewUint32(ctx, WIFI_CSI_COUNTER(filtered_rssi))) ||
@@ -3027,6 +3574,18 @@ JSValue js_wifi_csi_session_stats(JSContext *ctx, JSValue *this_val,
         !esp32_mquickjs_set_property_ref(
             ctx, result, "receivedBytes",
             JS_NewUint32(ctx, WIFI_CSI_COUNTER(received_bytes))) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "packetUnavailable",
+            JS_NewUint32(ctx, WIFI_CSI_COUNTER(packet_unavailable))) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "packetMalformed",
+            JS_NewUint32(ctx, WIFI_CSI_COUNTER(packet_malformed))) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "packetTruncated",
+            JS_NewUint32(ctx, WIFI_CSI_COUNTER(packet_truncated))) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "droppedPacketRequired",
+            JS_NewUint32(ctx, WIFI_CSI_COUNTER(dropped_packet_required))) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "droppedPacketIncomplete",
+            JS_NewUint32(ctx, WIFI_CSI_COUNTER(dropped_packet_incomplete))) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "receivedPacketBytes",
+            JS_NewUint32(ctx, WIFI_CSI_COUNTER(received_packet_bytes))) ||
         !esp32_mquickjs_set_property_ref(
             ctx, result, "leasedFrames",
             JS_NewUint32(ctx, WIFI_CSI_COUNTER(leased_frames))) ||
@@ -3114,6 +3673,11 @@ JSValue js_wifi_csi_session_configure(JSContext *ctx, JSValue *this_val,
         }
         return JS_EXCEPTION;
     }
+    if (atomic_load_explicit(&session->resources->identity_exhausted, memory_order_acquire)) {
+        return wifi_csi_throw_driver_error(ctx, "WIFI_CSI_IDENTITY_EXHAUSTED",
+            "capture-identity", ESP_ERR_INVALID_STATE);
+    }
+
     if (atomic_load_explicit(&session->lifecycle,
                              memory_order_acquire) != WIFI_CSI_STOPPED) {
         return JS_ThrowReferenceError(ctx,
@@ -3122,14 +3686,20 @@ JSValue js_wifi_csi_session_configure(JSContext *ctx, JSValue *this_val,
     if (!wifi_csi_parse_open_options(ctx, argv[0], &options)) {
         return JS_EXCEPTION;
     }
-    if (options.queue_capacity != session->options.queue_capacity) {
+    if (options.queue_capacity != session->options.queue_capacity ||
+        options.pool_capacity != session->options.pool_capacity) {
         return JS_ThrowTypeError(ctx,
-            "WIFI_CSI_CONFIG_UNSUPPORTED: queue capacity cannot change within a session");
+            "WIFI_CSI_CONFIG_UNSUPPORTED: buffering capacities cannot change within a session");
     }
+    if (esp32_mquickjs_wifi_csi_packet_capacity(&options.packet) > session->resources->max_packet_bytes) {
+        return JS_ThrowRangeError(ctx, "WIFI_CSI_CONFIG_UNSUPPORTED: packet capacity exceeds the allocation made at open");
+    }
+    atomic_store_explicit(&session->channel_conflicted, false, memory_order_release);
     session->options = options;
-    session->resources.filter = options.filter;
-    session->resources.filter_qualified = 0U;
-    session->resources.last_accepted_timestamp_set = false;
+    session->resources->packet_options = options.packet;
+    session->resources->filter = options.filter;
+    session->resources->filter_phase = 0U;
+    session->resources->last_accepted_timestamp_set = false;
     session->last_error = ESP_OK;
     session->last_error_code = NULL;
     session->last_error_stage = NULL;
@@ -3152,6 +3722,11 @@ JSValue js_wifi_csi_session_start(JSContext *ctx, JSValue *this_val,
         }
         return JS_EXCEPTION;
     }
+    if (atomic_load_explicit(&session->resources->identity_exhausted, memory_order_acquire)) {
+        return wifi_csi_throw_driver_error(ctx, "WIFI_CSI_IDENTITY_EXHAUSTED",
+            "capture-identity", ESP_ERR_INVALID_STATE);
+    }
+
     if (atomic_load_explicit(&session->lifecycle,
                              memory_order_acquire) == WIFI_CSI_RUNNING) {
         return wifi_csi_status_to_js(ctx, session);
@@ -3224,7 +3799,7 @@ void js_wifi_csi_session_finalizer(JSContext *ctx, void *opaque)
     if (ref != NULL && ref->generation == s_wifi_csi.generation) {
         wifi_csi_request_reap(&s_wifi_csi);
     }
-    heap_caps_free(ref);
+    esp32_mquickjs_memory_payload_free(ref);
 }
 
 JSValue js_wifi_csi_frame_constructor(JSContext *ctx, JSValue *this_val,
@@ -3252,89 +3827,90 @@ void js_wifi_csi_frame_finalizer(JSContext *ctx, void *opaque)
         };
         wifi_csi_lease_request_close(&lease);
     }
-    heap_caps_free(ref);
+    esp32_mquickjs_memory_payload_free(ref);
 }
 
-JSValue js_wifi_csi_frame_samples(JSContext *ctx, JSValue *this_val,
-                                  int argc, JSValue *argv)
+static JSValue wifi_csi_frame_bytes(JSContext *ctx, JSValue *this_val,
+    int argc, bool packet, bool copy)
 {
     esp32_mquickjs_wifi_csi_event_t event;
     esp32_mquickjs_wifi_csi_slot_t *slot;
-    wifi_csi_lease_ref_t *lease;
-
-    (void)argv;
-    if (argc != 0 || this_val == NULL ||
-        (slot = wifi_csi_frame_from_value(
-            ctx, *this_val, "WiFiCsiFrame.samples()", NULL, &event)) == NULL) {
-        if (!JS_HasException(ctx)) {
-            return JS_ThrowTypeError(
-                ctx, "WiFiCsiFrame.samples() expects no arguments");
-        }
-        return JS_EXCEPTION;
+    if (argc != 0 || this_val == NULL)
+        return JS_ThrowTypeError(ctx, "CSI frame byte methods require their Frame and no arguments");
+    slot = wifi_csi_frame_from_value(ctx, *this_val, "WiFiCsiFrame bytes", NULL, &event);
+    if (slot == NULL) return JS_EXCEPTION;
+    if (packet && (slot->packet == NULL || slot->packet->length == 0)) return JS_NULL;
+    uint8_t *bytes = packet ? slot->packet->bytes : slot->payload;
+    size_t length = packet ? slot->packet->length : slot->length;
+    if (copy) {
+        uint8_t *owned = length != 0 ? esp32_mquickjs_memory_wireless_alloc("wifi.csi", length, ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_COPY) : NULL;
+        if (length != 0 && owned == NULL) return JS_ThrowOutOfMemory(ctx);
+        if (length != 0) memcpy(owned, bytes, length);
+        return esp32_mquickjs_new_wireless_owned_byte_view("wifi.csi", ctx, owned, length);
     }
-    lease = wifi_csi_retain_event(&event);
+    wifi_csi_lease_ref_t *lease = wifi_csi_retain_event(&event);
     if (lease == NULL) return JS_ThrowOutOfMemory(ctx);
-    return esp32_mquickjs_new_retained_byte_view(
-        ctx, slot->payload, slot->length,
-        wifi_csi_byte_view_release, lease);
+    return esp32_mquickjs_new_wireless_retained_byte_view("wifi.csi", ctx, bytes, length, wifi_csi_byte_view_release, lease);
 }
 
-JSValue js_wifi_csi_frame_copy_samples(JSContext *ctx, JSValue *this_val,
-                                       int argc, JSValue *argv)
+JSValue js_wifi_csi_frame_samples(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{ (void)argv; return wifi_csi_frame_bytes(ctx, this_val, argc, false, false); }
+JSValue js_wifi_csi_frame_copy_samples(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{ (void)argv; return wifi_csi_frame_bytes(ctx, this_val, argc, false, true); }
+JSValue js_wifi_csi_frame_packet_bytes(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{ (void)argv; return wifi_csi_frame_bytes(ctx, this_val, argc, true, false); }
+JSValue js_wifi_csi_frame_copy_packet_bytes(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{ (void)argv; return wifi_csi_frame_bytes(ctx, this_val, argc, true, true); }
+
+
+static JSValue wifi_csi_frame_data_source(JSContext *ctx, JSValue *this_val,
+                                 int argc, JSValue *argv, bool packet)
 {
+    esp32_mquickjs_wifi_csi_event_t event;
     esp32_mquickjs_wifi_csi_slot_t *slot;
-    uint8_t *copy = NULL;
+    wifi_csi_sample_source_t *source;
 
     (void)argv;
     if (argc != 0 || this_val == NULL ||
         (slot = wifi_csi_frame_from_value(
-            ctx, *this_val, "WiFiCsiFrame.copySamples()",
-            NULL, NULL)) == NULL) {
+            ctx, *this_val, "WiFiCsiFrame.sampleSource()", NULL, &event)) == NULL) {
         if (!JS_HasException(ctx)) {
             return JS_ThrowTypeError(
-                ctx, "WiFiCsiFrame.copySamples() expects no arguments");
+                ctx, "WiFiCsiFrame.sampleSource() expects no arguments");
         }
         return JS_EXCEPTION;
     }
-    if (slot->length > 0U) {
-        copy = heap_caps_malloc(slot->length, MALLOC_CAP_8BIT);
-        if (copy == NULL) return JS_ThrowOutOfMemory(ctx);
-        memcpy(copy, slot->payload, slot->length);
+    if (packet && (slot->packet == NULL || slot->packet->length == 0)) return JS_NULL;
+    if (!wifi_csi_update_event(&event, WIFI_CSI_EVENT_RETAIN)) {
+        return JS_ThrowReferenceError(
+            ctx, "WIFI_CSI_STALE_FRAME: could not retain frame source");
     }
-    return esp32_mquickjs_new_owned_byte_view(ctx, copy, slot->length);
+    source = esp32_mquickjs_memory_wireless_calloc("wifi.csi", 1, sizeof(*source), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
+    if (source == NULL) {
+        (void)wifi_csi_update_event(&event, WIFI_CSI_EVENT_RELEASE);
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    source->lease.event = event;
+    source->packet = packet;
+    return esp32_mquickjs_new_wireless_byte_span_source("wifi.csi",
+        ctx, JS_UNDEFINED, &s_wifi_csi_sample_source_ops, source);
 }
+
+JSValue js_wifi_csi_frame_sample_source(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{ return wifi_csi_frame_data_source(ctx, this_val, argc, argv, false); }
+JSValue js_wifi_csi_frame_packet_source(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{ return wifi_csi_frame_data_source(ctx, this_val, argc, argv, true); }
 
 JSValue js_wifi_csi_frame_source(JSContext *ctx, JSValue *this_val,
                                  int argc, JSValue *argv)
 {
+    if (this_val == NULL || JS_GetClassID(ctx, *this_val) != JS_CLASS_WIFI_CSI_FRAME)
+        return JS_ThrowTypeError(ctx, "WiFiCsiFrame.source requires its Frame");
+    if (!wifi_csi_capture_source_options(ctx, argc, argv)) return JS_EXCEPTION;
     esp32_mquickjs_wifi_csi_event_t event;
-    esp32_mquickjs_wifi_csi_slot_t *slot;
-    wifi_csi_frame_source_t *source;
-
-    (void)argv;
-    if (argc != 0 || this_val == NULL ||
-        (slot = wifi_csi_frame_from_value(
-            ctx, *this_val, "WiFiCsiFrame.source()", NULL, &event)) == NULL) {
-        if (!JS_HasException(ctx)) {
-            return JS_ThrowTypeError(
-                ctx, "WiFiCsiFrame.source() expects no arguments");
-        }
+    if (wifi_csi_frame_from_value(ctx, *this_val, "WiFiCsiFrame.source()", NULL, &event) == NULL)
         return JS_EXCEPTION;
-    }
-    if (!esp32_mquickjs_wifi_csi_slot_retain(
-            &s_wifi_csi.resources, slot)) {
-        return JS_ThrowReferenceError(
-            ctx, "WIFI_CSI_STALE_FRAME: could not retain frame source");
-    }
-    source = heap_caps_calloc(1, sizeof(*source), MALLOC_CAP_8BIT);
-    if (source == NULL) {
-        (void)esp32_mquickjs_wifi_csi_slot_release(
-            &s_wifi_csi.resources, slot);
-        return JS_ThrowOutOfMemory(ctx);
-    }
-    source->lease.event = event;
-    return esp32_mquickjs_new_byte_span_source(
-        ctx, *this_val, &s_wifi_csi_frame_source_ops, source);
+    return wifi_csi_new_wire_source(ctx, &event, 1U);
 }
 
 JSValue js_wifi_csi_frame_close(JSContext *ctx, JSValue *this_val,
@@ -3358,7 +3934,7 @@ JSValue js_wifi_csi_frame_close(JSContext *ctx, JSValue *this_val,
     ref->closed = true;
     wifi_csi_lease_request_close(&lease);
     JS_SetOpaque(ctx, *this_val, NULL);
-    heap_caps_free(ref);
+    esp32_mquickjs_memory_payload_free(ref);
     return JS_TRUE;
 }
 
@@ -3391,7 +3967,7 @@ void js_wifi_csi_batch_finalizer(JSContext *ctx, void *opaque)
 
     (void)ctx;
     wifi_csi_batch_release_owner(batch);
-    heap_caps_free(batch);
+    esp32_mquickjs_memory_payload_free(batch);
 }
 
 static bool wifi_csi_batch_index(JSContext *ctx,
@@ -3430,8 +4006,8 @@ JSValue js_wifi_csi_batch_info(JSContext *ctx, JSValue *this_val,
     return wifi_csi_frame_info_to_js(ctx, slot);
 }
 
-JSValue js_wifi_csi_batch_samples(JSContext *ctx, JSValue *this_val,
-                                  int argc, JSValue *argv)
+static JSValue wifi_csi_batch_bytes(JSContext *ctx, JSValue *this_val,
+                                  int argc, JSValue *argv, bool packet)
 {
     wifi_csi_batch_ref_t *batch;
     esp32_mquickjs_wifi_csi_slot_t *slot;
@@ -3449,68 +4025,30 @@ JSValue js_wifi_csi_batch_samples(JSContext *ctx, JSValue *this_val,
         return JS_ThrowReferenceError(
             ctx, "WIFI_CSI_STALE_FRAME: batch frame is stale");
     }
+    if (packet && (slot->packet == NULL || slot->packet->length == 0)) return JS_NULL;
     lease = wifi_csi_retain_event(&batch->events[index]);
     if (lease == NULL) return JS_ThrowOutOfMemory(ctx);
-    return esp32_mquickjs_new_retained_byte_view(
-        ctx, slot->payload, slot->length,
+    return esp32_mquickjs_new_wireless_retained_byte_view("wifi.csi",
+        ctx, packet ? slot->packet->bytes : slot->payload,
+        packet ? slot->packet->length : slot->length,
         wifi_csi_byte_view_release, lease);
 }
+
+JSValue js_wifi_csi_batch_samples(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{ return wifi_csi_batch_bytes(ctx, this_val, argc, argv, false); }
+JSValue js_wifi_csi_batch_packet_bytes(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{ return wifi_csi_batch_bytes(ctx, this_val, argc, argv, true); }
 
 JSValue js_wifi_csi_batch_source(JSContext *ctx, JSValue *this_val,
                                  int argc, JSValue *argv)
 {
-    static const char *const allowed[] = {"format"};
-    wifi_csi_batch_ref_t *batch;
-    wifi_csi_batch_source_t *source;
-    size_t allocation_size;
-    uint16_t index;
-
-    if (this_val == NULL ||
-        (batch = wifi_csi_batch_from_value(
-            ctx, *this_val, "WiFiCsiBatch.source()")) == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (argc > 1) {
-        return JS_ThrowTypeError(
-            ctx, "WiFiCsiBatch.source(options?) expects at most one argument");
-    }
-    if (argc == 1 && !JS_IsUndefined(argv[0])) {
-        JSValue format;
-
-        if (!esp32_mquickjs_validate_plain_options(
-                ctx, argv[0], "WiFiCsiBatch.source()", allowed, 1U)) {
-            return JS_EXCEPTION;
-        }
-        format = JS_GetPropertyStr(ctx, argv[0], "format");
-        if (JS_IsException(format) ||
-            (!JS_IsUndefined(format) &&
-             !wifi_csi_string_equals(ctx, format, "esp32qjs-csi/1"))) {
-            return JS_ThrowTypeError(
-                ctx, "batch source format only supports esp32qjs-csi/1");
-        }
-    }
-    allocation_size = sizeof(*source) +
-        ((size_t)batch->frame_count * sizeof(source->leases[0]));
-    source = heap_caps_calloc(1, allocation_size, MALLOC_CAP_8BIT);
-    if (source == NULL) return JS_ThrowOutOfMemory(ctx);
-    source->frame_count = batch->frame_count;
-    for (index = 0; index < batch->frame_count; ++index) {
-        esp32_mquickjs_wifi_csi_slot_t *slot =
-            wifi_csi_resolve_event(&batch->events[index]);
-
-        if (slot == NULL || !esp32_mquickjs_wifi_csi_slot_retain(
-                &s_wifi_csi.resources, slot)) goto fail;
-        source->leases[index].event = batch->events[index];
-    }
-    if (!wifi_csi_batch_source_build_control(source)) goto fail;
-    return esp32_mquickjs_new_byte_span_source(
-        ctx, *this_val, &s_wifi_csi_batch_source_ops, source);
-
-fail:
-    wifi_csi_batch_source_release(source);
-    heap_caps_free(source->control);
-    heap_caps_free(source);
-    return JS_ThrowOutOfMemory(ctx);
+    if (this_val == NULL || JS_GetClassID(ctx, *this_val) != JS_CLASS_WIFI_CSI_BATCH)
+        return JS_ThrowTypeError(ctx, "WiFiCsiBatch.source requires its Batch");
+    if (!wifi_csi_capture_source_options(ctx, argc, argv)) return JS_EXCEPTION;
+    /* A format getter can close the Batch: never keep its adapter across JS. */
+    wifi_csi_batch_ref_t *batch = wifi_csi_batch_from_value(ctx, *this_val, "WiFiCsiBatch.source()");
+    if (batch == NULL) return JS_EXCEPTION;
+    return wifi_csi_new_wire_source(ctx, batch->events, batch->frame_count);
 }
 
 JSValue js_wifi_csi_batch_close(JSContext *ctx, JSValue *this_val,
@@ -3528,7 +4066,7 @@ JSValue js_wifi_csi_batch_close(JSContext *ctx, JSValue *this_val,
     if (batch == NULL) return JS_TRUE;
     wifi_csi_batch_release_owner(batch);
     JS_SetOpaque(ctx, *this_val, NULL);
-    heap_caps_free(batch);
+    esp32_mquickjs_memory_payload_free(batch);
     return JS_TRUE;
 }
 
@@ -3560,6 +4098,8 @@ JSValue js_wifi_csi_session_receive_batch(JSContext *ctx,
     if (this_val == NULL ||
         (session = wifi_csi_session_from_value(
             ctx, *this_val, false)) == NULL) goto fail;
+    if (maximum_frames > session->options.queue_capacity)
+        maximum_frames = session->options.queue_capacity;
     if (argc > 1) {
         JS_ThrowTypeError(
             ctx, "WiFiCsiSession.receiveBatch(options?) expects at most one argument");
@@ -3620,7 +4160,8 @@ JSValue js_wifi_csi_session_receive_batch(JSContext *ctx,
             goto fail;
         }
     }
-    if (!esp32_mquickjs_wifi_csi_batch_options_valid(
+    if (maximum_frames > session->options.queue_capacity ||
+        !esp32_mquickjs_wifi_csi_batch_options_valid(
             maximum_frames, minimum_frames, timeout_ms,
             maximum_latency_ms,
             CONFIG_ESP32_MQUICKJS_WIFI_CSI_MAX_BATCH_FRAMES)) {
@@ -3648,10 +4189,8 @@ JSValue js_wifi_csi_session_receive_batch(JSContext *ctx,
             "Wi-Fi CSI receive returned an invalid frame");
         goto fail;
     }
-    batch = heap_caps_calloc(
-        1, sizeof(*batch) +
-            ((size_t)maximum_frames * sizeof(batch->events[0])),
-        MALLOC_CAP_8BIT);
+    batch = esp32_mquickjs_memory_wireless_calloc("wifi.csi", 1, sizeof(*batch) +
+            ((size_t)maximum_frames * sizeof(batch->events[0])), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (batch == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto fail;
@@ -3662,9 +4201,9 @@ JSValue js_wifi_csi_session_receive_batch(JSContext *ctx,
     batch->events[0].slot_generation = frame_ref->slot_generation;
     frame_ref->closed = true;
     JS_SetOpaque(ctx, *first, NULL);
-    heap_caps_free(frame_ref);
+    esp32_mquickjs_memory_payload_free(frame_ref);
     atomic_fetch_sub_explicit(
-        &session->resources.counters.delivered_frames, 1U,
+        &session->resources->counters.delivered_frames, 1U,
         memory_order_relaxed);
     *first = JS_UNDEFINED;
     latency_deadline_us = esp_timer_get_time() +
@@ -3675,9 +4214,7 @@ JSValue js_wifi_csi_session_receive_batch(JSContext *ctx,
 
             if (!esp32_mquickjs_event_queue_try_receive(
                     session->event_queue, &event)) break;
-            if (wifi_csi_resolve_event(&event) != NULL &&
-                esp32_mquickjs_wifi_csi_slot_take_event_owner(
-                    &session->resources, &event)) {
+            if (wifi_csi_update_event(&event, WIFI_CSI_EVENT_TAKE)) {
                 batch->events[batch->frame_count++] = event;
             }
         }
@@ -3715,9 +4252,9 @@ JSValue js_wifi_csi_session_receive_batch(JSContext *ctx,
             batch->frame_count += 1U;
             frame_ref->closed = true;
             JS_SetOpaque(ctx, *first, NULL);
-            heap_caps_free(frame_ref);
+            esp32_mquickjs_memory_payload_free(frame_ref);
             atomic_fetch_sub_explicit(
-                &session->resources.counters.delivered_frames, 1U,
+                &session->resources->counters.delivered_frames, 1U,
                 memory_order_relaxed);
             *first = JS_UNDEFINED;
         }
@@ -3731,9 +4268,7 @@ JSValue js_wifi_csi_session_receive_batch(JSContext *ctx,
         JS_SetOpaque(ctx, *object, NULL);
         goto fail_batch;
     }
-    atomic_fetch_add_explicit(
-        &session->resources.counters.delivered_batches, 1U,
-        memory_order_relaxed);
+    (void)wifi_csi_update_event(&batch->events[0], WIFI_CSI_EVENT_BATCH_DELIVERED);
     *options = JS_UNDEFINED;
     JS_PopGCRef(ctx, &options_ref);
     JSValue return_value = JS_PopGCRef(ctx, &object_ref);
@@ -3742,12 +4277,12 @@ JSValue js_wifi_csi_session_receive_batch(JSContext *ctx,
 
 fail_batch:
     wifi_csi_batch_release_owner(batch);
-    heap_caps_free(batch);
+    esp32_mquickjs_memory_payload_free(batch);
     batch = NULL;
 fail:
     if (batch != NULL) {
         wifi_csi_batch_release_owner(batch);
-        heap_caps_free(batch);
+        esp32_mquickjs_memory_payload_free(batch);
     }
     if (!JS_IsUndefined(*first) &&
         JS_GetClassID(ctx, *first) == JS_CLASS_WIFI_CSI_FRAME) {
@@ -3772,7 +4307,7 @@ bool esp32_mquickjs_init_wifi_csi_runtime(
                              memory_order_acquire) != WIFI_CSI_CLOSED ||
         atomic_load_explicit(&s_wifi_csi.cleanup_scheduled,
                              memory_order_acquire) ||
-        s_wifi_csi.resources.slots != NULL) {
+        wifi_csi_pool_retirement_pending()) {
         JS_PopGCRef(ctx, &method_ref);
         JS_PopGCRef(ctx, &session_ref);
         return false;

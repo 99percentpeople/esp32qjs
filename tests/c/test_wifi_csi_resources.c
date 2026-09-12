@@ -17,11 +17,11 @@ static void test_repeated_resource_lifecycle_returns_to_baseline(void)
         esp32_mquickjs_wifi_csi_slot_t *slot;
 
         assert(esp32_mquickjs_wifi_csi_resources_init(
-            &resources, generation, 4, sizeof(payload), &allocator));
+            &resources, generation, 4, sizeof(payload),0, &allocator));
         assert(state.allocations == 2);
         esp32_mquickjs_wifi_csi_resources_set_accepting(&resources, true);
         assert(esp32_mquickjs_wifi_csi_callback_publish(
-            &resources, &metadata, payload, sizeof(payload),
+            &resources, &metadata, payload, sizeof(payload),NULL,
             wifi_csi_test_publish_ok, &event) ==
             ESP32_MQUICKJS_WIFI_CSI_PUBLISH_ACCEPTED);
         slot = esp32_mquickjs_wifi_csi_slot_from_event(&resources, &event);
@@ -37,8 +37,42 @@ static void test_repeated_resource_lifecycle_returns_to_baseline(void)
     }
 }
 
+static void test_counter_reset_preserves_native_owners_and_filter_state(void)
+{
+    wifi_csi_test_allocator_state_t state = {0};
+    esp32_mquickjs_wifi_csi_allocator_t allocator = wifi_csi_test_allocator(&state);
+    esp32_mquickjs_wifi_csi_resources_t resources;
+    esp32_mquickjs_wifi_csi_metadata_t metadata = {0};
+    esp32_mquickjs_wifi_csi_event_t event;
+    uint8_t payload[32] = {0};
+    assert(esp32_mquickjs_wifi_csi_resources_init(&resources, 9, 4, sizeof(payload), 0, &allocator));
+    esp32_mquickjs_wifi_csi_resources_set_accepting(&resources, true);
+    assert(esp32_mquickjs_wifi_csi_callback_publish(&resources, &metadata, payload, sizeof(payload), NULL,
+        wifi_csi_test_publish_ok, &event) == ESP32_MQUICKJS_WIFI_CSI_PUBLISH_ACCEPTED);
+    assert(esp32_mquickjs_wifi_csi_callback_enter(&resources));
+    uint32_t sequence = atomic_load(&resources.sequence);
+    resources.filter_phase = 3;
+    resources.last_accepted_timestamp_us = 41;
+    resources.last_accepted_timestamp_set = true;
+    esp32_mquickjs_wifi_csi_resources_reset_counters(&resources);
+    assert(atomic_load(&resources.counters.callbacks) == 0);
+    assert(atomic_load(&resources.counters.accepted) == 0);
+    assert(atomic_load(&resources.counters.received_bytes) == 0);
+    assert(atomic_load(&resources.counters.leased_frames) == 1);
+    assert(atomic_load(&resources.callbacks_active) == 1);
+    assert(atomic_load(&resources.sequence) == sequence && resources.generation == 9);
+    assert(resources.filter_phase == 3 && resources.last_accepted_timestamp_us == 41 && resources.last_accepted_timestamp_set);
+    assert(!esp32_mquickjs_wifi_csi_resources_deinit(&resources));
+    esp32_mquickjs_wifi_csi_callback_leave(&resources);
+    esp32_mquickjs_wifi_csi_slot_t *slot = esp32_mquickjs_wifi_csi_slot_from_event(&resources, &event);
+    assert(slot != NULL && esp32_mquickjs_wifi_csi_slot_take_event_owner(&resources, &event));
+    assert(esp32_mquickjs_wifi_csi_slot_close_public_owner(&resources, slot));
+    assert(esp32_mquickjs_wifi_csi_resources_deinit(&resources) && state.allocations == 0);
+}
+
 int main(void)
 {
+    test_counter_reset_preserves_native_owners_and_filter_state();
     esp32_mquickjs_wifi_csi_resources_t resources;
 
     for (unsigned fail_at = 1; fail_at <= 2; ++fail_at) {
@@ -48,7 +82,7 @@ int main(void)
 
         memset(&resources, 0xa5, sizeof(resources));
         assert(!esp32_mquickjs_wifi_csi_resources_init(
-            &resources, 1, 4, 128, &allocator));
+            &resources, 1, 4, 128,0, &allocator));
         assert(state.allocations == 0);
         assert(resources.slots == NULL);
         assert(resources.payload_storage == NULL);
@@ -58,7 +92,7 @@ int main(void)
     esp32_mquickjs_wifi_csi_allocator_t allocator =
         wifi_csi_test_allocator(&state);
     assert(esp32_mquickjs_wifi_csi_resources_init(
-        &resources, 7, 4, 128, &allocator));
+        &resources, 7, 4, 128,0, &allocator));
     assert(state.allocations == 2);
     assert(resources.slots[1].payload - resources.slots[0].payload == 128);
     atomic_store(&resources.callbacks_active, 1);

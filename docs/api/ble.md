@@ -1,9 +1,7 @@
 # `ble` Module
 
-`ble` exposes ESP-NimBLE central, peripheral, observer, broadcaster, GATT, and
-security capabilities when `sys.info.features.ble` is enabled. Applications
-use raw advertising bytes and flat GATT records, then implement their profile
-policy in JavaScript.
+`ble` exposes ESP-NimBLE roles, GATT and security when `sys.info.features.ble`
+is enabled. JavaScript implements profiles using raw advertising and flat GATT records.
 
 ## Capabilities and adapter
 
@@ -28,7 +26,7 @@ ble.capabilities() -> {
 }
 ```
 
-Open the runtime singleton with:
+Open the runtime singleton:
 
 ```text
 ble.open(options?: {
@@ -67,8 +65,8 @@ Connections with the compiled bonding policy, `mitm:false`, and
 }
 ```
 
-All booleans, counts, and strings in this status are snapshots. BLE addresses
-use `{ address: "aa:bb:cc:dd:ee:ff", type }`, where `type` is `"public"`,
+Status is a snapshot. BLE addresses use
+`{ address: "aa:bb:cc:dd:ee:ff", type }`, where `type` is `"public"`,
 `"random-static"`, `"random-private-resolvable"`, or
 `"random-private-nonresolvable"`.
 
@@ -274,7 +272,7 @@ timestampUs, indication, data }`. Close the owned `data` view after use.
 
 ## Local GATT server
 
-The optional server definition passed to `ble.open()` is:
+`ble.open()` accepts this optional server definition:
 
 ```text
 BLEGattServerDefinition = {
@@ -298,7 +296,7 @@ BLEGattServerDefinition = {
 }
 ```
 
-Service and characteristic IDs are unique application identifiers. UUIDs use
+Service and characteristic IDs are unique. UUIDs use
 standard 16-bit, 32-bit, or 128-bit text forms. `primary` and `storeWrites`
 default to `true`; `maxLength` is positive and bounded by the compiled maximum
 attribute size.
@@ -356,6 +354,9 @@ and `{ hostCode, attCode, connectionId, attributeHandle }` details. Stable codes
 cover support/open state, stale adapters/connections/attributes/subscriptions,
 GAP conflicts, timeout and queue limits, connection/disconnection, GATT and
 security failures, expired pairing, payload/server limits, and closing state.
+`BLE_PHY_RESTART_REQUIRED` rejects `ble.open()` after a Wi-Fi antenna transaction
+could not restore shared PHY/GPIO state. This boot-scoped fault requires a device
+reboot; restarting JS or the Wi-Fi driver cannot clear it.
 
 One-shot BLE operations work as cooperative direct calls and through
 `Future.call(...)`. GAP start/stop operations share one lane, GATT procedures

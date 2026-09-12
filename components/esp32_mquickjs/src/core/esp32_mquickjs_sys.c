@@ -1056,6 +1056,58 @@ JSValue js_sys_memory_get(JSContext *ctx,
     }
 }
 
+static JSValue sys_wireless_budget_region(JSContext *ctx,
+    const esp32_mquickjs_memory_budget_region_t *region)
+{
+    JSGCRef object_ref, roles_ref;
+    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    JSValue *roles = JS_PushGCRef(ctx, &roles_ref);
+    *object = JS_NewObject(ctx);
+    if (JS_IsException(*object)) goto fail;
+    *roles = JS_NewObject(ctx);
+    if (JS_IsException(*roles)) goto fail;
+    for (unsigned role = ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL;
+         role < ESP32_MQUICKJS_MEMORY_BUDGET_ROLE_COUNT; ++role) {
+        if (!esp32_mquickjs_set_property_ref(ctx, roles,
+                esp32_mquickjs_memory_budget_role_name(role),
+                JS_NewUint32(ctx, (uint32_t)region->roles[role]))) goto fail;
+    }
+    if (!esp32_mquickjs_set_property_ref(ctx, object, "limitBytes",
+            JS_NewUint32(ctx, (uint32_t)region->limit)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "controlReserveBytes",
+            JS_NewUint32(ctx, (uint32_t)region->control_reserve)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "reservedBytes",
+            JS_NewUint32(ctx, (uint32_t)region->reserved)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "highWaterBytes",
+            JS_NewUint32(ctx, (uint32_t)region->high_water)) ||
+        JS_IsException(JS_SetPropertyStr(ctx, *object, "roles", *roles))) goto fail;
+    JS_PopGCRef(ctx, &roles_ref);
+    return JS_PopGCRef(ctx, &object_ref);
+fail:
+    JS_PopGCRef(ctx, &roles_ref);
+    JS_PopGCRef(ctx, &object_ref);
+    return JS_EXCEPTION;
+}
+
+static JSValue sys_wireless_budget(JSContext *ctx,
+    const esp32_mquickjs_memory_budget_t *budget)
+{
+    JSGCRef object_ref;
+    JSValue *object = JS_PushGCRef(ctx, &object_ref);
+    *object = JS_NewObject(ctx);
+    if (JS_IsException(*object) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "internal",
+            sys_wireless_budget_region(ctx, &budget->regions[0])) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "psram",
+            sys_wireless_budget_region(ctx, &budget->regions[1])) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "rejectedReservations",
+            JS_NewUint32(ctx, budget->rejected))) {
+        JS_PopGCRef(ctx, &object_ref);
+        return JS_EXCEPTION;
+    }
+    return JS_PopGCRef(ctx, &object_ref);
+}
+
 JSValue js_sys_memory_manager(JSContext *ctx,
                               JSValue *this_val,
                               int argc,
@@ -1117,6 +1169,8 @@ JSValue js_sys_memory_manager(JSContext *ctx,
         JS_PopGCRef(ctx, &allocation_ref);
     }
     if (
+        !esp32_mquickjs_set_property_ref(ctx, object, "wireless",
+            sys_wireless_budget(ctx, &status.wireless)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, object, "pressure",
             JS_NewString(ctx,
@@ -1564,6 +1618,12 @@ JSValue js_sys_runtime_status_resources(JSContext *ctx,
                                          JS_NewUint32(ctx, status.event_queues_open)) ||
         !esp32_mquickjs_set_property_ref(ctx, event_queues, "dropped",
                                          JS_NewUint32(ctx, status.event_queues_dropped)) ||
+        !esp32_mquickjs_set_property_ref(ctx, event_queues, "queued",
+                                         JS_NewUint32(ctx, status.event_queues_queued)) ||
+        !esp32_mquickjs_set_property_ref(ctx, event_queues, "capacity",
+                                         JS_NewUint32(ctx, status.event_queues_capacity)) ||
+        !esp32_mquickjs_set_property_ref(ctx, event_queues, "highWater",
+                                         JS_NewUint32(ctx, status.event_queues_high_water)) ||
         !esp32_mquickjs_set_property_ref(
             ctx,
             async_pollers,

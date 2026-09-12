@@ -16,6 +16,20 @@ SPEC.loader.exec_module(CI_CONTEXT)
 
 
 class CiBuildContextTests(unittest.TestCase):
+    def test_wireless_limits_are_explicit_in_generated_contexts(self):
+        for target, profile, psram in (
+            ('esp32c3', 'representative', 0),
+            ('esp32c5', 'representative', 0),
+            ('esp32s3', 'representative-psram', 4194304),
+        ):
+            defaults, _, _, _ = CI_CONTEXT.sdkconfig_text(CI_CONTEXT.load_features(), target, profile)
+            values = dict(line.split('=', 1) for line in defaults.splitlines() if line.startswith('CONFIG_') and '=' in line)
+            self.assertEqual(int(values['CONFIG_ESP32_MQUICKJS_WIRELESS_INTERNAL_BUDGET_BYTES']), 131072)
+            self.assertEqual(int(values['CONFIG_ESP32_MQUICKJS_WIRELESS_PSRAM_BUDGET_BYTES']), psram)
+            reserve = int(values['CONFIG_ESP32_MQUICKJS_WIRELESS_CONTROL_RESERVE_BYTES'])
+            self.assertEqual(reserve, 16384)
+            self.assertLessEqual(reserve, int(values['CONFIG_ESP32_MQUICKJS_WIRELESS_INTERNAL_BUDGET_BYTES']))
+
     def test_nan_inventory_profile_uses_real_c5_kconfig_without_js_api(self):
         with tempfile.TemporaryDirectory() as name:
             output = CI_CONTEXT.generate_context("esp32c5", "wireless-inventory", Path(name))
@@ -26,6 +40,29 @@ class CiBuildContextTests(unittest.TestCase):
         for target in ("esp32c3", "esp32s3"):
             with self.assertRaisesRegex(SystemExit, "only supported for esp32c5"):
                 CI_CONTEXT.generate_context(target, "wireless-inventory", Path("unused"))
+
+    def test_ftm_profile_explicitly_enables_sdk_roles_without_changing_representative(self):
+        for target in ("esp32c3", "esp32s3", "esp32c5"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as name:
+                output = CI_CONTEXT.generate_context(target, "wireless-ftm", Path(name))
+                defaults = (output / "sdkconfig.defaults").read_text()
+                manifest = json.loads((output / "manifest.json").read_text())
+                self.assertEqual(manifest["hardware"]["mcu"], target)
+                self.assertEqual(manifest["contextId"], "firmware-ci-" + target + "-wireless-ftm")
+                for field in ("ESP_WIFI_FTM_ENABLE", "ESP_WIFI_FTM_INITIATOR_SUPPORT", "ESP_WIFI_FTM_RESPONDER_SUPPORT"):
+                    self.assertIn("CONFIG_" + field + "=y", defaults)
+                representative, _, _, _ = CI_CONTEXT.sdkconfig_text(CI_CONTEXT.load_features(), target, "representative")
+                self.assertNotIn("CONFIG_ESP_WIFI_FTM_ENABLE=y", representative)
+
+    def test_roaming_profile_explicit_sdk_flags(self):
+        for target in ("esp32c3", "esp32s3", "esp32c5"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as name:
+                output = CI_CONTEXT.generate_context(target, "wireless-roaming", Path(name))
+                defaults = (output / "sdkconfig.defaults").read_text()
+                for field in ("11KV", "RRM", "WNM", "11R"):
+                    self.assertIn("CONFIG_ESP_WIFI_" + field + "_SUPPORT=y", defaults)
+                representative, _, _, _ = CI_CONTEXT.sdkconfig_text(CI_CONTEXT.load_features(), target, "representative")
+                self.assertNotIn("CONFIG_ESP_WIFI_11KV_SUPPORT=y", representative)
 
     def test_ci_workflow_covers_required_target_profiles(self):
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(

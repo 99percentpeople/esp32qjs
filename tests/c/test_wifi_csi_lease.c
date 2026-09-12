@@ -13,10 +13,10 @@ int main(void)
     uint8_t payload = 42;
 
     assert(esp32_mquickjs_wifi_csi_resources_init(
-        &resources, 1, 1, 8, &allocator));
+        &resources, 1, 1, 8,0, &allocator));
     esp32_mquickjs_wifi_csi_resources_set_accepting(&resources, true);
     assert(esp32_mquickjs_wifi_csi_callback_publish(
-        &resources, &metadata, &payload, 1,
+        &resources, &metadata, &payload, 1,NULL,
         wifi_csi_test_publish_ok, &event) ==
         ESP32_MQUICKJS_WIFI_CSI_PUBLISH_ACCEPTED);
     esp32_mquickjs_wifi_csi_slot_t *slot =

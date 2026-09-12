@@ -145,13 +145,6 @@ add_executable(test_timer_resource
 target_include_directories(test_timer_resource PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_timer_resource COMMAND test_timer_resource)
 
-add_executable(test_future_worker_pool
-    test_future_worker_pool.c
-    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_future_worker_pool.c
-)
-target_include_directories(test_future_worker_pool PRIVATE ../../components/esp32_mquickjs/internal)
-add_test(NAME test_future_worker_pool COMMAND test_future_worker_pool)
-
 add_executable(test_future_scheduler
     test_future_scheduler.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_future_scheduler.c
@@ -299,6 +292,21 @@ add_executable(test_memory_owner_accounting
 target_include_directories(test_memory_owner_accounting PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_memory_owner_accounting COMMAND test_memory_owner_accounting)
 
+add_executable(test_memory_budget test_memory_budget.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_memory_budget.c)
+target_include_directories(test_memory_budget PRIVATE ../../components/esp32_mquickjs/internal)
+add_test(NAME test_memory_budget COMMAND test_memory_budget)
+
+find_package(Threads REQUIRED)
+add_executable(test_memory_wireless test_memory_wireless.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_memory.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_memory_budget.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_memory_owner_accounting.c
+    ../../components/esp32_mquickjs/src/core/esp32_mquickjs_memory_dma_accounting.c)
+target_include_directories(test_memory_wireless PRIVATE memory_stubs ../../components/esp32_mquickjs/internal)
+target_link_libraries(test_memory_wireless PRIVATE Threads::Threads)
+add_test(NAME test_memory_wireless COMMAND test_memory_wireless)
+
 add_executable(test_dma_transfer
     test_dma_transfer.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_dma_transfer.c
@@ -325,6 +333,8 @@ set(WIFI_CSI_RESOURCE_SOURCES
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_native_pool.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_native_lease.c
     ../../components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi_resources.c
+    ../../components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi_packet.c
+    ../../components/esp32_mquickjs/src/modules/wifi_common/esp32_mquickjs_wifi_rx.c
 )
 
 foreach(WIFI_CSI_RESOURCE_TEST
@@ -355,6 +365,7 @@ add_test(NAME test_wifi_csi_target_config COMMAND test_wifi_csi_target_config)
 
 add_executable(test_wifi_csi_layout
     test_wifi_csi_layout.c
+    ../../components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_config.c
     ../../components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_layout.c
 )
 target_include_directories(test_wifi_csi_layout PRIVATE
@@ -379,8 +390,23 @@ add_executable(test_wifi_radio
 )
 target_include_directories(test_wifi_radio PRIVATE radio_stubs ../../components/esp32_mquickjs/internal)
 target_link_libraries(test_wifi_radio PRIVATE Threads::Threads)
-target_compile_definitions(test_wifi_radio PRIVATE RADIO_DIAGNOSTICS_TEST=1)
-foreach(RADIO_CASE stale channel concurrent release-race exhaustion promiscuous-cleanup capacity 1 2 3 4 5 6)
+target_compile_definitions(test_wifi_radio PRIVATE RADIO_DIAGNOSTICS_TEST=1 CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW=1)
+foreach(RADIO_CASE stop-wait-budget start-event-timeout stop-event-timeout stop-event-queue event-marker-revision event-apsta-stop event-interrupt event-exhaustion helper-lifecycle-admission lifecycle-handoff handoff-capacity handoff-readback lifecycle-owner-roles ap-validation shutdown-callback-barrier restart-acquire-barrier application-settings-owner lifecycle-reservation lifecycle-unregister lifecycle-exhaustion
+    restart-failure-1 restart-failure-2 restart-failure-3 restart-failure-4 restart-failure-5 restart-failure-6
+    retire-shared retire-operation retire-stop-error retire-acquire-race stale channel concurrent release-race exhaustion promiscuous-cleanup promiscuous-shared-identity promiscuous-failed-acquire promiscuous-identity-exhausted capacity 1 2 3 4 5 6 20
+    promiscuous-rx-union promiscuous-rx-drain promiscuous-rx-failure promiscuous-rx-capacity
+    shared-release lifecycle stop-error deinit-error mode-union channel-drift
+    cleanup-1 cleanup-2 cleanup-3 cleanup-4 cleanup-5 cleanup-6 stop-acquire-race deinit-acquire-race
+    partial-ap-stop-wait-budget partial-ap-stop ap-reopen-activation activation-controls global-settings global-settings-errors power-save-release-race tx-power-release-race
+    operation-fixed operation-identity operation-exhaustion operation-mutation operation-channel-race
+    channel-event channel-event-restart channel-event-query-race channel-event-write-race event-loop-error channel-handler-error)
     add_test(NAME test_wifi_radio_${RADIO_CASE} COMMAND test_wifi_radio ${RADIO_CASE})
     set_tests_properties(test_wifi_radio_${RADIO_CASE} PROPERTIES TIMEOUT 10)
 endforeach()
+
+add_executable(test_wifi_rx_header
+    test_wifi_rx_header.c
+    ../../components/esp32_mquickjs/src/modules/wifi_common/esp32_mquickjs_wifi_rx.c
+)
+target_include_directories(test_wifi_rx_header PRIVATE ../../components/esp32_mquickjs/internal)
+add_test(NAME test_wifi_rx_header COMMAND test_wifi_rx_header)

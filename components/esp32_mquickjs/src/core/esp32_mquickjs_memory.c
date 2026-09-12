@@ -18,6 +18,10 @@
 #define MEMORY_LARGE_DEFAULT_BYTES 4096U
 #define MEMORY_MAX_ACTIONS_PER_PASS 4U
 
+_Static_assert(CONFIG_ESP32_MQUICKJS_WIRELESS_CONTROL_RESERVE_BYTES <=
+    CONFIG_ESP32_MQUICKJS_WIRELESS_INTERNAL_BUDGET_BYTES,
+    "wireless control reserve exceeds internal quota");
+
 struct esp32_mquickjs_memory_block {
     struct esp32_mquickjs_memory_block *next;
     void *data;
@@ -40,6 +44,8 @@ typedef struct esp32_mquickjs_memory_payload {
     esp32_mquickjs_memory_class_t memory_class;
     bool external;
     bool transitioning;
+    uint8_t budget_role;
+    bool metadata_external;
 } esp32_mquickjs_memory_payload_t;
 
 typedef struct {
@@ -53,6 +59,7 @@ typedef struct {
     size_t managed_pinned_bytes;
     esp32_mquickjs_memory_owner_accounting_t owner_accounting;
     esp32_mquickjs_memory_dma_accounting_t dma_accounting;
+    esp32_mquickjs_memory_budget_t wireless;
     uint64_t use_sequence;
     uint32_t migration_count;
     size_t migration_bytes;
@@ -234,6 +241,10 @@ void esp32_mquickjs_memory_init(void)
         dma.largest_free_block / 2U,
         MEMORY_MIN_DMA_RESERVE_BYTES,
         MEMORY_MAX_DMA_RESERVE_BYTES);
+    (void)esp32_mquickjs_memory_budget_init(&s_memory.wireless,
+        CONFIG_ESP32_MQUICKJS_WIRELESS_INTERNAL_BUDGET_BYTES,
+        CONFIG_ESP32_MQUICKJS_WIRELESS_PSRAM_BUDGET_BYTES,
+        CONFIG_ESP32_MQUICKJS_WIRELESS_CONTROL_RESERVE_BYTES);
     s_memory.initialized = true;
     taskEXIT_CRITICAL(&s_memory.lock);
 }
@@ -524,6 +535,139 @@ static void *memory_payload_alloc_tracked(
     return data;
 }
 
+static bool memory_wireless_bytes(size_t size, bool external,
+    bool metadata_external, size_t bytes[2])
+{
+    bytes[0] = bytes[1] = 0;
+    bytes[memory_region_for_external(external)] = size;
+    uint8_t metadata_region = memory_region_for_external(metadata_external);
+    if (bytes[metadata_region] > SIZE_MAX - sizeof(esp32_mquickjs_memory_payload_t))
+        return false;
+    bytes[metadata_region] += sizeof(esp32_mquickjs_memory_payload_t);
+    return true;
+}
+
+static void memory_wireless_release(
+    esp32_mquickjs_memory_budget_role_t role, const size_t bytes[2])
+{
+    taskENTER_CRITICAL(&s_memory.lock);
+    (void)esp32_mquickjs_memory_budget_release(&s_memory.wireless, role, bytes);
+    taskEXIT_CRITICAL(&s_memory.lock);
+}
+
+static void *memory_wireless_alloc_tracked(const char *owner, size_t size,
+    esp32_mquickjs_memory_class_t memory_class,
+    esp32_mquickjs_memory_budget_role_t role, bool zero)
+{
+    if (owner == NULL || owner[0] == '\0' ||
+        role <= ESP32_MQUICKJS_MEMORY_BUDGET_NONE ||
+        role >= ESP32_MQUICKJS_MEMORY_BUDGET_ROLE_COUNT ||
+        role == ESP32_MQUICKJS_MEMORY_BUDGET_RETIRED_POOL ||
+        (memory_class != ESP32_MQUICKJS_MEMORY_DEFAULT &&
+         memory_class != ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL &&
+         memory_class != ESP32_MQUICKJS_MEMORY_EXTERNAL)) {
+        memory_note_failure();
+        return NULL;
+    }
+    esp32_mquickjs_memory_init();
+    size_t actual_size = size == 0 ? 1U : size;
+    bool has_psram = memory_has_psram();
+    bool prefer_external = has_psram &&
+        (memory_class == ESP32_MQUICKJS_MEMORY_EXTERNAL ||
+         (memory_class == ESP32_MQUICKJS_MEMORY_DEFAULT &&
+          (actual_size >= MEMORY_LARGE_DEFAULT_BYTES ||
+           memory_pressure_now() != ESP32_MQUICKJS_MEMORY_PRESSURE_NORMAL)));
+    /* DEFAULT may try the other region; explicit policies retain their region.
+     * Tracking nodes prefer PSRAM independently of the payload's placement. */
+    unsigned attempts = has_psram && memory_class == ESP32_MQUICKJS_MEMORY_DEFAULT ? 2U : 1U;
+    for (unsigned attempt = 0; attempt < attempts; ++attempt) {
+        bool external = attempt == 0 ? prefer_external : !prefer_external;
+        for (unsigned meta = 0; meta < (has_psram ? 2U : 1U); ++meta) {
+            bool metadata_external = has_psram && meta == 0;
+            size_t bytes[2];
+            if (!memory_wireless_bytes(actual_size, external, metadata_external, bytes))
+                continue;
+            if (bytes[0] != 0 && !memory_internal_can_fit(bytes[0])) continue;
+            taskENTER_CRITICAL(&s_memory.lock);
+            bool admitted = esp32_mquickjs_memory_budget_reserve(
+                &s_memory.wireless, role, bytes);
+            taskEXIT_CRITICAL(&s_memory.lock);
+            if (!admitted) continue;
+
+            void *data = heap_caps_malloc(actual_size, MALLOC_CAP_8BIT |
+                (external ? MALLOC_CAP_SPIRAM : MALLOC_CAP_INTERNAL));
+            esp32_mquickjs_memory_payload_t *payload = data == NULL ? NULL :
+                heap_caps_calloc(1, sizeof(*payload), MALLOC_CAP_8BIT |
+                    (metadata_external ? MALLOC_CAP_SPIRAM : MALLOC_CAP_INTERNAL));
+            if (payload != NULL) {
+                if (zero) memset(data, 0, actual_size);
+                taskENTER_CRITICAL(&s_memory.lock);
+                bool accounted = memory_account_add_locked(owner, memory_class,
+                    external, actual_size);
+                if (accounted) {
+                    payload->data = data;
+                    payload->size = actual_size;
+                    payload->owner = owner;
+                    payload->memory_class = memory_class;
+                    payload->external = external;
+                    payload->metadata_external = metadata_external;
+                    payload->budget_role = role;
+                    payload->next = s_memory.payloads;
+                    s_memory.payloads = payload;
+                }
+                taskEXIT_CRITICAL(&s_memory.lock);
+                if (accounted) return data;
+            }
+            heap_caps_free(data);
+            heap_caps_free(payload);
+            memory_wireless_release(role, bytes);
+        }
+    }
+    memory_note_failure();
+    return NULL;
+}
+
+void *esp32_mquickjs_memory_wireless_alloc(const char *owner, size_t size,
+    esp32_mquickjs_memory_class_t memory_class,
+    esp32_mquickjs_memory_budget_role_t role)
+{
+    return memory_wireless_alloc_tracked(owner, size, memory_class, role, false);
+}
+
+void *esp32_mquickjs_memory_wireless_calloc(const char *owner, size_t count,
+    size_t size, esp32_mquickjs_memory_class_t memory_class,
+    esp32_mquickjs_memory_budget_role_t role)
+{
+    if (size != 0 && count > SIZE_MAX / size) {
+        memory_note_failure();
+        return NULL;
+    }
+    return memory_wireless_alloc_tracked(owner, count * size, memory_class, role, true);
+}
+
+bool esp32_mquickjs_memory_wireless_retire(void *data)
+{
+    bool retired = false;
+    taskENTER_CRITICAL(&s_memory.lock);
+    for (esp32_mquickjs_memory_payload_t *p = s_memory.payloads; p != NULL; p = p->next) {
+        if (p->data != data) continue;
+        if (p->transitioning) break;
+        if (p->budget_role == ESP32_MQUICKJS_MEMORY_BUDGET_RETIRED_POOL) {
+            retired = true;
+        } else if (p->budget_role == ESP32_MQUICKJS_MEMORY_BUDGET_POOL) {
+            size_t bytes[2];
+            if (memory_wireless_bytes(p->size, p->external, p->metadata_external, bytes) &&
+                esp32_mquickjs_memory_budget_retire(&s_memory.wireless, bytes)) {
+                p->budget_role = ESP32_MQUICKJS_MEMORY_BUDGET_RETIRED_POOL;
+                retired = true;
+            }
+        }
+        break;
+    }
+    taskEXIT_CRITICAL(&s_memory.lock);
+    return retired;
+}
+
 void *esp32_mquickjs_memory_payload_alloc(
     const char *owner,
     size_t size,
@@ -573,7 +717,8 @@ void *esp32_mquickjs_memory_payload_realloc(
             break;
         }
     }
-    if (payload == NULL || payload->transitioning || owner == NULL ||
+    if (payload == NULL || payload->transitioning ||
+        payload->budget_role != ESP32_MQUICKJS_MEMORY_BUDGET_NONE || owner == NULL ||
         strcmp(payload->owner, owner) != 0) {
         taskEXIT_CRITICAL(&s_memory.lock);
         memory_note_failure();
@@ -630,12 +775,21 @@ void esp32_mquickjs_memory_payload_free(void *data)
         return;
     }
     *cursor = payload->next;
-    (void)memory_account_remove_locked(
-        payload->owner, payload->memory_class, payload->external,
-        payload->size);
+    esp32_mquickjs_memory_payload_t saved = *payload;
     taskEXIT_CRITICAL(&s_memory.lock);
-    heap_caps_free(payload->data);
+    heap_caps_free(saved.data);
     heap_caps_free(payload);
+    /* A blocked/reentrant allocator must still see these bytes reserved. */
+    taskENTER_CRITICAL(&s_memory.lock);
+    (void)memory_account_remove_locked(saved.owner, saved.memory_class,
+        saved.external, saved.size);
+    if (saved.budget_role != ESP32_MQUICKJS_MEMORY_BUDGET_NONE) {
+        size_t bytes[2];
+        if (memory_wireless_bytes(saved.size, saved.external, saved.metadata_external, bytes))
+            (void)esp32_mquickjs_memory_budget_release(&s_memory.wireless,
+                saved.budget_role, bytes);
+    }
+    taskEXIT_CRITICAL(&s_memory.lock);
 }
 
 static esp32_mquickjs_memory_block_t *memory_block_metadata_alloc(void)
@@ -1157,6 +1311,17 @@ bool esp32_mquickjs_memory_release_driver_pinned(
     return released;
 }
 
+void esp32_mquickjs_memory_reset_counters(void)
+{
+    taskENTER_CRITICAL(&s_memory.lock);
+    s_memory.migration_count = 0;
+    s_memory.migration_bytes = 0;
+    s_memory.eviction_count = 0;
+    s_memory.allocation_failures = 0;
+    esp32_mquickjs_memory_budget_reset_counters(&s_memory.wireless);
+    taskEXIT_CRITICAL(&s_memory.lock);
+}
+
 void esp32_mquickjs_memory_get_status(esp32_mquickjs_memory_status_t *out)
 {
     esp32_mquickjs_memory_block_t *block;
@@ -1184,6 +1349,7 @@ void esp32_mquickjs_memory_get_status(esp32_mquickjs_memory_status_t *out)
     out->migration_bytes = s_memory.migration_bytes;
     out->eviction_count = s_memory.eviction_count;
     out->allocation_failures = s_memory.allocation_failures;
+    out->wireless = s_memory.wireless;
     out->allocation_count = esp32_mquickjs_memory_owner_snapshot(
         &s_memory.owner_accounting, out->allocations,
         ESP32_MQUICKJS_MEMORY_MAX_OWNER_ENTRIES);

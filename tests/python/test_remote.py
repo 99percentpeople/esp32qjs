@@ -243,7 +243,9 @@ class RemoteConfigTests(unittest.TestCase):
             REMOTE.resolve_js_test_capabilities(args),
             {"csi-hardware"},
         )
-        self.assertEqual(len(hardware_cases), 7)
+        self.assertEqual(len(hardware_cases), 8)
+        self.assertIn("modules/wifi_csi/packet-hardware.js",
+                      [case.path for case in hardware_cases])
         self.assertTrue(all(case.path.endswith("-hardware.js")
                             for case in hardware_cases))
         self.assertTrue(all(case.record_details for case in hardware_cases))

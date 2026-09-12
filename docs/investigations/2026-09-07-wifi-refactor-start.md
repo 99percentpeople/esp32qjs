@@ -405,3 +405,11 @@ F-03 指定竞争与 F-04 控制完成已取得对应证据。F-CORE 余下 F-08
 server 事件池槽泄漏、失败转换误触发 adapter orphan close，以及 ByteSource
 小数/整数回绕接受问题。F-CORE 可以交接 W-01；本次提交修复与 W-00 工具，
 没有实施 W-01 新生命周期。长时间/RF 验收继续 deferred / not-run。
+
+## 2026-09-08 W-01 开始实施
+
+F-CORE 提交为 `1ec39a5`，W-00 工具提交为 `d7db8d1`。W-01 的第一批内部
+生命周期、多 lease 信道共享、mode union 和诊断已经实现，见
+[W-01 基础与剩余集成](2026-09-08-w01-radio-foundation.md)。此前 once/单 owner
+描述是历史基线；W-01 整项仍 in-progress，公开生命周期、事件驱动 drift 与
+runtime teardown 集成没有冒充完成。

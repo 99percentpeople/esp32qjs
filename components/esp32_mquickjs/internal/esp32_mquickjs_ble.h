@@ -8,6 +8,9 @@
 bool esp32_mquickjs_init_ble_runtime(JSContext *ctx,
                                      esp32_mquickjs_runtime_t *runtime);
 bool esp32_mquickjs_deinit_ble_runtime(JSContext *ctx);
+/* Runtime task only; pending opens and failed/closing adapters still own PHY.
+ * Native controller/PHY checks remain the caller's responsibility. */
+bool esp32_mquickjs_ble_phy_idle(void);
 
 JSValue js_ble_capabilities(JSContext *, JSValue *, int, JSValue *);
 JSValue js_ble_open(JSContext *, JSValue *, int, JSValue *);

@@ -19,6 +19,10 @@ typedef void (*esp32_mquickjs_event_queue_close_fn)(void *opaque);
 typedef struct {
     uint32_t open;
     uint32_t dropped;
+    uint32_t queued;
+    uint32_t capacity;
+    /* Sum of per-queue peaks, not a simultaneous runtime-wide peak. */
+    uint32_t high_water;
 } esp32_mquickjs_event_queue_status_t;
 
 typedef struct {
@@ -26,6 +30,7 @@ typedef struct {
     uint32_t queued;
     uint32_t capacity;
     uint32_t dropped;
+    uint32_t high_water;
     bool receiver_pending;
 } esp32_mquickjs_event_queue_stats_t;
 
@@ -35,6 +40,9 @@ void esp32_mquickjs_deinit_event_queue_runtime(esp32_mquickjs_runtime_t *runtime
 bool esp32_mquickjs_get_event_queue_status(
     esp32_mquickjs_runtime_t *runtime,
     esp32_mquickjs_event_queue_status_t *status);
+/* Active runtime thread only; no allocation/drop/drain or ownership changes.
+ * Registered queues only. Each queue is reset independently under its lock. */
+void esp32_mquickjs_reset_event_queue_counters(esp32_mquickjs_runtime_t *runtime);
 JSValue esp32_mquickjs_event_queue_new(JSContext *ctx,
                                        esp32_mquickjs_runtime_t *runtime,
                                        size_t event_size,
@@ -44,6 +52,13 @@ JSValue esp32_mquickjs_event_queue_new(JSContext *ctx,
                                        esp32_mquickjs_event_queue_drop_fn drop,
                                        esp32_mquickjs_event_queue_close_fn close,
                                        void *opaque);
+/* owner is an immutable boot-lifetime label. This factory admits all native
+ * queue storage and receive state into the shared wireless memory budget. */
+JSValue esp32_mquickjs_event_queue_new_wireless(const char *owner, JSContext *ctx,
+    esp32_mquickjs_runtime_t *runtime, size_t event_size, uint32_t capacity,
+    esp32_mquickjs_event_queue_overflow_t overflow,
+    esp32_mquickjs_event_queue_to_js_fn to_js, esp32_mquickjs_event_queue_drop_fn drop,
+    esp32_mquickjs_event_queue_close_fn close, void *opaque);
 bool esp32_mquickjs_event_queue_send(esp32_mquickjs_event_queue_t *queue,
                                      const void *event);
 bool esp32_mquickjs_event_queue_try_send_from_callback(
@@ -75,6 +90,14 @@ esp32_mquickjs_event_queue_t *esp32_mquickjs_event_queue_from_value(
     JSValue value);
 bool esp32_mquickjs_event_queue_retain(esp32_mquickjs_event_queue_t *queue);
 void esp32_mquickjs_event_queue_release(esp32_mquickjs_event_queue_t *queue);
+/* Initialization only: bind while the new queue is privately GC-rooted, before
+ * exposing it or starting producers/receivers. Success transfers one opaque
+ * context reference. Release runs once at native destruction, after resources
+ * and pending receive/reaper references are gone; never call JS from it.
+ * Failure leaves that reference with the caller. */
+bool esp32_mquickjs_event_queue_bind_context_release(
+    esp32_mquickjs_event_queue_t *queue,
+    esp32_mquickjs_event_queue_close_fn release);
 
 JSValue js_event_queue_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 void js_event_queue_finalizer(JSContext *ctx, void *opaque);

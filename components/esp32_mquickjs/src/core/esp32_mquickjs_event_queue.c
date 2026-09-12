@@ -5,6 +5,8 @@
 #include "esp32_mquickjs_event_queue_resources.h"
 #include "esp32_mquickjs_options.h"
 #include "esp32_mquickjs_reaper.h"
+#include "esp32_mquickjs_memory.h"
+#include "esp32_mquickjs_memory_rtos.h"
 
 #include <stdatomic.h>
 #include <string.h>
@@ -24,10 +26,13 @@ struct esp32_mquickjs_event_queue {
     esp32_mquickjs_event_queue_to_js_fn to_js;
     esp32_mquickjs_event_queue_drop_fn drop;
     esp32_mquickjs_event_queue_close_fn close;
+    esp32_mquickjs_event_queue_close_fn context_release;
     void *opaque;
+    const char *memory_owner;
     portMUX_TYPE lock;
     esp32_mquickjs_future_token_t receiver;
     uint32_t dropped;
+    uint32_t high_water;
     bool receiver_registered;
     bool dispose_requested;
     bool destroying;
@@ -62,42 +67,69 @@ struct esp32_mquickjs_future_driver_state {
     bool native_queue_retained;
 };
 
+static void *event_queue_allocate(esp32_mquickjs_event_queue_t *queue,
+    size_t size, esp32_mquickjs_memory_budget_role_t role)
+{
+    return queue->memory_owner != NULL
+        ? esp32_mquickjs_memory_wireless_calloc(queue->memory_owner, 1, size,
+            ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, role)
+        : heap_caps_calloc(1, size, MALLOC_CAP_8BIT);
+}
+
 static void *event_queue_resource_allocate(size_t bytes, void *opaque)
 {
-    (void)opaque;
-    return heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
+    return event_queue_allocate(opaque, bytes, ESP32_MQUICKJS_MEMORY_BUDGET_QUEUE);
 }
 
 static void event_queue_resource_release(void *allocation, void *opaque)
 {
-    (void)opaque;
-    heap_caps_free(allocation);
+    esp32_mquickjs_event_queue_t *queue = opaque;
+    if (queue->memory_owner != NULL) esp32_mquickjs_memory_payload_free(allocation);
+    else heap_caps_free(allocation);
 }
 
 static void *event_queue_resource_create_lock(void *opaque)
 {
-    (void)opaque;
-    return xSemaphoreCreateMutex();
+    esp32_mquickjs_event_queue_t *queue = opaque;
+    if (queue->memory_owner == NULL) return xSemaphoreCreateMutex();
+    StaticSemaphore_t *storage = event_queue_resource_allocate(sizeof(*storage), opaque);
+    if (storage == NULL) return NULL;
+    SemaphoreHandle_t lock = xSemaphoreCreateMutexStatic(storage);
+    if (lock == NULL) event_queue_resource_release(storage, opaque);
+    return lock;
 }
 
 static void event_queue_resource_delete_lock(void *lock, void *opaque)
 {
-    (void)opaque;
     vSemaphoreDelete((SemaphoreHandle_t)lock);
+    esp32_mquickjs_event_queue_t *queue = opaque;
+    if (queue->memory_owner != NULL) event_queue_resource_release(lock, opaque);
 }
 
 static void *event_queue_resource_create_queue(uint32_t capacity,
                                                size_t event_size,
                                                void *opaque)
 {
-    (void)opaque;
-    return xQueueCreate(capacity, event_size);
+    esp32_mquickjs_event_queue_t *queue = opaque;
+    if (queue->memory_owner == NULL) return xQueueCreate(capacity, event_size);
+    if (event_size > UINT32_MAX || event_size == 0 ||
+        capacity > (SIZE_MAX - sizeof(StaticQueue_t)) / event_size) return NULL;
+    StaticQueue_t *storage = event_queue_resource_allocate(
+        sizeof(*storage) + (size_t)capacity * event_size, opaque);
+    if (storage == NULL) return NULL;
+    /* The pinned IDF returns the supplied StaticQueue_t as its native handle.
+     * Its byte storage immediately follows the correctly aligned control. */
+    QueueHandle_t events = xQueueCreateStatic(capacity, (UBaseType_t)event_size,
+        (uint8_t *)(storage + 1), storage);
+    if (events == NULL) event_queue_resource_release(storage, opaque);
+    return events;
 }
 
 static void event_queue_resource_delete_queue(void *queue, void *opaque)
 {
-    (void)opaque;
     vQueueDelete((QueueHandle_t)queue);
+    esp32_mquickjs_event_queue_t *owner = opaque;
+    if (owner->memory_owner != NULL) event_queue_resource_release(queue, opaque);
 }
 
 static const esp32_mquickjs_event_queue_resource_ops_t
@@ -183,8 +215,11 @@ static void event_queue_destroy_native(esp32_mquickjs_event_queue_t *queue)
         return;
     }
     esp32_mquickjs_event_queue_resources_deinit(
-        &queue->resources, &s_event_queue_resource_ops, NULL);
-    heap_caps_free(queue);
+        &queue->resources, &s_event_queue_resource_ops, queue);
+    esp32_mquickjs_event_queue_close_fn release = queue->context_release;
+    void *opaque = queue->opaque;
+    event_queue_resource_release(queue, queue);
+    if (release != NULL) release(opaque);
 }
 
 static bool event_queue_take_destroy_ownership_locked(
@@ -233,7 +268,7 @@ static bool event_queue_reap(void *opaque)
         return false;
     }
     (void)esp32_mquickjs_event_queue_drain(
-        queue->resources.events, queue->resources.drain_scratch,
+        queue, queue->resources.drain_scratch,
         event_queue_drain_receive, queue->drop, queue->opaque);
     xSemaphoreGive((SemaphoreHandle_t)queue->resources.send_lock);
 
@@ -345,22 +380,46 @@ static void event_queue_request_reap(esp32_mquickjs_event_queue_t *queue,
 
 static bool event_queue_drain_receive(void *source, void *event)
 {
-    return xQueueReceive((QueueHandle_t)source, event, 0) == pdTRUE;
+    esp32_mquickjs_event_queue_t *queue = source;
+    portENTER_CRITICAL(&queue->lock);
+    bool received = xQueueReceive((QueueHandle_t)queue->resources.events, event, 0) == pdTRUE;
+    portEXIT_CRITICAL(&queue->lock);
+    return received;
+}
+
+static uint32_t event_queue_sum(uint32_t left, uint32_t right)
+{
+    return right > UINT32_MAX - left ? UINT32_MAX : left + right;
 }
 
 static bool event_queue_enqueue_send(void *destination, const void *event)
 {
-    return xQueueSend((QueueHandle_t)destination, event, 0) == pdTRUE;
+    esp32_mquickjs_event_queue_t *queue = destination;
+    /* This private RTOS queue has no blocking send/receive or queue-set users.
+     * Zero-timeout calls cannot unblock an RTOS waiter/yield under this lock.
+     * Serialize all mutations so a fast receiver cannot hide an enqueue peak.
+     * Owned-event drop callbacks are always outside this critical section. */
+    portENTER_CRITICAL(&queue->lock);
+    bool sent = xQueueSend((QueueHandle_t)queue->resources.events, event, 0) == pdTRUE;
+    uint32_t queued = (uint32_t)uxQueueMessagesWaitingFromISR((QueueHandle_t)queue->resources.events);
+    if (queued > queue->high_water) queue->high_water = queued;
+    portEXIT_CRITICAL(&queue->lock);
+    return sent;
 }
 
 static bool event_queue_enqueue_send_from_isr(void *destination,
                                               const void *event,
                                               int *task_woken)
 {
+    esp32_mquickjs_event_queue_t *queue = destination;
     BaseType_t higher_priority_woken = pdFALSE;
+    portENTER_CRITICAL_ISR(&queue->lock);
     bool sent = xQueueSendFromISR(
-                    (QueueHandle_t)destination, event,
+                    (QueueHandle_t)queue->resources.events, event,
                     &higher_priority_woken) == pdTRUE;
+    uint32_t queued = (uint32_t)uxQueueMessagesWaitingFromISR((QueueHandle_t)queue->resources.events);
+    if (queued > queue->high_water) queue->high_water = queued;
+    portEXIT_CRITICAL_ISR(&queue->lock);
 
     if (task_woken != NULL && higher_priority_woken == pdTRUE) {
         *task_woken = 1;
@@ -373,6 +432,20 @@ esp32_mquickjs_event_queue_t *esp32_mquickjs_event_queue_from_value(
     JSValue value)
 {
     return event_queue_from_value(ctx, value);
+}
+
+bool esp32_mquickjs_event_queue_bind_context_release(
+    esp32_mquickjs_event_queue_t *queue,
+    esp32_mquickjs_event_queue_close_fn release)
+{
+    if (queue == NULL || release == NULL) return false;
+    portENTER_CRITICAL(&queue->lock);
+    bool bound = queue->context_release == NULL && !queue->dispose_requested &&
+        !queue->destroying && !queue->receiver_registered &&
+        !atomic_load_explicit(&queue->closed, memory_order_acquire);
+    if (bound) queue->context_release = release;
+    portEXIT_CRITICAL(&queue->lock);
+    return bound;
 }
 
 bool esp32_mquickjs_event_queue_retain(esp32_mquickjs_event_queue_t *queue)
@@ -474,13 +547,13 @@ bool esp32_mquickjs_event_queue_send(esp32_mquickjs_event_queue_t *queue,
         return false;
     }
     sent = esp32_mquickjs_event_queue_enqueue(
-        queue->resources.events, event, queue->resources.overflow_scratch,
+        queue, event, queue->resources.overflow_scratch,
         queue->overflow == ESP32_MQUICKJS_EVENT_QUEUE_DROP_OLDEST,
         event_queue_enqueue_send, event_queue_drain_receive, queue->drop,
         queue->opaque, &dropped);
     if (dropped > 0) {
         portENTER_CRITICAL(&queue->lock);
-        queue->dropped += dropped;
+        queue->dropped = event_queue_sum(queue->dropped, dropped);
         portEXIT_CRITICAL(&queue->lock);
     }
     if (!sent) {
@@ -504,11 +577,11 @@ bool esp32_mquickjs_event_queue_try_send_from_callback(
         return false;
     }
     if (!esp32_mquickjs_event_queue_enqueue_from_callback(
-            queue->resources.events, event, event_queue_enqueue_send,
+            queue, event, event_queue_enqueue_send,
             &dropped)) {
         if (dropped > 0) {
             portENTER_CRITICAL(&queue->lock);
-            queue->dropped += dropped;
+            queue->dropped = event_queue_sum(queue->dropped, dropped);
             portEXIT_CRITICAL(&queue->lock);
         }
         return false;
@@ -525,8 +598,7 @@ bool esp32_mquickjs_event_queue_try_receive(
         atomic_load_explicit(&queue->closed, memory_order_acquire)) {
         return false;
     }
-    return xQueueReceive((QueueHandle_t)queue->resources.events,
-                         event, 0) == pdTRUE;
+    return event_queue_drain_receive(queue, event);
 }
 
 bool esp32_mquickjs_event_queue_send_from_isr(esp32_mquickjs_event_queue_t *queue,
@@ -543,11 +615,11 @@ bool esp32_mquickjs_event_queue_send_from_isr(esp32_mquickjs_event_queue_t *queu
         return false;
     }
     if (!esp32_mquickjs_event_queue_enqueue_from_isr(
-            queue->resources.events, event,
+            queue, event,
             event_queue_enqueue_send_from_isr,
             &higher_priority_woken, &dropped)) {
         portENTER_CRITICAL_ISR(&queue->lock);
-        queue->dropped += dropped;
+        queue->dropped = event_queue_sum(queue->dropped, dropped);
         portEXIT_CRITICAL_ISR(&queue->lock);
         if (task_woken != NULL && higher_priority_woken != 0) {
             *task_woken = 1;
@@ -642,7 +714,7 @@ size_t esp32_mquickjs_event_queue_discard_all(
         return 0;
     }
     discarded = esp32_mquickjs_event_queue_drain(
-        queue->resources.events, queue->resources.drain_scratch,
+        queue, queue->resources.drain_scratch,
         event_queue_drain_receive,
         queue->drop, queue->opaque);
     xSemaphoreGive((SemaphoreHandle_t)queue->resources.send_lock);
@@ -664,10 +736,11 @@ bool esp32_mquickjs_event_queue_get_stats(
         return false;
     }
     memset(stats, 0, sizeof(*stats));
-    stats->queued = (uint32_t)uxQueueMessagesWaiting(
-        (QueueHandle_t)queue->resources.events);
     stats->capacity = queue->capacity;
     portENTER_CRITICAL(&queue->lock);
+    stats->queued = (uint32_t)uxQueueMessagesWaitingFromISR(
+        (QueueHandle_t)queue->resources.events);
+    stats->high_water = queue->high_water;
     stats->open = !atomic_load_explicit(&queue->closed,
                                         memory_order_acquire);
     stats->dropped = queue->dropped;
@@ -717,20 +790,20 @@ static bool event_queue_future_prepare(JSContext *ctx,
         JS_ThrowTypeError(ctx, "EventQueue.receive(timeoutMs?) expects a non-negative timeout");
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = event_queue_allocate(queue, sizeof(*state), ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
     }
-    state->event = heap_caps_malloc(queue->event_size, MALLOC_CAP_8BIT);
+    state->event = event_queue_allocate(queue, queue->event_size, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state->event == NULL) {
-        heap_caps_free(state);
+        event_queue_resource_release(state, queue);
         JS_ThrowOutOfMemory(ctx);
         return false;
     }
     if (!esp32_mquickjs_event_queue_retain(queue)) {
-        heap_caps_free(state->event);
-        heap_caps_free(state);
+        event_queue_resource_release(state->event, queue);
+        event_queue_resource_release(state, queue);
         JS_ThrowInternalError(ctx, "EventQueue.receive() lost its queue");
         return false;
     }
@@ -802,8 +875,7 @@ static esp32_mquickjs_future_poll_t event_queue_future_poll(
                              &state->completed, memory_order_acquire)) {
         return ESP32_MQUICKJS_FUTURE_READY;
     }
-    if (xQueueReceive((QueueHandle_t)state->queue->resources.events,
-                      state->event, 0) == pdTRUE) {
+    if (event_queue_drain_receive(state->queue, state->event)) {
         state->received = true;
         atomic_store_explicit(&state->completed, true, memory_order_release);
     } else if (atomic_load_explicit(&state->timed_out, memory_order_acquire) ||
@@ -863,8 +935,8 @@ static void event_queue_future_destroy(esp32_mquickjs_future_driver_state_t *sta
         JS_DeleteGCRef(state->ctx, &state->queue_ref);
         state->queue_retained = false;
     }
-    heap_caps_free(state->event);
-    heap_caps_free(state);
+    event_queue_resource_release(state->event, queue);
+    event_queue_resource_release(state, queue);
     if (release_queue) {
         esp32_mquickjs_event_queue_release(queue);
     }
@@ -901,7 +973,10 @@ bool esp32_mquickjs_init_event_queue_runtime(JSContext *ctx,
     if (runtime == NULL || runtime->event_queue_state != NULL) {
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_shared_runtime_owner() != NULL
+        ? esp32_mquickjs_memory_wireless_calloc(esp32_mquickjs_memory_shared_runtime_owner(),
+            1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL)
+        : heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
     if (state == NULL) {
         return false;
     }
@@ -964,7 +1039,7 @@ void esp32_mquickjs_deinit_event_queue_runtime(esp32_mquickjs_runtime_t *runtime
         }
     }
     state->orphans = NULL;
-    heap_caps_free(state);
+    esp32_mquickjs_memory_payload_free(state);
     runtime->event_queue_state = NULL;
 }
 
@@ -983,22 +1058,31 @@ bool esp32_mquickjs_get_event_queue_status(
         return true;
     }
     for (queue = state->head; queue != NULL; queue = queue->next) {
-        uint32_t dropped;
-        bool closed;
-
-        portENTER_CRITICAL(&queue->lock);
-        dropped = queue->dropped;
-        closed = atomic_load_explicit(&queue->closed, memory_order_acquire);
-        portEXIT_CRITICAL(&queue->lock);
-        status->dropped += dropped;
-        if (!closed) {
-            status->open++;
-        }
+        esp32_mquickjs_event_queue_stats_t stats;
+        if (!esp32_mquickjs_event_queue_get_stats(queue, &stats)) continue;
+        status->dropped = event_queue_sum(status->dropped, stats.dropped);
+        status->queued = event_queue_sum(status->queued, stats.queued);
+        status->capacity = event_queue_sum(status->capacity, stats.capacity);
+        status->high_water = event_queue_sum(status->high_water, stats.high_water);
+        if (stats.open) status->open = event_queue_sum(status->open, 1);
     }
     return true;
 }
 
-JSValue esp32_mquickjs_event_queue_new(JSContext *ctx,
+void esp32_mquickjs_reset_event_queue_counters(esp32_mquickjs_runtime_t *runtime)
+{
+    esp32_mquickjs_event_queue_runtime_t *state = event_queue_runtime(runtime);
+    if (state == NULL) return;
+    for (esp32_mquickjs_event_queue_t *queue = state->head; queue != NULL; queue = queue->next) {
+        portENTER_CRITICAL(&queue->lock);
+        queue->dropped = 0;
+        queue->high_water = queue->resources.events == NULL ? 0 :
+            (uint32_t)uxQueueMessagesWaitingFromISR((QueueHandle_t)queue->resources.events);
+        portEXIT_CRITICAL(&queue->lock);
+    }
+}
+
+static JSValue event_queue_new(const char *memory_owner, JSContext *ctx,
                                        esp32_mquickjs_runtime_t *runtime,
                                        size_t event_size,
                                        uint32_t capacity,
@@ -1014,15 +1098,21 @@ JSValue esp32_mquickjs_event_queue_new(JSContext *ctx,
     if (ctx == NULL || runtime == NULL || event_size == 0 || capacity == 0 || to_js == NULL) {
         return JS_ThrowInternalError(ctx, "invalid native EventQueue configuration");
     }
-    queue = heap_caps_calloc(1, sizeof(*queue), MALLOC_CAP_8BIT);
+    if (event_size > UINT32_MAX || capacity > (SIZE_MAX - sizeof(StaticQueue_t)) / event_size)
+        return JS_ThrowRangeError(ctx, "native EventQueue storage size overflow");
+    queue = memory_owner != NULL
+        ? esp32_mquickjs_memory_wireless_calloc(memory_owner, 1, sizeof(*queue),
+            ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_QUEUE)
+        : heap_caps_calloc(1, sizeof(*queue), MALLOC_CAP_8BIT);
     if (queue == NULL) {
         return JS_ThrowOutOfMemory(ctx);
     }
+    queue->memory_owner = memory_owner;
     if (!esp32_mquickjs_event_queue_resources_init(
             &queue->resources, event_size, capacity,
             overflow == ESP32_MQUICKJS_EVENT_QUEUE_DROP_OLDEST,
-            &s_event_queue_resource_ops, NULL)) {
-        heap_caps_free(queue);
+            &s_event_queue_resource_ops, queue)) {
+        event_queue_resource_release(queue, queue);
         return JS_ThrowOutOfMemory(ctx);
     }
     queue->runtime = runtime;
@@ -1038,13 +1128,32 @@ JSValue esp32_mquickjs_event_queue_new(JSContext *ctx,
     object = JS_NewObjectClassUser(ctx, JS_CLASS_EVENT_QUEUE);
     if (JS_IsException(object)) {
         esp32_mquickjs_event_queue_resources_deinit(
-            &queue->resources, &s_event_queue_resource_ops, NULL);
-        heap_caps_free(queue);
+            &queue->resources, &s_event_queue_resource_ops, queue);
+        event_queue_resource_release(queue, queue);
         return object;
     }
     JS_SetOpaque(ctx, object, queue);
     event_queue_register(queue);
     return object;
+}
+
+JSValue esp32_mquickjs_event_queue_new(JSContext *ctx, esp32_mquickjs_runtime_t *runtime,
+    size_t event_size, uint32_t capacity, esp32_mquickjs_event_queue_overflow_t overflow,
+    esp32_mquickjs_event_queue_to_js_fn to_js, esp32_mquickjs_event_queue_drop_fn drop,
+    esp32_mquickjs_event_queue_close_fn close, void *opaque)
+{
+    return event_queue_new(NULL, ctx, runtime, event_size, capacity, overflow, to_js, drop, close, opaque);
+}
+
+JSValue esp32_mquickjs_event_queue_new_wireless(const char *owner, JSContext *ctx,
+    esp32_mquickjs_runtime_t *runtime, size_t event_size, uint32_t capacity,
+    esp32_mquickjs_event_queue_overflow_t overflow,
+    esp32_mquickjs_event_queue_to_js_fn to_js, esp32_mquickjs_event_queue_drop_fn drop,
+    esp32_mquickjs_event_queue_close_fn close, void *opaque)
+{
+    if (owner == NULL || owner[0] == '\0')
+        return JS_ThrowInternalError(ctx, "wireless EventQueue requires a memory owner");
+    return event_queue_new(owner, ctx, runtime, event_size, capacity, overflow, to_js, drop, close, opaque);
 }
 
 JSValue js_event_queue_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
@@ -1118,6 +1227,8 @@ JSValue js_event_queue_stats(JSContext *ctx, JSValue *this_val,
                                          JS_NewUint32(ctx, stats.capacity)) ||
         !esp32_mquickjs_set_property_ref(ctx, object, "dropped",
                                          JS_NewUint32(ctx, stats.dropped)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "highWater",
+                                         JS_NewUint32(ctx, stats.high_water)) ||
         !esp32_mquickjs_set_property_ref(ctx, object, "receiverPending",
                                          JS_NewBool(stats.receiver_pending))) {
         JS_PopGCRef(ctx, &object_ref);

@@ -76,7 +76,7 @@ bool esp32_mquickjs_wifi_csi_target_channel_structurally_valid(
 void esp32_mquickjs_wifi_csi_target_decode_he_signal(
     esp32_mquickjs_wifi_csi_metadata_t *metadata,
     uint32_t signal_a1,
-    uint16_t signal_a2);
+    uint16_t signal_a2, bool vht_multi_user);
 void esp32_mquickjs_wifi_csi_target_build_legacy_layout(
     esp32_mquickjs_wifi_csi_metadata_t *metadata,
     const esp32_mquickjs_wifi_csi_capture_config_t *config,

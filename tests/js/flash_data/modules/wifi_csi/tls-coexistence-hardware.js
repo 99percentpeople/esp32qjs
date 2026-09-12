@@ -35,11 +35,9 @@ test("wifi_csi/tls-coexistence-hardware", function () {
   before = test.memorySnapshot();
   try {
     session = wifi.csi.open({
-      source: "associated",
-      channel: "current",
-      conflict: "fail",
+      source: { mode: "associated" },
       capture: capture,
-      queue: { capacity: 16, overflow: "drop-newest" }
+      buffering: { queueCapacity: 16, overflow: "drop-newest" }
     });
     for (i = 0; i < 5; i += 1) {
       client = socket.openTCP({ tls: true });

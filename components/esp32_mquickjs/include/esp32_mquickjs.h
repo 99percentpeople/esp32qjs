@@ -142,6 +142,9 @@ typedef struct {
     uint32_t futures_internal_reserve;
     uint32_t event_queues_open;
     uint32_t event_queues_dropped;
+    uint32_t event_queues_queued;
+    uint32_t event_queues_capacity;
+    uint32_t event_queues_high_water;
     uint32_t async_pollers_registered;
     uint32_t async_pollers_capacity;
     uint32_t orphans_pending;

@@ -1,9 +1,11 @@
 #include "esp32_mquickjs_ble.h"
+#include "esp32_mquickjs_wifi_antenna.h"
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_BLE
 
 #include "esp32_mquickjs_ble_runtime_resources.h"
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_memory.h"
 #include "esp32_mquickjs_event_queue.h"
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_nvs_flash_boot.h"
@@ -458,6 +460,14 @@ static ble_adapter_t s_ble = {
     .lock = portMUX_INITIALIZER_UNLOCKED,
     .lifecycle = BLE_LIFECYCLE_CLOSED,
 };
+
+bool esp32_mquickjs_ble_phy_idle(void)
+{
+    /* CLOSED is published after native cleanup/worker retirement. Do not read
+     * cleanup flags while its worker can change them, or equate sleep with closure. */
+    return atomic_load_explicit(&s_ble.lifecycle, memory_order_acquire) == BLE_LIFECYCLE_CLOSED &&
+        !s_ble.port_initialized && !s_ble.host_started;
+}
 static _Atomic uint32_t s_ble_next_generation = 1;
 static _Atomic uint32_t s_ble_next_scanner_generation = 1;
 static _Atomic uint32_t s_ble_next_advertiser_generation = 1;
@@ -1105,7 +1115,7 @@ static void ble_retire_handle(JSContext *ctx, JSValue value,
         return;
     }
     JS_SetOpaque(ctx, value, closed_ref);
-    heap_caps_free(ref);
+    esp32_mquickjs_memory_payload_free(ref);
 }
 
 static void ble_close_subscription(ble_subscription_t *subscription)
@@ -1115,17 +1125,17 @@ static void ble_close_subscription(ble_subscription_t *subscription)
     ble_release_event_queue(s_ble.ctx, &subscription->queue,
                             &subscription->queue_ref,
                             &subscription->queue_rooted);
-    heap_caps_free(subscription->payloads);
-    heap_caps_free(subscription->lengths);
+    esp32_mquickjs_memory_payload_free(subscription->payloads);
+    esp32_mquickjs_memory_payload_free(subscription->lengths);
     memset(subscription, 0, sizeof(*subscription));
 }
 
 static void ble_clear_remote_discovery(ble_connection_slot_t *slot)
 {
     if (slot == NULL) return;
-    heap_caps_free(slot->services);
-    heap_caps_free(slot->characteristics);
-    heap_caps_free(slot->descriptors);
+    esp32_mquickjs_memory_payload_free(slot->services);
+    esp32_mquickjs_memory_payload_free(slot->characteristics);
+    esp32_mquickjs_memory_payload_free(slot->descriptors);
     slot->services = NULL;
     slot->characteristics = NULL;
     slot->descriptors = NULL;
@@ -1181,7 +1191,7 @@ static JSValue ble_new_connection_handle(JSContext *ctx, uint16_t index,
     JSValue *object = JS_PushGCRef(ctx, &object_ref);
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_BLE_CONNECTION);
     if (JS_IsException(*object)) goto fail;
-    ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
+    ref = esp32_mquickjs_memory_wireless_calloc("ble", 1, sizeof(*ref), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (ref == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto fail;
@@ -1193,7 +1203,7 @@ static JSValue ble_new_connection_handle(JSContext *ctx, uint16_t index,
     if (!esp32_mquickjs_set_property_ref(ctx, object, "_eventQueue",
                                          slot->queue_ref.val)) {
         JS_SetOpaque(ctx, *object, NULL);
-        heap_caps_free(ref);
+        esp32_mquickjs_memory_payload_free(ref);
         goto fail;
     }
     return JS_PopGCRef(ctx, &object_ref);
@@ -1251,7 +1261,7 @@ static JSValue ble_scan_event_to_js(JSContext *ctx, const void *event,
         goto fail;
     }
     if (scan_event->length > 0) {
-        payload = heap_caps_malloc(scan_event->length, MALLOC_CAP_8BIT);
+        payload = esp32_mquickjs_memory_wireless_alloc("ble", scan_event->length, ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_COPY);
         if (payload == NULL) {
             ble_scan_pool_release(scanner, scan_event->pool_index);
             JS_ThrowOutOfMemory(ctx);
@@ -1262,7 +1272,7 @@ static JSValue ble_scan_event_to_js(JSContext *ctx, const void *event,
                scan_event->length);
     }
     ble_scan_pool_release(scanner, scan_event->pool_index);
-    *data = esp32_mquickjs_new_owned_byte_view(ctx, payload,
+    *data = esp32_mquickjs_new_wireless_owned_byte_view("ble", ctx, payload,
                                                scan_event->length);
     payload = NULL;
     *peer = ble_address_to_js(ctx, &scan_event->peer);
@@ -1300,7 +1310,7 @@ static JSValue ble_scan_event_to_js(JSContext *ctx, const void *event,
     JS_PopGCRef(ctx, &peer_ref);
     return JS_PopGCRef(ctx, &object_ref);
 fail:
-    heap_caps_free(payload);
+    esp32_mquickjs_memory_payload_free(payload);
     JS_PopGCRef(ctx, &data_ref);
     JS_PopGCRef(ctx, &peer_ref);
     JS_PopGCRef(ctx, &object_ref);
@@ -1580,7 +1590,7 @@ static JSValue ble_notification_event_to_js(JSContext *ctx, const void *event,
         goto fail;
     }
     if (value_event->length > 0) {
-        payload = heap_caps_malloc(value_event->length, MALLOC_CAP_8BIT);
+        payload = esp32_mquickjs_memory_wireless_alloc("ble", value_event->length, ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_COPY);
         if (payload == NULL) {
             ble_notification_pool_release(subscription, value_event->pool_index);
             JS_ThrowOutOfMemory(ctx);
@@ -1592,7 +1602,7 @@ static JSValue ble_notification_event_to_js(JSContext *ctx, const void *event,
                value_event->length);
     }
     ble_notification_pool_release(subscription, value_event->pool_index);
-    *data = esp32_mquickjs_new_owned_byte_view(ctx, payload, value_event->length);
+    *data = esp32_mquickjs_new_wireless_owned_byte_view("ble", ctx, payload, value_event->length);
     payload = NULL;
     *object = JS_NewObject(ctx);
     if (JS_IsException(*data) || JS_IsException(*object) ||
@@ -1608,7 +1618,7 @@ static JSValue ble_notification_event_to_js(JSContext *ctx, const void *event,
     JS_PopGCRef(ctx, &data_ref);
     return JS_PopGCRef(ctx, &object_ref);
 fail:
-    heap_caps_free(payload);
+    esp32_mquickjs_memory_payload_free(payload);
     JS_PopGCRef(ctx, &data_ref);
     JS_PopGCRef(ctx, &object_ref);
     return JS_EXCEPTION;
@@ -2379,8 +2389,8 @@ static void ble_future_state_storage_free(
     esp32_mquickjs_future_driver_state_t *state)
 {
     if (state == NULL) return;
-    heap_caps_free(state->payload);
-    heap_caps_free(state);
+    esp32_mquickjs_memory_payload_free(state->payload);
+    esp32_mquickjs_memory_payload_free(state);
 }
 
 static void ble_future_state_release(esp32_mquickjs_future_driver_state_t *state)
@@ -2553,7 +2563,7 @@ static bool ble_allocate_connection_queues(JSContext *ctx,
         atomic_init(&slot->gatt_pending, 0);
         esp32_mquickjs_wireless_native_operation_init(
             &slot->connect_operation);
-        JSValue queue = esp32_mquickjs_event_queue_new(
+        JSValue queue = esp32_mquickjs_event_queue_new_wireless("ble",
             ctx, adapter->runtime, sizeof(ble_connection_event_t),
             CONFIG_ESP32_MQUICKJS_BLE_CONNECTION_QUEUE_LEN,
             ESP32_MQUICKJS_EVENT_QUEUE_DROP_OLDEST,
@@ -2574,20 +2584,20 @@ static void ble_free_server(ble_gatt_server_t *server)
     ble_release_event_queue(s_ble.ctx, &server->event_queue,
                             &server->event_queue_ref,
                             &server->event_queue_rooted);
-    heap_caps_free(server->event_payloads);
+    esp32_mquickjs_memory_payload_free(server->event_payloads);
     for (index = 0; index < server->characteristic_count; ++index) {
-        heap_caps_free(server->characteristics[index].id);
-        heap_caps_free(server->characteristics[index].value);
+        esp32_mquickjs_memory_payload_free(server->characteristics[index].id);
+        esp32_mquickjs_memory_payload_free(server->characteristics[index].value);
     }
     if (server->characteristic_defs != NULL) {
         for (index = 0; index < server->service_count; ++index) {
-            heap_caps_free(server->characteristic_defs[index]);
+            esp32_mquickjs_memory_payload_free(server->characteristic_defs[index]);
         }
     }
-    heap_caps_free(server->characteristic_defs);
-    heap_caps_free(server->characteristics);
-    heap_caps_free(server->service_uuids);
-    heap_caps_free(server->services);
+    esp32_mquickjs_memory_payload_free(server->characteristic_defs);
+    esp32_mquickjs_memory_payload_free(server->characteristics);
+    esp32_mquickjs_memory_payload_free(server->service_uuids);
+    esp32_mquickjs_memory_payload_free(server->services);
     memset(server, 0, sizeof(*server));
 }
 
@@ -2599,7 +2609,7 @@ static void ble_release_scanner(ble_adapter_t *adapter)
     ble_scan_callbacks_quiesce();
     ble_release_event_queue(adapter->ctx, &scanner->queue,
                             &scanner->queue_ref, &scanner->queue_rooted);
-    heap_caps_free(scanner->payloads);
+    esp32_mquickjs_memory_payload_free(scanner->payloads);
     memset(scanner, 0, sizeof(*scanner));
 }
 
@@ -2716,7 +2726,7 @@ static char *ble_copy_string(JSContext *ctx, JSValue value,
                            (unsigned)max_length);
         return NULL;
     }
-    copy = heap_caps_malloc(length + 1U, MALLOC_CAP_8BIT);
+    copy = esp32_mquickjs_memory_wireless_alloc("ble", length + 1U, ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (copy == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return NULL;
@@ -2862,7 +2872,7 @@ static JSValue ble_server_event_to_js(JSContext *ctx, const void *event,
     *object = JS_NewObject(ctx);
     if (server_event->kind == BLE_SERVER_EVENT_WRITE) {
         if (server_event->length > 0) {
-            payload = heap_caps_malloc(server_event->length, MALLOC_CAP_8BIT);
+            payload = esp32_mquickjs_memory_wireless_alloc("ble", server_event->length, ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_COPY);
             if (payload == NULL) {
                 ble_server_event_pool_release(server, server_event->pool_index);
                 pool_released = true;
@@ -2876,7 +2886,7 @@ static JSValue ble_server_event_to_js(JSContext *ctx, const void *event,
         }
         ble_server_event_pool_release(server, server_event->pool_index);
         pool_released = true;
-        *data = esp32_mquickjs_new_owned_byte_view(ctx, payload,
+        *data = esp32_mquickjs_new_wireless_owned_byte_view("ble", ctx, payload,
                                                    server_event->length);
         payload = NULL;
     }
@@ -2917,7 +2927,7 @@ fail:
     if (!JS_IsUndefined(*connection) && !JS_IsException(*connection))
         ble_retire_handle(ctx, *connection, JS_CLASS_BLE_CONNECTION,
                           &s_ble_closed_connection_ref);
-    heap_caps_free(payload);
+    esp32_mquickjs_memory_payload_free(payload);
     JS_PopGCRef(ctx, &data_ref);
     JS_PopGCRef(ctx, &connection_ref);
     JS_PopGCRef(ctx, &object_ref);
@@ -2980,14 +2990,10 @@ static bool ble_parse_gatt_server(JSContext *ctx, JSValue definition,
             goto done;
         }
     }
-    server->services = heap_caps_calloc(service_count + 1U,
-                                         sizeof(*server->services), MALLOC_CAP_8BIT);
-    server->service_uuids = heap_caps_calloc(service_count,
-                                              sizeof(*server->service_uuids), MALLOC_CAP_8BIT);
-    server->characteristic_defs = heap_caps_calloc(
-        service_count, sizeof(*server->characteristic_defs), MALLOC_CAP_8BIT);
-    server->characteristics = heap_caps_calloc(
-        total_characteristics, sizeof(*server->characteristics), MALLOC_CAP_8BIT);
+    server->services = esp32_mquickjs_memory_wireless_calloc("ble", service_count + 1U, sizeof(*server->services), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
+    server->service_uuids = esp32_mquickjs_memory_wireless_calloc("ble", service_count, sizeof(*server->service_uuids), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
+    server->characteristic_defs = esp32_mquickjs_memory_wireless_calloc("ble", service_count, sizeof(*server->characteristic_defs), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
+    server->characteristics = esp32_mquickjs_memory_wireless_calloc("ble", total_characteristics, sizeof(*server->characteristics), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (server->services == NULL || server->service_uuids == NULL ||
         server->characteristic_defs == NULL || server->characteristics == NULL) {
         JS_ThrowOutOfMemory(ctx);
@@ -3028,8 +3034,7 @@ static bool ble_parse_gatt_server(JSContext *ctx, JSValue definition,
         *characteristics = JS_GetPropertyStr(ctx, *service, "characteristics");
         if (!ble_array_length(ctx, *characteristics, "service characteristics",
                               &count)) goto done;
-        server->characteristic_defs[service_index] = heap_caps_calloc(
-            count + 1U, sizeof(struct ble_gatt_chr_def), MALLOC_CAP_8BIT);
+        server->characteristic_defs[service_index] = esp32_mquickjs_memory_wireless_calloc("ble", count + 1U, sizeof(struct ble_gatt_chr_def), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
         if (server->characteristic_defs[service_index] == NULL) {
             JS_ThrowOutOfMemory(ctx);
             goto done;
@@ -3089,8 +3094,7 @@ static bool ble_parse_gatt_server(JSContext *ctx, JSValue definition,
             local->max_length = max_length;
             local->store_writes = true;
             local->lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
-            local->value = heap_caps_calloc(max_length, 1,
-                                             MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+            local->value = esp32_mquickjs_memory_wireless_calloc("ble", max_length, 1, ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_POOL);
             if (local->value == NULL) {
                 JS_ThrowOutOfMemory(ctx);
                 goto done;
@@ -3101,7 +3105,7 @@ static bool ble_parse_gatt_server(JSContext *ctx, JSValue definition,
             *property = JS_GetPropertyStr(ctx, *characteristic, "initialValue");
             if (JS_IsException(*property)) goto done;
             if (!JS_IsUndefined(*property)) {
-                if (!esp32_mquickjs_get_byte_source(
+                if (!esp32_mquickjs_get_wireless_byte_source("ble",
                         ctx, *property, "GATT initialValue", &source,
                         &owned, &error)) goto done;
                 if (source.length > max_length) {
@@ -3122,16 +3126,14 @@ static bool ble_parse_gatt_server(JSContext *ctx, JSValue definition,
         }
     }
     server->event_capacity = CONFIG_ESP32_MQUICKJS_BLE_SERVER_QUEUE_LEN;
-    server->event_payloads = heap_caps_calloc(
-        server->event_capacity, CONFIG_ESP32_MQUICKJS_BLE_MAX_ATTRIBUTE_BYTES,
-        MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+    server->event_payloads = esp32_mquickjs_memory_wireless_calloc("ble", server->event_capacity, CONFIG_ESP32_MQUICKJS_BLE_MAX_ATTRIBUTE_BYTES, ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_POOL);
     if (!esp32_mquickjs_native_pool_init(&server->free_slots,
                                             server->event_capacity) ||
         server->event_payloads == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto done;
     }
-    queue = esp32_mquickjs_event_queue_new(
+    queue = esp32_mquickjs_event_queue_new_wireless("ble",
         ctx, adapter->runtime, sizeof(ble_server_event_t),
         server->event_capacity, ESP32_MQUICKJS_EVENT_QUEUE_DROP_NEWEST,
         ble_server_event_to_js, ble_server_event_drop, NULL, server);
@@ -3151,7 +3153,7 @@ done:
     for (service_index = 0;
          service_index < CONFIG_ESP32_MQUICKJS_BLE_MAX_SERVICES;
          ++service_index)
-        heap_caps_free(service_ids[service_index]);
+        esp32_mquickjs_memory_payload_free(service_ids[service_index]);
     if (!result) ble_free_server(server);
     JS_PopGCRef(ctx, &property_ref);
     JS_PopGCRef(ctx, &characteristic_ref);
@@ -3322,7 +3324,15 @@ static bool ble_open_capture(
         ble_throw_error(ctx, "BLE_ALREADY_OPEN", BLE_HS_EALREADY, -1, -1, -1);
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
+    if (esp32_mquickjs_wifi_antenna_fault() != ESP_OK) {
+        ble_throw_error(ctx, "BLE_PHY_RESTART_REQUIRED", BLE_HS_EBUSY, -1, -1, -1);
+        return false;
+    }
+#endif
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -3349,7 +3359,7 @@ static bool ble_open_capture(
         !ble_allocate_connection_queues(ctx, &s_ble)) {
         ble_free_pools(&s_ble);
         s_ble.lifecycle = BLE_LIFECYCLE_CLOSED;
-        heap_caps_free(state);
+        esp32_mquickjs_memory_payload_free(state);
         return false;
     }
     *out_state = state;
@@ -3462,7 +3472,7 @@ static JSValue ble_open_finish(
     }
     object = JS_NewObjectClassUser(ctx, JS_CLASS_BLE_ADAPTER);
     if (JS_IsException(object)) return object;
-    ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
+    ref = esp32_mquickjs_memory_wireless_calloc("ble", 1, sizeof(*ref), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (ref == NULL) return JS_ThrowOutOfMemory(ctx);
     ref->generation = s_ble.generation;
     JS_SetOpaque(ctx, object, ref);
@@ -3490,7 +3500,7 @@ static void ble_open_destroy(esp32_mquickjs_future_driver_state_t *state)
 }
 
 static const esp32_mquickjs_future_driver_t s_ble_open_driver = {
-    .capture = ble_open_capture,
+    .memory_owner = "wireless.future", .capture = ble_open_capture,
     .start = ble_open_start,
     .poll = ble_open_poll,
     .finish = ble_open_finish,
@@ -3553,7 +3563,9 @@ static bool ble_scan_capture(
         ble_throw_error(ctx, "BLE_GAP_CONFLICT", BLE_HS_EBUSY, -1, -1, -1);
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_PopGCRef(ctx, &property_ref);
         JS_ThrowOutOfMemory(ctx);
@@ -3628,14 +3640,15 @@ static bool ble_scan_capture(
     atomic_init(&scanner->reports, 0);
     atomic_init(&scanner->dropped, 0);
     atomic_init(&scanner->malformed, 0);
-    scanner->payloads = heap_caps_calloc(capacity, BLE_HS_ADV_MAX_SZ,
-                                         MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+    scanner->payloads = esp32_mquickjs_memory_wireless_calloc(
+        "ble.scan", capacity, BLE_HS_ADV_MAX_SZ,
+        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_POOL);
     if (!esp32_mquickjs_native_pool_init(&scanner->free_slots, capacity) ||
         scanner->payloads == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto fail_scanner;
     }
-    queue = esp32_mquickjs_event_queue_new(
+    queue = esp32_mquickjs_event_queue_new_wireless("ble",
         ctx, adapter->runtime, sizeof(ble_scan_event_t), capacity,
         ESP32_MQUICKJS_EVENT_QUEUE_DROP_NEWEST, ble_scan_event_to_js,
         ble_scan_event_drop, NULL, scanner);
@@ -3652,10 +3665,10 @@ static bool ble_scan_capture(
 fail_scanner:
     ble_release_event_queue(ctx, &scanner->queue, &scanner->queue_ref,
                             &scanner->queue_rooted);
-    heap_caps_free(scanner->payloads);
+    esp32_mquickjs_memory_payload_free(scanner->payloads);
     memset(scanner, 0, sizeof(*scanner));
 fail:
-    heap_caps_free(state);
+    esp32_mquickjs_memory_payload_free(state);
     JS_PopGCRef(ctx, &property_ref);
     return false;
 }
@@ -3707,7 +3720,7 @@ static JSValue ble_scan_finish(
     JSValue *object = JS_PushGCRef(ctx, &object_ref);
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_BLE_SCANNER);
     if (JS_IsException(*object)) goto fail;
-    ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
+    ref = esp32_mquickjs_memory_wireless_calloc("ble", 1, sizeof(*ref), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (ref == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto fail;
@@ -3718,7 +3731,7 @@ static JSValue ble_scan_finish(
     if (!esp32_mquickjs_set_property_ref(ctx, object, "_eventQueue",
                                          s_ble.scanner.queue_ref.val)) {
         JS_SetOpaque(ctx, *object, NULL);
-        heap_caps_free(ref);
+        esp32_mquickjs_memory_payload_free(ref);
         goto fail;
     }
     state->transferred = true;
@@ -3746,7 +3759,7 @@ static void ble_scan_destroy(esp32_mquickjs_future_driver_state_t *state)
         ble_release_event_queue(state->ctx, &s_ble.scanner.queue,
                                 &s_ble.scanner.queue_ref,
                                 &s_ble.scanner.queue_rooted);
-        heap_caps_free(s_ble.scanner.payloads);
+        esp32_mquickjs_memory_payload_free(s_ble.scanner.payloads);
         memset(&s_ble.scanner, 0, sizeof(s_ble.scanner));
     }
     ble_future_state_release(state);
@@ -3762,7 +3775,9 @@ static bool ble_scanner_close_capture(
     if (out_state == NULL || argc != 0 ||
         (scanner = ble_scanner_from_value(ctx, this_ref->val, true)) == NULL)
         return false;
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -3828,7 +3843,7 @@ static JSValue ble_bool_finish(JSContext *ctx,
 }
 
 static const esp32_mquickjs_future_driver_t s_ble_scan_driver = {
-    .capture = ble_scan_capture,
+    .memory_owner = "wireless.future", .capture = ble_scan_capture,
     .start = ble_scan_start,
     .poll = ble_future_poll,
     .finish = ble_scan_finish,
@@ -3840,7 +3855,7 @@ static const esp32_mquickjs_future_driver_t s_ble_scan_driver = {
 };
 
 static const esp32_mquickjs_future_driver_t s_ble_scanner_close_driver = {
-    .capture = ble_scanner_close_capture,
+    .memory_owner = "wireless.future", .capture = ble_scanner_close_capture,
     .start = ble_scanner_close_start,
     .poll = ble_future_poll,
     .finish = ble_scanner_close_finish,
@@ -3879,7 +3894,7 @@ static bool ble_copy_small_byte_source(JSContext *ctx, JSValue value,
     esp32_mquickjs_byte_source_t source;
     uint8_t *owned = NULL;
     JSValue error = JS_UNDEFINED;
-    if (!esp32_mquickjs_get_byte_source(ctx, value, api_name, &source, &owned,
+    if (!esp32_mquickjs_get_wireless_byte_source("ble", ctx, value, api_name, &source, &owned,
                                         &error)) return false;
     if (source.length > BLE_HS_ADV_MAX_SZ) {
         esp32_mquickjs_release_byte_source(owned);
@@ -3937,7 +3952,9 @@ static bool ble_advertise_capture(
         if (!JS_HasException(ctx)) JS_ThrowTypeError(ctx, "advertising options must be an object");
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_PopGCRef(ctx, &property_ref);
         JS_ThrowOutOfMemory(ctx);
@@ -4020,7 +4037,7 @@ static bool ble_advertise_capture(
     atomic_init(&advertiser->sequence, 0);
     atomic_init(&advertiser->incoming, 0);
     atomic_init(&advertiser->dropped, 0);
-    queue = esp32_mquickjs_event_queue_new(
+    queue = esp32_mquickjs_event_queue_new_wireless("ble",
         ctx, adapter->runtime, sizeof(ble_advertiser_event_t), capacity,
         ESP32_MQUICKJS_EVENT_QUEUE_DROP_NEWEST,
         ble_advertiser_event_to_js, ble_advertiser_event_drop, NULL, advertiser);
@@ -4040,7 +4057,7 @@ fail_advertiser:
                             &advertiser->queue_rooted);
     memset(advertiser, 0, sizeof(*advertiser));
 fail:
-    heap_caps_free(state);
+    esp32_mquickjs_memory_payload_free(state);
     JS_PopGCRef(ctx, &property_ref);
     return false;
 }
@@ -4097,7 +4114,7 @@ static JSValue ble_advertise_finish(
     JSValue *object = JS_PushGCRef(ctx, &object_ref);
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_BLE_ADVERTISER);
     if (JS_IsException(*object)) goto fail;
-    ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
+    ref = esp32_mquickjs_memory_wireless_calloc("ble", 1, sizeof(*ref), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (ref == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto fail;
@@ -4108,7 +4125,7 @@ static JSValue ble_advertise_finish(
     if (!esp32_mquickjs_set_property_ref(ctx, object, "_eventQueue",
                                          s_ble.advertiser.queue_ref.val)) {
         JS_SetOpaque(ctx, *object, NULL);
-        heap_caps_free(ref);
+        esp32_mquickjs_memory_payload_free(ref);
         goto fail;
     }
     state->transferred = true;
@@ -4152,7 +4169,9 @@ static bool ble_advertiser_close_capture(
     if (out_state == NULL || argc != 0 ||
         (advertiser = ble_advertiser_from_value(ctx, this_ref->val, true)) == NULL)
         return false;
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -4206,7 +4225,7 @@ static JSValue ble_advertiser_close_finish(
 }
 
 static const esp32_mquickjs_future_driver_t s_ble_advertise_driver = {
-    .capture = ble_advertise_capture,
+    .memory_owner = "wireless.future", .capture = ble_advertise_capture,
     .start = ble_advertise_start,
     .poll = ble_future_poll,
     .finish = ble_advertise_finish,
@@ -4218,7 +4237,7 @@ static const esp32_mquickjs_future_driver_t s_ble_advertise_driver = {
 };
 
 static const esp32_mquickjs_future_driver_t s_ble_advertiser_close_driver = {
-    .capture = ble_advertiser_close_capture,
+    .memory_owner = "wireless.future", .capture = ble_advertiser_close_capture,
     .start = ble_advertiser_close_start,
     .poll = ble_future_poll,
     .finish = ble_advertiser_close_finish,
@@ -4302,7 +4321,9 @@ static bool ble_connect_capture(
         ble_throw_error(ctx, "BLE_QUEUE_FULL", BLE_HS_ENOMEM, -1, -1, -1);
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         slot->reserved = false;
         JS_PopGCRef(ctx, &property_ref);
@@ -4341,7 +4362,7 @@ static bool ble_connect_capture(
     return true;
 fail:
     slot->reserved = false;
-    heap_caps_free(state);
+    esp32_mquickjs_memory_payload_free(state);
     JS_PopGCRef(ctx, &property_ref);
     return false;
 }
@@ -4453,7 +4474,7 @@ static esp32_mquickjs_resource_key_t ble_gap_resource_key(
 }
 
 static const esp32_mquickjs_future_driver_t s_ble_connect_driver = {
-    .capture = ble_connect_capture,
+    .memory_owner = "wireless.future", .capture = ble_connect_capture,
     .start = ble_connect_start,
     .poll = ble_future_poll,
     .finish = ble_connect_finish,
@@ -4475,7 +4496,9 @@ static bool ble_connection_operation_capture(
         ctx, this_ref->val, &ref, true);
     if (out_state == NULL || slot == NULL) return false;
     *out_state = NULL;
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -4491,7 +4514,7 @@ static bool ble_connection_operation_capture(
         (argc == 1 && !ble_parse_timeout_option(
                           ctx, argv[0].val, "BLE connection operation",
                           &state->timeout_ms))) {
-        heap_caps_free(state);
+        esp32_mquickjs_memory_payload_free(state);
         return false;
     }
     ble_retain_owner(ctx, this_ref->val, state);
@@ -4587,7 +4610,7 @@ static JSValue ble_connection_close_finish(
 }
 
 static const esp32_mquickjs_future_driver_t s_ble_connection_close_driver = {
-    .capture = ble_connection_close_capture,
+    .memory_owner = "wireless.future", .capture = ble_connection_close_capture,
     .start = ble_connection_close_start,
     .poll = ble_future_poll,
     .finish = ble_connection_close_finish,
@@ -4687,7 +4710,7 @@ static esp32_mquickjs_resource_key_t ble_gatt_resource_key(
 }
 
 static const esp32_mquickjs_future_driver_t s_ble_pair_driver = {
-    .capture = ble_pair_capture,
+    .memory_owner = "wireless.future", .capture = ble_pair_capture,
     .start = ble_pair_start,
     .poll = ble_future_poll,
     .finish = ble_pair_finish,
@@ -4731,7 +4754,9 @@ static bool ble_exchange_mtu_capture(
     if (out_state == NULL || argc > 2 ||
         ble_connection_from_value(ctx, this_ref->val, &ref, true) == NULL)
         return false;
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -4763,7 +4788,7 @@ static bool ble_exchange_mtu_capture(
     *out_state = state;
     return true;
 fail:
-    heap_caps_free(state);
+    esp32_mquickjs_memory_payload_free(state);
     return false;
 }
 
@@ -4814,7 +4839,7 @@ static JSValue ble_exchange_mtu_finish(
 }
 
 static const esp32_mquickjs_future_driver_t s_ble_exchange_mtu_driver = {
-    .capture = ble_exchange_mtu_capture,
+    .memory_owner = "wireless.future", .capture = ble_exchange_mtu_capture,
     .start = ble_exchange_mtu_start,
     .poll = ble_future_poll,
     .finish = ble_exchange_mtu_finish,
@@ -4835,7 +4860,9 @@ static bool ble_read_rssi_capture(
     if (out_state == NULL || argc > 1 ||
         ble_connection_from_value(ctx, this_ref->val, &ref, true) == NULL)
         return false;
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -4850,7 +4877,7 @@ static bool ble_read_rssi_capture(
     if (argc == 1 && !JS_IsUndefined(argv[0].val)) {
         if (!ble_to_u32(ctx, argv[0].val, &raw) || raw == 0 || raw > 60000) {
             JS_ThrowRangeError(ctx, "timeoutMs must be in 1..60000");
-            heap_caps_free(state);
+            esp32_mquickjs_memory_payload_free(state);
             return false;
         }
         state->timeout_ms = raw;
@@ -4912,7 +4939,7 @@ static JSValue ble_read_rssi_finish(
 }
 
 static const esp32_mquickjs_future_driver_t s_ble_read_rssi_driver = {
-    .capture = ble_read_rssi_capture,
+    .memory_owner = "wireless.future", .capture = ble_read_rssi_capture,
     .start = ble_read_rssi_start,
     .poll = ble_future_poll,
     .finish = ble_read_rssi_finish,
@@ -5184,7 +5211,9 @@ static bool ble_discover_capture(
         ble_throw_error(ctx, "BLE_BUSY", BLE_HS_EBUSY, -1, ref->index, -1);
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_PopGCRef(ctx, &property_ref);
         JS_ThrowOutOfMemory(ctx);
@@ -5225,13 +5254,10 @@ static bool ble_discover_capture(
 #undef BLE_PARSE_DISCOVERY_LIMIT
     }
     ble_clear_remote_discovery(slot);
-    slot->services = heap_caps_calloc(state->max_services,
-                                      sizeof(*slot->services), MALLOC_CAP_8BIT);
-    slot->characteristics = heap_caps_calloc(
-        state->max_characteristics, sizeof(*slot->characteristics), MALLOC_CAP_8BIT);
+    slot->services = esp32_mquickjs_memory_wireless_calloc("ble", state->max_services, sizeof(*slot->services), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_COPY);
+    slot->characteristics = esp32_mquickjs_memory_wireless_calloc("ble", state->max_characteristics, sizeof(*slot->characteristics), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_COPY);
     if (state->include_descriptors)
-        slot->descriptors = heap_caps_calloc(state->max_descriptors,
-                                             sizeof(*slot->descriptors), MALLOC_CAP_8BIT);
+        slot->descriptors = esp32_mquickjs_memory_wireless_calloc("ble", state->max_descriptors, sizeof(*slot->descriptors), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_COPY);
     if (slot->services == NULL || slot->characteristics == NULL ||
         (state->include_descriptors && slot->descriptors == NULL)) {
         JS_ThrowOutOfMemory(ctx);
@@ -5243,7 +5269,7 @@ static bool ble_discover_capture(
     JS_PopGCRef(ctx, &property_ref);
     return true;
 fail:
-    heap_caps_free(state);
+    esp32_mquickjs_memory_payload_free(state);
     JS_PopGCRef(ctx, &property_ref);
     return false;
 }
@@ -5485,7 +5511,7 @@ static JSValue ble_discover_finish(
 }
 
 static const esp32_mquickjs_future_driver_t s_ble_discover_driver = {
-    .capture = ble_discover_capture,
+    .memory_owner = "wireless.future", .capture = ble_discover_capture,
     .start = ble_discover_start,
     .poll = ble_future_poll,
     .finish = ble_discover_finish,
@@ -5551,7 +5577,9 @@ static bool ble_gatt_read_handle_capture(
         JS_PopGCRef(ctx, &property_ref);
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_PopGCRef(ctx, &property_ref);
         JS_ThrowOutOfMemory(ctx);
@@ -5581,7 +5609,7 @@ static bool ble_gatt_read_handle_capture(
             state->max_bytes = raw;
         }
     }
-    state->payload = heap_caps_malloc(state->max_bytes, MALLOC_CAP_8BIT);
+    state->payload = esp32_mquickjs_memory_wireless_alloc("ble", state->max_bytes, ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_COPY);
     if (state->payload == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto fail;
@@ -5591,8 +5619,8 @@ static bool ble_gatt_read_handle_capture(
     JS_PopGCRef(ctx, &property_ref);
     return true;
 fail:
-    heap_caps_free(state->payload);
-    heap_caps_free(state);
+    esp32_mquickjs_memory_payload_free(state->payload);
+    esp32_mquickjs_memory_payload_free(state);
     JS_PopGCRef(ctx, &property_ref);
     return false;
 }
@@ -5681,9 +5709,9 @@ static JSValue ble_gatt_read_finish(
     }
     payload = state->payload;
     state->payload = NULL;
-    result = esp32_mquickjs_new_owned_byte_view(ctx, payload,
+    result = esp32_mquickjs_new_wireless_owned_byte_view("ble", ctx, payload,
                                                 state->payload_length);
-    if (JS_IsException(result)) heap_caps_free(payload);
+    if (JS_IsException(result)) esp32_mquickjs_memory_payload_free(payload);
     return result;
 }
 
@@ -5718,7 +5746,9 @@ static bool ble_gatt_write_handle_capture(
                                    "BLEConnection.writeHandle()", allowed,
                                    2)))
         return false;
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -5737,7 +5767,7 @@ static bool ble_gatt_write_handle_capture(
          !ble_parse_timeout_option(ctx, options, "GATT write",
                                    &state->timeout_ms)))
         goto fail;
-    if (!esp32_mquickjs_get_byte_source(ctx, argv[1].val,
+    if (!esp32_mquickjs_get_wireless_byte_source("ble", ctx, argv[1].val,
                                         "BLEConnection.writeHandle()",
                                         &source, &owned, &error))
         goto fail;
@@ -5748,8 +5778,7 @@ static bool ble_gatt_write_handle_capture(
                         state->connection_index, state->attribute_handle);
         goto fail;
     }
-    state->payload = heap_caps_malloc(source.length > 0 ? source.length : 1,
-                                      MALLOC_CAP_8BIT);
+    state->payload = esp32_mquickjs_memory_wireless_alloc("ble", source.length > 0 ? source.length : 1, ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_TX);
     if (state->payload == NULL) {
         esp32_mquickjs_release_byte_source(owned);
         owned = NULL;
@@ -5766,8 +5795,8 @@ static bool ble_gatt_write_handle_capture(
     return true;
 fail:
     esp32_mquickjs_release_byte_source(owned);
-    heap_caps_free(state->payload);
-    heap_caps_free(state);
+    esp32_mquickjs_memory_payload_free(state->payload);
+    esp32_mquickjs_memory_payload_free(state);
     return false;
 }
 
@@ -5833,7 +5862,7 @@ static JSValue ble_gatt_write_finish(
 }
 
 static const esp32_mquickjs_future_driver_t s_ble_gatt_read_driver = {
-    .capture = ble_gatt_read_handle_capture,
+    .memory_owner = "wireless.future", .capture = ble_gatt_read_handle_capture,
     .start = ble_gatt_read_start,
     .poll = ble_future_poll,
     .finish = ble_gatt_read_finish,
@@ -5845,7 +5874,7 @@ static const esp32_mquickjs_future_driver_t s_ble_gatt_read_driver = {
 };
 
 static const esp32_mquickjs_future_driver_t s_ble_gatt_write_driver = {
-    .capture = ble_gatt_write_handle_capture,
+    .memory_owner = "wireless.future", .capture = ble_gatt_write_handle_capture,
     .start = ble_gatt_write_start,
     .poll = ble_future_poll,
     .finish = ble_gatt_write_finish,
@@ -5974,7 +6003,9 @@ static bool ble_subscribe_capture(
                         ref->index, characteristic->value_handle);
         goto fail_early;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto fail_early;
@@ -5991,11 +6022,11 @@ static bool ble_subscribe_capture(
     state->timeout_ms = BLE_DEFAULT_TIMEOUT_MS;
     state->indication = indication;
     state->payload_length = 2;
-    state->payload = heap_caps_calloc(1, 2, MALLOC_CAP_8BIT);
+    state->payload = esp32_mquickjs_memory_wireless_calloc("ble", 1, 2, ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_TX);
     atomic_init(&state->completed, false);
     if (state->payload == NULL) {
         JS_ThrowOutOfMemory(ctx);
-        heap_caps_free(state);
+        esp32_mquickjs_memory_payload_free(state);
         goto fail_early;
     }
     if (!JS_IsUndefined(options) &&
@@ -6009,11 +6040,12 @@ static bool ble_subscribe_capture(
     subscription->cccd_handle = state->cccd_handle;
     subscription->indication = indication;
     subscription->capacity = capacity;
-    subscription->payloads = heap_caps_calloc(
-        capacity, CONFIG_ESP32_MQUICKJS_BLE_MAX_ATTRIBUTE_BYTES,
-        MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
-    subscription->lengths = heap_caps_calloc(capacity, sizeof(uint16_t),
-                                              MALLOC_CAP_8BIT);
+    subscription->payloads = esp32_mquickjs_memory_wireless_calloc(
+        "ble.subscription", capacity, CONFIG_ESP32_MQUICKJS_BLE_MAX_ATTRIBUTE_BYTES,
+        ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_POOL);
+    subscription->lengths = esp32_mquickjs_memory_wireless_calloc(
+        "ble.subscription", capacity, sizeof(uint16_t),
+        ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_POOL);
     atomic_init(&subscription->sequence, 0);
     atomic_init(&subscription->received, 0);
     atomic_init(&subscription->dropped, 0);
@@ -6024,7 +6056,7 @@ static bool ble_subscribe_capture(
         JS_ThrowOutOfMemory(ctx);
         goto fail_subscription;
     }
-    queue = esp32_mquickjs_event_queue_new(
+    queue = esp32_mquickjs_event_queue_new_wireless("ble",
         ctx, s_ble.runtime, sizeof(ble_notification_event_t), capacity,
         ESP32_MQUICKJS_EVENT_QUEUE_DROP_NEWEST,
         ble_notification_event_to_js, ble_notification_event_drop,
@@ -6043,12 +6075,12 @@ fail_subscription:
     ble_release_event_queue(ctx, &subscription->queue,
                             &subscription->queue_ref,
                             &subscription->queue_rooted);
-    heap_caps_free(subscription->payloads);
-    heap_caps_free(subscription->lengths);
+    esp32_mquickjs_memory_payload_free(subscription->payloads);
+    esp32_mquickjs_memory_payload_free(subscription->lengths);
     memset(subscription, 0, sizeof(*subscription));
 fail_state:
-    heap_caps_free(state->payload);
-    heap_caps_free(state);
+    esp32_mquickjs_memory_payload_free(state->payload);
+    esp32_mquickjs_memory_payload_free(state);
 fail_early:
     JS_PopGCRef(ctx, &property_ref);
     return false;
@@ -6108,7 +6140,7 @@ static JSValue ble_subscribe_finish(
     subscription->open = true;
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_BLE_NOTIFICATION_STREAM);
     if (JS_IsException(*object)) goto fail;
-    ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
+    ref = esp32_mquickjs_memory_wireless_calloc("ble", 1, sizeof(*ref), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (ref == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto fail;
@@ -6122,7 +6154,7 @@ static JSValue ble_subscribe_finish(
     if (!esp32_mquickjs_set_property_ref(ctx, object, "_eventQueue",
                                          subscription->queue_ref.val)) {
         JS_SetOpaque(ctx, *object, NULL);
-        heap_caps_free(ref);
+        esp32_mquickjs_memory_payload_free(ref);
         goto fail;
     }
     state->transferred = true;
@@ -6186,7 +6218,9 @@ static bool ble_subscription_close_capture(
     if (out_state == NULL || argc != 0 ||
         (subscription = ble_subscription_from_value(
              ctx, this_ref->val, &ref, true)) == NULL) return false;
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -6202,10 +6236,10 @@ static bool ble_subscription_close_capture(
     state->cccd_handle = subscription->cccd_handle;
     state->timeout_ms = BLE_DEFAULT_TIMEOUT_MS;
     state->payload_length = 2;
-    state->payload = heap_caps_calloc(1, 2, MALLOC_CAP_8BIT);
+    state->payload = esp32_mquickjs_memory_wireless_calloc("ble", 1, 2, ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_TX);
     atomic_init(&state->completed, false);
     if (state->payload == NULL) {
-        heap_caps_free(state);
+        esp32_mquickjs_memory_payload_free(state);
         JS_ThrowOutOfMemory(ctx);
         return false;
     }
@@ -6236,7 +6270,7 @@ static JSValue ble_subscription_close_finish(
 }
 
 static const esp32_mquickjs_future_driver_t s_ble_subscribe_driver = {
-    .capture = ble_subscribe_capture,
+    .memory_owner = "wireless.future", .capture = ble_subscribe_capture,
     .start = ble_subscribe_start,
     .poll = ble_future_poll,
     .finish = ble_subscribe_finish,
@@ -6248,7 +6282,7 @@ static const esp32_mquickjs_future_driver_t s_ble_subscribe_driver = {
 };
 
 static const esp32_mquickjs_future_driver_t s_ble_subscription_close_driver = {
-    .capture = ble_subscription_close_capture,
+    .memory_owner = "wireless.future", .capture = ble_subscription_close_capture,
     .start = ble_subscribe_start,
     .poll = ble_future_poll,
     .finish = ble_subscription_close_finish,
@@ -6272,7 +6306,9 @@ static bool ble_bond_operation_capture_common(
         JS_ThrowTypeError(ctx, "invalid BLE bond operation arguments");
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -6284,7 +6320,7 @@ static bool ble_bond_operation_capture_common(
     atomic_init(&state->completed, false);
     if (operation == BLE_OP_REMOVE_BOND &&
         !ble_parse_address(ctx, argv[0].val, &state->peer)) {
-        heap_caps_free(state);
+        esp32_mquickjs_memory_payload_free(state);
         return false;
     }
     ble_retain_owner(ctx, this_ref->val, state);
@@ -6349,7 +6385,7 @@ static JSValue ble_bond_operation_finish(
 }
 
 static const esp32_mquickjs_future_driver_t s_ble_remove_bond_driver = {
-    .capture = ble_remove_bond_capture,
+    .memory_owner = "wireless.future", .capture = ble_remove_bond_capture,
     .start = ble_bond_operation_start,
     .poll = ble_future_poll,
     .finish = ble_bond_operation_finish,
@@ -6361,7 +6397,7 @@ static const esp32_mquickjs_future_driver_t s_ble_remove_bond_driver = {
 };
 
 static const esp32_mquickjs_future_driver_t s_ble_clear_bonds_driver = {
-    .capture = ble_clear_bonds_capture,
+    .memory_owner = "wireless.future", .capture = ble_clear_bonds_capture,
     .start = ble_bond_operation_start,
     .poll = ble_future_poll,
     .finish = ble_bond_operation_finish,
@@ -6543,7 +6579,9 @@ static bool ble_adapter_close_capture(
             "BLE_STALE_ADAPTER: BLE adapter is closed");
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -6616,7 +6654,7 @@ static esp32_mquickjs_resource_key_t ble_adapter_resource_key(
 }
 
 static const esp32_mquickjs_future_driver_t s_ble_adapter_close_driver = {
-    .capture = ble_adapter_close_capture,
+    .memory_owner = "wireless.future", .capture = ble_adapter_close_capture,
     .start = ble_adapter_close_start,
     .poll = ble_future_poll,
     .finish = ble_adapter_close_finish,
@@ -6678,7 +6716,9 @@ static bool ble_server_notify_capture(
         JS_PopGCRef(ctx, &property_ref);
         return false;
     }
-    state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
+    state = esp32_mquickjs_memory_wireless_calloc(
+        "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
+        ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) {
         JS_PopGCRef(ctx, &property_ref);
         JS_ThrowOutOfMemory(ctx);
@@ -6717,8 +6757,7 @@ static bool ble_server_notify_capture(
     if (JS_IsUndefined(data)) {
         taskENTER_CRITICAL(&local->lock);
         length = local->length;
-        state->payload = heap_caps_malloc(length > 0 ? length : 1,
-                                           MALLOC_CAP_8BIT);
+        state->payload = esp32_mquickjs_memory_wireless_alloc("ble", length > 0 ? length : 1, ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_TX);
         if (state->payload != NULL && length > 0)
             memcpy(state->payload, local->value, length);
         taskEXIT_CRITICAL(&local->lock);
@@ -6728,7 +6767,7 @@ static bool ble_server_notify_capture(
         }
         state->payload_length = length;
     } else {
-        if (!esp32_mquickjs_get_byte_source(ctx, data, "server notify data",
+        if (!esp32_mquickjs_get_wireless_byte_source("ble", ctx, data, "server notify data",
                                             &source, &owned, &error)) goto fail;
         if (source.length > local->max_length) {
             esp32_mquickjs_release_byte_source(owned);
@@ -6737,8 +6776,7 @@ static bool ble_server_notify_capture(
                             -1, -1, local->value_handle);
             goto fail;
         }
-        state->payload = heap_caps_malloc(source.length > 0 ? source.length : 1,
-                                           MALLOC_CAP_8BIT);
+        state->payload = esp32_mquickjs_memory_wireless_alloc("ble", source.length > 0 ? source.length : 1, ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_TX);
         if (state->payload == NULL) {
             esp32_mquickjs_release_byte_source(owned);
             owned = NULL;
@@ -6756,8 +6794,8 @@ static bool ble_server_notify_capture(
     return true;
 fail:
     esp32_mquickjs_release_byte_source(owned);
-    heap_caps_free(state->payload);
-    heap_caps_free(state);
+    esp32_mquickjs_memory_payload_free(state->payload);
+    esp32_mquickjs_memory_payload_free(state);
     JS_PopGCRef(ctx, &property_ref);
     return false;
 }
@@ -6903,7 +6941,7 @@ static esp32_mquickjs_resource_key_t ble_server_notify_resource_key(
 }
 
 static const esp32_mquickjs_future_driver_t s_ble_server_notify_driver = {
-    .capture = ble_server_notify_capture,
+    .memory_owner = "wireless.future", .capture = ble_server_notify_capture,
     .start = ble_server_notify_start,
     .poll = ble_future_poll,
     .finish = ble_server_notify_finish,
@@ -7094,7 +7132,7 @@ void js_ble_adapter_finalizer(JSContext *ctx, void *opaque)
     (void)ctx;
     if (ref != NULL && ref != &s_ble_closed_adapter_ref) {
         ble_request_orphan_close(ref->generation);
-        heap_caps_free(ref);
+        esp32_mquickjs_memory_payload_free(ref);
     }
 }
 
@@ -7142,7 +7180,7 @@ JSValue js_ble_adapter_server(JSContext *ctx, JSValue *this_val,
     }
     *object = JS_NewObjectClassUser(ctx, JS_CLASS_BLE_GATT_SERVER);
     if (JS_IsException(*object)) goto fail;
-    ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
+    ref = esp32_mquickjs_memory_wireless_calloc("ble", 1, sizeof(*ref), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (ref == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto fail;
@@ -7152,7 +7190,7 @@ JSValue js_ble_adapter_server(JSContext *ctx, JSValue *this_val,
     if (!esp32_mquickjs_set_property_ref(ctx, object, "_eventQueue",
                                          s_ble.server.event_queue_ref.val)) {
         JS_SetOpaque(ctx, *object, NULL);
-        heap_caps_free(ref);
+        esp32_mquickjs_memory_payload_free(ref);
         goto fail;
     }
     return JS_PopGCRef(ctx, &object_ref);
@@ -7229,7 +7267,7 @@ void js_ble_scanner_finalizer(JSContext *ctx, void *opaque)
             s_ble.scanner.open) {
             ble_request_orphan_close(ref->adapter_generation);
         }
-        heap_caps_free(ref);
+        esp32_mquickjs_memory_payload_free(ref);
     }
 }
 
@@ -7306,7 +7344,7 @@ void js_ble_advertiser_finalizer(JSContext *ctx, void *opaque)
             s_ble.advertiser.open) {
             ble_request_orphan_close(ref->adapter_generation);
         }
-        heap_caps_free(ref);
+        esp32_mquickjs_memory_payload_free(ref);
     }
 }
 
@@ -7383,7 +7421,7 @@ void js_ble_connection_finalizer(JSContext *ctx, void *opaque)
             s_ble.connections[ref->index].open) {
             ble_request_orphan_close(ref->adapter_generation);
         }
-        heap_caps_free(ref);
+        esp32_mquickjs_memory_payload_free(ref);
     }
 }
 
@@ -7511,7 +7549,7 @@ void js_ble_notification_finalizer(JSContext *ctx, void *opaque)
                 ble_request_orphan_close(ref->adapter_generation);
             }
         }
-        heap_caps_free(ref);
+        esp32_mquickjs_memory_payload_free(ref);
     }
 }
 
@@ -7576,7 +7614,7 @@ JSValue js_ble_gatt_server_constructor(JSContext *ctx, JSValue *this_val,
 void js_ble_gatt_server_finalizer(JSContext *ctx, void *opaque)
 {
     (void)ctx;
-    heap_caps_free(opaque);
+    esp32_mquickjs_memory_payload_free(opaque);
 }
 
 static bool ble_server_from_value(JSContext *ctx, JSValue value)
@@ -7698,7 +7736,7 @@ JSValue js_ble_gatt_server_characteristic(JSContext *ctx, JSValue *this_val,
     *properties = ble_properties_to_js(
         ctx, s_ble.server.characteristics[index].properties);
     if (JS_IsException(*object) || JS_IsException(*properties)) goto fail;
-    ref = heap_caps_calloc(1, sizeof(*ref), MALLOC_CAP_8BIT);
+    ref = esp32_mquickjs_memory_wireless_calloc("ble", 1, sizeof(*ref), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (ref == NULL) {
         JS_ThrowOutOfMemory(ctx);
         goto fail;
@@ -7715,7 +7753,7 @@ JSValue js_ble_gatt_server_characteristic(JSContext *ctx, JSValue *this_val,
             JS_NewUint32(ctx, s_ble.server.characteristics[index].max_length)) ||
         !esp32_mquickjs_set_property_ref(ctx, object, "properties", *properties)) {
         JS_SetOpaque(ctx, *object, NULL);
-        heap_caps_free(ref);
+        esp32_mquickjs_memory_payload_free(ref);
         goto fail;
     }
     JS_PopGCRef(ctx, &properties_ref);
@@ -7737,7 +7775,7 @@ JSValue js_ble_local_characteristic_constructor(JSContext *ctx,
 void js_ble_local_characteristic_finalizer(JSContext *ctx, void *opaque)
 {
     (void)ctx;
-    heap_caps_free(opaque);
+    esp32_mquickjs_memory_payload_free(opaque);
 }
 
 JSValue js_ble_local_characteristic_value(JSContext *ctx, JSValue *this_val,
@@ -7752,11 +7790,11 @@ JSValue js_ble_local_characteristic_value(JSContext *ctx, JSValue *this_val,
              ctx, *this_val, NULL, true)) == NULL) return JS_EXCEPTION;
     taskENTER_CRITICAL(&local->lock);
     length = local->length;
-    payload = heap_caps_malloc(length > 0 ? length : 1, MALLOC_CAP_8BIT);
+    payload = esp32_mquickjs_memory_wireless_alloc("ble", length > 0 ? length : 1, ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_COPY);
     if (payload != NULL && length > 0) memcpy(payload, local->value, length);
     taskEXIT_CRITICAL(&local->lock);
     if (payload == NULL) return JS_ThrowOutOfMemory(ctx);
-    return esp32_mquickjs_new_owned_byte_view(ctx, payload, length);
+    return esp32_mquickjs_new_wireless_owned_byte_view("ble", ctx, payload, length);
 }
 
 JSValue js_ble_local_characteristic_set_value(JSContext *ctx,
@@ -7770,7 +7808,7 @@ JSValue js_ble_local_characteristic_set_value(JSContext *ctx,
     if (this_val == NULL || argc != 1 ||
         (local = ble_local_characteristic_from_value(
              ctx, *this_val, NULL, true)) == NULL) return JS_EXCEPTION;
-    if (!esp32_mquickjs_get_byte_source(ctx, argv[0], "setValue",
+    if (!esp32_mquickjs_get_wireless_byte_source("ble", ctx, argv[0], "setValue",
                                         &source, &owned, &error)) return JS_EXCEPTION;
     if (source.length > local->max_length) {
         esp32_mquickjs_release_byte_source(owned);

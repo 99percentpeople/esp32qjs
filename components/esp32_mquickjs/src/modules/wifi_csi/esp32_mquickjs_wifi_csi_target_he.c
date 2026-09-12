@@ -100,7 +100,8 @@ static esp32_mquickjs_wifi_csi_secondary_t he_secondary(uint8_t value)
 {
     return value == 1U ? ESP32_MQUICKJS_WIFI_CSI_SECONDARY_ABOVE :
            value == 2U ? ESP32_MQUICKJS_WIFI_CSI_SECONDARY_BELOW :
-                         ESP32_MQUICKJS_WIFI_CSI_SECONDARY_NONE;
+           value == 0U ? ESP32_MQUICKJS_WIFI_CSI_SECONDARY_NONE :
+                         (esp32_mquickjs_wifi_csi_secondary_t)3;
 }
 
 void esp32_mquickjs_wifi_csi_target_normalize_metadata(
@@ -111,25 +112,24 @@ void esp32_mquickjs_wifi_csi_target_normalize_metadata(
     const wifi_pkt_rx_ctrl_t *rx = &info->rx_ctrl;
 
     memset(metadata, 0, sizeof(*metadata));
-    memcpy(metadata->source_mac, info->mac, 6U);
-    memcpy(metadata->destination_mac, info->dmac, 6U);
-    metadata->destination_mac_available = true;
+    /* SDK mac/dmac are transmitter/receiver, not DS-aware logical roles.
+     * rx_seq is not initialized on every SDK error path. Publication derives
+     * address roles and sequence only from the proven same-callback header. */
+    metadata->frame_type = ESP32_MQUICKJS_WIFI_PACKET_UNKNOWN;
+    metadata->rx_sequence = UINT32_MAX;
     metadata->rssi = rx->rssi;
     metadata->noise_floor = rx->noise_floor;
     metadata->noise_floor_available = true;
     metadata->channel = rx->channel;
     metadata->secondary = he_secondary(rx->second);
     metadata->driver_timestamp_us = rx->timestamp;
-    metadata->rx_sequence = info->rx_seq;
     metadata->first_word_invalid = info->first_word_invalid;
     metadata->channel_estimate_valid =
         rx->rx_channel_estimate_info_vld != 0U;
     metadata->channel_estimate_valid_available = true;
     metadata->phy = he_phy(rx->cur_bb_format);
-    metadata->bandwidth_mhz = rx->second == 0U ? 20U : 40U;
-    metadata->bandwidth_available = true;
     esp32_mquickjs_wifi_csi_target_decode_he_signal(
-        metadata, rx->he_siga1, rx->he_siga2);
+        metadata, rx->he_siga1, rx->he_siga2, rx->cur_bb_format == RX_BB_FORMAT_VHT_MU);
     esp32_mquickjs_wifi_csi_target_build_he_layout(
         metadata, config, info->len);
 }

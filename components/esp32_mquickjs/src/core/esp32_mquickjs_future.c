@@ -4,8 +4,9 @@
 #include "esp32_mquickjs_future_runtime_resources.h"
 #include "esp32_mquickjs_future_scheduler.h"
 #include "esp32_mquickjs_future_timeout.h"
-#include "esp32_mquickjs_future_worker_pool.h"
 #include "esp32_mquickjs_options.h"
+#include "esp32_mquickjs_memory.h"
+#include "esp32_mquickjs_memory_rtos.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -19,7 +20,8 @@
 #include "freertos/task.h"
 
 #define ESP32_MQUICKJS_FUTURE_MAX_ARGS 16U
-#define ESP32_MQUICKJS_FUTURE_MAX_DRIVERS 128U
+#define ESP32_MQUICKJS_FUTURE_MAX_DRIVERS 256U
+#define ESP32_MQUICKJS_FUTURE_DRIVER_CHUNK_SIZE 16U
 #define ESP32_MQUICKJS_FUTURE_SLOT_COUNT \
     (CONFIG_ESP32_MQUICKJS_MAX_FUTURES + CONFIG_ESP32_MQUICKJS_INTERNAL_FUTURE_RESERVE)
 
@@ -61,6 +63,12 @@ typedef struct {
     bool retained;
 } future_driver_entry_t;
 
+typedef struct future_driver_chunk {
+    struct future_driver_chunk *next;
+    size_t count;
+    future_driver_entry_t entries[ESP32_MQUICKJS_FUTURE_DRIVER_CHUNK_SIZE];
+} future_driver_chunk_t;
+
 typedef struct {
     esp32_mquickjs_runtime_t *runtime;
     uint8_t slot_id;
@@ -89,6 +97,7 @@ typedef struct {
     esp_timer_handle_t timer;
     const esp32_mquickjs_future_driver_t *driver;
     esp32_mquickjs_future_driver_state_t *driver_state;
+    const char *memory_owner;
     esp32_mquickjs_resource_key_t resource_key;
     future_handle_t *handle;
     bool continuation_running;
@@ -101,7 +110,7 @@ typedef struct {
     QueueHandle_t ready;
     future_slot_t *slots;
     esp32_mquickjs_future_runtime_resources_t resources;
-    future_driver_entry_t drivers[ESP32_MQUICKJS_FUTURE_MAX_DRIVERS];
+    future_driver_chunk_t *drivers;
     size_t driver_count;
     int running_slot;
     uint64_t next_submission_sequence;
@@ -126,13 +135,16 @@ static void *future_runtime_resource_allocate(size_t count,
                                               void *opaque)
 {
     (void)opaque;
-    return heap_caps_calloc(count, size, MALLOC_CAP_8BIT);
+    return esp32_mquickjs_memory_shared_runtime_owner() != NULL
+        ? esp32_mquickjs_memory_wireless_calloc(esp32_mquickjs_memory_shared_runtime_owner(),
+            count, size, ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL)
+        : heap_caps_calloc(count, size, MALLOC_CAP_8BIT);
 }
 
 static void future_runtime_resource_release(void *value, void *opaque)
 {
     (void)opaque;
-    heap_caps_free(value);
+    esp32_mquickjs_memory_payload_free(value);
 }
 
 static void *future_runtime_queue_create(size_t length,
@@ -140,13 +152,14 @@ static void *future_runtime_queue_create(size_t length,
                                          void *opaque)
 {
     (void)opaque;
-    return xQueueCreate((UBaseType_t)length, (UBaseType_t)item_size);
+    return esp32_mquickjs_memory_queue_create(esp32_mquickjs_memory_shared_runtime_owner(),
+        length, item_size, true);
 }
 
 static void future_runtime_queue_delete(void *queue, void *opaque)
 {
     (void)opaque;
-    vQueueDelete((QueueHandle_t)queue);
+    esp32_mquickjs_memory_queue_delete((QueueHandle_t)queue);
 }
 
 static const esp32_mquickjs_future_runtime_resource_ops_t
@@ -157,10 +170,27 @@ static const esp32_mquickjs_future_runtime_resource_ops_t
         .queue_delete = future_runtime_queue_delete,
     };
 
+/* Stacks and TCBs are one fixed boot allocation. Created workers never retire
+ * during runtime restart; partial creation retains them and retries the suffix.
+ * vTaskDelete on another CPU does not prove its static storage is reusable. */
+#define ESP32_MQUICKJS_FUTURE_WORKER_STACK_BYTES 4096U
+_Static_assert(sizeof(StackType_t) == 1, "ESP-IDF task stack depth must count bytes");
 typedef struct {
-    TaskHandle_t *workers;
-    QueueHandle_t queue;
-} future_worker_pool_cleanup_t;
+    StaticTask_t task;
+    StackType_t stack[ESP32_MQUICKJS_FUTURE_WORKER_STACK_BYTES];
+} future_worker_storage_t;
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI || CONFIG_ESP32_MQUICKJS_FEATURE_BLE || CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW
+_Static_assert(CONFIG_ESP32_MQUICKJS_WIRELESS_CONTROL_RESERVE_BYTES > 0 &&
+    CONFIG_ESP32_MQUICKJS_WIRELESS_CONTROL_RESERVE_BYTES <
+        CONFIG_ESP32_MQUICKJS_WIRELESS_INTERNAL_BUDGET_BYTES,
+    "Wireless builds require internal control and data headroom");
+_Static_assert(CONFIG_ESP32_MQUICKJS_FUTURE_WORKER_POOL_SIZE <=
+    (CONFIG_ESP32_MQUICKJS_WIRELESS_INTERNAL_BUDGET_BYTES -
+     CONFIG_ESP32_MQUICKJS_WIRELESS_CONTROL_RESERVE_BYTES) / sizeof(future_worker_storage_t),
+    "Wireless internal data quota cannot hold the Future worker stacks and TCBs");
+#endif
+static future_worker_storage_t *s_future_worker_storage;
+static size_t s_future_workers_created;
 
 static void future_scheduler_snapshot(
     const future_runtime_t *state,
@@ -180,24 +210,6 @@ static void future_scheduler_snapshot(
         out_slots[i].lane_waiting = slot->lane_waiting;
         out_slots[i].submission_sequence = slot->submission_sequence;
         out_slots[i].resource_key = slot->resource_key;
-    }
-}
-
-static void future_cleanup_partial_worker(size_t worker_index, void *opaque)
-{
-    future_worker_pool_cleanup_t *cleanup = opaque;
-
-    if (cleanup != NULL && cleanup->workers != NULL) {
-        vTaskDelete(cleanup->workers[worker_index]);
-    }
-}
-
-static void future_cleanup_partial_queue(void *opaque)
-{
-    future_worker_pool_cleanup_t *cleanup = opaque;
-
-    if (cleanup != NULL && cleanup->queue != NULL) {
-        vQueueDelete(cleanup->queue);
     }
 }
 
@@ -221,48 +233,41 @@ static void future_worker_task(void *opaque)
 
 static bool future_init_worker_pool(void)
 {
-    TaskHandle_t workers[CONFIG_ESP32_MQUICKJS_FUTURE_WORKER_POOL_SIZE] = {0};
-    future_worker_pool_cleanup_t cleanup = {
-        .workers = workers,
-    };
-    int started = 0;
-    int i;
-
-    if (s_future_worker_pool_initialized) {
-        return true;
-    }
-    s_future_worker_queue = xQueueCreate(
-        CONFIG_ESP32_MQUICKJS_FUTURE_WORKER_QUEUE_LEN,
-        sizeof(future_worker_item_t));
+    if (s_future_worker_pool_initialized) return true;
     if (s_future_worker_queue == NULL) {
-        return false;
+        s_future_worker_queue = esp32_mquickjs_memory_queue_create(
+            esp32_mquickjs_memory_shared_runtime_owner(),
+            CONFIG_ESP32_MQUICKJS_FUTURE_WORKER_QUEUE_LEN, sizeof(future_worker_item_t), true);
+        if (s_future_worker_queue == NULL) return false;
     }
-    for (i = 0; i < CONFIG_ESP32_MQUICKJS_FUTURE_WORKER_POOL_SIZE; ++i) {
-        if (xTaskCreate(future_worker_task,
-                        "mqjs_io",
-                        4096,
-                        NULL,
-                        tskIDLE_PRIORITY + 2,
-                        &workers[i]) == pdPASS) {
-            started++;
-        } else {
-            break;
-        }
+    if (s_future_worker_storage == NULL) {
+        s_future_worker_storage = esp32_mquickjs_memory_shared_runtime_owner() != NULL
+            ? esp32_mquickjs_memory_wireless_calloc(esp32_mquickjs_memory_shared_runtime_owner(),
+                CONFIG_ESP32_MQUICKJS_FUTURE_WORKER_POOL_SIZE, sizeof(*s_future_worker_storage),
+                ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_STACK)
+            : heap_caps_calloc(CONFIG_ESP32_MQUICKJS_FUTURE_WORKER_POOL_SIZE,
+                sizeof(*s_future_worker_storage), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (s_future_worker_storage == NULL) goto failed;
     }
-    if (started != CONFIG_ESP32_MQUICKJS_FUTURE_WORKER_POOL_SIZE) {
-        ESP_LOGE(TAG,
-                 "Future worker pool initialization failed (%d/%d workers)",
-                 started,
-                 CONFIG_ESP32_MQUICKJS_FUTURE_WORKER_POOL_SIZE);
-        cleanup.queue = s_future_worker_queue;
-        esp32_mquickjs_future_worker_pool_cleanup_partial(
-            (size_t)started, future_cleanup_partial_worker,
-            future_cleanup_partial_queue, &cleanup);
-        s_future_worker_queue = NULL;
-        return false;
+    while (s_future_workers_created < CONFIG_ESP32_MQUICKJS_FUTURE_WORKER_POOL_SIZE) {
+        future_worker_storage_t *storage = &s_future_worker_storage[s_future_workers_created];
+        if (xTaskCreateStatic(future_worker_task, "mqjs_io",
+            ESP32_MQUICKJS_FUTURE_WORKER_STACK_BYTES, NULL, tskIDLE_PRIORITY + 2,
+            storage->stack, &storage->task) == NULL) goto failed;
+        ++s_future_workers_created;
     }
     s_future_worker_pool_initialized = true;
     return true;
+failed:
+    ESP_LOGE(TAG, "Future worker pool initialization failed (%u/%d workers)",
+        (unsigned)s_future_workers_created, CONFIG_ESP32_MQUICKJS_FUTURE_WORKER_POOL_SIZE);
+    if (s_future_workers_created == 0) {
+        esp32_mquickjs_memory_queue_delete(s_future_worker_queue);
+        s_future_worker_queue = NULL;
+        esp32_mquickjs_memory_payload_free(s_future_worker_storage);
+        s_future_worker_storage = NULL;
+    }
+    return false;
 }
 
 static future_runtime_t *future_runtime(esp32_mquickjs_runtime_t *runtime)
@@ -320,6 +325,14 @@ static esp32_mquickjs_future_token_t future_token(const future_slot_t *slot)
     return token;
 }
 
+static void *future_control_allocate(future_slot_t *slot, size_t count, size_t size)
+{
+    return slot->memory_owner != NULL
+        ? esp32_mquickjs_memory_wireless_calloc(slot->memory_owner, count, size,
+            ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL)
+        : heap_caps_calloc(count, size, MALLOC_CAP_8BIT);
+}
+
 static void future_release_call_refs(JSContext *ctx, future_slot_t *slot)
 {
     int i;
@@ -330,7 +343,7 @@ static void future_release_call_refs(JSContext *ctx, future_slot_t *slot)
     for (i = (int)slot->argument_count - 1; i >= 0; --i) {
         JS_DeleteGCRef(ctx, &slot->arguments[i]);
     }
-    heap_caps_free(slot->arguments);
+    esp32_mquickjs_memory_payload_free(slot->arguments);
     slot->arguments = NULL;
     slot->argument_count = 0;
     JS_DeleteGCRef(ctx, &slot->receiver);
@@ -348,7 +361,7 @@ static void future_release_input_refs(JSContext *ctx, future_slot_t *slot)
     for (i = (int)slot->input_count - 1; i >= 0; --i) {
         JS_DeleteGCRef(ctx, &slot->inputs[i]);
     }
-    heap_caps_free(slot->inputs);
+    esp32_mquickjs_memory_payload_free(slot->inputs);
     slot->inputs = NULL;
     slot->input_count = 0;
     slot->input_refs_retained = false;
@@ -539,6 +552,7 @@ static future_slot_t *future_allocate_slot(esp32_mquickjs_runtime_t *runtime,
         slot->generation++;
     }
     slot->allocated = true;
+    slot->memory_owner = esp32_mquickjs_memory_shared_runtime_owner();
     slot->kind = kind;
     slot->state = FUTURE_STATE_QUEUED;
     slot->submitted_us = (uint64_t)esp_timer_get_time();
@@ -559,7 +573,7 @@ static JSValue future_make_handle(JSContext *ctx, future_slot_t *slot)
         future_clear_slot(ctx, slot);
         return JS_PopGCRef(ctx, &object_ref);
     }
-    handle = heap_caps_calloc(1, sizeof(*handle), MALLOC_CAP_8BIT);
+    handle = future_control_allocate(slot, 1, sizeof(*handle));
     if (handle == NULL) {
         future_clear_slot(ctx, slot);
         result = JS_ThrowOutOfMemory(ctx);
@@ -728,9 +742,7 @@ static bool future_retain_call(JSContext *ctx,
         goto done;
     }
     if (argument_count > 0) {
-        slot->arguments = heap_caps_calloc(argument_count,
-                                           sizeof(*slot->arguments),
-                                           MALLOC_CAP_8BIT);
+        slot->arguments = future_control_allocate(slot, argument_count, sizeof(*slot->arguments));
         if (slot->arguments == NULL) {
             JS_ThrowOutOfMemory(ctx);
             goto done;
@@ -791,9 +803,7 @@ static bool future_retain_inputs(JSContext *ctx,
         goto done;
     }
     if (input_count > 0) {
-        slot->inputs = heap_caps_calloc(input_count,
-                                        sizeof(*slot->inputs),
-                                        MALLOC_CAP_8BIT);
+        slot->inputs = future_control_allocate(slot, input_count, sizeof(*slot->inputs));
         if (slot->inputs == NULL) {
             JS_ThrowOutOfMemory(ctx);
             goto done;
@@ -834,7 +844,7 @@ static bool future_retain_continuation(JSContext *ctx,
         JS_ThrowTypeError(ctx, "Future continuation expects a live Future and a function");
         return false;
     }
-    slot->inputs = heap_caps_calloc(1, sizeof(*slot->inputs), MALLOC_CAP_8BIT);
+    slot->inputs = future_control_allocate(slot, 1, sizeof(*slot->inputs));
     if (slot->inputs == NULL) {
         JS_ThrowOutOfMemory(ctx);
         return false;
@@ -867,17 +877,34 @@ static void future_observe_inputs(JSContext *ctx, future_slot_t *slot)
 static const esp32_mquickjs_future_driver_t *future_find_driver(future_runtime_t *state,
                                                                 JSValue function)
 {
-    size_t i;
-
     if (state == NULL) {
         return NULL;
     }
-    for (i = 0; i < state->driver_count; ++i) {
-        if (state->drivers[i].retained && state->drivers[i].function.val == function) {
-            return state->drivers[i].driver;
+    for (future_driver_chunk_t *chunk = state->drivers; chunk != NULL; chunk = chunk->next) {
+        for (size_t i = 0; i < chunk->count; ++i) {
+            if (chunk->entries[i].retained && chunk->entries[i].function.val == function) {
+                return chunk->entries[i].driver;
+            }
         }
     }
     return NULL;
+}
+
+static void future_clear_driver_registry(JSContext *ctx, future_runtime_t *state)
+{
+    future_driver_chunk_t *chunk = state->drivers;
+    state->drivers = NULL;
+    state->driver_count = 0;
+    while (chunk != NULL) {
+        future_driver_chunk_t *next = chunk->next;
+        if (ctx != NULL) {
+            for (size_t i = 0; i < chunk->count; ++i) {
+                if (chunk->entries[i].retained) JS_DeleteGCRef(ctx, &chunk->entries[i].function);
+            }
+        }
+        future_runtime_resource_release(chunk, NULL);
+        chunk = next;
+    }
 }
 
 static void future_apply_driver_deadline(future_slot_t *slot)
@@ -1018,7 +1045,7 @@ static void future_dispatch_call(JSContext *ctx,
     }
 
     if (slot->argument_count > 0) {
-        argv = heap_caps_calloc(slot->argument_count, sizeof(*argv), MALLOC_CAP_8BIT);
+        argv = future_control_allocate(slot, slot->argument_count, sizeof(*argv));
         if (argv == NULL) {
             future_reject_message(ctx, slot, "Future dispatch ran out of memory");
             return;
@@ -1044,7 +1071,7 @@ static void future_dispatch_call(JSContext *ctx,
                                  argv);
     runtime->deadline_us = saved_deadline_us;
     state->running_slot = -1;
-    heap_caps_free(argv);
+    esp32_mquickjs_memory_payload_free(argv);
     future_release_call_refs(ctx, slot);
     if (future_is_terminal(slot->state)) {
         if (JS_IsException(result)) {
@@ -1449,14 +1476,16 @@ static bool future_expire_deadlines(JSContext *ctx,
         future_slot_t *slot = &state->slots[i];
         char message[96];
         uint32_t timeout_ms;
-        JSValue timeout_error = JS_UNDEFINED;
-        bool custom_timeout_error = false;
+        bool custom_timeout = false, timeout_rejected = false;
 
         if (!slot->allocated || future_is_terminal(slot->state) ||
             slot->kind == FUTURE_KIND_SLEEP || slot->kind == FUTURE_KIND_TIMEOUT ||
             slot->deadline_us == 0 || now_us < slot->deadline_us) {
             continue;
         }
+        JSGCRef timeout_ref;
+        JSValue *timeout_result = JS_PushGCRef(ctx, &timeout_ref);
+        *timeout_result = JS_UNDEFINED;
         timeout_ms = esp32_mquickjs_future_elapsed_timeout_ms(
             slot->submitted_us, slot->deadline_us);
         if (slot->driver_active && slot->driver != NULL &&
@@ -1465,8 +1494,13 @@ static bool future_expire_deadlines(JSContext *ctx,
                 ctx, slot->driver_state, timeout_ms);
 
             if (JS_IsException(result) && JS_HasException(ctx)) {
-                timeout_error = JS_GetException(ctx);
-                custom_timeout_error = true;
+                *timeout_result = JS_GetException(ctx);
+                custom_timeout = timeout_rejected = true;
+            } else if (!JS_IsException(result)) {
+                /* Receive-style drivers use null as a successful empty wait.
+                 * Root it before native cancellation can run any cleanup. */
+                *timeout_result = result;
+                custom_timeout = true;
             }
         }
         if (slot->driver_active && slot->state == FUTURE_STATE_QUEUED) {
@@ -1480,13 +1514,14 @@ static bool future_expire_deadlines(JSContext *ctx,
                 slot->cancel_requested = true;
             }
         }
-        if (custom_timeout_error) {
+        if (custom_timeout) {
             future_settle(
-                ctx, slot, FUTURE_STATE_REJECTED, timeout_error);
+                ctx, slot, timeout_rejected ? FUTURE_STATE_REJECTED : FUTURE_STATE_FULFILLED, *timeout_result);
         } else {
             snprintf(message, sizeof(message), "Future operation timed out after %" PRIu32 " ms", timeout_ms);
             future_reject_message(ctx, slot, message);
         }
+        JS_PopGCRef(ctx, &timeout_ref);
         handled = true;
     }
     return handled;
@@ -1685,13 +1720,7 @@ bool esp32_mquickjs_prepare_future_runtime_destroy(JSContext *ctx,
     if (driver_pending) {
         return false;
     }
-    for (i = 0; i < state->driver_count; ++i) {
-        if (state->drivers[i].retained) {
-            JS_DeleteGCRef(ctx, &state->drivers[i].function);
-            state->drivers[i].retained = false;
-        }
-    }
-    state->driver_count = 0;
+    future_clear_driver_registry(ctx, state);
     return true;
 }
 
@@ -1703,6 +1732,10 @@ void esp32_mquickjs_deinit_future_runtime(esp32_mquickjs_runtime_t *runtime)
     if (state == NULL) {
         return;
     }
+    /* Normal teardown removed roots while ctx was alive. Init failure has no
+     * registered methods; this also releases any remaining storage after the
+     * embedding runtime has destroyed its context. */
+    future_clear_driver_registry(NULL, state);
     resources = state->resources;
     runtime->future_state = NULL;
     esp32_mquickjs_future_runtime_resources_deinit(
@@ -1748,16 +1781,11 @@ bool esp32_mquickjs_future_register_driver(JSContext *ctx,
     future_runtime_t *state = future_runtime(runtime);
     future_driver_entry_t *entry;
     JSValue *rooted;
-    size_t i;
-
-    if (ctx == NULL || state == NULL || driver == NULL || !JS_IsFunction(ctx, function)) {
+    if (ctx == NULL || state == NULL || state->shutting_down || driver == NULL || !JS_IsFunction(ctx, function)) {
         return false;
     }
-    for (i = 0; i < state->driver_count; ++i) {
-        if (state->drivers[i].function.val == function) {
-            return state->drivers[i].driver == driver;
-        }
-    }
+    const esp32_mquickjs_future_driver_t *existing = future_find_driver(state, function);
+    if (existing != NULL) return existing == driver;
     if (state->driver_count >= ESP32_MQUICKJS_FUTURE_MAX_DRIVERS) {
         ESP_LOGE(TAG,
                  "Future driver registry exhausted: count=%u capacity=%u",
@@ -1765,11 +1793,24 @@ bool esp32_mquickjs_future_register_driver(JSContext *ctx,
                  (unsigned)ESP32_MQUICKJS_FUTURE_MAX_DRIVERS);
         return false;
     }
-    entry = &state->drivers[state->driver_count++];
+    future_driver_chunk_t *chunk = state->drivers;
+    if (chunk == NULL || chunk->count == ESP32_MQUICKJS_FUTURE_DRIVER_CHUNK_SIZE) {
+        /* Each GC reference must keep its address while registered. Grow in
+         * stable bounded chunks, never realloc a live array of GC roots. */
+        chunk = future_runtime_resource_allocate(1, sizeof(*chunk), NULL);
+        if (chunk == NULL) {
+            JS_ThrowOutOfMemory(ctx);
+            return false;
+        }
+        chunk->next = state->drivers;
+        state->drivers = chunk;
+    }
+    entry = &chunk->entries[chunk->count++];
     rooted = JS_AddGCRef(ctx, &entry->function);
     *rooted = function;
     entry->driver = driver;
     entry->retained = true;
+    ++state->driver_count;
     return true;
 }
 
@@ -2010,7 +2051,7 @@ void js_future_finalizer(JSContext *ctx, void *opaque)
     future_report_unobserved(ctx, handle);
     handle->result = JS_UNDEFINED;
     handle->result_retained = false;
-    heap_caps_free(handle);
+    esp32_mquickjs_memory_payload_free(handle);
 }
 
 void js_future_gc_trace(JSContext *ctx, void *opaque,
@@ -2055,6 +2096,8 @@ JSValue js_future_call(JSContext *ctx, JSValue *this_val, int argc, JSValue *arg
         *result = JS_ThrowInternalError(ctx, "Future capacity is exhausted");
         goto done;
     }
+    const esp32_mquickjs_future_driver_t *driver = future_find_driver(state, *function);
+    if (driver != NULL && driver->memory_owner != NULL) slot->memory_owner = driver->memory_owner;
     if (!future_retain_call(ctx,
                             slot,
                             *function,

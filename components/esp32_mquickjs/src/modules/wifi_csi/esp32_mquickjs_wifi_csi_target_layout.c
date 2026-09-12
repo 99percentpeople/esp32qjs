@@ -111,6 +111,9 @@ void esp32_mquickjs_wifi_csi_target_build_legacy_layout(
     wifi_csi_layout_unknown(
         metadata, ESP32_MQUICKJS_WIFI_CSI_LAYOUT_SCHEMA_LEGACY,
         frame_length);
+    if ((metadata->phy != ESP32_MQUICKJS_WIFI_CSI_PHY_LEGACY &&
+         metadata->phy != ESP32_MQUICKJS_WIFI_CSI_PHY_HT) ||
+        (unsigned)metadata->secondary > ESP32_MQUICKJS_WIFI_CSI_SECONDARY_BELOW) return;
     layout = &metadata->layout;
     memset(layout->segments, 0, sizeof(layout->segments));
     layout->segment_count = 0U;
@@ -243,6 +246,8 @@ void esp32_mquickjs_wifi_csi_target_build_he_layout(
         config->schema != ESP32_MQUICKJS_WIFI_CSI_SCHEMA_HE) return;
     wifi_csi_layout_unknown(
         metadata, ESP32_MQUICKJS_WIFI_CSI_LAYOUT_SCHEMA_HE, frame_length);
+    if ((unsigned)metadata->secondary > ESP32_MQUICKJS_WIFI_CSI_SECONDARY_BELOW ||
+        metadata->phy == ESP32_MQUICKJS_WIFI_CSI_PHY_UNKNOWN) return;
     layout = &metadata->layout;
     memset(layout->segments, 0, sizeof(layout->segments));
     layout->segment_count = 0U;
@@ -269,7 +274,9 @@ void esp32_mquickjs_wifi_csi_target_build_he_layout(
         wifi_csi_segment_set_nulls(segment, null_one, 1U);
     } else if (metadata->phy == ESP32_MQUICKJS_WIFI_CSI_PHY_HT ||
                metadata->phy == ESP32_MQUICKJS_WIFI_CSI_PHY_VHT) {
-        if (!metadata->bandwidth_available || !metadata->stbc_available) {
+        if (!metadata->bandwidth_available || !metadata->stbc_available ||
+            (metadata->phy == ESP32_MQUICKJS_WIFI_CSI_PHY_VHT && !metadata->mcs_available)) {
+            /* VHT MU/reserved SU fields do not establish the SU LTF layout. */
             goto unknown;
         }
         stbc = metadata->stbc;
@@ -325,7 +332,7 @@ void esp32_mquickjs_wifi_csi_target_build_he_layout(
             }
         }
     } else if (metadata->phy == ESP32_MQUICKJS_WIFI_CSI_PHY_HE_SU) {
-        if (!metadata->stbc_available || !metadata->bandwidth_available ||
+        if (!metadata->stbc_available || !metadata->bandwidth_available || !metadata->mcs_available ||
             metadata->bandwidth_mhz != 20U) goto unknown;
         segment = wifi_csi_layout_add_segment(
             layout,

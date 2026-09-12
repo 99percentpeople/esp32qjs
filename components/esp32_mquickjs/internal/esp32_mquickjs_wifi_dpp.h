@@ -1,0 +1,18 @@
+#pragma once
+#include "esp32_mquickjs_types.h"
+#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI && CONFIG_ESP_WIFI_DPP_SUPPORT && CONFIG_ESP_NETIF_USES_TCPIP_WITH_BSD_API && CONFIG_LWIP_IPV4
+bool esp32_mquickjs_init_wifi_dpp_runtime(JSContext *, esp32_mquickjs_runtime_t *);
+JSValue js_wifi_dpp_capabilities(JSContext *, JSValue *, int, JSValue *);
+JSValue js_wifi_dpp_global_status(JSContext *, JSValue *, int, JSValue *);
+JSValue js_wifi_dpp_start(JSContext *, JSValue *, int, JSValue *);
+JSValue js_wifi_dpp_constructor(JSContext *, JSValue *, int, JSValue *);
+void js_wifi_dpp_finalizer(JSContext *, void *);
+JSValue js_wifi_dpp_status(JSContext *, JSValue *, int, JSValue *);
+JSValue js_wifi_dpp_watch(JSContext *, JSValue *, int, JSValue *);
+JSValue js_wifi_dpp_receive(JSContext *, JSValue *, int, JSValue *);
+JSValue js_wifi_dpp_connect(JSContext *, JSValue *, int, JSValue *);
+JSValue js_wifi_dpp_close(JSContext *, JSValue *, int, JSValue *);
+JSValue js_wifi_dpp_cancel(JSContext *, JSValue *, int, JSValue *);
+JSValue js_wifi_dpp_recover(JSContext *, JSValue *, int, JSValue *);
+bool esp32_mquickjs_wifi_dpp_poll_observations(bool close);
+#endif
