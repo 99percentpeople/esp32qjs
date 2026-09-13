@@ -39,7 +39,7 @@ configure/start/stop 的返回对象在原生操作完成后分配。如果该�
 
 ## 已补测试源码，运行后置
 
-`tests/python/test_wifi_monitor_session.py` 新增生产 replace helper 场景：
+`tests/c/integration/wifi/monitor/test_wifi_monitor_session.py` 新增生产 replace helper 场景：
 运行中拒绝、entered RX/reaper 未排空拒绝、错误 task/runtime、self replacement、
 新 Session 第 N 次分配失败不影响旧 lease、同 token 交接无 acquire/release，
 旧 View 跨交接及新 Session restart 存活，最终仅释放一次 Radio owner。

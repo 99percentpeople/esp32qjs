@@ -220,6 +220,12 @@ are destructive.
 
 Host checks do not require a board:
 
+Test ownership and evidence are defined in [Test responsibilities](tests/README.md):
+C covers native behavior, Python covers development tools and contract checks,
+and device JS covers public API integration. `test --scope c` runs CTest and
+the native C/SDK/VM integration drivers; Python discovery runs tooling and
+static contract tests only. Results are reported separately.
+
 ```bash
 uv run python scripts/generate_api_manifest.py --check
 uv run python scripts/generate_feature_docs.py --check
@@ -287,9 +293,10 @@ components/esp32qjs_interactive optional serial shell
 main/                       default ESP-IDF entry point
 docs/                       framework documentation
 tests/build-contexts/       complete test-only Build Context fixtures
-tests/c/                    host-native C tests
+tests/c/                    unit/<domain>, integration/<domain>, fixtures/<domain>
 tests/js/                   device-backed JavaScript tests
-tests/python/               repository tooling tests
+tests/python/               tooling/{build,generators}, contracts/<domain>, infrastructure
+tests/support/              shared native fixture/compiler and discovery support
 scripts/remote.py           compatibility entrypoint for development commands
 scripts/esp32qjs/           profile, build, flash, serial, test, and CLI modules
 ```

@@ -64,6 +64,22 @@ literals without an explicit transpilation pipeline.
 
 ## Testing and Commits
 
+Follow [Test responsibilities](tests/README.md). Native behavior assertions and
+SDK/RTOS failure fixtures belong in C sources under `tests/c/`; Python owns
+tooling/contract tests and orchestration, while device JS owns public API
+integration. Do not add embedded C behavior suites to `tests/python/`.
+Group CTest sources under `tests/c/unit/<domain>`, native Python drivers under
+`tests/c/integration/<domain>`, and C fragments under the matching
+`tests/c/fixtures/<domain>/<case>`. Python tests are grouped into
+`tooling/{build,generators}`, `contracts/{runtime,io,net,wireless}`, and
+`infrastructure`. Keep Python test directories importable with `__init__.py`;
+use `tests.support.paths.ROOT` instead of case-depth-dependent source paths.
+Shared compiler/VM/discovery helpers live in `tests/support`.
+Use `scripts/run_native_tests.py` for integrations; generic unittest discovery
+would register imported TestCase classes again. `test --scope c` includes CTest
+and these integrations. Python discovery is tooling/contracts only. Keep both
+native stages, tooling, syntax, target builds, and device acceptance separate.
+
 The default validation target is `python scripts/remote.py test`. Use
 `--scope`, `--module`, `--network`, `--loopback`, and `--media-hardware` only to
 narrow or explicitly enable physical cases. Network cases require the

@@ -45,7 +45,7 @@ runtime 清理沿用真实共享实现。Neighbor 请求观察发布继续在 Fu
 
 ## 延期测试与剩余项
 
-新增 `tests/python/test_wifi_roaming_watch.py` 使用生产 options/parser/mask、
+新增 `tests/c/integration/wifi/station/test_wifi_roaming_watch.py` 使用生产 options/parser/mask、
 固定 SDK descriptor、capture/poll 过滤与真实 VM 注入边界，覆盖 RRM 开关、
 GC/getter/OOM、精确事件限制及通用 watch 回归。仅 AST 检查，没有 import、编译或
 执行 fixture；共享完整 EventQueue factory/关闭竞争也未验证。

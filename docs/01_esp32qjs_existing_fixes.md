@@ -404,16 +404,16 @@ F 阶段不把后续设计里的方法先塞进正式 `.d.ts` 和 manifest。目
 以下名称是**拟新增文件**，不是声称仓库已经存在；已有等价测试时优先扩展。
 
 ```text
-tests/c/test_wireless_control_completion.c
-tests/c/test_wireless_late_callback_isolation.c
-tests/c/test_wireless_cleanup_suffix.c
-tests/c/test_wifi_radio_failure_recovery.c
-tests/c/test_wifi_radio_lease_identity.c
-tests/c/test_ble_timeout_lifecycle.c
-tests/c/test_wifi_csi_retained_lifecycle.c
-tests/c/test_wireless_memory_budget.c
-tests/python/test_wireless_public_contract.py
-tests/python/test_wireless_secret_redaction.py
+tests/c/unit/wireless/test_wireless_control_completion.c
+tests/c/unit/wireless/test_wireless_late_callback_isolation.c
+tests/c/unit/wireless/test_wireless_cleanup_suffix.c
+tests/c/unit/wifi/config/test_wifi_radio_failure_recovery.c
+tests/c/unit/wifi/config/test_wifi_radio_lease_identity.c
+tests/c/unit/ble/test_ble_timeout_lifecycle.c
+tests/c/unit/wifi/csi/test_wifi_csi_retained_lifecycle.c
+tests/c/unit/wireless/test_wireless_memory_budget.c
+tests/python/contracts/wireless/test_wireless_public_contract.py
+tests/python/contracts/wireless/test_wireless_secret_redaction.py
 tests/js/wireless/lifecycle-existing-api.js
 ```
 

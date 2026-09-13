@@ -29,7 +29,7 @@ F-HARDWARE 未通过。按用户安排，长时间、完整生命周期、RF 与
 
 ## 可复现的测试边界
 
-`tests/python/wireless_vm_fixture.py` 链接 vendored MQuickJS、实际 ByteView/Source
+`tests/support/wireless_vm_fixture.py` 链接 vendored MQuickJS、实际 ByteView/Source
 实现、生产 class finalizer 和 core property helper。它在原生 allocator 与可分配
 JS API 入口逐个注入失败，在允许触发 GC 的 VM 分配入口强制真实压缩 GC。native
 malloc 不触发虚构的 GC；setter 的按值参数由 VM 自己 root，不在入口前移动它们。

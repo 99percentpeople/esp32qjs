@@ -36,7 +36,7 @@ STOP、timer/SDK barrier、deinit 的物理证据才能退休。因而既有顺�
 
 ## 延后运行的生产用例
 
-`tests/python/test_wifi_recovery_teardown.py` 在修复前建立，修复后仅做 AST 解析。
+`tests/c/integration/wifi/lifecycle/test_wifi_recovery_teardown.py` 在修复前建立，修复后仅做 AST 解析。
 它组合实际 core destroy、Future prepare/slot clear/scheduler 判定、共享 recovery
 poll/cancel/dispose、runtime/AP cleanup。VM/队列存储、无关原生 Future 和 Radio/
 worker 完成是注入边界；真实物理证明由已有 Action/FTM Radio fixture 单独覆盖。

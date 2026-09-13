@@ -1,0 +1,3 @@
+
+bool esp32_mquickjs_wifi_btwt_setup_owner_native(unsigned,uint32_t,uintptr_t *);
+void esp32_mquickjs_wifi_twt_sdk_broadcast_teardown_complete_native(uintptr_t,uint8_t,uint8_t);

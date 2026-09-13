@@ -107,7 +107,7 @@ Future、completion watcher、输入捕获和关闭后的 JS 结果保存亦待�
 
 ## 当前检查及待执行用例
 
-新增 `tests/python/test_wifi_raw_tx_session.py` 直接包含实际 Session/queue/lane/
+新增 `tests/c/integration/wifi/tx/test_wifi_raw_tx_session.py` 直接包含实际 Session/queue/lane/
 broker/validator，只有 Radio/SDK、allocator、task locks、worker queue 与 clock
 作为可控边界。覆盖两 Session 排队/逐包公平、flush 之后 enqueue、关闭期间保留
 active、迟到 callback、stop 失败后缀、错误第二帧、control 第 N 次分配失败、mutex

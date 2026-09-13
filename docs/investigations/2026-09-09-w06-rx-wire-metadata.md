@@ -56,7 +56,7 @@ RF layout 验收或时钟映射。band/legacy rate/signal mode 等完整解码�
 
 ## 测试与检查
 
-新增 `tests/python/test_wifi_rx_wire_metadata.py`，组合实际生产 layout、envelope、
+新增 `tests/c/integration/wifi/monitor/test_wifi_rx_wire_metadata.py`，组合实际生产 layout、envelope、
 metadata encoder，未复制测试编码器。覆盖完整默认 256 字节、带字段的 Monitor
 record、合法零 MAC 的 availability、不可用存储清零、时间戳高 32 位、snap/完整
 header、目录/metadata 关联、三种 CSI sample encoding、未知 layout、错误 flag/enum/

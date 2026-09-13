@@ -66,7 +66,7 @@ PAC 长度小于 512 时原 SDK 创建空 PAC 并丢弃输入，本项保留这�
 
 ## 延期回归与剩余工作
 
-新增 `tests/python/test_idf_eap_secrets.py` 编写了原始/修补 SDK 函数的对照用例：
+新增 `tests/c/integration/wifi/security/test_idf_eap_secrets.py` 编写了原始/修补 SDK 函数的对照用例：
 普通释放遗留、正常替换、OOM 保留、别名输入、PAC 泄漏/完整 512-byte 清零、
 FAST/domain 失败、SM 部分初始化释放、借用证书不被释放、hash drift/double patch。
 使用实际 SDK setter/reset/deinit/clear helper 与 SDK 通用 zero 实现，注入 allocator、

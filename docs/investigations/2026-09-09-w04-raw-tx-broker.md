@@ -53,7 +53,7 @@ STA/ESP-NOW owner；当前不宣称 runtime restart 可恢复隔离状态。
 
 ## 待执行的生产实现用例
 
-`tests/python/test_wifi_raw_tx_broker.py` 直接编译生产 broker、validator、RX parser
+`tests/c/integration/wifi/tx/test_wifi_raw_tx_broker.py` 直接编译生产 broker、validator、RX parser
 及 callback snapshot，使用 inventory 中 C3/S3/C5 的 SDK TX 类型；只替换 SDK、
 allocator、时钟和 pthread 锁边界。包含：
 

@@ -63,7 +63,7 @@ unknown/rejected/aborted/dropped；pending 归零代表这个范围都进入原�
 
 ## 待执行用例与当前检查
 
-新增 `tests/python/test_wifi_raw_tx_queue.py`，直接包含生产 header/source；只提供
+新增 `tests/c/integration/wifi/tx/test_wifi_raw_tx_queue.py`，直接包含生产 header/source；只提供
 payload allocator/释放追踪和队列不变量审计，不用另一个 FIFO 状态机替代实现。
 覆盖整批失败无副作用、descriptor/payload alias、指针溢出、活跃批次保护、整批
 eviction 回执、flush 期间继续 enqueue、关闭保留 active、各终态、旧 packet/watch

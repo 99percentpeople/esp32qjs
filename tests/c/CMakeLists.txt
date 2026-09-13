@@ -9,14 +9,14 @@ set(CMAKE_C_EXTENSIONS OFF)
 enable_testing()
 
 add_executable(test_repl_logic
-    test_repl_logic.c
+    unit/protocol/test_repl_logic.c
     ../../components/esp32qjs_interactive/src/repl_line.c
 )
 target_include_directories(test_repl_logic PRIVATE ../../components/esp32qjs_interactive/internal)
 add_test(NAME test_repl_logic COMMAND test_repl_logic)
 
 add_executable(test_fs_path
-    test_fs_path.c
+    unit/fs/test_fs_path.c
     ../../components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs_path.c
 )
 target_compile_definitions(test_fs_path PRIVATE CONFIG_ESP32_MQUICKJS_FEATURE_FS=1)
@@ -25,7 +25,7 @@ target_include_directories(test_fs_path PRIVATE ../../components/esp32_mquickjs/
 add_test(NAME test_fs_path COMMAND test_fs_path)
 
 add_executable(test_fs_atomic_write
-    test_fs_atomic_write.c
+    unit/fs/test_fs_atomic_write.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_fs_atomic_write.c
 )
 target_include_directories(test_fs_atomic_write PRIVATE ../../components/esp32_mquickjs/internal)
@@ -33,7 +33,7 @@ add_test(NAME test_fs_atomic_write COMMAND test_fs_atomic_write)
 
 set(LITTLEFS_SOURCE_DIR ../../managed_components/joltwallet__littlefs/src/littlefs)
 add_executable(test_littlefs_recovery
-    test_littlefs_recovery.c
+    unit/fs/test_littlefs_recovery.c
     ${LITTLEFS_SOURCE_DIR}/lfs.c
     ${LITTLEFS_SOURCE_DIR}/lfs_util.c
     ${LITTLEFS_SOURCE_DIR}/bd/lfs_rambd.c
@@ -43,7 +43,7 @@ target_compile_definitions(test_littlefs_recovery PRIVATE LFS_NO_DEBUG LFS_NO_WA
 add_test(NAME test_littlefs_recovery COMMAND test_littlefs_recovery)
 
 add_executable(test_byte_span
-    test_byte_span.c
+    unit/memory/test_byte_span.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_byte_span.c
 )
 target_include_directories(test_byte_span PRIVATE ../../components/esp32_mquickjs/internal)
@@ -51,35 +51,35 @@ target_include_directories(test_byte_span PRIVATE ../../components/esp32_mquickj
 add_test(NAME test_byte_span COMMAND test_byte_span)
 
 add_executable(test_bitmap_image
-    test_bitmap_image.c
+    unit/media/test_bitmap_image.c
     ../../components/esp32_mquickjs/src/modules/bitmap/esp32_mquickjs_bitmap_image_core.c
 )
 target_include_directories(test_bitmap_image PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_bitmap_image COMMAND test_bitmap_image)
 
 add_executable(test_bitmap_jpeg
-    test_bitmap_jpeg.c
+    unit/media/test_bitmap_jpeg.c
     ../../components/esp32_mquickjs/src/modules/bitmap/esp32_mquickjs_bitmap_jpeg_core.c
 )
 target_include_directories(test_bitmap_jpeg PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_bitmap_jpeg COMMAND test_bitmap_jpeg)
 
 add_executable(test_peripheral_lease
-    test_peripheral_lease.c
+    unit/io/test_peripheral_lease.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_peripheral_lease.c
 )
 target_include_directories(test_peripheral_lease PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_peripheral_lease COMMAND test_peripheral_lease)
 
 add_executable(test_native_pool
-    test_native_pool.c
+    unit/memory/test_native_pool.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_native_pool.c
 )
 target_include_directories(test_native_pool PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_native_pool COMMAND test_native_pool)
 
 add_executable(test_native_lease
-    test_native_lease.c
+    unit/memory/test_native_lease.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_native_pool.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_native_lease.c
 )
@@ -87,235 +87,235 @@ target_include_directories(test_native_lease PRIVATE ../../components/esp32_mqui
 add_test(NAME test_native_lease COMMAND test_native_lease)
 
 add_executable(test_reaper
-    test_reaper.c
+    unit/runtime/test_reaper.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_reaper.c
 )
 target_include_directories(test_reaper PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_reaper COMMAND test_reaper)
 
 add_executable(test_line_framer
-    test_line_framer.c
+    unit/protocol/test_line_framer.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_line_framer.c
 )
 target_include_directories(test_line_framer PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_line_framer COMMAND test_line_framer)
 
 add_executable(test_rpc_wire
-    test_rpc_wire.c
+    unit/protocol/test_rpc_wire.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_rpc_wire.c
 )
 target_include_directories(test_rpc_wire PRIVATE ../../components/esp32_mquickjs/include)
 target_compile_definitions(test_rpc_wire PRIVATE
-    RPC_GOLDEN_VECTOR_PATH="${CMAKE_CURRENT_SOURCE_DIR}/rpc-v1-golden.txt"
+    RPC_GOLDEN_VECTOR_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../fixtures/rpc/rpc-v1-golden.txt"
 )
 add_test(NAME test_rpc_wire COMMAND test_rpc_wire)
 
 add_executable(test_log_ring
-    test_log_ring.c
+    unit/runtime/test_log_ring.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_log_ring.c
 )
 target_include_directories(test_log_ring PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_log_ring COMMAND test_log_ring)
 
 add_executable(test_event_queue_drain
-    test_event_queue_drain.c
+    unit/runtime/test_event_queue_drain.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_event_queue_drain.c
 )
 target_include_directories(test_event_queue_drain PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_event_queue_drain COMMAND test_event_queue_drain)
 
 add_executable(test_event_queue_resources
-    test_event_queue_resources.c
+    unit/runtime/test_event_queue_resources.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_event_queue_resources.c
 )
 target_include_directories(test_event_queue_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_event_queue_resources COMMAND test_event_queue_resources)
 
 add_executable(test_future_timeout
-    test_future_timeout.c
+    unit/runtime/test_future_timeout.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_future_timeout.c
 )
 target_include_directories(test_future_timeout PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_future_timeout COMMAND test_future_timeout)
 
 add_executable(test_timer_resource
-    test_timer_resource.c
+    unit/runtime/test_timer_resource.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_timer_resource.c
 )
 target_include_directories(test_timer_resource PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_timer_resource COMMAND test_timer_resource)
 
 add_executable(test_future_scheduler
-    test_future_scheduler.c
+    unit/runtime/test_future_scheduler.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_future_scheduler.c
 )
 target_include_directories(test_future_scheduler PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_future_scheduler COMMAND test_future_scheduler)
 
 add_executable(test_future_runtime_resources
-    test_future_runtime_resources.c
+    unit/runtime/test_future_runtime_resources.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_future_runtime_resources.c
 )
 target_include_directories(test_future_runtime_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_future_runtime_resources COMMAND test_future_runtime_resources)
 
 add_executable(test_usb_serial_future_lifecycle
-    test_usb_serial_future_lifecycle.c
+    unit/io/test_usb_serial_future_lifecycle.c
     ../../components/esp32_mquickjs/src/modules/usb_serial/esp32_mquickjs_usb_serial_future_lifecycle.c
 )
 target_include_directories(test_usb_serial_future_lifecycle PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_usb_serial_future_lifecycle COMMAND test_usb_serial_future_lifecycle)
 
 add_executable(test_http_operation_resources
-    test_http_operation_resources.c
+    unit/net/test_http_operation_resources.c
     ../../components/esp32_mquickjs/src/modules/http/esp32_mquickjs_http_operation_resources.c
 )
 target_include_directories(test_http_operation_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_http_operation_resources COMMAND test_http_operation_resources)
 
 add_executable(test_http_client_resources
-    test_http_client_resources.c
+    unit/net/test_http_client_resources.c
     ../../components/esp32_mquickjs/src/modules/http/esp32_mquickjs_http_client_resources.c
 )
 target_include_directories(test_http_client_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_http_client_resources COMMAND test_http_client_resources)
 
 add_executable(test_http_server_resources
-    test_http_server_resources.c
+    unit/net/test_http_server_resources.c
     ../../components/esp32_mquickjs/src/modules/http/esp32_mquickjs_http_server_resources.c
 )
 target_include_directories(test_http_server_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_http_server_resources COMMAND test_http_server_resources)
 
 add_executable(test_websocket_client_resources
-    test_websocket_client_resources.c
+    unit/net/test_websocket_client_resources.c
     ../../components/esp32_mquickjs/src/modules/websocket/esp32_mquickjs_websocket_client_resources.c
 )
 target_include_directories(test_websocket_client_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_websocket_client_resources COMMAND test_websocket_client_resources)
 
 add_executable(test_rmt_symbol_buffer_resources
-    test_rmt_symbol_buffer_resources.c
+    unit/io/test_rmt_symbol_buffer_resources.c
     ../../components/esp32_mquickjs/src/modules/rmt/esp32_mquickjs_rmt_symbol_buffer_resources.c
 )
 target_include_directories(test_rmt_symbol_buffer_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_rmt_symbol_buffer_resources COMMAND test_rmt_symbol_buffer_resources)
 
 add_executable(test_rmt_channel_resources
-    test_rmt_channel_resources.c
+    unit/io/test_rmt_channel_resources.c
     ../../components/esp32_mquickjs/src/modules/rmt/esp32_mquickjs_rmt_channel_resources.c
 )
 target_include_directories(test_rmt_channel_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_rmt_channel_resources COMMAND test_rmt_channel_resources)
 
 add_executable(test_wifi_runtime_resources
-    test_wifi_runtime_resources.c
+    unit/wifi/lifecycle/test_wifi_runtime_resources.c
     ../../components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi_runtime_resources.c
 )
 target_include_directories(test_wifi_runtime_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_wifi_runtime_resources COMMAND test_wifi_runtime_resources)
 
 add_executable(test_i2s_timer_resources
-    test_i2s_timer_resources.c
+    unit/io/test_i2s_timer_resources.c
     ../../components/esp32_mquickjs/src/modules/i2s/esp32_mquickjs_i2s_timer_resources.c
 )
 target_include_directories(test_i2s_timer_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_i2s_timer_resources COMMAND test_i2s_timer_resources)
 
 add_executable(test_i2s_channel_resources
-    test_i2s_channel_resources.c
+    unit/io/test_i2s_channel_resources.c
     ../../components/esp32_mquickjs/src/modules/i2s/esp32_mquickjs_i2s_channel_resources.c
 )
 target_include_directories(test_i2s_channel_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_i2s_channel_resources COMMAND test_i2s_channel_resources)
 
 add_executable(test_adc_unit_resources
-    test_adc_unit_resources.c
+    unit/io/test_adc_unit_resources.c
     ../../components/esp32_mquickjs/src/modules/adc/esp32_mquickjs_adc_unit_resources.c
 )
 target_include_directories(test_adc_unit_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_adc_unit_resources COMMAND test_adc_unit_resources)
 
 add_executable(test_ledc_resources
-    test_ledc_resources.c
+    unit/io/test_ledc_resources.c
     ../../components/esp32_mquickjs/src/modules/ledc/esp32_mquickjs_ledc_resources.c
 )
 target_include_directories(test_ledc_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_ledc_resources COMMAND test_ledc_resources)
 
 add_executable(test_camera_driver_resources
-    test_camera_driver_resources.c
+    unit/media/test_camera_driver_resources.c
     ../../components/esp32_mquickjs/src/modules/camera/esp32_mquickjs_camera_driver_resources.c
 )
 target_include_directories(test_camera_driver_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_camera_driver_resources COMMAND test_camera_driver_resources)
 
 add_executable(test_spi_native_resources
-    test_spi_native_resources.c
+    unit/io/test_spi_native_resources.c
     ../../components/esp32_mquickjs/src/modules/spi/esp32_mquickjs_spi_native_resources.c
 )
 target_include_directories(test_spi_native_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_spi_native_resources COMMAND test_spi_native_resources)
 
 add_executable(test_i2c_bus_resources
-    test_i2c_bus_resources.c
+    unit/io/test_i2c_bus_resources.c
     ../../components/esp32_mquickjs/src/modules/i2c/esp32_mquickjs_i2c_bus_resources.c
 )
 target_include_directories(test_i2c_bus_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_i2c_bus_resources COMMAND test_i2c_bus_resources)
 
 add_executable(test_uart_port_resources
-    test_uart_port_resources.c
+    unit/io/test_uart_port_resources.c
     ../../components/esp32_mquickjs/src/modules/uart/esp32_mquickjs_uart_port_resources.c
 )
 target_include_directories(test_uart_port_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_uart_port_resources COMMAND test_uart_port_resources)
 
 add_executable(test_ble_runtime_resources
-    test_ble_runtime_resources.c
+    unit/ble/test_ble_runtime_resources.c
     ../../components/esp32_mquickjs/src/modules/ble/esp32_mquickjs_ble_runtime_resources.c
 )
 target_include_directories(test_ble_runtime_resources PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_ble_runtime_resources COMMAND test_ble_runtime_resources)
 
 add_executable(test_memory_dma_accounting
-    test_memory_dma_accounting.c
+    unit/memory/test_memory_dma_accounting.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_memory_dma_accounting.c
 )
 target_include_directories(test_memory_dma_accounting PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_memory_dma_accounting COMMAND test_memory_dma_accounting)
 
 add_executable(test_memory_owner_accounting
-    test_memory_owner_accounting.c
+    unit/memory/test_memory_owner_accounting.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_memory_owner_accounting.c
 )
 target_include_directories(test_memory_owner_accounting PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_memory_owner_accounting COMMAND test_memory_owner_accounting)
 
-add_executable(test_memory_budget test_memory_budget.c
+add_executable(test_memory_budget unit/memory/test_memory_budget.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_memory_budget.c)
 target_include_directories(test_memory_budget PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_memory_budget COMMAND test_memory_budget)
 
 find_package(Threads REQUIRED)
-add_executable(test_memory_wireless test_memory_wireless.c
+add_executable(test_memory_wireless unit/memory/test_memory_wireless.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_memory.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_memory_budget.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_memory_owner_accounting.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_memory_dma_accounting.c)
-target_include_directories(test_memory_wireless PRIVATE memory_stubs ../../components/esp32_mquickjs/internal)
+target_include_directories(test_memory_wireless PRIVATE support/memory_stubs ../../components/esp32_mquickjs/internal)
 target_link_libraries(test_memory_wireless PRIVATE Threads::Threads)
 add_test(NAME test_memory_wireless COMMAND test_memory_wireless)
 
 add_executable(test_dma_transfer
-    test_dma_transfer.c
+    unit/io/test_dma_transfer.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_dma_transfer.c
 )
 target_include_directories(test_dma_transfer PRIVATE ../../components/esp32_mquickjs/internal)
 add_test(NAME test_dma_transfer COMMAND test_dma_transfer)
 
 add_executable(test_wireless_core
-    test_wireless_core.c
+    unit/wireless/test_wireless_core.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_native_pool.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_wireless_core.c
 )
@@ -323,7 +323,7 @@ target_include_directories(test_wireless_core PRIVATE ../../components/esp32_mqu
 add_test(NAME test_wireless_core COMMAND test_wireless_core)
 
 add_executable(test_espnow_tx_queue
-    test_espnow_tx_queue.c
+    unit/espnow/test_espnow_tx_queue.c
     ../../components/esp32_mquickjs/src/modules/espnow/esp32_mquickjs_espnow_tx_queue.c
 )
 target_include_directories(test_espnow_tx_queue PRIVATE ../../components/esp32_mquickjs/internal)
@@ -345,7 +345,7 @@ foreach(WIFI_CSI_RESOURCE_TEST
         test_wifi_csi_lease
         test_wifi_csi_ownership)
     add_executable(${WIFI_CSI_RESOURCE_TEST}
-        ${WIFI_CSI_RESOURCE_TEST}.c
+        unit/wifi/csi/${WIFI_CSI_RESOURCE_TEST}.c
         ${WIFI_CSI_RESOURCE_SOURCES}
     )
     target_include_directories(${WIFI_CSI_RESOURCE_TEST} PRIVATE
@@ -355,7 +355,7 @@ foreach(WIFI_CSI_RESOURCE_TEST
 endforeach()
 
 add_executable(test_wifi_csi_target_config
-    test_wifi_csi_target_config.c
+    unit/wifi/csi/test_wifi_csi_target_config.c
     ../../components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_config.c
 )
 target_include_directories(test_wifi_csi_target_config PRIVATE
@@ -364,7 +364,7 @@ target_include_directories(test_wifi_csi_target_config PRIVATE
 add_test(NAME test_wifi_csi_target_config COMMAND test_wifi_csi_target_config)
 
 add_executable(test_wifi_csi_layout
-    test_wifi_csi_layout.c
+    unit/wifi/csi/test_wifi_csi_layout.c
     ../../components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_config.c
     ../../components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi_target_layout.c
 )
@@ -374,7 +374,7 @@ target_include_directories(test_wifi_csi_layout PRIVATE
 add_test(NAME test_wifi_csi_layout COMMAND test_wifi_csi_layout)
 
 add_executable(test_wifi_csi_batch
-    test_wifi_csi_batch.c
+    unit/wifi/csi/test_wifi_csi_batch.c
     ../../components/esp32_mquickjs/src/modules/wifi_csi/esp32_mquickjs_wifi_csi_batch.c
 )
 target_include_directories(test_wifi_csi_batch PRIVATE
@@ -384,11 +384,11 @@ add_test(NAME test_wifi_csi_batch COMMAND test_wifi_csi_batch)
 
 find_package(Threads REQUIRED)
 add_executable(test_wifi_radio
-    test_wifi_radio.c
+    unit/wifi/config/test_wifi_radio.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_wireless_core.c
     ../../components/esp32_mquickjs/src/core/esp32_mquickjs_native_pool.c
 )
-target_include_directories(test_wifi_radio PRIVATE radio_stubs ../../components/esp32_mquickjs/internal)
+target_include_directories(test_wifi_radio PRIVATE support/radio_stubs ../../components/esp32_mquickjs/internal)
 target_link_libraries(test_wifi_radio PRIVATE Threads::Threads)
 target_compile_definitions(test_wifi_radio PRIVATE RADIO_DIAGNOSTICS_TEST=1 CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW=1)
 foreach(RADIO_CASE stop-wait-budget start-event-timeout stop-event-timeout stop-event-queue event-marker-revision event-apsta-stop event-interrupt event-exhaustion helper-lifecycle-admission lifecycle-handoff handoff-capacity handoff-readback lifecycle-owner-roles ap-validation shutdown-callback-barrier restart-acquire-barrier application-settings-owner lifecycle-reservation lifecycle-unregister lifecycle-exhaustion
@@ -405,7 +405,7 @@ foreach(RADIO_CASE stop-wait-budget start-event-timeout stop-event-timeout stop-
 endforeach()
 
 add_executable(test_wifi_rx_header
-    test_wifi_rx_header.c
+    unit/wifi/monitor/test_wifi_rx_header.c
     ../../components/esp32_mquickjs/src/modules/wifi_common/esp32_mquickjs_wifi_rx.c
 )
 target_include_directories(test_wifi_rx_header PRIVATE ../../components/esp32_mquickjs/internal)

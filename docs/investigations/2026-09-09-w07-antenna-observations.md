@@ -48,7 +48,7 @@ C5 immutable Context `build/wireless-contexts/c5`（8 MB/no PSRAM）生产构建
 1,600 bytes。常驻账本与链接符号以 `build/w07-antenna-read-evidence.json` 为准；
 编译和符号大小不替代运行时内存测量。
 
-新增 deferred `tests/python/test_wifi_driver_antenna.py`，提取实际 Radio helper、
+新增 deferred `tests/c/integration/wifi/driver/test_wifi_driver_antenna.py`，提取实际 Radio helper、
 JS getter、转换和错误路径；仅注入 SDK storage/返回值、锁及 VM 分配/GC 边界。
 覆盖所有非稳定 driver state、逐项 admission、零参数预验证、SDK 部分输出错误、
 全部枚举组合和 4-bit 选择范围、disabled GPIO/raw 7-bit 保留、快照值复制、

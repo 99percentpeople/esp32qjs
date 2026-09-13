@@ -1,0 +1,2 @@
+# These are verbatim source inputs, including intentional boundary newlines.
+*.inc -whitespace

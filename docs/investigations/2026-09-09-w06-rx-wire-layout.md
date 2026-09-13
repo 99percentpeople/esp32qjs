@@ -52,7 +52,7 @@ metadata 的逐字段一致性规则，避免错误地要求 driver 报告等于
 
 ## 测试源码与检查
 
-新增 `tests/python/test_wifi_rx_wire.py`，编译并调用实际生产 header/source，
+新增 `tests/c/integration/wifi/monitor/test_wifi_rx_wire.py`，编译并调用实际生产 header/source，
 不复制布局实现为测试状态机。源码覆盖：
 
 - CSI/Monitor 的固定字节值与多帧 offset、空 section、reported/captured 分离；

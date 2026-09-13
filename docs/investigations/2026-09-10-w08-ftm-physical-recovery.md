@@ -67,7 +67,7 @@ manifest 51/491、feature docs 27、live SDK schema STA 35/AP 21、strict
 TypeScript、MQuickJS 61 sources/56 snippets、SDK map、whitespace 通过。
 具体 ELF、静态尺寸、生成物
 检查和 hash 见 `build/w08-ftm-recovery-radio-evidence.json`。新增
-`tests/python/test_wifi_ftm_recovery.py`，组合真实 Radio/Session/worker、STOP 与
+`tests/c/integration/wifi/ftm/test_wifi_ftm_recovery.py`，组合真实 Radio/Session/worker、STOP 与
 shutdown helper，注入 SDK/event/timer/allocator/锁和无关 broker storage 边界。
 覆盖 missing/ambiguous report、旧 timer、STOP 失败/迟到事件、SDK fence 和注销/
 deinit 失败后缀、物理终止后原 worker 释放、报告丢弃与 generation 顺序。仅 AST

@@ -1,0 +1,7 @@
+#define CONFIG_ESP32_MQUICKJS_FEATURE_WIFI 1
+#define CONFIG_ESP_WIFI_SOFTAP_SUPPORT 1
+#define CONFIG_IDF_TARGET "fixture"
+typedef int esp_err_t;
+#define ESP_OK 0
+#define ESP_ERR_INVALID_ARG 1
+#define ESP_ERR_INVALID_STATE 2

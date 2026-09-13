@@ -46,7 +46,7 @@ bridge 首次零初始化、构造与 detach 由调用方串行化，callbacks/c
 
 ## 测试源码，尚未运行
 
-`tests/python/test_wifi_monitor_queue.py` 使用实际 Monitor resources/queue bridge、
+`tests/c/integration/wifi/monitor/test_wifi_monitor_queue.py` 使用实际 Monitor resources/queue bridge、
 EventQueue 的构造、context bind、close/dispose、retain/release/native destruction
 和 Future finish/destroy。JS、SDK resource 创建、队列字节传输与 wake 调度是明确
 边界替身；没有声称该 fixture 等同完整 FreeRTOS queue/reaper 或 movable GC。

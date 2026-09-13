@@ -1,0 +1,64 @@
+
+static void reset_twt(void) {
+    reset_vendor();s_radio.next_operation_identity=1;
+    s_twt_probe=(__typeof__(s_twt_probe)){0};s_twt_identity.next_identity=1;
+    native_result=(esp32_mquickjs_wifi_twt_probe_result_snapshot_t){0};
+    native_timer=(esp32_mquickjs_wifi_twt_probe_timer_snapshot_t){0};
+    native_wake=(esp32_mquickjs_wifi_twt_probe_wake_snapshot_t){0};
+    submits=retires=0;mode_error=channel_error=association_error=submit_error=retire_error=0;
+    accept_native=true;early=false;
+}
+int main(void) {
+    reset_twt();esp32_mquickjs_wifi_twt_token_t token={0},old;
+    assert(esp32_mquickjs_wifi_radio_twt_probe_submit(0,&token)==ESP_ERR_INVALID_ARG);
+    assert(esp32_mquickjs_wifi_radio_twt_probe_submit(60001,&token)==ESP_ERR_INVALID_ARG && !submits);
+    association_error=71;assert(esp32_mquickjs_wifi_radio_twt_probe_submit(1,&token)==71 && !token.identity);
+    association_error=0;mode_error=72;assert(esp32_mquickjs_wifi_radio_twt_probe_submit(1,&token)==72);
+    mode_error=0;channel_error=73;assert(esp32_mquickjs_wifi_radio_twt_probe_submit(1,&token)==73);
+    channel_error=0;s_radio.next_operation_identity=0;
+    assert(esp32_mquickjs_wifi_radio_twt_probe_submit(1,&token)==ESP_ERR_NO_MEM && !submits);
+    s_radio.next_operation_identity=1;s_twt_identity.next_identity=0;
+    assert(esp32_mquickjs_wifi_radio_twt_probe_submit(1,&token)==ESP_ERR_NO_MEM && !submits);
+    reset_twt();esp32_mquickjs_wifi_radio_lease_t sta={0};
+    wifi_radio_operation_lock();assert(!wifi_radio_acquire_locked(ESP32_MQUICKJS_WIFI_RADIO_CLIENT_WIFI_STA,WIFI_MODE_STA,&sta));
+    wifi_radio_live_lease_t *owner=wifi_radio_promiscuous_owner(sta.identity);
+    owner->fixed_channel=true;owner->primary_channel=7;wifi_radio_operation_unlock();
+    assert(esp32_mquickjs_wifi_radio_twt_probe_submit(1,&token)==ESP_ERR_INVALID_STATE && !submits);
+    owner->primary_channel=6;owner->raw_tx_identity=8;
+    assert(esp32_mquickjs_wifi_radio_twt_probe_submit(1,&token)==ESP_ERR_INVALID_STATE && !submits);
+    owner->raw_tx_identity=0;owner->channel_conflict=true;
+    assert(esp32_mquickjs_wifi_radio_twt_probe_submit(1,&token)==ESP_ERR_INVALID_STATE && !submits);
+    owner->channel_conflict=false;early=true;submit_error=74;
+    assert(esp32_mquickjs_wifi_radio_twt_probe_submit(60000,&token)==74 && token.identity && submits==1);
+    assert(s_radio.clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_WIFI_STA]==1);
+    esp32_mquickjs_wifi_twt_probe_radio_state_t s;
+    assert(esp32_mquickjs_wifi_radio_twt_probe_status(&token,&s) && s.native.owned && s.native.event_seen && s.submit_error==74);
+    assert(!s.dispatching && s.native_identity);
+    old=token;++old.identity;
+    assert(!esp32_mquickjs_wifi_radio_twt_probe_status(&old,&s));
+    assert(esp32_mquickjs_wifi_radio_twt_probe_retire(&old)==ESP_ERR_INVALID_STATE && !retires);
+    esp32_mquickjs_wifi_radio_operation_t op=s_radio.operation;
+    esp32_mquickjs_wifi_radio_end_operation(&op);assert(op.identity && s_radio.operation.identity);
+    esp32_mquickjs_wifi_radio_lease_t borrowed=s_twt_probe.lease;
+    wifi_radio_operation_lock();wifi_radio_release_locked(&borrowed);wifi_radio_operation_unlock();
+    assert(borrowed.acquired && s_radio.clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_TWT]==1);
+    retire_error=75;assert(esp32_mquickjs_wifi_radio_twt_probe_retire(&token)==75 && token.identity);
+    assert(esp32_mquickjs_wifi_radio_twt_probe_status(&token,&s) && s.cleanup_pending && s.cleanup_error==75);
+    assert(!strcmp(s.cleanup_stage,"injected-native-suffix"));
+    native_timer.fault=76;assert(esp32_mquickjs_wifi_radio_twt_probe_status(&token,&s) && s.native_error==76);
+    native_result.control_error=77;assert(esp32_mquickjs_wifi_radio_twt_probe_status(&token,&s) && s.native_error==77);
+    native_result.control_error=native_timer.fault=0;old=token;retire_error=0;
+    assert(!esp32_mquickjs_wifi_radio_twt_probe_retire(&token) && !token.identity);
+    assert(!s_radio.clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_TWT] && s_radio.clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_WIFI_STA]==1);
+    assert(esp32_mquickjs_wifi_radio_twt_probe_retire(&old)==ESP_ERR_INVALID_STATE);
+    accept_native=false;submit_error=78;
+    assert(esp32_mquickjs_wifi_radio_twt_probe_submit(1,&token)==78 && token.identity>old.identity);
+    unsigned calls_before=retires;assert(!esp32_mquickjs_wifi_radio_twt_probe_retire(&token) && retires==calls_before);
+    s_twt_identity.next_identity=UINT64_MAX;s_radio.next_operation_identity=UINT32_MAX;
+    assert(esp32_mquickjs_wifi_radio_twt_probe_submit(1,&token)==78 && token.identity==UINT64_MAX);
+    assert(!s_twt_identity.next_identity && !s_radio.next_operation_identity);
+    assert(!esp32_mquickjs_wifi_radio_twt_probe_retire(&token));
+    assert(esp32_mquickjs_wifi_radio_twt_probe_submit(1,&token)==ESP_ERR_NO_MEM);
+    esp32_mquickjs_wifi_radio_twt_probe_snapshot(&s);assert(!s.token.identity && !s.cleanup_pending);
+    assert(!locks && !critical);return 0;
+}

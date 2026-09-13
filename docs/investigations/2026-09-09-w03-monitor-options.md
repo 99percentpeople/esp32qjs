@@ -41,7 +41,7 @@ filter 本身仍按同 role OR、跨 role AND 执行。
 
 ## 已编写的 VM 测试，未执行
 
-`tests/python/test_wifi_monitor_options.py` 使用 vendored MQuickJS、生产 parser、
+`tests/c/integration/wifi/monitor/test_wifi_monitor_options.py` 使用 vendored MQuickJS、生产 parser、
 生产 options helpers、原生 filter/capture 类型与纯信道映射，覆盖 2.4 GHz-only 和
 5 GHz gate。公共 getter/array-index 边界可逐次注入 OOM，并在读取前执行真实
 移动 GC，检查输出原子性、exception 保留与 root/native 账本。

@@ -54,7 +54,7 @@ AP helper owner 的新 claim；AP/APSTA 共存准入留在 W-01/W-02 范围继�
 
 ## 测试源码与已执行检查
 
-`tests/python/test_wifi_monitor_capture.py` 编译真实 capture/resources/NativePool/
+`tests/c/integration/wifi/monitor/test_wifi_monitor_capture.py` 编译真实 capture/resources/NativePool/
 NativeLease/filter/target adapter 源码，Radio 与 queue lifecycle 为明确替身。
 已编写各启动步骤失败、失败且 acquired=true、cleanup 错误与普通 drain 区分、
 重试不提前释放信道/Radio/队列、stop/start 复用、关闭后 Frame/ref 保留、固定

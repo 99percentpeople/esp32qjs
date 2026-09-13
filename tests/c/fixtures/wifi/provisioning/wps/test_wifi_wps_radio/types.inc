@@ -1,0 +1,6 @@
+
+#include <stdlib.h>
+#define ESP_ERR_WIFI_NOT_CONNECT -20
+#define ESP_ERR_WIFI_NOT_STARTED -21
+#define ESP_ERR_INVALID_RESPONSE -22
+#define ESP_ERR_NOT_FINISHED -23

@@ -143,7 +143,7 @@
 ```text
 docs/idf-wifi-api-map.json
 scripts/generate_idf_wifi_api_map.py
-tests/python/test_idf_wifi_api_coverage.py
+tests/python/tooling/generators/test_idf_wifi_api_coverage.py
 ```
 
 映射表建议结构（本轮修订；示例状态为 planned）：
@@ -2191,8 +2191,8 @@ frame 1 CSI bytes
 必须同步重写：
 
 - `scripts/esp32qjs_csi.py`
-- `tests/python/test_wifi_csi_protocol.py`
-- `tests/python/fixtures/esp32qjs-csi-v1.hex`
+- `tests/c/integration/wifi/csi/test_wifi_csi_protocol.py`
+- `tests/fixtures/esp32qjs-csi-v1.hex`
 - `docs/api/wifi-csi-protocol.md`
 
 不保留旧 metadata 192-byte reader。
@@ -3682,16 +3682,16 @@ generic receive 和该共享服务处理的非无线调用。worker 创建前预
 建议新增：
 
 ```text
-tests/c/test_wifi_80211_parser.c
-tests/c/test_wifi_promiscuous_broker.c
-tests/c/test_wifi_tx_broker.c
-tests/c/test_wifi_raw_tx_validator.c
-tests/c/test_wifi_monitor_resources.c
-tests/c/test_wifi_csi_packet_capture.c
-tests/python/test_idf_wifi_api_coverage.py
-tests/python/test_wifi_public_surface.py
-tests/python/test_wifi_monitor_protocol.py
-tests/python/test_wifi_csi_protocol.py
+tests/c/unit/wifi/monitor/test_wifi_80211_parser.c
+tests/c/unit/wifi/monitor/test_wifi_promiscuous_broker.c
+tests/c/unit/wifi/tx/test_wifi_tx_broker.c
+tests/c/unit/wifi/tx/test_wifi_raw_tx_validator.c
+tests/c/unit/wifi/monitor/test_wifi_monitor_resources.c
+tests/c/unit/wifi/csi/test_wifi_csi_packet_capture.c
+tests/python/tooling/generators/test_idf_wifi_api_coverage.py
+tests/python/contracts/wireless/test_wifi_public_surface.py
+tests/c/integration/wifi/monitor/test_wifi_monitor_protocol.py
+tests/c/integration/wifi/csi/test_wifi_csi_protocol.py
 ```
 
 ### 31.2 JavaScript 硬件测试

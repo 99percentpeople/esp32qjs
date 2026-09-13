@@ -54,7 +54,7 @@ cleanup。首次 lock 初始化及 control 销毁需要外部串行化。
 
 ## 测试源码与执行边界
 
-`tests/python/test_wifi_monitor_resources.py` 拼接真实 target adapter/parser、
+`tests/c/integration/wifi/monitor/test_wifi_monitor_resources.py` 拼接真实 target adapter/parser、
 NativePool、NativeLease 和 Monitor resources。仅 allocator、发布 hook、FreeRTOS
 锁映射为明确测试边界，使用 recorded C3/S3/C5 SDK 类型；不是独立测试状态机。
 

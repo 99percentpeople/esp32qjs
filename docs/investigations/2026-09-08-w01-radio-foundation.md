@@ -53,7 +53,7 @@ mutation 与 release 在同一个 mutation mutex 期间完成；NVS、SDK、等�
 
 ## 验证
 
-`tests/c/test_wifi_radio.c` 直接编译生产 Radio，只替换 SDK/RTOS 调用。先把同信道
+`tests/c/unit/wifi/config/test_wifi_radio.c` 直接编译生产 Radio，只替换 SDK/RTOS 调用。先把同信道
 共享期待加入原有测试，取得修改前失败 `build/w01-before.txt`，然后修改生产实现。
 
 新增覆盖：共享/退出/复制旧 token、不同 secondary 冲突、重复 stop/start/shutdown、

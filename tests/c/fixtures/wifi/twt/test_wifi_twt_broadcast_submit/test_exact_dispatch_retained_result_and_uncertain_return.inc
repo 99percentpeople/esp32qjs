@@ -1,0 +1,13 @@
+
+#define ESP32_MQUICKJS_WIFI_TWT_MAX_TIMEOUT_MS 60000U
+typedef struct {wifi_btwt_setup_config_t config;uint32_t timeout_ms;} esp32_mquickjs_wifi_btwt_options_t;
+esp_err_t esp_wifi_sta_btwt_setup(wifi_btwt_setup_config_t *);
+esp_err_t __real_wifi_sta_btwt_setup_process(void *);
+int pm_get_sleep_type(void);
+esp_err_t esp32_mquickjs_wifi_twt_tx_broadcast_admit_native(unsigned);
+void esp32_mquickjs_wifi_twt_tx_broadcast_cancel_native(void);
+bool esp32_mquickjs_wifi_twt_sdk_broadcast_node_matches_native(uintptr_t);
+bool esp32_mquickjs_wifi_twt_sdk_broadcast_established_native(unsigned);
+esp_err_t esp32_mquickjs_wifi_twt_tx_broadcast_cancel_request_native(unsigned,uint32_t);
+esp_err_t esp32_mquickjs_wifi_twt_tx_broadcast_quiescent_native(unsigned,uint32_t,uint32_t *);
+void esp32_mquickjs_wifi_twt_sdk_broadcast_tx_complete_native(uintptr_t,uint8_t,const uint8_t *,uint8_t);

@@ -166,7 +166,7 @@
 ```text
 docs/nimble-api-map.json
 scripts/generate_nimble_api_map.py
-tests/python/test_nimble_api_coverage.py
+tests/python/tooling/generators/test_nimble_api_coverage.py
 ```
 
 覆盖表使用与 Wi-Fi 文档相同的 schema/disposition/implementation/contract/validation 概念；不要复用一个 `mapped` 同时表示目标映射和完成实现。
@@ -2381,12 +2381,12 @@ PAwR、ISO、CTE/Direction Finding、LE Power Control/Path Loss/Subrating 分别
 新增：
 
 ```text
-tests/python/test_ble_api_architecture.py
-tests/python/test_ble_callback_ownership.py
-tests/python/test_ble_teardown_invariants.py
-tests/python/test_ble_gatt_schema.py
-tests/python/test_ble_capability_manifest.py
-tests/python/test_nimble_api_coverage.py
+tests/python/contracts/wireless/test_ble_api_architecture.py
+tests/python/contracts/wireless/test_ble_callback_ownership.py
+tests/python/contracts/wireless/test_ble_teardown_invariants.py
+tests/python/contracts/wireless/test_ble_gatt_schema.py
+tests/python/contracts/wireless/test_ble_capability_manifest.py
+tests/python/tooling/generators/test_nimble_api_coverage.py
 ```
 
 检查：

@@ -1,0 +1,12 @@
+
+static bool xPortInIsrContext(void){return false;}
+void esp32_mquickjs_wifi_twt_sdk_broadcast_teardown_complete_native(uintptr_t,uint8_t,uint8_t);
+void esp32_mquickjs_wifi_twt_tx_broadcast_cancel_native(void);
+bool esp32_mquickjs_wifi_twt_sdk_broadcast_node_matches_native(uintptr_t);
+bool esp32_mquickjs_wifi_twt_sdk_broadcast_established_native(unsigned);
+void esp32_mquickjs_wifi_twt_sdk_broadcast_tx_complete_native(uintptr_t,uint8_t,const uint8_t *,uint8_t);
+esp_err_t esp_timer_stop_blocking(esp_timer_handle_t,unsigned);
+esp_err_t esp32_mquickjs_wifi_action_sdk_fence(void);
+esp_err_t esp32_mquickjs_wifi_twt_sdk_broadcast_cancel(unsigned,uint32_t);
+esp_err_t esp32_mquickjs_wifi_twt_sdk_broadcast_quiescent(unsigned,uint32_t,esp32_mquickjs_wifi_btwt_cut_t *);
+esp_err_t esp32_mquickjs_wifi_twt_sdk_broadcast_release(unsigned,uint32_t,const esp32_mquickjs_wifi_btwt_cut_t *,uint32_t);

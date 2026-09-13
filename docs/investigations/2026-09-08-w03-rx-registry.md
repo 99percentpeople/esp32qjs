@@ -56,7 +56,7 @@ mask 是公共内部语义，尚未转换为 SDK filter bit；不把 OR 结果�
 
 ## 测试源码（not-run）
 
-`tests/python/test_wifi_promiscuous_broker.py` 使用记录的 C3/S3/C5 native 类型，
+`tests/c/integration/wifi/monitor/test_wifi_promiscuous_broker.py` 使用记录的 C3/S3/C5 native 类型，
 编译真实 adapter/parser/filter/registry；唯一线程边界替身是 pthread 实现的
 FreeRTOS critical section。测试源码包括：
 

@@ -1,0 +1,5 @@
+#define CONFIG_ESP32_MQUICKJS_FEATURE_WIFI 1
+#define CONFIG_ESP_WIFI_SOFTAP_SUPPORT 1
+#define CONFIG_SOC_WIFI_SUPPORT_5G 0
+typedef int esp_err_t;
+#define ESP_OK 0

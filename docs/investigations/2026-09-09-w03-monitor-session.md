@@ -64,7 +64,7 @@ runtime 指针为 NULL，旧 Frame/Source 的最终释放不会通知新 runtime
 
 ## 测试源码与验证边界
 
-新增 `tests/python/test_wifi_monitor_session.py`。它拼接实际 Session/capture/
+新增 `tests/c/integration/wifi/monitor/test_wifi_monitor_session.py`。它拼接实际 Session/capture/
 resources/queue bridge、EventQueue native lifetime/Future finish/destroy 与 reaper
 registry；Radio、JS object/GC、SDK allocation、task notification、queue 字节传输
 为明确边界。复用 queue fixture 的 production_queue_code，并增加第 N 次 allocator

@@ -1,0 +1,7 @@
+
+typedef int JSContext,esp32_mquickjs_runtime_t;
+typedef unsigned esp32_mquickjs_future_token_t;
+typedef struct {uint32_t generation,identity;int client;bool acquired;} esp32_mquickjs_wifi_radio_lease_t;
+typedef enum {ESP32_MQUICKJS_FUTURE_PENDING,ESP32_MQUICKJS_FUTURE_READY} esp32_mquickjs_future_poll_t;
+typedef enum {ESP32_MQUICKJS_CANCEL_REQUESTED} esp32_mquickjs_cancel_result_t;
+typedef struct esp32_mquickjs_future_driver_state esp32_mquickjs_future_driver_state_t;

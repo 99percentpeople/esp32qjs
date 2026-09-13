@@ -49,7 +49,7 @@ no-submit rejection/abort，也没有 force clear。未来显式故障恢复需�
 
 ## 验证与下一步
 
-新增 deferred `tests/python/test_wifi_raw_tx_periodic.py`，将实际生产 C 文件作为
+新增 deferred `tests/c/integration/wifi/tx/test_wifi_raw_tx_periodic.py`，将实际生产 C 文件作为
 独立编译单元，而非用测试状态机替换。准备覆盖绝对 deadline、迟到合并、busy 两种
 策略、finite count、停止/关闭时 active 保留、精确/旧 ticket、重复提交、错误及
 uncertain、时间倒退、INT64/UINT32 边界与计数不变量。该 fixture 仅通过 AST，

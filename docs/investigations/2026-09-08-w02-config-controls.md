@@ -56,7 +56,7 @@ code/details、STA/AP 各频段的完整 protocol bitmap、带宽和 Station pow
 feature docs、raw schema/live SDK header、recorded SDK map、一致性及 whitespace。
 最终结果与文件 hash：`build/w02-config-controls-evidence.json`。
 
-新增 `tests/python/test_wifi_config_controls.py` 调用实际事务、精确 token 入口、
+新增 `tests/c/integration/wifi/config/test_wifi_config_controls.py` 调用实际事务、精确 token 入口、
 纯 validator、semantic config compare 和 secure-zero；SDK typedef 从已记录
 C3/C5 inventory 读取，注入边界仅模拟 driver 调用及返回数据。覆盖成功路径
 每次调用失败、先部分写入后返回失败、逐回滚失败、读回不一致、内存失败/

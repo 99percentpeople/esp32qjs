@@ -719,6 +719,46 @@ def run_host_c_tests() -> TestStageSummary:
     return summary
 
 
+def run_native_fixture_tests(config: ProjectConfig) -> TestStageSummary:
+    """Run native C/SDK/VM integrations separately from CTest and tooling tests."""
+    import tempfile
+
+    summary = TestStageSummary(name="Native C/SDK/VM")
+    with tempfile.TemporaryDirectory(prefix="esp32qjs-native-tests-") as directory:
+        result_path = Path(directory) / "result.json"
+        environment = dict(os.environ)
+        sdk_available = (Path(config.idf_path) / "components/esp_wifi/include/esp_wifi.h").is_file()
+        if sdk_available:
+            environment["IDF_PATH"] = config.idf_path
+        else:
+            environment.pop("IDF_PATH", None)
+        completed = subprocess.run(
+            [sys.executable, str(ROOT_DIR / "scripts/run_native_tests.py"),
+             "--result", str(result_path)], cwd=ROOT_DIR, env=environment, check=False,
+        )
+        returncode = completed.returncode
+        if not result_path.exists():
+            summary.status = "failed"
+            summary.note = f"native test runner exited with code {returncode} without a result"
+            raise TestStageError(summary, "Native fixture runner did not produce a result.")
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+    summary.passed_cases = result["passed"]
+    summary.skipped_cases = result["skipped"]
+    summary.failed_cases = result["failed"] + result["notRun"]
+    summary.failure_details = result["failedCases"] + result["notRunCases"]
+    summary.note = "SDK/emulator and VM fixtures; no device or RF acceptance"
+    if not sdk_available:
+        summary.note += "; configured ESP-IDF unavailable, SDK prerequisites remain skipped"
+    if result["notRun"]:
+        summary.note += f'; selected cases not run={result["notRun"]}'
+    if returncode != 0 or result["status"] != "passed":
+        summary.status = "failed"
+        print_test_stage_summary(summary)
+        raise TestStageError(summary, "Native C/SDK/VM fixtures failed.")
+    print_test_stage_summary(summary)
+    return summary
+
+
 def wait_for_optional_js_repl_banner(session: MonitorSession, initial_output: str) -> None:
     """Wait for the REPL banner when observable, but let the runtime probe prove readiness."""
     if JS_REPL_BANNER_MARKER in initial_output:
@@ -1379,12 +1419,13 @@ def run_test_command(config: ProjectConfig, args: argparse.Namespace) -> None:
     stage_errors: list[str] = []
 
     if "c" in scopes:
-        try:
-            report.stages.append(run_host_c_tests())
-        except TestStageError as exc:
-            if not report.stages or report.stages[-1] is not exc.summary:
-                report.stages.append(exc.summary)
-            stage_errors.append(exc.message)
+        for run_stage in (run_host_c_tests, lambda: run_native_fixture_tests(config)):
+            try:
+                report.stages.append(run_stage())
+            except TestStageError as exc:
+                if not report.stages or report.stages[-1] is not exc.summary:
+                    report.stages.append(exc.summary)
+                stage_errors.append(exc.message)
 
     if "js" in scopes:
         try:

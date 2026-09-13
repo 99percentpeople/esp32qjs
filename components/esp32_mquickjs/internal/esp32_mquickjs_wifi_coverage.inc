@@ -2,7 +2,7 @@
  * Reviewed inventory union; counts are not runtime or hardware qualification. */
 #define WIFI_COVERAGE_IDF_REVISION "fff9895c82d744c7237be8847347bdd1b07c6643"
 #define WIFI_COVERAGE_INVENTORY_SHA256 "5cfdeb1cb587da6cd8d8fc700677dc2507167e439d111d9df16cfaf8e6e4d914"
-#define WIFI_COVERAGE_MAP_SHA256 "c829806899f77bcd3d10e66557708bf604873bdb59225fdcc8e4cc30294d13b0"
+#define WIFI_COVERAGE_MAP_SHA256 "8300a779ccdef725318cb91946cdcaafe62e2067d1612de04252c0c1c6787b7a"
 #define WIFI_COVERAGE_MANIFEST_SHA256 "239d0fec362f865f58034119feddcf46aef043ae90e72d3da54947687f03fae3"
 static const char *const s_wifi_coverage_fields[] = {"symbols", "functionSymbols", "registeredSymbols", "mapped", "frameworkOwned", "buildTime", "removedOrDeprecated", "privateExcluded", "targetUnsupported", "planned", "inProgress", "implemented", "reviewRequired", "contractPending", "reviewed"};
 typedef struct { const char *name; uint32_t counts[15]; } wifi_coverage_row_t;

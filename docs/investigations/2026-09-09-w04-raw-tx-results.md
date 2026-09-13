@@ -60,7 +60,7 @@ caller 释放后继续由结果读取者保留，最后一个 exact watcher 释�
 
 ## 用例和证据范围
 
-新增 `tests/python/test_wifi_raw_tx_results.py`，复用提取出的 production_session_code
+新增 `tests/c/integration/wifi/tx/test_wifi_raw_tx_results.py`，复用提取出的 production_session_code
 来直接编译实际 Session/queue/arbiter/broker/validator。覆盖 8 个结果上限、slot
 满时不驱逐 queue、旧 token/slot 复用、独立序号、不同 packet 的 completion 不互相
 覆盖、queue overflow/close dropped、UINT32_MAX 耗尽、SDK 前 rejected 和 SDK 后

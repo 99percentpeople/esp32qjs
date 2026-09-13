@@ -1,0 +1,4 @@
+
+static esp_err_t esp32_mquickjs_wifi_twt_sdk_probe_cancel(uint32_t);
+static esp_err_t esp32_mquickjs_wifi_twt_sdk_probe_quiescent(uint32_t,esp32_mquickjs_wifi_twt_probe_cut_t *);
+static esp_err_t esp32_mquickjs_wifi_twt_sdk_probe_release(uint32_t,const esp32_mquickjs_wifi_twt_probe_cut_t *,uint32_t);

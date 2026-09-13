@@ -1,0 +1,3 @@
+bool esp32_mquickjs_wifi_twt_sdk_broadcast_established_native(unsigned);
+esp_err_t esp32_mquickjs_wifi_twt_tx_broadcast_cancel_request_native(unsigned, uint32_t);
+esp_err_t esp32_mquickjs_wifi_twt_tx_broadcast_quiescent_native(unsigned, uint32_t, uint32_t *);
