@@ -28,6 +28,14 @@ static struct {
 } s_raw_tx = {.next_identity = 1, .submitting = RAW_TX_NONE};
 
 static void raw_tx_count(uint32_t *value) { if (*value != UINT32_MAX) ++*value; }
+static void raw_tx_note_correlation_locked(const char *reason, unsigned index)
+{
+    if (s_raw_tx.status.correlation_failure_reason != NULL) return;
+    s_raw_tx.status.correlation_failure_reason = reason;
+    s_raw_tx.status.correlation_failure_generation = s_raw_tx.status.generation;
+    s_raw_tx.status.correlation_failure_identity = index < RAW_TX_SLOTS
+        ? s_raw_tx.records[index].native.token.identity : 0U;
+}
 static unsigned raw_tx_find(const esp32_mquickjs_wifi_raw_tx_token_t *token)
 {
     if (token == NULL || token->identity == 0U) return RAW_TX_NONE;
@@ -57,6 +65,9 @@ static void raw_tx_status_locked(unsigned index, esp32_mquickjs_wifi_raw_tx_brok
     out->invalid_callbacks = s_raw_tx.status.invalid_callbacks;
     out->mismatched_callbacks = s_raw_tx.status.mismatched_callbacks;
     out->duplicate_callbacks = s_raw_tx.status.duplicate_callbacks;
+    out->correlation_failure_reason = s_raw_tx.status.correlation_failure_reason;
+    out->correlation_failure_identity = s_raw_tx.status.correlation_failure_identity;
+    out->correlation_failure_generation = s_raw_tx.status.correlation_failure_generation;
     out->cleanup_error = s_raw_tx.status.cleanup_error;
     out->identity_exhausted = s_raw_tx.next_identity == 0U;
     out->max_in_flight = RAW_TX_SLOTS;
@@ -69,6 +80,7 @@ static void raw_tx_complete(const esp_80211_tx_info_t *info, void *descriptor, b
 {
     portENTER_CRITICAL(&s_raw_tx_lock);
     if (s_raw_tx.status.callbacks_active == UINT32_MAX) {
+        raw_tx_note_correlation_locked("callback-overflow", RAW_TX_NONE);
         s_raw_tx.status.registration_uncertain = true;
         portEXIT_CRITICAL(&s_raw_tx_lock); return;
     }
@@ -84,18 +96,26 @@ static void raw_tx_complete(const esp_80211_tx_info_t *info, void *descriptor, b
             if (descriptor != NULL && s_raw_tx.records[i].descriptor == descriptor) { index = i; break; }
     } else index = raw_tx_first();
     if (index == RAW_TX_NONE || !s_raw_tx.records[index].native.operation_active) {
+        raw_tx_note_correlation_locked("orphan-callback", RAW_TX_NONE);
         raw_tx_count(&s_raw_tx.status.orphan_callbacks);
         s_raw_tx.status.registration_uncertain = true;
     } else {
         raw_tx_record_t *record = &s_raw_tx.records[index];
         esp32_mquickjs_wifi_raw_tx_broker_status_t *native = &record->native;
-        if (!valid) raw_tx_count(&s_raw_tx.status.invalid_callbacks);
+        if (!valid) {
+            raw_tx_count(&s_raw_tx.status.invalid_callbacks);
+            if (exact) raw_tx_note_correlation_locked(info == NULL ? "invalid-info" : "invalid-interface", index);
+        }
         else if (snapshot.interface != record->interface ||
             (snapshot.destination_available && memcmp(snapshot.destination, record->buffer + 4, 6) != 0) ||
             (snapshot.source_available && memcmp(snapshot.source, record->buffer + 10, 6) != 0)) {
             raw_tx_count(&s_raw_tx.status.mismatched_callbacks);
+            if (exact) raw_tx_note_correlation_locked(snapshot.interface != record->interface ? "interface-mismatch" :
+                (snapshot.destination_available && memcmp(snapshot.destination, record->buffer + 4, 6) != 0)
+                    ? "destination-mismatch" : "source-mismatch", index);
         } else if (native->driver_completed) {
             raw_tx_count(&s_raw_tx.status.duplicate_callbacks);
+            raw_tx_note_correlation_locked("duplicate-callback", index);
             native->correlation_fault = native->quarantined = true;
         } else {
             native->completion = snapshot;
@@ -103,9 +123,10 @@ static void raw_tx_complete(const esp_80211_tx_info_t *info, void *descriptor, b
             /* SDK may recycle the descriptor after this callback. Detach it
              * now so subsequent allocation cannot alias an unretired result. */
             record->descriptor = NULL;
-            if (native->submit_returned && !native->driver_accepted)
+            if (native->submit_returned && !native->driver_accepted) {
+                raw_tx_note_correlation_locked("completion-after-rejection", index);
                 native->correlation_fault = native->quarantined = true;
-            else native->quarantined = false;
+            } else native->quarantined = false;
         }
     }
     if (exact) {
@@ -140,6 +161,32 @@ static void raw_tx_callback(const esp_80211_tx_info_t *info)
 #if ESP32_MQUICKJS_RAW_TX_DESCRIPTOR_IDENTITY
 extern void *ic_ebuf_alloc(const void *bytes, int kind, int length);
 extern void ieee80211_get_tx_info_from_eb(void *descriptor, esp_80211_tx_info_t *info);
+extern void ieee80211_copy_eb_header(void *destination, void *source);
+void esp32qjs_raw_tx_copy_header(void *destination, void *source)
+{
+    ieee80211_copy_eb_header(destination, source);
+    /* HMAC can replace a cache descriptor even for a one-shot packet. The
+     * reviewed caller recycles source immediately after this hook and only
+     * then dispatches destination. Unrelated SDK traffic has no binding. */
+    portENTER_CRITICAL(&s_raw_tx_lock);
+    unsigned index = RAW_TX_NONE;
+    for (unsigned i = 0; i < RAW_TX_SLOTS; ++i)
+        if (source != NULL && s_raw_tx.records[i].descriptor == source) { index = i; break; }
+    if (index != RAW_TX_NONE && destination != source) {
+        bool collision = destination == NULL;
+        for (unsigned i = 0; i < RAW_TX_SLOTS; ++i)
+            if (destination != NULL && s_raw_tx.records[i].descriptor == destination) collision = true;
+        s_raw_tx.records[index].descriptor = collision ? NULL : destination;
+        if (collision) {
+            raw_tx_note_correlation_locked("descriptor-transfer", index);
+            s_raw_tx.status.registration_uncertain = true;
+            for (unsigned i = 0; i < RAW_TX_SLOTS; ++i)
+                if (s_raw_tx.records[i].native.operation_active && !s_raw_tx.records[i].native.driver_completed)
+                    s_raw_tx.records[i].native.correlation_fault = s_raw_tx.records[i].native.quarantined = true;
+        }
+    }
+    portEXIT_CRITICAL(&s_raw_tx_lock);
+}
 void *esp32qjs_raw_tx_alloc(const void *bytes, int kind, int length)
 {
     void *descriptor = ic_ebuf_alloc(bytes, kind, length);
@@ -149,9 +196,15 @@ void *esp32qjs_raw_tx_alloc(const void *bytes, int kind, int length)
     if (index < RAW_TX_SLOTS && s_raw_tx.records[index].buffer == bytes &&
         s_raw_tx.records[index].native.byte_length == length && s_raw_tx.records[index].descriptor == NULL) {
         for (unsigned i = 0; i < RAW_TX_SLOTS; ++i)
-            if (s_raw_tx.records[i].descriptor == descriptor) s_raw_tx.status.registration_uncertain = true;
+            if (s_raw_tx.records[i].descriptor == descriptor) {
+                raw_tx_note_correlation_locked("descriptor-reused", index);
+                s_raw_tx.status.registration_uncertain = true;
+            }
         s_raw_tx.records[index].descriptor = descriptor;
-    } else s_raw_tx.status.registration_uncertain = true;
+    } else {
+        raw_tx_note_correlation_locked("allocation-binding", index);
+        s_raw_tx.status.registration_uncertain = true;
+    }
     portEXIT_CRITICAL(&s_raw_tx_lock);
     return descriptor;
 }
@@ -177,6 +230,8 @@ esp_err_t esp32_mquickjs_wifi_raw_tx_broker_register(uint32_t generation)
         portEXIT_CRITICAL(&s_raw_tx_lock); return ESP_ERR_INVALID_STATE;
     }
     s_raw_tx.status.generation = generation;
+    s_raw_tx.status.correlation_failure_reason = NULL;
+    s_raw_tx.status.correlation_failure_identity = s_raw_tx.status.correlation_failure_generation = 0U;
     s_raw_tx.status.control_busy = true;
     portEXIT_CRITICAL(&s_raw_tx_lock);
     esp_err_t error = esp_wifi_register_80211_tx_cb(raw_tx_callback);
@@ -231,7 +286,10 @@ esp_err_t esp32_mquickjs_wifi_raw_tx_broker_submit(uint32_t generation, uint32_t
     record->native.submit_error = error;
     if (error != ESP_OK) {
         record->native.quarantined = true;
-        if (record->native.driver_completed) record->native.correlation_fault = true;
+        if (record->native.driver_completed) {
+            raw_tx_note_correlation_locked("completion-after-rejection", index);
+            record->native.correlation_fault = true;
+        }
     }
     portEXIT_CRITICAL(&s_raw_tx_lock);
     return error;

@@ -4,6 +4,9 @@ static unsigned next_descriptor;
 static void *last_descriptor;
 void *esp32qjs_raw_tx_alloc(const void *, int, int);
 void esp32qjs_raw_tx_info(void *, esp_80211_tx_info_t *);
+void ieee80211_copy_eb_header(void *destination, void *source) {
+    assert(destination && source && !critical_depth);
+}
 void *ic_ebuf_alloc(const void *bytes, int kind, int length) {
     assert(bytes && kind==1 && length==24);
     return &descriptors[next_descriptor++ % 16];

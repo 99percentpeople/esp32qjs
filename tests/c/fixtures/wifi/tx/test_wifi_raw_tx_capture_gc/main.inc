@@ -45,6 +45,23 @@ int main(int argc,char **argv) {
                 assert(!JS_ToInt32(ctx,&number,JS_GetPropertyStr(ctx,*result,"laneIdentity")) && number==77);
                 assert(!JS_ToInt32(ctx,&number,JS_GetPropertyStr(ctx,*result,"operationIdentity")) && number==45);
                 assert(!JS_ToInt32(ctx,&number,JS_GetPropertyStr(ctx,*result,"laneWaiters")) && number==8);
+                assert(!JS_ToInt32(ctx,&number,JS_GetPropertyStr(ctx,*result,"invalidCallbacks")) && number==3);
+                assert(!JS_ToInt32(ctx,&number,JS_GetPropertyStr(ctx,*result,"mismatchedCallbacks")) && number==5);
+                assert(!JS_ToInt32(ctx,&number,JS_GetPropertyStr(ctx,*result,"orphanCallbacks")) && number==7);
+                assert(!JS_ToInt32(ctx,&number,JS_GetPropertyStr(ctx,*result,"duplicateCallbacks")) && number==9);
+                if (terminated_snapshot) {
+                    assert(JS_IsNull(JS_GetPropertyStr(ctx,*result,"correlationFailureReason")));
+                    assert(JS_IsNull(JS_GetPropertyStr(ctx,*result,"correlationFailureIdentity")));
+                    assert(JS_IsNull(JS_GetPropertyStr(ctx,*result,"correlationFailureGeneration")));
+                } else {
+                    /* Origin may differ from the first retained operation. */
+                    assert(!JS_ToInt32(ctx,&number,JS_GetPropertyStr(ctx,*result,"correlationFailureIdentity")) && number==46);
+                    assert(!JS_ToInt32(ctx,&number,JS_GetPropertyStr(ctx,*result,"correlationFailureGeneration")) && number==7);
+                    args[1].val=JS_GetPropertyStr(ctx,*result,"correlationFailureReason");
+                    JSCStringBuf buffer;size_t length;
+                    const char *reason=JS_ToCStringLen(ctx,&length,args[1].val,&buffer);
+                    assert(reason && length==15 && !memcmp(reason,"source-mismatch",15));
+                }
                 assert(JS_GetPropertyStr(ctx,*result,"laneIdentityExhausted")==JS_TRUE);
                 assert(JS_GetPropertyStr(ctx,*result,"nativeTerminated")==JS_NewBool(terminated_snapshot));
                 if(terminated_snapshot) {

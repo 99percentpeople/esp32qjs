@@ -175,6 +175,27 @@ by runtime or Radio restart. The fields are diagnostic snapshots, not a combined
 atomic transaction across scheduler, broker and cleanup. No packet bytes or credentials are
 included. `clients.wifiRawTx` and `activeOperations` retain unfinished native work.
 
+For `completion-correlation`, inspect `correlationFailureReason`,
+`correlationFailureIdentity` and `correlationFailureGeneration` before recovery.
+These retain the first broker correlation/descriptor failure until a fresh
+registration, including through deinit and owner retirement. Identity is null
+when the failure cannot be attributed to a packet; otherwise it identifies the
+originating native operation, which may differ from `operationIdentity` when a
+fault quarantines other in-flight packets. With no recorded failure all three
+fields are null. Reasons distinguish `invalid-info`, `invalid-interface`,
+`interface-mismatch`, `destination-mismatch`, `source-mismatch`, `orphan-callback`,
+`duplicate-callback`, `completion-after-rejection`, `descriptor-reused`,
+`descriptor-transfer`, `allocation-binding` and `callback-overflow`. They describe a native observation,
+not a proven SDK or RF root cause. A reused unbound descriptor can be counted as
+an orphan callback rather than a duplicate.
+
+`invalidCallbacks`, `mismatchedCallbacks`, `orphanCallbacks` and
+`duplicateCallbacks` are saturating boot-lifetime counters. Compare snapshots
+before and after sending; recovery and runtime restart do not reset them.
+Descriptor allocation failures are described by the failure reason and do not
+increment callback counters. Reading diagnostics does not change ownership or
+trigger recovery.
+
 The native scheduler admits at most nine requests, grants them in request order,
 and keeps the current grant through original native completion and required
 Radio cleanup. Cancelling a waiting request removes only that request. Worker

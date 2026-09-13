@@ -60,6 +60,19 @@ class WiFiRawTxBroker(unittest.TestCase):
         compile_run(self, production_code('esp32c5/representative', identity=True) +
                     fixture_text('wifi/tx/test_wifi_raw_tx_broker/window.inc'))
 
+    def test_exact_completion_fault_causes_retain_storage_until_deinit(self):
+        from tests.support.native_compile import compile_run
+        for profile in ('esp32c3/representative', 'esp32s3/representative-psram',
+                        'esp32c5/representative'):
+            with self.subTest(profile=profile):
+                compile_run(self, production_code(profile, identity=True) +
+                            fixture_text('wifi/tx/test_wifi_raw_tx_broker/correlation.inc'))
+
+    def test_cache_descriptor_transfer_reuse_order_and_collision(self):
+        from tests.support.native_compile import compile_run
+        compile_run(self, production_code('esp32c5/representative', identity=True) +
+                    fixture_text('wifi/tx/test_wifi_raw_tx_broker/cache_transfer.inc'))
+
 
 PRELUDE = fixture_text('wifi/tx/test_wifi_raw_tx_broker/prelude.inc')
 

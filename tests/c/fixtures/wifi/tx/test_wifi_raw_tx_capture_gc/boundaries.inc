@@ -20,7 +20,13 @@ static struct {bool active;esp_err_t error;const char *stage;} s_retired={true,2
 static bool terminated_snapshot;
 void esp32_mquickjs_wifi_raw_tx_broker_status(esp32_mquickjs_wifi_raw_tx_broker_status_t *output) {
     *output=(esp32_mquickjs_wifi_raw_tx_broker_status_t){.operation_active=!terminated_snapshot,.quarantined=true,
-        .native_terminated=terminated_snapshot,.token={.identity=45,.generation=7},.submit_error=12,.cleanup_error=34};
+        .native_terminated=terminated_snapshot,.token={.identity=45,.generation=7},.submit_error=12,.cleanup_error=34,
+        .invalid_callbacks=3,.mismatched_callbacks=5,.orphan_callbacks=7,.duplicate_callbacks=9};
+    if (!terminated_snapshot) {
+        output->correlation_failure_reason="source-mismatch";
+        output->correlation_failure_identity=46;
+        output->correlation_failure_generation=7;
+    }
 }
 void esp32_mquickjs_wifi_raw_tx_sessions_status(esp32_mquickjs_wifi_raw_tx_sessions_status_t *output) {
     *output=(esp32_mquickjs_wifi_raw_tx_sessions_status_t){.live=2,.closing=1,.faulted=1,

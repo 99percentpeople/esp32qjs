@@ -16,6 +16,10 @@ typedef struct {
     uint32_t generation, callbacks_active;
     uint8_t in_flight, max_in_flight;
     uint32_t orphan_callbacks, invalid_callbacks, mismatched_callbacks, duplicate_callbacks;
+    /* First correlation/descriptor failure in a registration epoch; static
+     * reason text only. Identity is zero when no packet can be attributed. */
+    const char *correlation_failure_reason;
+    uint32_t correlation_failure_identity, correlation_failure_generation;
     esp32_mquickjs_wifi_raw_tx_token_t token;
     esp_err_t submit_error, cleanup_error;
     uint64_t submitted_at_us;

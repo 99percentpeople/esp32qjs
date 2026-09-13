@@ -519,6 +519,13 @@ JSValue esp32_mquickjs_wifi_raw_tx_status(JSContext *ctx)
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "terminatedRadioGeneration", native.native_terminated ? JS_NewUint32(ctx, native.token.generation) : JS_NULL, fail);
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "quarantined", JS_NewBool(native.quarantined || native.registration_uncertain || native.unregister_written), fail);
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "correlationFault", JS_NewBool(native.correlation_fault), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "correlationFailureReason", native.correlation_failure_reason ? JS_NewString(ctx, native.correlation_failure_reason) : JS_NULL, fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "correlationFailureIdentity", native.correlation_failure_identity ? JS_NewUint32(ctx, native.correlation_failure_identity) : JS_NULL, fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "correlationFailureGeneration", native.correlation_failure_generation ? JS_NewUint32(ctx, native.correlation_failure_generation) : JS_NULL, fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "invalidCallbacks", JS_NewUint32(ctx, native.invalid_callbacks), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "mismatchedCallbacks", JS_NewUint32(ctx, native.mismatched_callbacks), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "orphanCallbacks", JS_NewUint32(ctx, native.orphan_callbacks), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "duplicateCallbacks", JS_NewUint32(ctx, native.duplicate_callbacks), fail);
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "cleanupPending", JS_NewBool(native.native_terminated || retired || sessions.closing != 0U || periodic.cleanup_pending != 0U), fail);
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "cleanupStage", stage ? JS_NewString(ctx, stage) : JS_NULL, fail);
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "cleanupError", error != ESP_OK ? JS_NewInt32(ctx, error) : JS_NULL, fail);

@@ -35,10 +35,20 @@ caller cookie，`wifi_tx_info_t.data` 也不是原始调用 buffer 的身份保�
 [ESP-IDF 回调契约](https://docs.espressif.com/projects/esp-idf/en/v6.0/esp32/api-reference/network/esp_wifi.html#_CPPv429esp_wifi_register_80211_tx_cb26esp_wifi_80211_tx_done_cb_t)
 说明回调在 Wi-Fi task 中执行，metadata 只在回调中有效。
 
-因此采用 build-local、对象 SHA-256 校验的两个 relocation hooks：
+因此采用 build-local、对象 SHA-256 校验的 relocation hooks。初版仅包含
+分配与完成两个 hook；同日的 completion-correlation 排查确认 TX cache
+会更换 descriptor，现已补齐中间转移步骤：
 
 1. `esp_wifi_80211_tx` → `ic_ebuf_alloc`：拿到 descriptor 后，在 HMAC enqueue 前绑定。
-2. `ieee80211_freedom_inside_cb` → `ieee80211_get_tx_info_from_eb`：在 SDK recycle 前取得同一 descriptor。
+2. `ieee80211_output_process` → `ieee80211_copy_eb_header`：cache 路径复制
+   descriptor 时转移已有身份绑定，在旧 descriptor 被回收前完成。
+3. `ieee80211_freedom_inside_cb` → `ieee80211_get_tx_info_from_eb`：在最终
+   TX descriptor recycle 前取得完成结果。
+
+初版测试的 HMAC stub 没有执行 cache descriptor 替换，漏掉了此生命周期。
+修复与真实 SDK cache 路径回归证据见
+[completion-correlation 排查](2026-09-13-raw-tx-completion-correlation.md)。
+本文后面的原始验证表是初版流水线证据，不能代替该修复的验证结果。
 
 同时校验 `libpp.a/pp.o` 的 SHA-256，保护 callback-before-recycle 的生命周期前提。
 仅改变经过审查的调用重定位，不改变 RF 字节、验证器或 SDK 调度。共享 SDK

@@ -4163,6 +4163,18 @@ namespace ESP32QJS {
     operationIdentity: number | null;
     quarantined: boolean;
     correlationFault: boolean;
+    /** First broker correlation failure; retained until a fresh registration. */
+    correlationFailureReason: "invalid-info" | "invalid-interface" | "interface-mismatch" |
+      "destination-mismatch" | "source-mismatch" | "orphan-callback" | "duplicate-callback" |
+      "completion-after-rejection" | "descriptor-reused" | "descriptor-transfer" | "allocation-binding" | "callback-overflow" | null;
+    /** Originating native operation; null if unattributable. May differ from operationIdentity. */
+    correlationFailureIdentity: number | null;
+    correlationFailureGeneration: number | null;
+    /** Saturating boot-lifetime counters; recovery does not reset them. */
+    invalidCallbacks: number;
+    mismatchedCallbacks: number;
+    orphanCallbacks: number;
+    duplicateCallbacks: number;
     cleanupPending: boolean;
     cleanupStage: string | null;
     cleanupError: number | null;
