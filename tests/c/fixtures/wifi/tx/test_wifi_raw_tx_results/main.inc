@@ -18,7 +18,7 @@ static result_t result(session_t *session,result_token_t *token) {
     result_t result;assert(api(result_status)(session,token,&result));return result;
 }
 static void complete_one(void) {
-    tick();assert(job_count==1);run_job();assert(s_raw_tx.status.operation_active);
+    tick();assert(job_count==1);run_job();assert(test_broker_status().operation_active);
     driver_callback(&callback_info);tick();assert(job_count==1);run_job();
 }
 int main(void) {

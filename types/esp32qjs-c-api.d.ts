@@ -3067,6 +3067,14 @@ namespace ESP32QJS {
     capabilities: { wps: boolean; ftmResponder: boolean; ftmInitiator: boolean; he: boolean; vht: boolean };
   }
 
+  interface WiFiScanResult {
+    records: WiFiScanRecord[];
+    /** The scan completed normally; maxRecords can still cap this list. */
+    complete: boolean;
+    /** The operation deadline stopped the scan, or expired before it started. */
+    timedOut: boolean;
+  }
+
   interface WiFiScanOptions {
     /** Match one SSID: 1..32 UTF-8 bytes, without NUL. */
     ssid?: string;
@@ -3092,7 +3100,7 @@ namespace ESP32QJS {
     coexistenceBackgroundScan?: boolean;
     /** Maximum returned records: 1..32, default 32. Does not bound driver scan memory. */
     maxRecords?: number;
-    /** Whole-operation deadline in milliseconds, from 1 through 60000. */
+    /** Whole-operation deadline, 1..2147483647 ms. Returns partial records after native stop; stop/cleanup can add latency. */
     timeoutMs?: number;
   }
 
@@ -3863,9 +3871,9 @@ namespace ESP32QJS {
     ghz5MHz?: 20 | 40;
   }
 
-  /** Replaces each supplied interface config; missing nested fields use constructor defaults. */
-  interface WiFiStopOptions {
-    /** Shared native wait budget, integer 1..60000 ms; default 1000. SDK calls are not preemptible. */
+  /** Wait options shared by Wi-Fi disconnect, stop and stopAP. */
+  interface WiFiWaitOptions {
+    /** Integer 1..2147483647 ms. stop/stopAP default 1000; disconnect defaults to wifi.DEFAULT_TIMEOUT_MS. SDK calls are not preemptible. */
     timeoutMs?: number;
   }
 
@@ -3918,10 +3926,33 @@ namespace ESP32QJS {
 
   type WiFiPacketType = "management" | "control" | "data" | "misc" | "unknown";
   type WiFiPhyFormat = "legacy" | "ht" | "vht" | "he-su" | "he-mu" | "he-er-su" | "he-tb" | "unknown";
+  /** Numeric Protocol Version 0 MAC identity; independent of SDK callback categories. */
+  interface WiFiFrameSelector {
+    type: 0 | 1 | 2 | 3;
+    /** Integer 0–15. */
+    subtype: number;
+    /** Optional catalogue assertion; when present must match the numeric pair. */
+    name?: WiFiFrameName | null;
+  }
+  type WiFiFrameName =
+    "association-request" | "association-response" | "reassociation-request" | "reassociation-response"
+    | "probe-request" | "probe-response" | "timing-advertisement" | "beacon" | "atim"
+    | "disassociation" | "authentication" | "deauthentication" | "action" | "action-no-ack"
+    | "vht-ndp-announcement" | "control-wrapper" | "block-ack-request" | "block-ack"
+    | "ps-poll" | "rts" | "cts" | "ack" | "cf-end" | "cf-end-cf-ack"
+    | "data" | "data-cf-ack" | "data-cf-poll" | "data-cf-ack-cf-poll"
+    | "null" | "cf-ack" | "cf-poll" | "cf-ack-cf-poll"
+    | "qos-data" | "qos-data-cf-ack" | "qos-data-cf-poll" | "qos-data-cf-ack-cf-poll"
+    | "qos-null" | "qos-cf-poll" | "qos-cf-ack-cf-poll";
+  interface WiFiFrameType extends WiFiFrameSelector {
+    /** Common RX/TX name; null for an unknown or reserved layout. Not a support guarantee. */
+    name: WiFiFrameName | null;
+  }
   interface WiFiPacketInfo {
-    type: WiFiPacketType;
-    subtype: number | null;
-    subtypeName: string | null;
+    /** SDK callback category; misc does not imply MAC type 3. */
+    category: WiFiPacketType;
+    /** Null without a readable PV0 Frame Control. Check capture.parseValid separately. */
+    frameType: WiFiFrameType | null;
     frameControl: number | null;
     durationId: number | null;
     sequenceControl: number | null;
@@ -3972,34 +4003,39 @@ namespace ESP32QJS {
     /** Metadata-only native callbacks have no packet bytes. */
     packet: WiFiPacketInfo | null;
   }
+  interface WiFiRxFilter {
+    types?: Array<Exclude<WiFiPacketType, "unknown">>;
+    subtypes?: number[];
+    /** OR across exact pairs, AND with other filters. At most 64 distinct pairs; empty matches none. */
+    frames?: WiFiFrameSelector[];
+    sourceMac?: string | string[];
+    destinationMac?: string | string[];
+    bssid?: string | string[];
+    minimumRssi?: number;
+    /** Monitor: valid MAC parse and RX status. CSI: valid sample/channel estimate. */
+    validOnly?: boolean;
+    sampleEvery?: number;
+    /** 0 disables the rate limit; otherwise 1..1000000. */
+    maximumRateHz?: number;
+  }
   interface WiFiMonitorOptions {
     /** Omit to follow Radio, or request a fixed regulatory channel. */
     channel?: number | "current";
-    filter?: {
-      types?: Array<Exclude<WiFiPacketType, "unknown">>;
-      subtypes?: number[];
-      sourceMac?: string | string[];
-      destinationMac?: string | string[];
-      bssid?: string | string[];
-      minimumRssi?: number;
-      validOnly?: boolean;
-      sampleEvery?: number;
-      maximumRateHz?: number;
-    };
+    filter?: WiFiRxFilter;
     capture?: { snapLength?: number; requireComplete?: boolean };
     buffering?: { poolCapacity?: number; queueCapacity?: number; overflow?: "drop-newest" };
-    /** require-none currently checks startup PS; it does not acquire a wake lock. */
-    powerSavePolicy?: "preserve" | "require-none";
   }
   interface WiFiMonitorCapabilities {
     apiVersion: "wifi-monitor/1";
     available: boolean;
     stability: "candidate";
     target: string; idfVersion: string;
-    frameTypes: Array<Exclude<WiFiPacketType, "unknown">>;
+    packetTypes: Array<Exclude<WiFiPacketType, "unknown">>;
+    /** Named MAC layouts understood by the parser, not a reception or TX guarantee. */
+    frameTypes: WiFiFrameType[];
     supports: {
       receive: boolean; frameSource: boolean; receiveBatch: boolean; configure: boolean;
-      fixedChannel: boolean; typeFilter: boolean; subtypeFilter: boolean;
+      fixedChannel: boolean; typeFilter: boolean; subtypeFilter: boolean; frameFilter: boolean;
       sourceMacFilter: boolean; destinationMacFilter: boolean; bssidFilter: boolean;
       rssiFilter: boolean; nativeDecimation: boolean; nativeRateLimit: boolean;
       wireSource: boolean; hostPcapngConverter: boolean;
@@ -4026,7 +4062,7 @@ namespace ESP32QJS {
     /** Snapshot at start; each Frame reports its own RX channel. */
     startChannel: number; startChannelGeneration: number;
     poolCapacity: number; queueCapacity: number; snapLength: number;
-    requireComplete: boolean; powerSavePolicy: "preserve" | "require-none";
+    requireComplete: boolean;
     allocatedPoolBytes: number; leasedFrames: number;
     lastEspCode: number; cleanupEspCode: number; lastStage: string | null; cleanupStage: string | null;
   }
@@ -4096,8 +4132,7 @@ namespace ESP32QJS {
     channel?: "current" | number;
     sequenceControl?: "driver" | "application";
     /** Both modes enforce mandatory MAC/SDK constraints; neither detects arbitrary FCS/container bytes. */
-    validation?: "strict" | "basic";
-    /** Whole Future deadline including waiting/initialization; 1-60000 ms, default 1000. */
+    /** Whole Future deadline including waiting/initialization; 1-2147483647 ms, default 1000. */
     timeoutMs?: number;
   }
   interface WiFiRawTxResult {
@@ -4105,7 +4140,7 @@ namespace ESP32QJS {
     radioGeneration: number;
     interface: "station" | "access-point";
     channel: number;
-    frameType: "beacon" | "probe-request" | "probe-response" | "action" | "non-qos-data";
+    frameType: WiFiFrameType;
     byteLength: number;
     submittedAtUs: number;
     completedAtUs: number;
@@ -4163,20 +4198,19 @@ namespace ESP32QJS {
     /** Interfaces admitting a pre-start exclusive Session rate lease. */
     rateLeaseInterfaces: ("station" | "access-point")[];
     interfaces: Array<"station" | "access-point">;
-    frameTypes: {
-      beacon: boolean; probeRequest: boolean; probeResponse: boolean;
-      action: boolean; nonQosData: boolean; qosData: false;
-      encryptedData: false; arbitraryControl: false;
-    };
+    /** Supported types only; order is not significant. Frame and live Radio constraints still apply. */
+    frameTypes: WiFiFrameType[];
     supports: {
       driverSequence: boolean; applicationSequence: boolean;
       txDoneCallback: boolean; fixedChannel: boolean;
       nativeQueue: boolean; batchAdmission: boolean; periodicTx: boolean;
       rateLease: boolean; recovery: boolean; callerFcs: false;
+      /** Build-local, hash-gated SDK extension; does not imply RF or PMF qualification. */
+      extendedManagement: boolean;
     };
     limits: {
       minimumFrameBytes: 24; maximumFrameBytes: 1500;
-      maximumQueueCapacity: number; maximumBatchFrames: number;
+      maximumQueueCapacity: number; maximumQueueBytes: number; maximumInFlight: number; maximumBatchFrames: number;
       maximumSessions: number;
       maximumPendingResultsPerSession: number;
       maximumPendingFlushesPerSession: number;
@@ -4407,19 +4441,25 @@ namespace ESP32QJS {
       lifecycleAdmitted: boolean; checkpointAttempted: boolean; replayAttempted: boolean; resumeAttempted: boolean;
       cleanupPending: boolean; restartRequired: boolean; radioFaultStage: string | null; radioFaultError: number | null };
   }
+  /** Shared admission policy for native packet queues. Started batches cannot be evicted. */
+  type PacketQueueOverflow = "reject-newest" | "drop-oldest-batch";
+
   interface WiFiRawTxOpenOptions {
     /** Temporary interface-global rate; stopped/owner-free driver with a known predecessor. AP requires configured AP or APSTA mode; Station is not connected automatically. */
     rate?: WiFiTxRateConfig;
     interface?: "station" | "access-point";
     channel?: "current" | number;
     sequenceControl?: "driver" | "application";
-    validation?: "strict" | "basic";
-    /** Opening deadline, 1-60000 ms; default 1000. */
+    /** Opening deadline, 1-2147483647 ms; default 1000. */
     timeoutMs?: number;
+    /** Native submission window, 1-8 and at most capacityPackets; default 1. */
+    maxInFlight?: number;
     queue?: {
-      /** 1-128 packets including any in-flight packet; default 32. */
+      /** 1-128 packets including all in-flight packets; default 32. */
       capacityPackets?: number;
-      overflow?: "reject-newest" | "drop-oldest-batch";
+      /** Queue-owned payload bytes, 24-capacityPackets*1500; default capacityPackets*1500. */
+      capacityBytes?: number;
+      overflow?: PacketQueueOverflow;
     };
   }
   interface WiFiRawTxAdmission {
@@ -4454,6 +4494,8 @@ namespace ESP32QJS {
     channel: number | null;
     sequenceControl: "driver" | "application";
     capacityPackets: number;
+    capacityBytes: number; usedBytes: number; availableBytes: number; highWaterBytes: number;
+    availablePackets: number; inFlight: number; maxInFlight: number;
     queuedPackets: number;
     pendingPackets: number;
     activeSequence: number | null;
@@ -4480,7 +4522,7 @@ namespace ESP32QJS {
     busyPolicy?: "skip" | "stop";
     /** Stop on failed/rejected/dropped packets; default true. */
     stopOnError?: boolean;
-    /** Startup Future deadline, 1-60000 ms; default 1000. */
+    /** Startup Future deadline, 1-2147483647 ms; default 1000. */
     timeoutMs?: number;
   }
   interface WiFiRawPeriodicTxStatus {
@@ -4512,6 +4554,8 @@ namespace ESP32QJS {
     send(frame: ByteSource, options?: { timeoutMs?: number }): WiFiRawTxSessionResult;
     enqueue(frame: ByteSource): WiFiRawTxAdmission;
     enqueueBatch(frames: ArrayLike<ByteSource>): WiFiRawTxAdmission;
+    /** Observe free capacity without reserving it. Supports Future.call; timeout/cancel only stop waiting. */
+    waitWritable(options?: { minimumPackets?: number; minimumBytes?: number; timeoutMs?: number }): void;
     /** Cumulative result through a captured fence; later enqueue cannot extend it. */
     flush(timeoutMs?: number): WiFiRawTxFlushResult;
     status(): WiFiRawTxStatus;
@@ -4635,7 +4679,7 @@ namespace ESP32QJS {
     gpios: [WiFiAntennaGpio, WiFiAntennaGpio, WiFiAntennaGpio, WiFiAntennaGpio];
   }
   interface WiFiDriverRestartOptions {
-    /** Shared native wait budget, integer 1..60000 ms, default 10000. SDK calls are not preempted. */
+    /** Shared native wait budget, integer 1..2147483647 ms, default 10000. SDK calls are not preempted. */
     timeoutMs?: number;
     /** Permit temporary AP activation to restore saved AP policy from off; default false. Final mode stays off. */
     allowApRestart?: boolean;
@@ -6830,10 +6874,10 @@ namespace ESP32QJS {
     exactAuthSelection: false;
     nativeOwner: "supplicant";
     rebuildsInitializedDriver: true;
-    maxTimeoutMs: 60000;
+    maxTimeoutMs: 2147483647;
   }
   interface WiFiWapiControlOptions {
-    /** Shared lifecycle wait budget, integer 1..60000 ms; default 10000. */
+    /** Shared lifecycle wait budget, integer 1..2147483647 ms; default 10000. */
     timeoutMs?: number;
   }
   interface WiFiWapiModule {
@@ -6891,8 +6935,8 @@ namespace ESP32QJS {
      * transaction. Recheck status after an error before retrying. */
     startAP(options: WiFiAccessPointOptions): WiFiAccessPointStartResult;
     /** Stop AP and retire its netif. APSTA retains Station; exclusive AP deinitializes Radio.
-     * Shared wait budget is an integer 1..60000 ms, default 1000; SDK calls are not preemptible. */
-    stopAP(timeoutMs?: number): WiFiStatus;
+     * Shared wait budget is an integer 1..2147483647 ms, default 1000; SDK calls are not preemptible. */
+    stopAP(options?: WiFiWaitOptions): WiFiStatus;
     /** Snapshot of this running AP's clients; optional later local DHCP IPv4 observation. */
     apClients(options?: WiFiAPClientsOptions): WiFiAPClient[];
     /** Target the MAC currently associated when the Wi-Fi-task command runs.
@@ -6915,15 +6959,15 @@ namespace ESP32QJS {
     /** Stop after disconnect/scan completion and other feature owners exit. */
     /** An idle disconnected Enterprise binding is retired before helper release;
      * configuration survives. Failed cleanup retains the stop transaction. */
-    stop(options?: WiFiStopOptions): WiFiStatus;
+    stop(options?: WiFiWaitOptions): WiFiStatus;
     status(): WiFiStatus;
     /** Set station modem power saving and return the active mode. */
     setPowerSave(mode: WiFiPowerSaveMode): WiFiPowerSaveMode;
     /** Set the shared radio maximum TX power and return the mapped actual dBm. */
     setTxPower(dbm: number): number;
     connect(ssid: string | ByteSource, options?: WiFiConnectOptions): WiFiConnectResult;
-    disconnect(timeoutMs?: number): WiFiStatus;
-    scan(options?: WiFiScanOptions): WiFiScanRecord[];
+    disconnect(options?: WiFiWaitOptions): WiFiStatus;
+    scan(options?: WiFiScanOptions): WiFiScanResult;
   }
 
   type WiFiCsiConfigSchema = "wifi-csi-legacy/1" | "wifi-csi-he/1";
@@ -6984,6 +7028,7 @@ namespace ESP32QJS {
       destinationMacFilter: boolean;
       bssidFilter: boolean;
       frameTypeFilter: boolean;
+      frameFilter: boolean;
       frameSubtypeFilter: boolean;
       rssiFilter: boolean;
       nativeDecimation: boolean;
@@ -7060,18 +7105,7 @@ namespace ESP32QJS {
     packet?: WiFiCsiPacketCaptureOptions;
     source?: WiFiCsiSource;
     capture: WiFiCsiLegacyCaptureConfig | WiFiCsiHeCaptureConfig;
-    filter?: {
-      sourceMac?: string | string[];
-      destinationMac?: string | string[];
-      bssid?: string | string[];
-      /** Empty lists match no frames; omitted fields impose no predicate. */
-      frameTypes?: WiFiPacketType[];
-      frameSubtypes?: number[];
-      minimumRssi?: number;
-      sampleEvery?: number;
-      maximumRateHz?: number;
-      validOnly?: boolean;
-    };
+    filter?: WiFiRxFilter;
     buffering?: {
       /** Defaults to the build maximum; allocated before Radio changes. */
       poolCapacity?: number;
@@ -7079,7 +7113,6 @@ namespace ESP32QJS {
       queueCapacity?: number;
       overflow?: "drop-newest";
     };
-    powerSavePolicy?: "preserve" | "require-none";
   }
 
   type WiFiCsiState =
@@ -7103,7 +7136,6 @@ namespace ESP32QJS {
     | "WIFI_CSI_CHANNEL_CONFLICT"
     | "WIFI_CSI_REGULATORY_CONFLICT"
     | "WIFI_CSI_PROMISCUOUS_CONFLICT"
-    | "WIFI_CSI_POWER_SAVE_CONFLICT"
     | "WIFI_CSI_RESOURCE_EXHAUSTED"
     | "WIFI_CSI_IDENTITY_EXHAUSTED"
     | "WIFI_CSI_FRAME_TOO_LARGE"
@@ -7128,6 +7160,7 @@ namespace ESP32QJS {
   interface WiFiCsiStatus {
     generation: number;
     state: WiFiCsiState;
+    /** Normalized, detached configuration; valid input to configure/open subject to lifecycle admission. */
     requested: WiFiCsiOpenOptions;
     effective: {
       source: WiFiCsiSourceMode;
@@ -7312,14 +7345,14 @@ namespace ESP32QJS {
     broadcastRateConfig?: EspNowPeerRateConfig;
     txQueue?: {
       capacityPackets: number;
-      overflow?: "reject-newest" | "drop-oldest-batch";
+      overflow?: PacketQueueOverflow;
     };
   }
 
   interface EspNowTxQueueStatus {
     enabled: boolean;
     capacityPackets: number;
-    overflow: "reject-newest" | "drop-oldest-batch" | null;
+    overflow: PacketQueueOverflow | null;
     active: boolean;
     queuedBatches: number;
     queuedPackets: number;

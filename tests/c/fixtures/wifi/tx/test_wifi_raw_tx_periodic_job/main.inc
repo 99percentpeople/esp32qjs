@@ -25,7 +25,7 @@ int main(void) {
     fire_timer(timer);drain_workers();assert(sends==1 && job_status(job).ledger.submitted==1);
     assert(job_status(job).ledger.skipped_busy==1);
     driver_callback(&callback_info);fire_timer(timer);drain_workers();
-    assert(!s_raw_tx.status.operation_active); /* Session worker retires actual completion */
+    assert(!test_broker_status().operation_active); /* Session worker retires actual completion */
     fire_timer(timer);drain_workers();assert(sends==2 && job_status(job).ledger.completed==1);
     /* Queue saturation in the timer path retains the single native hold. */
     queue_full=true;fire_timer(timer);assert(!job_count && !job_status(job).worker_busy);queue_full=false;

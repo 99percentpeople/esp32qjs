@@ -18,8 +18,15 @@ COMMON = ROOT / 'components/esp32_mquickjs/src/modules/wifi_common'
 
 
 def unit(path):
-    return '\n'.join(line for line in path.read_text().splitlines()
-                     if not line.startswith(('#include ', '#pragma once'))) + '\n'
+    # Keep dependency-free shared macro headers authoritative in extracted units.
+    shared = {'esp32_mquickjs_wifi_raw_tx_limits.h', 'esp32_mquickjs_js_macros.h'}
+    lines = []
+    for line in path.read_text().splitlines():
+        if line.startswith('#include "') and line.split('"')[1] in shared:
+            lines.append('#include "' + str(INTERNAL / line.split('"')[1]) + '"')
+        elif not line.startswith(('#include ', '#pragma once')):
+            lines.append(line)
+    return '\n'.join(lines) + '\n'
 
 
 class WiFiRxTarget(unittest.TestCase):

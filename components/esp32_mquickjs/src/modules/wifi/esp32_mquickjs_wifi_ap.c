@@ -712,7 +712,7 @@ done:
 JSValue js_wifi_stop_ap(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;
-    if (argc > 1) return JS_ThrowTypeError(ctx, "wifi.stopAP(timeoutMs?) expects at most one argument");
+    if (argc > 1) return JS_ThrowTypeError(ctx, "wifi.stopAP(options?) expects at most one argument");
     uint32_t timeout_ms;
     if (!esp32_mquickjs_wifi_capture_stop_ap_timeout(ctx, argc ? argv[0] : JS_UNDEFINED, &timeout_ms)) return JS_EXCEPTION;
     esp_err_t err = esp32_mquickjs_wifi_wait_begin(timeout_ms);
@@ -1202,7 +1202,7 @@ JSValue js_wifi_start_ap(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
 JSValue js_wifi_stop_ap(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     (void)this_val;
-    if (argc > 1) return JS_ThrowTypeError(ctx, "wifi.stopAP(timeoutMs?) expects at most one argument");
+    if (argc > 1) return JS_ThrowTypeError(ctx, "wifi.stopAP(options?) expects at most one argument");
     uint32_t timeout_ms;
     if (!esp32_mquickjs_wifi_capture_stop_ap_timeout(ctx, argc ? argv[0] : JS_UNDEFINED, &timeout_ms)) return JS_EXCEPTION;
     return esp32_mquickjs_wifi_make_status_object(ctx);

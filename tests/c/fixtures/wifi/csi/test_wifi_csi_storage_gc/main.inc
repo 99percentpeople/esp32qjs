@@ -65,6 +65,14 @@ int main(int argc,char **argv) {
             *child=JS_GetPropertyStr(ctx,*value,"channel");assert(JS_GetPropertyStr(ctx,*child,"primary")==JS_NewInt32(ctx,6));
             *child=JS_GetPropertyStr(ctx,*value,"addresses");assert(JS_GetClassID(ctx,*child)==JS_CLASS_OBJECT);
             if(!packet_mode)assert(JS_GetPropertyStr(ctx,*child,"source")==JS_NULL);
+            if(packet_mode) {
+                *child=JS_GetPropertyStr(ctx,*value,"packet");
+                assert(wifi_csi_string_equals(ctx,JS_GetPropertyStr(ctx,*child,"category"),"data"));
+                *child=JS_GetPropertyStr(ctx,*child,"frameType");
+                assert(JS_GetPropertyStr(ctx,*child,"type")==JS_NewInt32(ctx,2));
+                assert(JS_GetPropertyStr(ctx,*child,"subtype")==JS_NewInt32(ctx,0));
+                assert(wifi_csi_string_equals(ctx,JS_GetPropertyStr(ctx,*child,"name"),"data"));
+            }
             *child=JS_GetPropertyStr(ctx,*value,"validity");assert(JS_GetPropertyStr(ctx,*child,"callbackDataValid")==JS_TRUE);
             assert(JS_GetPropertyStr(ctx,*child,"layoutKnown")==JS_TRUE);
             JS_PopGCRef(ctx,&child_ref);

@@ -1,6 +1,8 @@
 #include "esp32_mquickjs_wifi_monitor_options.h"
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
 #include "esp32_mquickjs_options.h"
+#include "esp32_mquickjs_wifi_rx.h"
+#include "esp32_mquickjs_wifi_frame_filter.h"
 #include <string.h>
 
 static bool monitor_options_error(JSContext *ctx, const char *field)
@@ -119,7 +121,7 @@ static bool monitor_options_filter(JSContext *ctx, JSValue value, esp32_mquickjs
 {
     static const char *const allowed[] = {
         "types", "subtypes", "sourceMac", "destinationMac", "bssid", "minimumRssi",
-        "sampleEvery", "maximumRateHz", "validOnly",
+        "sampleEvery", "maximumRateHz", "validOnly", "frames",
     };
     JSGCRef object_ref, value_ref;
     JSValue *object = JS_PushGCRef(ctx, &object_ref);
@@ -127,7 +129,7 @@ static bool monitor_options_filter(JSContext *ctx, JSValue value, esp32_mquickjs
     *object = value; *property = JS_UNDEFINED;
     bool valid = false;
     uint16_t mask;
-    if (!esp32_mquickjs_validate_plain_options(ctx, *object, "wifi.monitor filter", allowed, 9)) goto done;
+    if (!esp32_mquickjs_validate_plain_options(ctx, *object, "wifi.monitor filter", allowed, 10)) goto done;
     *property = JS_GetPropertyStr(ctx, *object, "types");
     if (JS_IsException(*property)) goto done;
     if (!JS_IsUndefined(*property)) {
@@ -141,6 +143,12 @@ static bool monitor_options_filter(JSContext *ctx, JSValue value, esp32_mquickjs
         filter->subtype_filter = true; filter->subtype_mask = mask;
     }
     static const char *const mac_keys[] = {"sourceMac", "destinationMac", "bssid"};
+    *property = JS_GetPropertyStr(ctx, *object, "frames");
+    if (JS_IsException(*property)) goto done;
+    if (!JS_IsUndefined(*property)) {
+        if (!esp32_mquickjs_wifi_frame_filter_parse(ctx, *property, filter->frame_subtype_masks)) goto done;
+        filter->frame_filter = true;
+    }
     esp32_mquickjs_wifi_rx_mac_filter_t *mac_lists[] = {&filter->source, &filter->destination, &filter->bssid};
     for (unsigned i = 0; i < 3; ++i) {
         *property = JS_GetPropertyStr(ctx, *object, mac_keys[i]);
@@ -169,11 +177,10 @@ done:
 bool esp32_mquickjs_wifi_monitor_capture_options(JSContext *ctx, JSValue value,
     esp32_mquickjs_wifi_monitor_options_t *output)
 {
-    static const char *const allowed[] = {"channel", "filter", "capture", "buffering", "powerSavePolicy"};
+    static const char *const allowed[] = {"channel", "filter", "capture", "buffering"};
     static const char *const capture_keys[] = {"snapLength", "requireComplete"};
     static const char *const buffering_keys[] = {"poolCapacity", "queueCapacity", "overflow"};
     static const char *const channel_names[] = {"current"};
-    static const char *const ps_names[] = {"preserve", "require-none"};
     static const char *const overflow_names[] = {"drop-newest"};
     if (ctx == NULL) return false;
     if (output == NULL) return monitor_options_error(ctx, "native output");
@@ -191,7 +198,7 @@ bool esp32_mquickjs_wifi_monitor_capture_options(JSContext *ctx, JSValue value,
     bool valid = false;
     size_t choice;
     if (JS_IsUndefined(*object)) { valid = true; goto done; }
-    if (!esp32_mquickjs_validate_plain_options(ctx, *object, "wifi.monitor.open", allowed, 5)) goto done;
+    if (!esp32_mquickjs_validate_plain_options(ctx, *object, "wifi.monitor.open", allowed, 4)) goto done;
     *property = JS_GetPropertyStr(ctx, *object, "channel");
     if (JS_IsException(*property)) goto done;
     if (!JS_IsUndefined(*property)) {
@@ -215,14 +222,6 @@ bool esp32_mquickjs_wifi_monitor_capture_options(JSContext *ctx, JSValue value,
             }
             parsed.capture.channel = (uint8_t)channel;
         }
-    }
-    *property = JS_GetPropertyStr(ctx, *object, "powerSavePolicy");
-    if (JS_IsException(*property)) goto done;
-    if (!JS_IsUndefined(*property)) {
-        if (!esp32_mquickjs_value_to_enum(ctx, *property, ps_names, 2, &choice)) {
-            monitor_options_error(ctx, "powerSavePolicy"); goto done;
-        }
-        parsed.capture.require_power_save_none = choice == 1;
     }
     *section = JS_GetPropertyStr(ctx, *object, "filter");
     if (JS_IsException(*section) || (!JS_IsUndefined(*section) && !monitor_options_filter(ctx, *section, &parsed.capture.filter))) goto done;

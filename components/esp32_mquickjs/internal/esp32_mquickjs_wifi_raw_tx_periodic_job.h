@@ -1,8 +1,8 @@
 #pragma once
+#include "esp32_mquickjs_wifi_raw_tx_limits.h"
 #include "esp32_mquickjs_wifi_raw_tx_periodic.h"
 #include "esp32_mquickjs_wifi_raw_tx_session.h"
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
-#define ESP32_MQUICKJS_WIFI_RAW_TX_MAX_PERIODIC_JOBS 8U
 typedef struct esp32_mquickjs_wifi_raw_tx_periodic_job esp32_mquickjs_wifi_raw_tx_periodic_job_t;
 typedef struct {
     esp32_mquickjs_wifi_raw_tx_periodic_t ledger;

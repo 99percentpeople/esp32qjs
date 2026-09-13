@@ -1,10 +1,9 @@
 #pragma once
+#include "esp32_mquickjs_wifi_raw_tx_limits.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-#define ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_MAX_PACKETS 128U
-#define ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_MAX_FLUSHES 8U
 #define ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_NONE UINT16_MAX
 
 typedef struct { uint8_t *data; uint16_t length; } esp32_mquickjs_wifi_raw_tx_payload_t;
@@ -45,7 +44,7 @@ typedef struct {
     esp32_mquickjs_wifi_raw_tx_payload_t payload;
     uint32_t sequence, batch_sequence;
     uint16_t next;
-    bool allocated, accepted;
+    bool allocated, accepted, in_flight, batch_started;
 } esp32_mquickjs_wifi_raw_tx_queue_slot_t;
 typedef struct {
     uint32_t identity;
@@ -55,6 +54,8 @@ typedef struct {
     bool initialized, closed;
     uint32_t generation, last_sequence, next_flush_identity, active_batch;
     uint16_t capacity, pending_head, pending_tail, active, queued, free_count;
+    uint16_t max_in_flight, in_flight;
+    uint32_t capacity_bytes, used_bytes, high_water_bytes;
     esp32_mquickjs_wifi_raw_tx_queue_slot_t *slots;
     esp32_mquickjs_wifi_raw_tx_queue_totals_t totals;
     esp32_mquickjs_wifi_raw_tx_flush_watch_t flushes[ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_MAX_FLUSHES];
@@ -68,6 +69,11 @@ typedef struct {
  * are caller-owned control storage retained until successful deinit. */
 bool esp32_mquickjs_wifi_raw_tx_queue_init(esp32_mquickjs_wifi_raw_tx_queue_t *queue,
     esp32_mquickjs_wifi_raw_tx_queue_slot_t *slots, uint16_t capacity, uint32_t generation);
+/* Configure an empty, unused queue. Limits include in-flight payloads. */
+bool esp32_mquickjs_wifi_raw_tx_queue_limits(esp32_mquickjs_wifi_raw_tx_queue_t *queue,
+    uint32_t capacity_bytes, uint16_t max_in_flight);
+bool esp32_mquickjs_wifi_raw_tx_queue_writable(const esp32_mquickjs_wifi_raw_tx_queue_t *queue,
+    uint16_t minimum_packets, uint32_t minimum_bytes);
 
 /* Every payload is already captured/validated and uniquely owned by caller.
  * On success ownership moves to queue and every input descriptor is zeroed.
@@ -81,8 +87,8 @@ esp32_mquickjs_wifi_raw_tx_queue_result_t esp32_mquickjs_wifi_raw_tx_queue_admit
     esp32_mquickjs_wifi_raw_tx_admission_t *result);
 
 /* Borrowed payload remains owned by queue through exact native retirement.
- * Each output descriptor/token must be zero. Only one active packet per queue;
- * a separate Radio/broker lane also serializes all queues at the SDK boundary. */
+ * Each output descriptor/token must be zero. Completion may be out of order;
+ * the caller must enforce the corresponding native driver admission limit. */
 bool esp32_mquickjs_wifi_raw_tx_queue_take(esp32_mquickjs_wifi_raw_tx_queue_t *queue,
     esp32_mquickjs_wifi_raw_tx_ticket_t *ticket, esp32_mquickjs_wifi_raw_tx_payload_t *borrowed);
 bool esp32_mquickjs_wifi_raw_tx_queue_accept(esp32_mquickjs_wifi_raw_tx_queue_t *queue,

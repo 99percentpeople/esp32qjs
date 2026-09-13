@@ -515,6 +515,7 @@ esp_err_t esp32_mquickjs_wifi_drain_scan(void)
     s_wifi_state.scan_cleanup_error = err;
     if (err == ESP_OK) {
         s_wifi_state.scan_results_pending = false;
+        s_wifi_state.scan_results_consumed_early = false;
         s_wifi_state.scan_draining = false;
         s_wifi_state.scan_stop_submitted = false;
         memset(&s_wifi_state.native_scan_config, 0,
@@ -557,6 +558,7 @@ static esp_err_t wifi_start_scan_reserved(const wifi_scan_config_t *config,
     }
     s_wifi_state.scan_cleanup_error = ESP_OK;
     s_wifi_state.scan_stop_submitted = false;
+    s_wifi_state.scan_results_consumed_early = false;
     wifi_set_scanning_locked(true);
     wifi_unlock();
     esp_err_t err = esp_wifi_scan_start(&s_wifi_state.native_scan_config, false);
@@ -600,6 +602,32 @@ esp_err_t esp32_mquickjs_wifi_start_scan(const wifi_scan_config_t *config,
     return err;
 }
 
+esp_err_t esp32_mquickjs_wifi_stop_scan_for_results(uint32_t generation)
+{
+    wifi_lock();
+    if (generation != s_wifi_state.scan_generation || !s_wifi_state.scan_future_registered ||
+        s_wifi_state.scan_draining || s_wifi_state.scan_start_active || s_wifi_state.scan_stop_active) {
+        wifi_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!s_wifi_state.scan_in_progress || s_wifi_state.scan_stop_submitted) {
+        wifi_unlock();
+        return ESP_OK;
+    }
+    s_wifi_state.scan_stop_active = true;
+    wifi_unlock();
+    /* This synchronous SDK call stops the scan, but its SCAN_DONE event may
+     * still be pending on the event loop. Preserve both the list owner and
+     * native reservation until the caller reads results and that event drains. */
+    esp_err_t err = esp_wifi_scan_stop();
+    wifi_lock();
+    s_wifi_state.scan_stop_active = false;
+    s_wifi_state.scan_stop_submitted = err == ESP_OK;
+    s_wifi_state.scan_cleanup_error = err;
+    wifi_unlock();
+    return err;
+}
+
 esp_err_t esp32_mquickjs_wifi_cancel_scan(uint32_t generation)
 {
     bool stop = false;
@@ -628,6 +656,9 @@ esp_err_t esp32_mquickjs_wifi_cancel_scan(uint32_t generation)
         wifi_unlock();
     }
     esp_err_t cleanup_err = esp32_mquickjs_wifi_drain_scan();
+    /* An early result read can be followed by SCAN_DONE before detachment.
+     * Then no list/draining suffix remains, but the reservation is now ready. */
+    wifi_release_radio_operation();
     return err != ESP_OK ? err : cleanup_err;
 }
 
@@ -635,6 +666,7 @@ void esp32_mquickjs_wifi_scan_results_consumed(void)
 {
     wifi_lock();
     s_wifi_state.scan_results_pending = false;
+    s_wifi_state.scan_results_consumed_early = s_wifi_state.scan_in_progress;
     wifi_unlock();
     wifi_release_radio_operation();
 }
@@ -891,7 +923,7 @@ static void wifi_process_driver_event(
             break;
         }
         wifi_set_scanning_locked(false);
-        s_wifi_state.scan_results_pending = true;
+        s_wifi_state.scan_results_pending = !s_wifi_state.scan_results_consumed_early;
         s_wifi_state.scan_cleanup_error = ESP_OK;
         if (!s_wifi_state.scan_future_registered) s_wifi_state.scan_draining = true;
         scan_event.generation = s_wifi_state.scan_generation;
@@ -2163,14 +2195,6 @@ static int js_value_to_timeout_ms(JSContext *ctx,
         return -1;
     }
     return 0;
-}
-
-int esp32_mquickjs_wifi_value_to_timeout_ms(JSContext *ctx,
-                                            JSValue value,
-                                            uint32_t default_timeout_ms,
-                                            uint32_t *out_timeout_ms)
-{
-    return js_value_to_timeout_ms(ctx, value, default_timeout_ms, out_timeout_ms);
 }
 
 esp_err_t esp32_mquickjs_wifi_get_status(esp32_mquickjs_wifi_status_t *status)

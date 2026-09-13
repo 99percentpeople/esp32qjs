@@ -10,7 +10,7 @@
 | `wifi.wapi.enable(options?)` | 允许 SDK supplicant 初始化实际 WAPI 支持 |
 | `wifi.wapi.disable(options?)` | 禁止 SDK supplicant 在下一次初始化时创建 WAPI 支持；已初始化时通过完整重建立即应用 |
 
-`options` 只接受 `timeoutMs`：整数 1..60000 ms，默认 10000。未知字段、非整数和
+`options` 只接受 `timeoutMs`：整数 1..2147483647 ms，默认 10000。未知字段、非整数和
 非法范围在修改前拒绝。控制使用普通同步生命周期等待预算，不是 Future 方法。
 
 默认策略为 enabled，与 SDK 启用 WAPI 构建的行为一致。首次 Radio 初始化前，控制

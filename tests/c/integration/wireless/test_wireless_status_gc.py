@@ -49,7 +49,8 @@ class WirelessStatusGc(unittest.TestCase):
         snapshot_types+=''.join(structure(HEADER.read_text(),n) for n in (
             'esp32_mquickjs_wifi_radio_config_result_t','esp32_mquickjs_wifi_link_sample_t',
             'esp32_mquickjs_wifi_rssi_request_t'))
-        cls.binary=build(cls.temp.name,SDK.replace('/* SNAPSHOT_TYPES */',snapshot_types)+native+counters+bodies,MAIN)
+        bodies += getattr(cls, 'extra', '')
+        cls.binary=build(cls.temp.name,getattr(cls, 'sdk', SDK).replace('/* SNAPSHOT_TYPES */',snapshot_types)+native+counters+bodies,getattr(cls, 'main', MAIN))
 
     def test_status_and_scan_allocation_failure_and_moving_gc(self):
         for mode in range(5):

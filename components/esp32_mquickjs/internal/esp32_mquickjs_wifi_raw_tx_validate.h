@@ -1,8 +1,7 @@
 #pragma once
+#include "esp32_mquickjs_wifi_raw_tx_limits.h"
 #include "esp32_mquickjs_wifi_rx.h"
 
-#define ESP32_MQUICKJS_WIFI_RAW_TX_MIN_FRAME_BYTES 24U
-#define ESP32_MQUICKJS_WIFI_RAW_TX_MAX_FRAME_BYTES 1500U
 
 typedef enum {
     ESP32_MQUICKJS_WIFI_RAW_TX_STATION,
@@ -14,6 +13,16 @@ typedef enum {
     ESP32_MQUICKJS_WIFI_RAW_TX_PROBE_RESPONSE,
     ESP32_MQUICKJS_WIFI_RAW_TX_ACTION,
     ESP32_MQUICKJS_WIFI_RAW_TX_NON_QOS_DATA,
+    ESP32_MQUICKJS_WIFI_RAW_TX_ASSOCIATION_REQUEST,
+    ESP32_MQUICKJS_WIFI_RAW_TX_ASSOCIATION_RESPONSE,
+    ESP32_MQUICKJS_WIFI_RAW_TX_REASSOCIATION_REQUEST,
+    ESP32_MQUICKJS_WIFI_RAW_TX_REASSOCIATION_RESPONSE,
+    ESP32_MQUICKJS_WIFI_RAW_TX_TIMING_ADVERTISEMENT,
+    ESP32_MQUICKJS_WIFI_RAW_TX_ATIM,
+    ESP32_MQUICKJS_WIFI_RAW_TX_DISASSOCIATION,
+    ESP32_MQUICKJS_WIFI_RAW_TX_AUTHENTICATION,
+    ESP32_MQUICKJS_WIFI_RAW_TX_DEAUTHENTICATION,
+    ESP32_MQUICKJS_WIFI_RAW_TX_ACTION_NO_ACK,
 } esp32_mquickjs_wifi_raw_tx_frame_type_t;
 typedef enum {
     ESP32_MQUICKJS_WIFI_RAW_TX_VALID,
@@ -45,7 +54,7 @@ typedef struct {
     esp32_mquickjs_wifi_rx_header_t header;
 } esp32_mquickjs_wifi_raw_tx_validated_frame_t;
 
-/* Allocation/SDK/JS-free preflight for the pinned SDK's allowlist. Input must be
+/* Allocation/SDK/JS-free preflight for this build's SDK admission policy. Input must be
  * a proven, stable pure MAC-frame span without caller-added FCS. It does not
  * recognize arbitrary container bytes or infer FCS from a payload's last bytes.
  * Rejects output overlap; on failure output and input are unchanged. This checks

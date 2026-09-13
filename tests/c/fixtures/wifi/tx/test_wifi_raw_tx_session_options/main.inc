@@ -7,11 +7,14 @@ int main(int argc,char **argv) {
         *value=JS_Eval(ctx,argv[2],strlen(argv[2]),"options",JS_EVAL_RETVAL);assert(!JS_IsException(*value));
         session_options_t options={.capacity=999};uint32_t timeout=0;
         calls=0;fail_at=nth;inject=true;collect=true;
-        bool ok=!strcmp(argv[1],"open") ? capture_open_options(ctx,*value,&options,&timeout) : capture_send_options(ctx,*value,&timeout);
+        esp32_mquickjs_future_driver_state_t writable={.options={.capacity=32},.timeout_ms=1000};
+        bool ok=!strcmp(argv[1],"open") ? capture_open_options(ctx,*value,&options,&timeout) :
+            !strcmp(argv[1],"writable") ? capture_writable_options(ctx,*value,&writable) : capture_send_options(ctx,*value,&timeout);
+        if(!strcmp(argv[1],"writable")) timeout=writable.timeout_ms;
         inject=false;collect=false;
         if(!nth){total=calls;assert(ok==expected);}
         if(ok) {
-            assert(timeout>=1 && timeout<=60000);
+            assert(timeout>=1 && timeout<=INT32_MAX);
             if(!strcmp(argv[1],"open"))assert(options.capacity>=1 && options.capacity<=128);
         } else {
             assert(JS_HasException(ctx));*error=JS_GetException(ctx);

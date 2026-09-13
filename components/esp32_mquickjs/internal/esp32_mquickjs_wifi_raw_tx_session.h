@@ -1,10 +1,9 @@
 #pragma once
+#include "esp32_mquickjs_wifi_raw_tx_limits.h"
 #include "esp32_mquickjs_wifi_raw_tx_broker.h"
 #include "esp32_mquickjs_wifi_raw_tx_queue.h"
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
 #include "esp32_mquickjs_wifi_tx_rate.h"
-#define ESP32_MQUICKJS_WIFI_RAW_TX_MAX_SESSIONS 8U
-#define ESP32_MQUICKJS_WIFI_RAW_TX_MAX_RESULTS 8U
 typedef struct esp32_mquickjs_wifi_raw_tx_session esp32_mquickjs_wifi_raw_tx_session_t;
 typedef enum {
     ESP32_MQUICKJS_WIFI_RAW_TX_RESULT_PENDING,
@@ -41,12 +40,15 @@ typedef struct {
     bool rate_set;
     wifi_tx_rate_config_t rate;
     uint16_t capacity;
+    uint16_t max_in_flight;
+    uint32_t capacity_bytes;
     esp32_mquickjs_wifi_raw_tx_queue_overflow_t overflow;
 } esp32_mquickjs_wifi_raw_tx_session_options_t;
 typedef struct {
     uint32_t generation, radio_generation, active_sequence, lane_identity;
     uint8_t channel;
-    uint16_t queued, capacity;
+    uint16_t queued, capacity, in_flight, max_in_flight;
+    uint32_t capacity_bytes, used_bytes, high_water_bytes, remaining_sequences;
     uint8_t periodic_children;
     bool open_complete, close_requested, closed, faulted, worker_busy;
     esp_err_t error, cleanup_error;
@@ -136,5 +138,6 @@ bool esp32_mquickjs_wifi_raw_tx_sessions_runtime_service(void);
 bool esp32_mquickjs_wifi_raw_tx_sessions_service(void);
 void esp32_mquickjs_wifi_raw_tx_sessions_request_close(void);
 bool esp32_mquickjs_wifi_raw_tx_sessions_drained(void);
+bool esp32_mquickjs_wifi_raw_tx_sessions_need_service(void);
 void esp32_mquickjs_wifi_raw_tx_sessions_status(esp32_mquickjs_wifi_raw_tx_sessions_status_t *output);
 #endif

@@ -20,8 +20,8 @@ from tests.support.wireless_vm_fixture import extract
 RAW = ROOT / 'components/esp32_mquickjs/src/modules/wifi_raw_tx'
 
 
-def production_session_code():
-    code = production_code('esp32c5/representative')
+def production_session_code(identity=False):
+    code = production_code('esp32c5/representative', identity=identity)
     code += rate_code('esp32c5/representative', ('wifi_interface_t', 'wifi_phy_rate_t', 'wifi_tx_status_t', 'wifi_tx_info_t', 'esp_80211_tx_info_t'))
     code = code.replace('static int64_t esp_timer_get_time(void)',
                         'static int64_t fake_now=123456789;\nstatic int64_t esp_timer_get_time(void)')
@@ -36,6 +36,7 @@ def production_session_code():
     code += BOUNDARIES
     for name in ['lane', 'queue', 'session']:
         code += unit(RAW / ('esp32_mquickjs_wifi_raw_tx_' + name + '.c'))
+    code += fixture_text('wifi/tx/test_wifi_raw_tx_session/broker_status.inc')
     return code
 
 
@@ -53,6 +54,12 @@ class WiFiRawTxSession(unittest.TestCase):
             self.assertEqual(built.returncode, 0, built.stderr)
             result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_window_refill_out_of_order_fence_and_close(self):
+        from tests.support.native_compile import compile_run
+        code = production_session_code(identity=True)
+        code += MAIN[:MAIN.index('int main(void)')]
+        compile_run(self, code + fixture_text('wifi/tx/test_wifi_raw_tx_session/window.inc'))
 
 
 BOUNDARIES = fixture_text('wifi/tx/test_wifi_raw_tx_session/boundaries.inc')

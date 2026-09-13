@@ -73,6 +73,7 @@ typedef struct {
     esp32_mquickjs_wifi_radio_start_controls_t start_controls;
 } esp32_mquickjs_wifi_configuration_t;
 bool esp32_mquickjs_wifi_capture_stop_ap_timeout(JSContext *ctx, JSValue value, uint32_t *timeout_ms);
+bool esp32_mquickjs_wifi_capture_disconnect(JSContext *ctx, JSValue options, uint32_t *timeout_ms);
 bool esp32_mquickjs_wifi_capture_stop(JSContext *ctx, JSValue options, uint32_t *timeout_ms);
 bool esp32_mquickjs_wifi_capture_restart(JSContext *ctx, JSValue options, uint32_t *timeout_ms, bool *allow_ap_restart);
 JSValue js_wifi_driver_restart(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
@@ -146,6 +147,7 @@ typedef struct {
     bool scan_in_progress;
     bool scan_draining;
     bool scan_results_pending;
+    bool scan_results_consumed_early;
     bool scan_stop_submitted;
     bool scan_stop_active;
     esp_err_t scan_cleanup_error;
@@ -451,6 +453,9 @@ esp_err_t esp32_mquickjs_wifi_cancel_connect(uint32_t generation);
 esp_err_t esp32_mquickjs_wifi_start_scan(const wifi_scan_config_t *config,
                                        uint32_t generation);
 esp_err_t esp32_mquickjs_wifi_cancel_scan(uint32_t generation);
+/* Stop synchronously without detaching the result owner or clearing its list.
+ * SCAN_DONE is still required before reusing native storage/Radio ownership. */
+esp_err_t esp32_mquickjs_wifi_stop_scan_for_results(uint32_t generation);
 esp_err_t esp32_mquickjs_wifi_drain_scan(void);
 void esp32_mquickjs_wifi_scan_results_consumed(void);
 
@@ -477,9 +482,6 @@ JSValue esp32_mquickjs_wifi_throw_operation_error(
     uint32_t scan_status);
 JSValue esp32_mquickjs_wifi_throw_connect_error(JSContext *ctx, esp_err_t err);
 JSValue esp32_mquickjs_wifi_throw_scan_error(JSContext *ctx, esp_err_t err);
-int esp32_mquickjs_wifi_value_to_timeout_ms(JSContext *ctx,
-                                            JSValue value,
-                                            uint32_t default_timeout_ms,
-                                            uint32_t *out_timeout_ms);
+
 
 #endif

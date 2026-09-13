@@ -170,8 +170,8 @@ int main(void) {
     /* Inject a separately established physical deinit boundary. This does not
      * test the missing Radio recovery coordinator or authorize production reset. */
     assert(esp32_mquickjs_wifi_raw_tx_broker_reset_after_deinit(7));
-    assert(s_raw_tx.status.native_terminated && allocations==frees+3);
+    assert(test_broker_status().native_terminated && allocations==frees+3);
     tick();run_job();
-    assert(esp32_mquickjs_wifi_raw_tx_sessions_drained() && allocations==frees && !s_raw_tx.status.native_terminated);
+    assert(esp32_mquickjs_wifi_raw_tx_sessions_drained() && allocations==frees && !test_broker_status().native_terminated);
     return 0;
 }

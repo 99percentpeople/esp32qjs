@@ -1,5 +1,6 @@
 #include "esp32_mquickjs_wifi_raw_tx_ap.h"
 #include "esp32_mquickjs_wifi_raw_tx_session.h"
+#include "esp32_mquickjs_wifi_raw_tx_pump.h"
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
 #include "esp32_mquickjs_wifi_raw_tx_lane.h"
 #include "esp32_mquickjs_wifi_radio.h"
@@ -35,6 +36,10 @@ struct esp32_mquickjs_wifi_raw_tx_session {
     esp32_mquickjs_wifi_raw_tx_lane_token_t lane;
     esp32_mquickjs_wifi_raw_tx_token_t native_token;
     esp32_mquickjs_wifi_raw_tx_ticket_t ticket;
+    struct {
+        esp32_mquickjs_wifi_raw_tx_token_t token;
+        esp32_mquickjs_wifi_raw_tx_ticket_t ticket;
+    } pending[ESP32_MQUICKJS_WIFI_RAW_TX_MAX_IN_FLIGHT];
     uint32_t last_sequence;
     esp32_mquickjs_wifi_raw_tx_broker_status_t last_completion;
     uint8_t periodic_children;
@@ -90,7 +95,10 @@ static size_t sessions_snapshot(session_t **output)
 
 void esp32_mquickjs_wifi_raw_tx_session_request_close(session_t *session)
 {
-    if (session != NULL) atomic_store_explicit(&session->close_requested, true, memory_order_release);
+    if (session != NULL) {
+        atomic_store_explicit(&session->close_requested, true, memory_order_release);
+        esp32_mquickjs_wifi_raw_tx_pump_wake();
+    }
 }
 
 void esp32_mquickjs_wifi_raw_tx_sessions_request_close(void)
@@ -109,6 +117,25 @@ bool esp32_mquickjs_wifi_raw_tx_sessions_drained(void)
         if (s_sessions[i] != NULL && !atomic_load_explicit(&s_sessions[i]->closed, memory_order_acquire)) drained = false;
     portEXIT_CRITICAL(&s_sessions_lock);
     return drained;
+}
+
+bool esp32_mquickjs_wifi_raw_tx_sessions_need_service(void)
+{
+    session_t *sessions[ESP32_MQUICKJS_WIFI_RAW_TX_MAX_SESSIONS];
+    size_t count = sessions_snapshot(sessions);
+    bool pending = false;
+    for (size_t i = 0; i < count; ++i) {
+        session_t *session = sessions[i];
+        if (xSemaphoreTake(session->mutex, 0) != pdTRUE) pending = true;
+        else {
+            if (!atomic_load_explicit(&session->closed, memory_order_acquire) &&
+                (session->worker_busy || !session->open_complete || session->queue.queued ||
+                 session->queue.in_flight || atomic_load_explicit(&session->close_requested, memory_order_acquire))) pending = true;
+            xSemaphoreGive(session->mutex);
+        }
+        esp32_mquickjs_wifi_raw_tx_session_release(session);
+    }
+    return pending;
 }
 
 void esp32_mquickjs_wifi_raw_tx_sessions_status(esp32_mquickjs_wifi_raw_tx_sessions_status_t *output)
@@ -144,6 +171,10 @@ esp_err_t esp32_mquickjs_wifi_raw_tx_session_new(
 {
     if (options == NULL || output == NULL || *output != NULL || options->capacity == 0U ||
         options->capacity > ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_MAX_PACKETS ||
+        options->max_in_flight > ESP32_MQUICKJS_WIFI_RAW_TX_MAX_IN_FLIGHT ||
+        options->max_in_flight > options->capacity ||
+        (options->capacity_bytes != 0U && (options->capacity_bytes < ESP32_MQUICKJS_WIFI_RAW_TX_MIN_FRAME_BYTES ||
+         options->capacity_bytes > (uint32_t)options->capacity * ESP32_MQUICKJS_WIFI_RAW_TX_MAX_FRAME_BYTES)) ||
         (options->interface != ESP32_MQUICKJS_WIFI_RAW_TX_STATION && options->interface != ESP32_MQUICKJS_WIFI_RAW_TX_ACCESS_POINT) ||
         (options->overflow != ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_REJECT_NEWEST &&
          options->overflow != ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_DROP_OLDEST_BATCH)) return ESP_ERR_INVALID_ARG;
@@ -160,6 +191,8 @@ esp_err_t esp32_mquickjs_wifi_raw_tx_session_new(
         return ESP_ERR_INVALID_ARG;
 #endif
     }
+    esp_err_t pump_error = esp32_mquickjs_wifi_raw_tx_pump_init();
+    if (pump_error != ESP_OK) return pump_error;
     session_t *session = esp32_mquickjs_memory_wireless_calloc("wifi.raw-tx", 1, sizeof(*session), ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (session == NULL) return ESP_ERR_NO_MEM;
     session->slots = esp32_mquickjs_memory_wireless_calloc("wifi.raw-tx", options->capacity, sizeof(*session->slots), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_QUEUE);
@@ -167,6 +200,8 @@ esp_err_t esp32_mquickjs_wifi_raw_tx_session_new(
     session->mutex = xSemaphoreCreateMutexStatic(&session->mutex_storage);
     if (session->mutex == NULL) { esp32_mquickjs_memory_payload_free(session->slots); esp32_mquickjs_memory_payload_free(session); return ESP_ERR_NO_MEM; }
     session->options = *options;
+    if (session->options.max_in_flight == 0U) session->options.max_in_flight = ESP32_MQUICKJS_WIFI_RAW_TX_DEFAULT_MAX_IN_FLIGHT;
+    if (session->options.capacity_bytes == 0U) session->options.capacity_bytes = (uint32_t)options->capacity * ESP32_MQUICKJS_WIFI_RAW_TX_MAX_FRAME_BYTES;
     session->references = 2; /* caller + native cleanup */
     session->cleanup_hold = true;
     session->next_result_identity = 1;
@@ -180,6 +215,8 @@ esp_err_t esp32_mquickjs_wifi_raw_tx_session_new(
     portEXIT_CRITICAL(&s_sessions_lock);
     bool initialized = generation != 0U && esp32_mquickjs_wifi_raw_tx_queue_init(
         &session->queue, session->slots, options->capacity, generation);
+    if (initialized) initialized = esp32_mquickjs_wifi_raw_tx_queue_limits(&session->queue,
+        session->options.capacity_bytes, session->options.max_in_flight);
     bool published = false;
     if (initialized) {
         portENTER_CRITICAL(&s_sessions_lock);
@@ -194,6 +231,7 @@ esp_err_t esp32_mquickjs_wifi_raw_tx_session_new(
         return ESP_ERR_INVALID_STATE;
     }
     *output = session;
+    esp32_mquickjs_wifi_raw_tx_pump_wake();
     return ESP_OK;
 }
 
@@ -208,6 +246,10 @@ bool esp32_mquickjs_wifi_raw_tx_session_status(session_t *session,
             ? session->slots[session->queue.active].sequence : 0U,
         .lane_identity = session->lane.identity,
         .channel = session->channel, .queued = session->queue.queued, .capacity = session->queue.capacity,
+        .in_flight = session->queue.in_flight, .max_in_flight = session->queue.max_in_flight,
+        .capacity_bytes = session->queue.capacity_bytes, .used_bytes = session->queue.used_bytes,
+        .high_water_bytes = session->queue.high_water_bytes,
+        .remaining_sequences = UINT32_MAX - session->queue.last_sequence,
         .periodic_children = session->periodic_children,
         .open_complete = session->open_complete, .faulted = session->faulted, .worker_busy = session->worker_busy,
         .close_requested = atomic_load_explicit(&session->close_requested, memory_order_acquire),
@@ -293,6 +335,7 @@ esp32_mquickjs_wifi_raw_tx_queue_result_t esp32_mquickjs_wifi_raw_tx_session_adm
         xSemaphoreTake(session->mutex, portMAX_DELAY) != pdTRUE) return ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_INVALID;
     esp32_mquickjs_wifi_raw_tx_queue_result_t result = session_admit_locked(session, frames, count, removed, removed_capacity, admission);
     xSemaphoreGive(session->mutex);
+    if (result == ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_OK) esp32_mquickjs_wifi_raw_tx_pump_wake();
     return result;
 }
 
@@ -329,6 +372,7 @@ static esp32_mquickjs_wifi_raw_tx_queue_result_t session_admit_result(
         }
         xSemaphoreGive(session->mutex);
     }
+    if (result == ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_OK) esp32_mquickjs_wifi_raw_tx_pump_wake();
     if (result != ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_OK) esp32_mquickjs_wifi_raw_tx_session_release(session);
     return result;
 }
@@ -357,7 +401,7 @@ bool esp32_mquickjs_wifi_raw_tx_session_periodic_acquire(session_t *session, con
     if (!session_validate_frames(session, frame, 1, &validation)) return false;
     if (!esp32_mquickjs_wifi_raw_tx_session_retain(session)) return false;
     xSemaphoreTake(session->mutex, portMAX_DELAY);
-    bool ok = session->open_complete && !session->faulted && session->periodic_children < 8U &&
+    bool ok = session->open_complete && !session->faulted && session->periodic_children < ESP32_MQUICKJS_WIFI_RAW_TX_MAX_PERIODIC_JOBS &&
         !atomic_load_explicit(&session->close_requested, memory_order_acquire);
     if (ok) ++session->periodic_children;
     xSemaphoreGive(session->mutex);
@@ -417,6 +461,7 @@ esp32_mquickjs_wifi_raw_tx_queue_result_t esp32_mquickjs_wifi_raw_tx_session_flu
     }
     esp32_mquickjs_wifi_raw_tx_queue_result_t result = esp32_mquickjs_wifi_raw_tx_queue_flush_begin(&session->queue, token);
     xSemaphoreGive(session->mutex);
+    if (result == ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_OK) esp32_mquickjs_wifi_raw_tx_pump_wake();
     if (result != ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_OK) esp32_mquickjs_wifi_raw_tx_session_release(session);
     return result;
 }
@@ -461,46 +506,24 @@ static void session_drop_queued(session_t *session)
     for (unsigned i = 0; i < count; ++i) esp32_mquickjs_memory_payload_free(removed[i].data);
 }
 
-static void session_worker(void *opaque)
+static void session_packet_step(session_t *session,
+    const esp32_mquickjs_wifi_radio_lease_t *owner,
+    esp32_mquickjs_wifi_raw_tx_token_t *native_token,
+    esp32_mquickjs_wifi_raw_tx_ticket_t *queue_ticket, uint8_t *actual_channel,
+    bool *terminated)
 {
-    session_t *session = opaque;
-    xSemaphoreTake(session->mutex, portMAX_DELAY);
-    esp32_mquickjs_wifi_radio_lease_t lease = session->lease;
-    esp32_mquickjs_wifi_raw_tx_lane_token_t lane = session->lane;
-    esp32_mquickjs_wifi_raw_tx_token_t token = session->native_token;
-    esp32_mquickjs_wifi_raw_tx_ticket_t ticket = session->ticket;
-    bool lane_acquired = session->lane_acquired, stop_pending = session->stop_pending;
-    bool ap_physical_terminated = session->ap_physical_terminated;
-    bool opening = !session->open_complete, work = opening || session->queue.queued != 0U;
-    uint8_t channel = session->channel;
-    xSemaphoreGive(session->mutex);
-    esp_err_t error = ESP_OK, cleanup_error = ESP_OK;
-    const char *stage = NULL, *cleanup_stage = NULL;
+    esp32_mquickjs_wifi_radio_lease_t lease = *owner;
+    esp32_mquickjs_wifi_raw_tx_token_t token = *native_token;
+    esp32_mquickjs_wifi_raw_tx_ticket_t ticket = *queue_ticket;
+    uint8_t channel = *actual_channel;
+    bool ap_physical_terminated = *terminated;
     bool close_requested = atomic_load_explicit(&session->close_requested, memory_order_acquire);
-    if (close_requested) session_drop_queued(session);
-    if (work && !close_requested && lane.identity == 0U) {
-        esp32_mquickjs_wifi_raw_tx_lane_result_t result = esp32_mquickjs_wifi_raw_tx_lane_request(&lane);
-        if (result == ESP32_MQUICKJS_WIFI_RAW_TX_LANE_FULL) goto publish;
-        if (result != ESP32_MQUICKJS_WIFI_RAW_TX_LANE_OK) {
-            error = ESP_ERR_INVALID_STATE; stage = "lane-request"; goto fault;
-        }
-    }
-    if (lane.identity != 0U && !lane_acquired && !close_requested)
-        lane_acquired = esp32_mquickjs_wifi_raw_tx_lane_acquire(&lane);
-    if (opening && !close_requested && lane_acquired) {
-        /* Only the runtime service may prepare/retire AP helper globals. */
-        if (session->options.rate_set && session->options.interface == ESP32_MQUICKJS_WIFI_RAW_TX_ACCESS_POINT)
-            goto publish;
-        error = esp32_mquickjs_wifi_radio_raw_tx_acquire(session->options.interface,
-            session->options.channel, session->options.rate_set ? &session->options.rate : NULL, &lease, &channel);
-        if (error != ESP_OK) { stage = "radio-open"; goto fault; }
-        opening = false;
-    }
-    close_requested = atomic_load_explicit(&session->close_requested, memory_order_acquire);
-    if (!opening && lane_acquired && token.identity == 0U && !close_requested) {
+    esp_err_t error = ESP_OK;
+    const char *stage = NULL;
+    if (token.identity == 0U && !close_requested) {
         payload_t borrowed = {0};
         xSemaphoreTake(session->mutex, portMAX_DELAY);
-        bool take = !atomic_load_explicit(&session->close_requested, memory_order_acquire) &&
+        bool take = !session->faulted && !atomic_load_explicit(&session->close_requested, memory_order_acquire) &&
             esp32_mquickjs_wifi_raw_tx_queue_take(&session->queue, &ticket, &borrowed);
         xSemaphoreGive(session->mutex);
         if (take) {
@@ -551,8 +574,8 @@ static void session_worker(void *opaque)
         }
     }
     if (token.identity != 0U) {
-        esp32_mquickjs_wifi_raw_tx_broker_status_t native;
-        esp32_mquickjs_wifi_raw_tx_broker_status(&native);
+        esp32_mquickjs_wifi_raw_tx_broker_status_t native = {0};
+        (void)esp32_mquickjs_wifi_raw_tx_broker_result(&token, &native);
         if (native.token.identity != token.identity || native.token.generation != token.generation ||
             native.token.radio_lease_identity != token.radio_lease_identity ||
             (native.correlation_fault && !native.native_terminated)) {
@@ -561,8 +584,8 @@ static void session_worker(void *opaque)
         /* Retire may race a callback after the snapshot. Only attempt it when
          * this exact snapshot already contains completion; otherwise a newly
          * completed operation could be retired with an older unknown result. */
-        if ((!native.driver_completed && !native.native_terminated) || native.callbacks_active != 0U) goto cleanup;
-        if (!esp32_mquickjs_wifi_radio_raw_tx_retire(&lease, &token)) goto cleanup;
+        if ((!native.driver_completed && !native.native_terminated) || native.callbacks_active != 0U) goto packet_done;
+        if (!esp32_mquickjs_wifi_radio_raw_tx_retire(&lease, &token)) goto packet_done;
         payload_t retired = {0};
         esp32_mquickjs_wifi_raw_tx_queue_outcome_t outcome = native.native_terminated
             ? ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_ABORTED : native.completion.status == ESP32_MQUICKJS_WIFI_RAW_TX_DRIVER_SUCCESS
@@ -584,13 +607,85 @@ static void session_worker(void *opaque)
         xSemaphoreGive(session->mutex);
         esp32_mquickjs_memory_payload_free(retired.data);
     }
-    goto cleanup;
+    goto packet_done;
 fault:
     xSemaphoreTake(session->mutex, portMAX_DELAY);
     session_fault(session, error, stage);
     xSemaphoreGive(session->mutex);
     if (ticket.sequence != 0U && token.identity != 0U) {
-        esp32_mquickjs_wifi_raw_tx_broker_status_t native;
+        esp32_mquickjs_wifi_raw_tx_broker_status_t native = {0};
+        (void)esp32_mquickjs_wifi_raw_tx_broker_result(&token, &native);
+        if (native.token.identity != token.identity || native.token.generation != token.generation ||
+            native.token.radio_lease_identity != token.radio_lease_identity) {
+            native = (esp32_mquickjs_wifi_raw_tx_broker_status_t){.token = token};
+        }
+        xSemaphoreTake(session->mutex, portMAX_DELAY);
+        session_result_publish(session, ticket.sequence, ESP32_MQUICKJS_WIFI_RAW_TX_RESULT_UNCERTAIN,
+            error, stage, channel, &native);
+        xSemaphoreGive(session->mutex);
+    }
+packet_done:
+    *native_token = token;
+    *queue_ticket = ticket;
+    *actual_channel = channel;
+    *terminated = ap_physical_terminated;
+}
+
+static void session_worker(void *opaque)
+{
+    session_t *session = opaque;
+    xSemaphoreTake(session->mutex, portMAX_DELAY);
+    esp32_mquickjs_wifi_radio_lease_t lease = session->lease;
+    esp32_mquickjs_wifi_raw_tx_lane_token_t lane = session->lane;
+    esp32_mquickjs_wifi_raw_tx_token_t token = session->native_token;
+    esp32_mquickjs_wifi_raw_tx_ticket_t ticket = session->ticket;
+    bool lane_acquired = session->lane_acquired, stop_pending = session->stop_pending;
+    bool ap_physical_terminated = session->ap_physical_terminated;
+    bool opening = !session->open_complete, work = opening || session->queue.queued != 0U;
+    uint8_t channel = session->channel;
+    xSemaphoreGive(session->mutex);
+    esp_err_t error = ESP_OK, cleanup_error = ESP_OK;
+    const char *stage = NULL, *cleanup_stage = NULL;
+    bool close_requested = atomic_load_explicit(&session->close_requested, memory_order_acquire);
+    if (close_requested) session_drop_queued(session);
+    if (work && !close_requested && lane.identity == 0U) {
+        esp32_mquickjs_wifi_raw_tx_lane_result_t result = esp32_mquickjs_wifi_raw_tx_lane_request(&lane);
+        if (result == ESP32_MQUICKJS_WIFI_RAW_TX_LANE_FULL) goto publish;
+        if (result != ESP32_MQUICKJS_WIFI_RAW_TX_LANE_OK) {
+            error = ESP_ERR_INVALID_STATE; stage = "lane-request"; goto fault;
+        }
+    }
+    if (lane.identity != 0U && !lane_acquired && !close_requested)
+        lane_acquired = esp32_mquickjs_wifi_raw_tx_lane_acquire(&lane);
+    if (opening && !close_requested && lane_acquired) {
+        /* Only the runtime service may prepare/retire AP helper globals. */
+        if (session->options.rate_set && session->options.interface == ESP32_MQUICKJS_WIFI_RAW_TX_ACCESS_POINT)
+            goto publish;
+        error = esp32_mquickjs_wifi_radio_raw_tx_acquire(session->options.interface,
+            session->options.channel, session->options.rate_set ? &session->options.rate : NULL, &lease, &channel);
+        if (error != ESP_OK) { stage = "radio-open"; goto fault; }
+        opening = false;
+    }
+    close_requested = atomic_load_explicit(&session->close_requested, memory_order_acquire);
+    if (!opening && lane_acquired) {
+        for (unsigned i = 0; i < session->options.max_in_flight; ++i)
+            session_packet_step(session, &lease, &session->pending[i].token,
+                &session->pending[i].ticket, &channel, &ap_physical_terminated);
+        token = (esp32_mquickjs_wifi_raw_tx_token_t){0};
+        ticket = (esp32_mquickjs_wifi_raw_tx_ticket_t){0};
+        for (unsigned i = 0; i < session->options.max_in_flight; ++i)
+            if (session->pending[i].token.identity != 0U) {
+                token = session->pending[i].token; ticket = session->pending[i].ticket; break;
+            }
+    }
+    goto cleanup;
+
+fault:
+    xSemaphoreTake(session->mutex, portMAX_DELAY);
+    session_fault(session, error, stage);
+    xSemaphoreGive(session->mutex);
+    if (ticket.sequence != 0U && token.identity != 0U) {
+        esp32_mquickjs_wifi_raw_tx_broker_status_t native = {0};
         esp32_mquickjs_wifi_raw_tx_broker_status(&native);
         if (native.token.identity != token.identity || native.token.generation != token.generation ||
             native.token.radio_lease_identity != token.radio_lease_identity) {
@@ -606,7 +701,9 @@ cleanup:
     if (close_requested) {
         session_drop_queued(session);
         if (token.identity != 0U) {
-            (void)esp32_mquickjs_wifi_raw_tx_broker_abandon(&token);
+            for (unsigned i = 0; i < session->options.max_in_flight; ++i)
+                if (session->pending[i].token.identity != 0U)
+                    (void)esp32_mquickjs_wifi_raw_tx_broker_abandon(&session->pending[i].token);
             cleanup_error = ESP_ERR_INVALID_STATE; cleanup_stage = "native-completion";
         } else if (session->ap.owned && !ap_physical_terminated) {
             stop_pending = true; /* Runtime exchanges rate owner for helper cleanup token. */
@@ -644,9 +741,10 @@ publish:
         atomic_store_explicit(&session->closed, true, memory_order_release);
         drop_hold = session->cleanup_hold; session->cleanup_hold = false;
     }
-    session->next_service_us = esp_timer_get_time() + (cleanup_error != ESP_OK ? 100000 : 1000);
+    session->next_service_us = esp_timer_get_time() + (cleanup_error != ESP_OK ? ESP32_MQUICKJS_WIFI_RAW_TX_CLEANUP_RETRY_US : 0);
     session->worker_busy = false;
     xSemaphoreGive(session->mutex);
+    esp32_mquickjs_wifi_raw_tx_pump_wake();
     if (drop_hold) esp32_mquickjs_wifi_raw_tx_session_release(session);
     esp32_mquickjs_wifi_raw_tx_session_release(session); /* worker reference, final access */
 }
@@ -694,7 +792,7 @@ bool esp32_mquickjs_wifi_raw_tx_sessions_runtime_service(void)
                 session->stop_pending = err != ESP_OK || ap.owned || lease.acquired;
             } else if (err == ESP_OK) session->open_complete = true;
             else session_fault(session, err, stage);
-            session->next_service_us = esp_timer_get_time() + (err == ESP_OK ? 0 : 100000);
+            session->next_service_us = esp_timer_get_time() + (err == ESP_OK ? 0 : ESP32_MQUICKJS_WIFI_RAW_TX_CLEANUP_RETRY_US);
             session->worker_busy = false;
             xSemaphoreGive(session->mutex);
             handled = true;
@@ -723,13 +821,16 @@ bool esp32_mquickjs_wifi_raw_tx_sessions_service(void)
                 session->lane_acquired = esp32_mquickjs_wifi_raw_tx_lane_acquire(&session->lane);
                 submit = session->lane_acquired;
             }
-            if (submit && !closing && session->native_token.identity != 0U) {
-                esp32_mquickjs_wifi_raw_tx_broker_status_t native;
-                esp32_mquickjs_wifi_raw_tx_broker_status(&native);
-                if (native.token.identity == session->native_token.identity &&
-                    native.token.generation == session->native_token.generation &&
-                    native.token.radio_lease_identity == session->native_token.radio_lease_identity &&
-                    !native.driver_completed && !native.correlation_fault && !native.native_terminated) submit = false;
+            if (submit && !closing && session->queue.in_flight != 0U) {
+                bool ready = session->queue.queued != 0U &&
+                    session->queue.in_flight < session->queue.max_in_flight && !session->faulted;
+                for (unsigned n = 0; n < session->options.max_in_flight; ++n) {
+                    esp32_mquickjs_wifi_raw_tx_broker_status_t native = {0};
+                    if (session->pending[n].token.identity != 0U &&
+                        esp32_mquickjs_wifi_raw_tx_broker_result(&session->pending[n].token, &native) &&
+                        (native.driver_completed || native.correlation_fault || native.native_terminated)) ready = true;
+                }
+                if (!ready) submit = false;
             }
             if (submit && !closing && !session->open_complete && session->lane_acquired &&
                 session->options.rate_set && session->options.interface == ESP32_MQUICKJS_WIFI_RAW_TX_ACCESS_POINT)
@@ -745,7 +846,7 @@ bool esp32_mquickjs_wifi_raw_tx_sessions_service(void)
                  * this task mutex. On rejection restore the scheduling flag
                  * before unlocking, without another blocking mutex acquire. */
                 if (worker_ref) accepted = esp32_mquickjs_submit_background_worker(session_worker, session);
-                if (!accepted) { session->worker_busy = false; session->next_service_us = now + 1000; }
+                if (!accepted) { session->worker_busy = false; session->next_service_us = now + ESP32_MQUICKJS_WIFI_RAW_TX_SERVICE_RETRY_US; }
             }
             xSemaphoreGive(session->mutex);
         }

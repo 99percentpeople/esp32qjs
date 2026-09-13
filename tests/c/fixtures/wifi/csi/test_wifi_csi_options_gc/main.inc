@@ -13,12 +13,30 @@ int main(int argc,char **argv){
         bool ok=wifi_csi_parse_open_options(ctx,*input,&options);
         if(ok){
             *result=wifi_csi_requested_to_js(ctx,&options);ok=!JS_IsException(*result);
+            if(ok){
+                wifi_csi_options_t replay;
+                ok=wifi_csi_parse_open_options(ctx,*result,&replay);
+                if(ok)assert(!memcmp(&options,&replay,sizeof(options)));
+            }
             if(ok)ok=esp32_mquickjs_wifi_csi_resources_init(&resources,1,options.pool_capacity,128,esp32_mquickjs_wifi_csi_packet_capacity(&options.packet),&allocator);
         }
         inject=false;collect=false;
         if(!nth){total=calls;assert(ok==expected);}
         else assert(!ok);
         if(ok){
+            *part=JS_GetPropertyStr(ctx,*result,"filter");
+            JSValue frames=JS_GetPropertyStr(ctx,*part,"frames");
+            assert(JS_IsUndefined(frames)==!options.filter.frame_filter);
+            if(options.filter.frame_filter){
+                uint16_t masks[4]={0};
+                assert(esp32_mquickjs_wifi_frame_filter_parse(ctx,frames,masks));
+                assert(!memcmp(masks,options.filter.frame_subtype_masks,sizeof(masks)));
+                /* Requested descriptors are fresh snapshots, not native storage. */
+                assert(!JS_IsException(JS_SetPropertyUint32(ctx,frames,0,JS_NULL)));
+                assert(!memcmp(masks,options.filter.frame_subtype_masks,sizeof(masks)));
+            }
+            assert(JS_IsUndefined(JS_GetPropertyStr(ctx,*part,"frameTypes")));
+            assert(JS_IsUndefined(JS_GetPropertyStr(ctx,*part,"frameSubtypes")));
             assert(options.pool_capacity==pool && options.queue_capacity==queue && resources.capacity==pool);
             assert(resources.slots[pool-1].payload==resources.payload_storage+(pool-1)*(128+esp32_mquickjs_wifi_csi_packet_capacity(&options.packet)));
             assert(esp32_mquickjs_native_pool_available(&resources.pool)==pool);

@@ -9,12 +9,14 @@ static TickType_t s_wait_started, s_wait_ticks;
 
 esp_err_t esp32_mquickjs_wifi_wait_begin(uint32_t timeout_ms)
 {
-    if (timeout_ms == 0 || timeout_ms > 60000U) return ESP_ERR_INVALID_ARG;
+    if (timeout_ms == 0 || timeout_ms > INT32_MAX) return ESP_ERR_INVALID_ARG;
     TaskHandle_t task = xTaskGetCurrentTaskHandle();
     TickType_t started = xTaskGetTickCount();
-    /* Round up and avoid pdMS_TO_TICKS multiplication overflow. The supported
-     * ESP-IDF tick rates keep this interval well below one TickType_t wrap. */
-    TickType_t ticks = (TickType_t)(((uint64_t)timeout_ms * configTICK_RATE_HZ + 999U) / 1000U);
+    /* Reserve less than half a tick cycle for wrap-safe finite waits; never
+     * narrow a converted interval into TickType_t or its infinite sentinel. */
+    uint64_t ticks_wide = ((uint64_t)timeout_ms * configTICK_RATE_HZ + 999U) / 1000U;
+    if (ticks_wide == 0 || ticks_wide > (uint64_t)((TickType_t)-1) / 2U) return ESP_ERR_INVALID_ARG;
+    TickType_t ticks = (TickType_t)ticks_wide;
     portENTER_CRITICAL(&s_wait_lock);
     if (s_wait_task != NULL) {
         portEXIT_CRITICAL(&s_wait_lock);

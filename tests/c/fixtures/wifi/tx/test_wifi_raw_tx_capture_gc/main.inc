@@ -54,6 +54,54 @@ int main(int argc,char **argv) {
             }
         }
         inject=false;collect=false;
+        if(ok && !strcmp(argv[1],"capabilities")) {
+            assert(!JS_IsException(JS_SetPropertyStr(ctx,JS_GetGlobalObject(ctx),"caps",*result)));
+#if defined(ESP32_MQUICKJS_RAW_TX_EXTENDED_MANAGEMENT) && ESP32_MQUICKJS_RAW_TX_EXTENDED_MANAGEMENT
+            const char *check = "caps.supports.extendedManagement === true && Array.isArray(caps.frameTypes) && caps.frameTypes.map(function(f){return f.name;}).sort().join(',') === "
+                "'action,action-no-ack,association-request,association-response,atim,authentication,beacon,data,deauthentication,disassociation,probe-request,probe-response,reassociation-request,reassociation-response,timing-advertisement'";
+#else
+            const char *check = "Array.isArray(caps.frameTypes) && caps.frameTypes.map(function(f){return f.name;}).sort().join(',') === "
+                "'action,beacon,data,probe-request,probe-response'";
+#endif
+            *root=JS_Eval(ctx,check,strlen(check),"frame-types",JS_EVAL_RETVAL);
+            assert(*root==JS_TRUE);
+            *root=JS_Eval(ctx,"caps.frameTypes[0].name='changed'; caps.frameTypes[0].type=3; caps.frameTypes.length=0;",
+                strlen("caps.frameTypes[0].name='changed'; caps.frameTypes[0].type=3; caps.frameTypes.length=0;"),"snapshot",0);
+            assert(!JS_IsException(*root));
+            *root=js_wifi_raw_tx_capabilities(ctx,NULL,0,NULL);
+            assert(!JS_IsException(*root));
+            assert(!JS_IsException(JS_SetPropertyStr(ctx,JS_GetGlobalObject(ctx),"caps",*root)));
+            *root=JS_Eval(ctx,check,strlen(check),"fresh-snapshot",JS_EVAL_RETVAL);
+            assert(*root==JS_TRUE);
+            const char *names[]={"beacon","probe-request","probe-response","action","data",
+#if defined(ESP32_MQUICKJS_RAW_TX_EXTENDED_MANAGEMENT) && ESP32_MQUICKJS_RAW_TX_EXTENDED_MANAGEMENT
+                "association-request","association-response","reassociation-request","reassociation-response","timing-advertisement","atim","disassociation","authentication","deauthentication","action-no-ack",
+#endif
+            };
+            const uint8_t frame_control[]={0x80,0x40,0x50,0xd0,0x08,
+#if defined(ESP32_MQUICKJS_RAW_TX_EXTENDED_MANAGEMENT) && ESP32_MQUICKJS_RAW_TX_EXTENDED_MANAGEMENT
+                0x00,0x10,0x20,0x30,0x60,0x90,0xa0,0xb0,0xc0,0xe0,
+#endif
+            };
+            for(unsigned i=0;i<sizeof(frame_control);i++) {
+                uint8_t bytes[24]={0};bytes[0]=frame_control[i];
+                esp32_mquickjs_wifi_raw_tx_validation_policy_t policy={0};
+                esp32_mquickjs_wifi_raw_tx_validated_frame_t validated={0};
+                assert(esp32_mquickjs_wifi_raw_tx_validate(bytes,sizeof(bytes),&policy,&validated)==ESP32_MQUICKJS_WIFI_RAW_TX_VALID);
+                esp32_mquickjs_wifi_raw_tx_broker_status_t native={0};
+                native.frame_type=validated.frame_type;
+                *root=esp32_mquickjs_wifi_raw_tx_result_to_js(ctx,&native,ESP32_MQUICKJS_WIFI_RAW_TX_STATION,1);
+                assert(!JS_IsException(*root));
+                args[1].val=JS_GetPropertyStr(ctx,*root,"frameType");
+                int32_t code;
+                assert(!JS_ToInt32(ctx,&code,JS_GetPropertyStr(ctx,args[1].val,"type")) && code==((frame_control[i]>>2)&3));
+                assert(!JS_ToInt32(ctx,&code,JS_GetPropertyStr(ctx,args[1].val,"subtype")) && code==(frame_control[i]>>4));
+                args[1].val=JS_GetPropertyStr(ctx,args[1].val,"name");
+                JSCStringBuf buffer;size_t length;
+                const char *name=JS_ToCStringLen(ctx,&length,args[1].val,&buffer);
+                assert(name && length==strlen(names[i]) && !memcmp(name,names[i],length));
+            }
+        }
         if(!ok) {
             assert(JS_HasException(ctx));*result=JS_GetException(ctx);
             if(!nth && argv[4][0]) {

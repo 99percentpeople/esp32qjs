@@ -1,3 +1,5 @@
+#include "esp32_mquickjs_wifi_frame_type.h"
+#include "esp32_mquickjs_wifi_frame_filter.h"
 #include "esp32_mquickjs_wifi_csi.h"
 #include "esp32_mquickjs_memory.h"
 
@@ -65,16 +67,11 @@ typedef enum {
     WIFI_CSI_SOURCE_PROMISCUOUS,
 } wifi_csi_source_t;
 
-typedef enum {
-    WIFI_CSI_POWER_SAVE_PRESERVE = 0,
-    WIFI_CSI_POWER_SAVE_REQUIRE_NONE,
-} wifi_csi_power_save_policy_t;
 
 typedef struct {
     wifi_csi_source_t source;
     bool fixed_channel;
     uint8_t channel;
-    wifi_csi_power_save_policy_t power_save_policy;
     uint32_t pool_capacity;
     uint32_t queue_capacity;
     esp32_mquickjs_wifi_csi_capture_config_t capture;
@@ -322,7 +319,6 @@ static void wifi_csi_default_options(wifi_csi_options_t *options)
 {
     memset(options, 0, sizeof(*options));
     options->source = WIFI_CSI_SOURCE_ASSOCIATED;
-    options->power_save_policy = WIFI_CSI_POWER_SAVE_PRESERVE;
     options->pool_capacity = CONFIG_ESP32_MQUICKJS_WIFI_CSI_POOL_CAPACITY;
     options->queue_capacity = CONFIG_ESP32_MQUICKJS_WIFI_CSI_QUEUE_LEN;
     options->packet.snap_length = ESP32_MQUICKJS_WIFI_CSI_DEFAULT_PACKET_BYTES;
@@ -422,12 +418,12 @@ static bool wifi_csi_parse_frame_filter(JSContext *ctx, JSValue value,
     uint32_t count;
     uint16_t result = 0;
     if (!JS_IsArray(ctx, *root)) {
-        JS_ThrowTypeError(ctx, "CSI frameTypes/frameSubtypes must be arrays");
+        JS_ThrowTypeError(ctx, "CSI types/subtypes must be arrays");
         goto fail;
     }
     JSValue length = JS_GetPropertyStr(ctx, *root, "length");
     if (JS_IsException(length) || !esp32_mquickjs_value_to_bounded_u32(
-            ctx, length, 0, subtypes ? 16 : 5, &count)) {
+            ctx, length, 0, subtypes ? 16 : 4, &count)) {
         if (!JS_HasException(ctx)) JS_ThrowRangeError(ctx, "Too many CSI frame types/subtypes");
         goto fail;
     }
@@ -441,9 +437,9 @@ static bool wifi_csi_parse_frame_filter(JSContext *ctx, JSValue value,
                 goto fail;
             }
         } else {
-            while (index < 5 && !wifi_csi_string_equals(ctx, *entry, wifi_csi_packet_type_name(index))) ++index;
+            while (index < 4 && !wifi_csi_string_equals(ctx, *entry, wifi_csi_packet_type_name(index))) ++index;
             if (JS_HasException(ctx)) goto fail;
-            if (index == 5) { JS_ThrowTypeError(ctx, "Invalid CSI frame type"); goto fail; }
+            if (index == 4) { JS_ThrowTypeError(ctx, "Invalid CSI frame type"); goto fail; }
         }
         if (result & (1U << index)) {
             JS_ThrowTypeError(ctx, "Duplicate CSI frame type/subtype"); goto fail;
@@ -467,7 +463,7 @@ static JSValue wifi_csi_frame_filter_to_js(JSContext *ctx, uint16_t mask, bool s
     *result = JS_NewArray(ctx, 0);
     if (JS_IsException(*result)) goto fail;
     uint32_t count = 0;
-    for (uint32_t i = 0; i < (subtypes ? 16U : 5U); ++i) {
+    for (uint32_t i = 0; i < (subtypes ? 16U : 4U); ++i) {
         if (!(mask & (1U << i))) continue;
         JSValue value = subtypes ? JS_NewUint32(ctx, i) : JS_NewString(ctx, wifi_csi_packet_type_name(i));
         if (JS_IsException(value) || JS_IsException(JS_SetPropertyUint32(ctx, *result, count++, value))) goto fail;
@@ -483,14 +479,14 @@ static bool wifi_csi_parse_filter_rooted(JSContext *ctx, JSValue *value,
 {
     static const char *const allowed[] = {
         "sourceMac", "destinationMac", "minimumRssi", "sampleEvery",
-        "maximumRateHz", "validOnly", "bssid", "frameTypes", "frameSubtypes",
+        "maximumRateHz", "validOnly", "bssid", "types", "subtypes", "frames",
     };
     JSValue property;
     int32_t signed_value;
     uint32_t unsigned_value;
 
     if (!esp32_mquickjs_validate_plain_options(
-            ctx, *value, "wifi.csi.open({ filter })", allowed, 9U)) {
+            ctx, *value, "wifi.csi.open({ filter })", allowed, 10U)) {
         return false;
     }
     property = JS_GetPropertyStr(ctx, *value, "sourceMac");
@@ -509,19 +505,25 @@ static bool wifi_csi_parse_filter_rooted(JSContext *ctx, JSValue *value,
     if (JS_IsException(property) || (!JS_IsUndefined(property) &&
         !wifi_csi_parse_mac_values(ctx, property, "filter.bssid", filter->bssids, &filter->bssid_count))) return false;
     uint16_t mask;
-    property = JS_GetPropertyStr(ctx, *value, "frameTypes");
+    property = JS_GetPropertyStr(ctx, *value, "types");
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property)) {
         if (!wifi_csi_parse_frame_filter(ctx, property, false, &mask)) return false;
         filter->frame_types = (uint8_t)mask;
         filter->frame_types_set = true;
     }
-    property = JS_GetPropertyStr(ctx, *value, "frameSubtypes");
+    property = JS_GetPropertyStr(ctx, *value, "subtypes");
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property)) {
         if (!wifi_csi_parse_frame_filter(ctx, property, true, &mask)) return false;
         filter->frame_subtypes = mask;
         filter->frame_subtypes_set = true;
+    }
+    property = JS_GetPropertyStr(ctx, *value, "frames");
+    if (JS_IsException(property)) return false;
+    if (!JS_IsUndefined(property)) {
+        if (!esp32_mquickjs_wifi_frame_filter_parse(ctx, property, filter->frame_subtype_masks)) return false;
+        filter->frame_filter = true;
     }
     property = JS_GetPropertyStr(ctx, *value, "minimumRssi");
     if (JS_IsException(property)) return false;
@@ -548,9 +550,9 @@ static bool wifi_csi_parse_filter_rooted(JSContext *ctx, JSValue *value,
     if (JS_IsException(property)) return false;
     if (!JS_IsUndefined(property)) {
         if (!esp32_mquickjs_value_to_bounded_u32(
-                ctx, property, 1U, 1000000U, &unsigned_value)) {
+                ctx, property, 0U, 1000000U, &unsigned_value)) {
             return JS_ThrowRangeError(
-                ctx, "filter.maximumRateHz must be 1..1000000"), false;
+                ctx, "filter.maximumRateHz must be 0..1000000"), false;
         }
         filter->maximum_rate_hz = unsigned_value;
     }
@@ -884,28 +886,16 @@ static JSValue wifi_csi_packet_options_to_js(JSContext *ctx,
 static bool wifi_csi_parse_open_options_rooted(JSContext *ctx, JSValue *value,
                                         wifi_csi_options_t *options)
 {
-    static const char *const allowed[] = {"source", "capture", "filter", "buffering", "powerSavePolicy", "packet"};
+    static const char *const allowed[] = {"source", "capture", "filter", "buffering", "packet"};
     JSValue property;
     esp32_mquickjs_wifi_csi_target_config_result_t target_result;
 
     wifi_csi_default_options(options);
     if (!esp32_mquickjs_validate_plain_options(
-            ctx, *value, "wifi.csi.open(options)", allowed, 6U)) return false;
+            ctx, *value, "wifi.csi.open(options)", allowed, 5U)) return false;
     property = JS_GetPropertyStr(ctx, *value, "source");
     if (JS_IsException(property) ||
         (!JS_IsUndefined(property) && !wifi_csi_parse_source(ctx, property, options))) return false;
-    property = JS_GetPropertyStr(ctx, *value, "powerSavePolicy");
-    if (JS_IsException(property)) return false;
-    if (!JS_IsUndefined(property)) {
-        if (wifi_csi_string_equals(ctx, property, "preserve")) {
-            options->power_save_policy = WIFI_CSI_POWER_SAVE_PRESERVE;
-        } else if (wifi_csi_string_equals(ctx, property, "require-none")) {
-            options->power_save_policy = WIFI_CSI_POWER_SAVE_REQUIRE_NONE;
-        } else {
-            return JS_ThrowTypeError(
-                ctx, "powerSavePolicy expects preserve or require-none"), false;
-        }
-    }
     property = JS_GetPropertyStr(ctx, *value, "packet");
     if (JS_IsException(property) ||
         (!JS_IsUndefined(property) && !wifi_csi_parse_packet(ctx, property, &options->packet))) return false;
@@ -1326,13 +1316,6 @@ static esp_err_t wifi_csi_start_native(wifi_csi_session_t *session)
         session->last_error_stage = "wifi_radio_get_status";
         return err;
     }
-    if (session->options.power_save_policy ==
-            WIFI_CSI_POWER_SAVE_REQUIRE_NONE &&
-        (!radio_status.power_save_available ||
-         radio_status.power_save != WIFI_PS_NONE)) {
-        session->last_error_stage = "power_save_policy";
-        return ESP_ERR_INVALID_STATE;
-    }
     session->effective_power_save = radio_status.power_save_available
         ? radio_status.power_save : WIFI_PS_NONE;
     if (session->options.fixed_channel) {
@@ -1415,9 +1398,6 @@ static const char *wifi_csi_start_error_code(
     const char *stage = session != NULL && session->last_error_stage != NULL
         ? session->last_error_stage : "";
 
-    if (strcmp(stage, "power_save_policy") == 0) {
-        return "WIFI_CSI_POWER_SAVE_CONFLICT";
-    }
     if (session != NULL &&
         session->options.source == WIFI_CSI_SOURCE_PROMISCUOUS &&
         strcmp(stage, "wifi_radio_acquire_promiscuous") == 0) {
@@ -2005,49 +1985,41 @@ static JSValue wifi_csi_requested_to_js(JSContext *ctx,
                                         const wifi_csi_options_t *options)
 {
     JSGCRef result_ref, capture_ref, filter_ref, queue_ref;
-    JSGCRef source_macs_ref, destination_macs_ref, source_ref;
+    JSGCRef source_ref;
     JSValue *result = JS_PushGCRef(ctx, &result_ref);
     JSValue *capture = JS_PushGCRef(ctx, &capture_ref);
     JSValue *filter = JS_PushGCRef(ctx, &filter_ref);
     JSValue *queue = JS_PushGCRef(ctx, &queue_ref);
-    JSValue *source_macs = JS_PushGCRef(ctx, &source_macs_ref);
-    JSValue *destination_macs = JS_PushGCRef(ctx, &destination_macs_ref);
     JSValue *source = JS_PushGCRef(ctx, &source_ref);
 
     *result = JS_NewObject(ctx);
     *capture = wifi_csi_capture_to_js(ctx, options);
     *filter = JS_NewObject(ctx);
     *queue = JS_NewObject(ctx);
-    *source_macs = wifi_csi_mac_array(
-        ctx, options->filter.source_macs, options->filter.source_mac_count);
-    *destination_macs = wifi_csi_mac_array(
-        ctx, options->filter.destination_macs,
-        options->filter.destination_mac_count);
     *source = wifi_csi_source_to_js(ctx, options);
     if (JS_IsException(*result) || JS_IsException(*capture) ||
         JS_IsException(*filter) || JS_IsException(*queue) ||
-        JS_IsException(*source_macs) || JS_IsException(*destination_macs) || JS_IsException(*source) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, filter, "sourceMac", *source_macs) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, filter, "destinationMac", *destination_macs) ||
-        !esp32_mquickjs_set_property_ref(ctx, filter, "bssid",
-            wifi_csi_mac_array(ctx, options->filter.bssids, options->filter.bssid_count)) ||
-        (options->filter.frame_types_set && !esp32_mquickjs_set_property_ref(ctx, filter, "frameTypes",
+        JS_IsException(*source) ||
+        (options->filter.source_mac_count && !esp32_mquickjs_set_property_ref(ctx, filter, "sourceMac",
+            wifi_csi_mac_array(ctx, options->filter.source_macs, options->filter.source_mac_count))) ||
+        (options->filter.destination_mac_count && !esp32_mquickjs_set_property_ref(ctx, filter, "destinationMac",
+            wifi_csi_mac_array(ctx, options->filter.destination_macs, options->filter.destination_mac_count))) ||
+        (options->filter.bssid_count && !esp32_mquickjs_set_property_ref(ctx, filter, "bssid",
+            wifi_csi_mac_array(ctx, options->filter.bssids, options->filter.bssid_count))) ||
+        (options->filter.frame_types_set && !esp32_mquickjs_set_property_ref(ctx, filter, "types",
             wifi_csi_frame_filter_to_js(ctx, options->filter.frame_types, false))) ||
-        (options->filter.frame_subtypes_set && !esp32_mquickjs_set_property_ref(ctx, filter, "frameSubtypes",
+        (options->filter.frame_subtypes_set && !esp32_mquickjs_set_property_ref(ctx, filter, "subtypes",
             wifi_csi_frame_filter_to_js(ctx, options->filter.frame_subtypes, true))) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, filter, "minimumRssi",
-            options->filter.minimum_rssi_set
-                ? JS_NewInt32(ctx, options->filter.minimum_rssi) : JS_NULL) ||
+        (options->filter.frame_filter && !esp32_mquickjs_set_property_ref(ctx, filter, "frames",
+            esp32_mquickjs_wifi_frame_filter_to_js(ctx, options->filter.frame_subtype_masks))) ||
+        (options->filter.minimum_rssi_set && !esp32_mquickjs_set_property_ref(
+            ctx, filter, "minimumRssi", JS_NewInt32(ctx, options->filter.minimum_rssi))) ||
         !esp32_mquickjs_set_property_ref(
             ctx, filter, "sampleEvery",
             JS_NewUint32(ctx, options->filter.sample_every)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, filter, "maximumRateHz",
-            options->filter.maximum_rate_hz > 0U
-                ? JS_NewUint32(ctx, options->filter.maximum_rate_hz) : JS_NULL) ||
+            JS_NewUint32(ctx, options->filter.maximum_rate_hz)) ||
         !esp32_mquickjs_set_property_ref(
             ctx, filter, "validOnly",
             JS_NewBool(options->filter.valid_only)) ||
@@ -2063,20 +2035,11 @@ static JSValue wifi_csi_requested_to_js(JSContext *ctx,
         !esp32_mquickjs_set_property_ref(ctx, result, "capture", *capture) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "filter", *filter) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "buffering", *queue) ||
-        !esp32_mquickjs_set_property_ref(ctx, result, "packet", wifi_csi_packet_options_to_js(ctx, &options->packet)) ||
-        !esp32_mquickjs_set_property_ref(
-            ctx, result, "powerSavePolicy",
-            JS_NewString(ctx,
-                options->power_save_policy == WIFI_CSI_POWER_SAVE_REQUIRE_NONE
-                    ? "require-none" : "preserve"))) goto fail;
+        !esp32_mquickjs_set_property_ref(ctx, result, "packet", wifi_csi_packet_options_to_js(ctx, &options->packet))) goto fail;
     *capture = JS_UNDEFINED;
     *filter = JS_UNDEFINED;
     *queue = JS_UNDEFINED;
-    *source_macs = JS_UNDEFINED;
-    *destination_macs = JS_UNDEFINED;
     JS_PopGCRef(ctx, &source_ref);
-    JS_PopGCRef(ctx, &destination_macs_ref);
-    JS_PopGCRef(ctx, &source_macs_ref);
     JS_PopGCRef(ctx, &queue_ref);
     JS_PopGCRef(ctx, &filter_ref);
     JS_PopGCRef(ctx, &capture_ref);
@@ -2084,8 +2047,6 @@ static JSValue wifi_csi_requested_to_js(JSContext *ctx,
 
 fail:
     JS_PopGCRef(ctx, &source_ref);
-    JS_PopGCRef(ctx, &destination_macs_ref);
-    JS_PopGCRef(ctx, &source_macs_ref);
     JS_PopGCRef(ctx, &queue_ref);
     JS_PopGCRef(ctx, &filter_ref);
     JS_PopGCRef(ctx, &capture_ref);
@@ -2280,10 +2241,9 @@ static JSValue wifi_csi_packet_to_js(JSContext *ctx, const esp32_mquickjs_wifi_c
 #define PACKET_SET(object, key, value) do { if (!esp32_mquickjs_set_property_ref(ctx, object, key, value)) goto fail; } while (0)
 #define PACKET_NUMBER(object, key, value) PACKET_SET(object, key, JS_NewUint32(ctx, value))
     if (JS_IsException(*result) || JS_IsException(*child)) goto fail;
-    PACKET_SET(result, "type", JS_NewString(ctx, types[(unsigned)header->type < 5 ? header->type : 4]));
-    PACKET_NUMBER(result, "subtype", header->subtype);
-    const char *name = esp32_mquickjs_wifi_rx_subtype_name(header->type, header->subtype);
-    PACKET_SET(result, "subtypeName", name != NULL ? JS_NewString(ctx, name) : JS_NULL);
+    PACKET_SET(result, "category", JS_NewString(ctx, types[(unsigned)header->type < 5 ? header->type : 4]));
+    PACKET_SET(result, "frameType", esp32_mquickjs_wifi_frame_type_to_js(ctx,
+        (header->frame_control >> 2) & 3, (header->frame_control >> 4) & 15));
     PACKET_NUMBER(result, "frameControl", header->frame_control);
     PACKET_NUMBER(result, "durationId", header->duration_id);
     PACKET_SET(result, "sequenceControl", header->sequence_valid ? JS_NewUint32(ctx, header->sequence_control) : JS_NULL);
@@ -2931,6 +2891,7 @@ JSValue js_wifi_csi_capabilities(JSContext *ctx, JSValue *this_val,
             ctx, supports, "destinationMacFilter", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(ctx, supports, "bssidFilter", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(ctx, supports, "frameTypeFilter", JS_TRUE) ||
+        !esp32_mquickjs_set_property_ref(ctx, supports, "frameFilter", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(ctx, supports, "frameSubtypeFilter", JS_TRUE) ||
         !esp32_mquickjs_set_property_ref(
             ctx, supports, "rssiFilter", JS_TRUE) ||

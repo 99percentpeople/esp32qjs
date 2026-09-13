@@ -78,6 +78,7 @@ remains pending the Wi-Fi phase tests.
     destinationMacFilter: boolean,
     bssidFilter: boolean,
     frameTypeFilter: boolean,
+    frameFilter: boolean,
     frameSubtypeFilter: boolean,
     rssiFilter: boolean,
     nativeDecimation: boolean,
@@ -117,8 +118,9 @@ the only session immediately:
     sourceMac?: string | string[],
     destinationMac?: string | string[],
     bssid?: string | string[],
-    frameTypes?: ("management" | "control" | "data" | "misc" | "unknown")[],
-    frameSubtypes?: number[],
+    types?: ("management" | "control" | "data" | "misc")[],
+    subtypes?: number[],
+    frames?: { type: 0 | 1 | 2 | 3, subtype: number, name?: WiFiFrameName | null }[],
     minimumRssi?: number,
     sampleEvery?: number,
     maximumRateHz?: number,
@@ -128,8 +130,7 @@ the only session immediately:
     poolCapacity?: number,
     queueCapacity?: number,
     overflow?: "drop-newest"
-  },
-  powerSavePolicy?: "preserve" | "require-none"
+  }
 }
 ```
 
@@ -179,17 +180,30 @@ ToDS/FromDS decoding, distinct from transmitter/receiver. A requested role must
 be known to match: four-address frames have no BSSID, and ACK has only receiver.
 No SDK `mac`/`dmac` substitution is made for an unknown role.
 
-`frameTypes` and `frameSubtypes` are optional arrays without duplicates. Subtypes
-are integers 0..15. An empty array matches nothing; omission adds no predicate.
-Unparseable/unreceipted observations have type `unknown` and no known subtype.
-A type filter does not make the SDK deliver additional frame types. These filters
-also work with `packet.content:"none"`, without packet storage allocation.
+`types`, `subtypes` and `frames` share the `WiFiRxFilter` contract with Monitor.
+Each list rejects duplicates; an empty list matches nothing and omission adds no
+predicate. `types` selects management/control/data/misc categories; `subtypes`
+contains integers 0..15. `frames` accepts at most 64 exact PV0 `{type, subtype}`
+pairs, OR within the list and AND with all other predicates. An optional `name`
+must agree with the common catalogue (or be null for an unnamed pair).
+For example, `frames:[{type:0,subtype:8},{type:2,subtype:0}]` selects Beacon or
+ordinary Data without also selecting association requests or QoS Data.
+
+CSI matches header predicates only against this callback's proven, parsed MAC
+header. Unparseable/unreceipted observations have category `unknown` and cannot
+match an explicit type, subtype or pair filter. Numeric type 3 is representable
+but has no supported CSI header layout; it is not the SDK misc category.
+These filters also work with `packet.content:"none"` without packet storage
+allocation. They do not make the SDK deliver additional frames. CSI `validOnly`
+continues to check CSI sample/channel-estimate validity, whereas Monitor checks
+MAC parsing and RX status. `requested.filter.frames` is a detached snapshot in
+numeric type/subtype order; pair misses increment `filteredFrameSubtype`.
 
 Static predicates precede decimation/rate limiting. `sampleEvery` is 1..UINT32_MAX,
 with a cyclic phase that cannot wrap a lifetime counter into a different pattern.
-The first qualifying sample is eligible. `maximumRateHz` is 1..1000000 when supplied;
+The first qualifying sample is eligible. `maximumRateHz` is 0..1000000 when supplied;
 the minimum interval is rounded up in microseconds, and regressing timestamps do
-not bypass it. Omission removes the limit. Configuration resets phase and timing.
+not bypass it. Omission or zero removes the limit. Configuration resets phase and timing.
 
 The capture schema must equal `capabilities().configSchema`. A legacy capture
 object is:
@@ -239,9 +253,9 @@ requires `supports.fixedChannel` and takes a fixed-channel shared-radio lease.
 Matching fixed-channel constraints can share; the native promiscuous owner
 remains exclusive.
 Regulatory and coexistence conflicts fail without disconnecting Station,
-moving SoftAP, or changing ESP-NOW. `powerSavePolicy: "preserve"` leaves modem
-sleep unchanged; `"require-none"` rejects instead of changing Wi-Fi power save.
-Timestamps currently use callback entry time under either policy.
+moving SoftAP, or changing ESP-NOW. Capture preserves the existing modem power-save
+mode. JavaScript owns power policy through `wifi.setPowerSave()` and explicit
+`wifi.acquireWakeLock()` lifetimes. Timestamps use callback entry time.
 
 A Radio home-channel conflict, or RX metadata reporting a different primary
 channel for a fixed session, stops new CSI callback publication and latches
@@ -271,8 +285,7 @@ var session = wifi.csi.open({
   source: { mode: "promiscuous", channel: 6 },
   capture: capture,
   filter: { minimumRssi: -85, validOnly: true },
-  buffering: { poolCapacity: 16, queueCapacity: 16, overflow: "drop-newest" },
-  powerSavePolicy: "preserve"
+  buffering: { poolCapacity: 16, queueCapacity: 16, overflow: "drop-newest" }
 });
 ```
 
@@ -280,7 +293,12 @@ var session = wifi.csi.open({
 
 - `status()` returns `{ generation, state, requested, effective, lastError }`.
   `state` is `"running"`, `"stopped"`, `"stopping"`, `"faulted"`, or
-  `"closed"`. `requested` is the complete open object. `effective` contains
+  `"closed"`. `requested` is a detached, normalized open object: it can be reused by
+  `configure(requested)` on a stopped session or `open(requested)` after resource
+  release, subject to the usual target and Radio admission rules. Unset MAC/RSSI
+  predicates are omitted; `maximumRateHz:0` means unlimited. Explicit empty
+  `types`, `subtypes` or `frames` arrays remain empty and continue to match none.
+  `effective` contains
   `{ source, channel, secondaryChannel, radioGeneration, configSchema,
   maxCsiBytes, queueCapacity, poolCapacity, powerSave, timestampAccuracy }`.
   `secondaryChannel` is `"none"`, `"above"`, or `"below"`, and
@@ -430,7 +448,7 @@ All three return null when the observation has no captured packet. A batch also
 provides `packetBytes(index)`. Packet views/sources retain the same slot as CSI;
 Frame/Batch/Session close does not invalidate an independently retained owner.
 
-`info.packet` is null or a parsed packet record with type, subtype, subtypeName,
+`info.packet` is null or a parsed packet record with category, frameType (`{ type, subtype, name }`),
 frameControl, durationId, optional sequenceControl/qosControl, decoded flags,
 and `capture`. Capture includes mode, headerLength, payloadLength, driverLength,
 driverPayloadLength, readableLength, capturedLength, payloadCapturedLength,
@@ -494,7 +512,7 @@ Operational failures use `error.operation === "wifi.csi"` and one of:
 `WIFI_CSI_CONFIG_SCHEMA_MISMATCH`, `WIFI_CSI_CONFIG_UNSUPPORTED`,
 `WIFI_CSI_CONFIG_INVALID`, `WIFI_CSI_RADIO_CONFLICT`, `WIFI_CSI_CHANNEL_CONFLICT`,
 `WIFI_CSI_REGULATORY_CONFLICT`, `WIFI_CSI_PROMISCUOUS_CONFLICT`,
-`WIFI_CSI_POWER_SAVE_CONFLICT`, `WIFI_CSI_RESOURCE_EXHAUSTED`,
+`WIFI_CSI_RESOURCE_EXHAUSTED`,
 `WIFI_CSI_FRAME_TOO_LARGE`, `WIFI_CSI_STALE_FRAME`,
 `WIFI_CSI_DRIVER_ERROR`, or `WIFI_CSI_CLEANUP_PENDING`. `error.details` may
 contain `{ stage, espCode, espName, requestedChannel, effectiveChannel,

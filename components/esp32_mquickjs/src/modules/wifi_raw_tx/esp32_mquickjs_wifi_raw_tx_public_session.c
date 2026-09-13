@@ -1,4 +1,5 @@
 #include "esp32_mquickjs_wifi_raw_tx.h"
+#include "esp32_mquickjs_js_macros.h"
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
 #include "esp32_mquickjs_wifi_raw_tx_session.h"
 #include "esp32_mquickjs_wifi_radio.h"
@@ -21,13 +22,13 @@ typedef struct {
     session_options_t options;
     native_status_t closed_status;
 } session_handle_t;
-typedef enum { SESSION_OPEN, SESSION_SEND, SESSION_FLUSH, SESSION_CLOSE } session_operation_t;
+typedef enum { SESSION_OPEN, SESSION_SEND, SESSION_FLUSH, SESSION_CLOSE, SESSION_WRITABLE } session_operation_t;
 struct esp32_mquickjs_future_driver_state {
     session_operation_t operation;
     session_handle_t *handle;
     native_session_t *session;
     session_options_t options;
-    uint32_t timeout_ms;
+    uint32_t timeout_ms, minimum_packets, minimum_bytes;
     uint8_t *bytes;
     size_t length;
     esp_err_t error;
@@ -44,10 +45,9 @@ struct esp32_mquickjs_future_driver_state {
     } wait;
 };
 
-#define SET(object, name, value) do { if (!esp32_mquickjs_set_property_ref(ctx, object, name, value)) goto fail; } while (0)
 static const char *session_operation_name(session_operation_t operation)
 {
-    static const char *const names[] = {"wifi.rawTx.open", "WiFiRawTxSession.send", "WiFiRawTxSession.flush", "WiFiRawTxSession.close"};
+    static const char *const names[] = {"wifi.rawTx.open", "WiFiRawTxSession.send", "WiFiRawTxSession.flush", "WiFiRawTxSession.close", "WiFiRawTxSession.waitWritable"};
     return names[operation];
 }
 
@@ -59,12 +59,12 @@ static JSValue session_error(JSContext *ctx, const char *operation, const char *
     JSValue *details = JS_PushGCRef(ctx, &ref);
     *details = JS_NewObject(ctx);
     if (JS_IsException(*details)) goto fail;
-    SET(details, "espCode", JS_NewInt32(ctx, error));
-    SET(details, "espName", JS_NewString(ctx, esp_err_to_name(error)));
-    SET(details, "stage", stage ? JS_NewString(ctx, stage) : JS_NULL);
-    SET(details, "admitted", JS_NewBool(admitted));
-    SET(details, "validationCode", JS_NewUint32(ctx, validation));
-    SET(details, "queueCode", JS_NewUint32(ctx, queue_result));
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "espCode", JS_NewInt32(ctx, error), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "espName", JS_NewString(ctx, esp_err_to_name(error)), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "stage", stage ? JS_NewString(ctx, stage) : JS_NULL, fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "admitted", JS_NewBool(admitted), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "validationCode", JS_NewUint32(ctx, validation), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "queueCode", JS_NewUint32(ctx, queue_result), fail);
     (void)esp32_mquickjs_throw_native_error(ctx, code, operation,
         "Raw TX Session operation did not complete; admitted packets may still transmit", *details);
 fail:
@@ -143,17 +143,17 @@ JSValue js_wifi_raw_tx_session_constructor(JSContext *ctx, JSValue *this_val, in
 
 static bool capture_timeout(JSContext *ctx, JSValue value, uint32_t *timeout)
 {
-    *timeout = 1000;
+    *timeout = ESP32_MQUICKJS_WIFI_RAW_TX_DEFAULT_TIMEOUT_MS;
     if (JS_IsUndefined(value)) return true;
-    if (esp32_mquickjs_value_to_bounded_u32(ctx, value, 1, 60000, timeout)) return true;
-    JS_ThrowTypeError(ctx, "timeoutMs must be an integer from 1 to 60000");
+    if (esp32_mquickjs_value_to_bounded_u32(ctx, value, 1, INT32_MAX, timeout)) return true;
+    JS_ThrowTypeError(ctx, "timeoutMs must be an integer from 1 to 2147483647");
     return false;
 }
 
 static bool capture_send_options(JSContext *ctx, JSValue value, uint32_t *timeout)
 {
     static const char *const keys[] = {"timeoutMs"};
-    *timeout = 1000;
+    *timeout = ESP32_MQUICKJS_WIFI_RAW_TX_DEFAULT_TIMEOUT_MS;
     if (JS_IsUndefined(value)) return true;
     JSGCRef root_ref, field_ref;
     JSValue *root = JS_PushGCRef(ctx, &root_ref), *field = JS_PushGCRef(ctx, &field_ref);
@@ -169,15 +169,14 @@ static bool capture_send_options(JSContext *ctx, JSValue value, uint32_t *timeou
 
 static bool capture_open_options(JSContext *ctx, JSValue value, session_options_t *output, uint32_t *timeout)
 {
-    static const char *const keys[] = {"interface", "channel", "sequenceControl", "validation", "queue", "timeoutMs", "rate"};
+    static const char *const keys[] = {"interface", "channel", "sequenceControl", "queue", "timeoutMs", "rate", "maxInFlight"};
     static const char *const interfaces[] = {"station", "access-point"};
     static const char *const sequences[] = {"driver", "application"};
-    static const char *const validations[] = {"strict", "basic"};
     static const char *const current[] = {"current"};
-    static const char *const queue_keys[] = {"capacityPackets", "overflow"};
+    static const char *const queue_keys[] = {"capacityPackets", "overflow", "capacityBytes"};
     static const char *const overflows[] = {"reject-newest", "drop-oldest-batch"};
-    session_options_t options = {.driver_sequence = true, .capacity = 32};
-    *timeout = 1000;
+    session_options_t options = {.driver_sequence = true, .capacity = ESP32_MQUICKJS_WIFI_RAW_TX_DEFAULT_QUEUE_PACKETS};
+    *timeout = ESP32_MQUICKJS_WIFI_RAW_TX_DEFAULT_TIMEOUT_MS;
     if (JS_IsUndefined(value)) { *output = options; return true; }
     JSGCRef root_ref, queue_ref, field_ref;
     JSValue *root = JS_PushGCRef(ctx, &root_ref), *queue = JS_PushGCRef(ctx, &queue_ref);
@@ -219,18 +218,21 @@ static bool capture_open_options(JSContext *ctx, JSValue value, session_options_
         if (!esp32_mquickjs_value_to_enum(ctx, *field, sequences, 2, &choice)) goto invalid;
         options.driver_sequence = choice == 0U;
     }
-    *field = JS_GetPropertyStr(ctx, *root, "validation");
-    if (JS_IsException(*field)) goto done;
-    if (!JS_IsUndefined(*field) && !esp32_mquickjs_value_to_enum(ctx, *field, validations, 2, &choice)) goto invalid;
     *queue = JS_GetPropertyStr(ctx, *root, "queue");
     if (JS_IsException(*queue)) goto done;
     if (!JS_IsUndefined(*queue)) {
-        if (!esp32_mquickjs_validate_plain_options(ctx, *queue, "wifi.rawTx.open.queue", queue_keys, 2)) goto done;
+        if (!esp32_mquickjs_validate_plain_options(ctx, *queue, "wifi.rawTx.open.queue", queue_keys, 3)) goto done;
         *field = JS_GetPropertyStr(ctx, *queue, "capacityPackets");
         if (JS_IsException(*field)) goto done;
         if (!JS_IsUndefined(*field)) {
-            if (!esp32_mquickjs_value_to_bounded_u32(ctx, *field, 1, 128, &number)) goto invalid;
+            if (!esp32_mquickjs_value_to_bounded_u32(ctx, *field, 1, ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_MAX_PACKETS, &number)) goto invalid;
             options.capacity = number;
+        }
+        *field = JS_GetPropertyStr(ctx, *queue, "capacityBytes");
+        if (JS_IsException(*field)) goto done;
+        if (!JS_IsUndefined(*field)) {
+            if (!esp32_mquickjs_value_to_bounded_u32(ctx, *field, ESP32_MQUICKJS_WIFI_RAW_TX_MIN_FRAME_BYTES, (uint32_t)options.capacity * ESP32_MQUICKJS_WIFI_RAW_TX_MAX_FRAME_BYTES, &number)) goto invalid;
+            options.capacity_bytes = number;
         }
         *field = JS_GetPropertyStr(ctx, *queue, "overflow");
         if (JS_IsException(*field)) goto done;
@@ -238,6 +240,13 @@ static bool capture_open_options(JSContext *ctx, JSValue value, session_options_
             if (!esp32_mquickjs_value_to_enum(ctx, *field, overflows, 2, &choice)) goto invalid;
             options.overflow = choice;
         }
+    }
+    *field = JS_GetPropertyStr(ctx, *root, "maxInFlight");
+    if (JS_IsException(*field)) goto done;
+    if (!JS_IsUndefined(*field)) {
+        if (!esp32_mquickjs_value_to_bounded_u32(ctx, *field, 1,
+            options.capacity < ESP32_MQUICKJS_WIFI_RAW_TX_MAX_IN_FLIGHT ? options.capacity : ESP32_MQUICKJS_WIFI_RAW_TX_MAX_IN_FLIGHT, &number)) goto invalid;
+        options.max_in_flight = number;
     }
     *field = JS_GetPropertyStr(ctx, *root, "timeoutMs");
     if (JS_IsException(*field) || !capture_timeout(ctx, *field, timeout)) goto done;
@@ -252,6 +261,40 @@ invalid:
     JS_ThrowTypeError(ctx, "invalid wifi.rawTx.open options");
 done:
     JS_PopGCRef(ctx, &field_ref); JS_PopGCRef(ctx, &queue_ref); JS_PopGCRef(ctx, &root_ref);
+    return ok;
+}
+
+/* Waiting observes capacity; it never reserves slots or changes queued work. */
+static bool capture_writable_options(JSContext *ctx, JSValue value,
+    esp32_mquickjs_future_driver_state_t *state)
+{
+    static const char *const keys[] = {"minimumPackets", "minimumBytes", "timeoutMs"};
+    state->minimum_packets = 1;
+    state->minimum_bytes = ESP32_MQUICKJS_WIFI_RAW_TX_MIN_FRAME_BYTES;
+    if (JS_IsUndefined(value)) return true;
+    JSGCRef root_ref, field_ref;
+    JSValue *root = JS_PushGCRef(ctx, &root_ref), *field = JS_PushGCRef(ctx, &field_ref);
+    *root = value;
+    bool ok = false;
+    if (!esp32_mquickjs_validate_plain_options(ctx, *root, "WiFiRawTxSession.waitWritable", keys, 3)) goto done;
+    *field = JS_GetPropertyStr(ctx, *root, "minimumPackets");
+    if (JS_IsException(*field)) goto done;
+    if (!JS_IsUndefined(*field) && !esp32_mquickjs_value_to_bounded_u32(ctx, *field, 1,
+        state->options.capacity, &state->minimum_packets)) goto invalid;
+    state->minimum_bytes = state->minimum_packets * ESP32_MQUICKJS_WIFI_RAW_TX_MIN_FRAME_BYTES;
+    *field = JS_GetPropertyStr(ctx, *root, "minimumBytes");
+    if (JS_IsException(*field)) goto done;
+    uint32_t capacity_bytes = state->options.capacity_bytes ? state->options.capacity_bytes : (uint32_t)state->options.capacity * ESP32_MQUICKJS_WIFI_RAW_TX_MAX_FRAME_BYTES;
+    if (!JS_IsUndefined(*field) && !esp32_mquickjs_value_to_bounded_u32(ctx, *field, 0,
+        capacity_bytes, &state->minimum_bytes)) goto invalid;
+    if (state->minimum_bytes > capacity_bytes) goto invalid;
+    *field = JS_GetPropertyStr(ctx, *root, "timeoutMs");
+    if (JS_IsException(*field) || !capture_timeout(ctx, *field, &state->timeout_ms)) goto done;
+    ok = true; goto done;
+invalid:
+    JS_ThrowTypeError(ctx, "invalid WiFiRawTxSession.waitWritable capacity");
+done:
+    JS_PopGCRef(ctx, &field_ref); JS_PopGCRef(ctx, &root_ref);
     return ok;
 }
 
@@ -286,7 +329,7 @@ static bool session_capture(JSContext *ctx, JSGCRef *receiver, int argc, JSGCRef
         "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
         ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) { JS_ThrowOutOfMemory(ctx); return false; }
-    state->operation = operation; state->timeout_ms = 1000;
+    state->operation = operation; state->timeout_ms = ESP32_MQUICKJS_WIFI_RAW_TX_DEFAULT_TIMEOUT_MS;
     if (operation == SESSION_OPEN) {
         if (!capture_open_options(ctx, argc ? argv[0].val : JS_UNDEFINED, &state->options, &state->timeout_ms)) goto fail;
         state->handle = esp32_mquickjs_memory_wireless_calloc("wifi.raw-tx", 1, sizeof(*state->handle), ESP32_MQUICKJS_MEMORY_DEFAULT, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
@@ -318,6 +361,8 @@ static bool session_capture(JSContext *ctx, JSGCRef *receiver, int argc, JSGCRef
                 session_error(ctx, session_operation_name(operation), "WIFI_RAW_TX_INVALID_FRAME", ESP_ERR_INVALID_ARG,
                     "capture", false, state->validation, ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_INVALID); goto fail;
             }
+        } else if (operation == SESSION_WRITABLE) {
+            if (!capture_writable_options(ctx, argc ? argv[0].val : JS_UNDEFINED, state)) goto fail;
         } else if (operation == SESSION_FLUSH && !capture_timeout(ctx, argc ? argv[0].val : JS_UNDEFINED, &state->timeout_ms)) goto fail;
     }
     *output = state; return true;
@@ -333,6 +378,7 @@ CAPTURE(session_open_capture, SESSION_OPEN)
 CAPTURE(session_send_capture, SESSION_SEND)
 CAPTURE(session_flush_capture, SESSION_FLUSH)
 CAPTURE(session_close_capture, SESSION_CLOSE)
+CAPTURE(session_writable_capture, SESSION_WRITABLE)
 
 static bool session_future_start(JSContext *ctx, esp32_mquickjs_runtime_t *runtime,
     esp32_mquickjs_future_token_t token, esp32_mquickjs_future_driver_state_t *state)
@@ -348,7 +394,7 @@ static bool session_future_start(JSContext *ctx, esp32_mquickjs_runtime_t *runti
     } else if (state->operation == SESSION_FLUSH) {
         state->queue_result = esp32_mquickjs_wifi_raw_tx_session_flush_begin(state->session, &state->wait.flush);
         state->stage = "flush-admission";
-    } else {
+    } else if (state->operation == SESSION_SEND) {
         payload_t frame = {state->bytes, (uint16_t)state->length};
         payload_t removed[ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_MAX_PACKETS] = {0};
         esp32_mquickjs_wifi_raw_tx_admission_t admission;
@@ -376,6 +422,16 @@ static esp32_mquickjs_future_poll_t session_future_poll(esp32_mquickjs_future_dr
         if (state->session == NULL) ready = true;
         else if (!(valid = esp32_mquickjs_wifi_raw_tx_session_status(state->session, &status))) ready = true;
         else ready = state->operation == SESSION_OPEN ? status.open_complete || status.faulted || status.close_requested : status.closed;
+    } else if (state->operation == SESSION_WRITABLE) {
+        native_status_t status = {0};
+        valid = esp32_mquickjs_wifi_raw_tx_session_status(state->session, &status);
+        if (valid && (status.closed || status.close_requested || status.faulted)) {
+            state->error = ESP_ERR_INVALID_STATE; state->stage = "queue-closed"; ready = true;
+        } else if (valid && state->minimum_packets > status.remaining_sequences) {
+            state->error = ESP_ERR_INVALID_STATE; state->stage = "queue-identity-exhausted"; ready = true;
+        } else if (valid) ready = status.open_complete &&
+            (uint32_t)(status.capacity - status.queued - status.in_flight) >= state->minimum_packets &&
+            status.capacity_bytes - status.used_bytes >= state->minimum_bytes;
     } else if (state->operation == SESSION_SEND) {
         esp32_mquickjs_wifi_raw_tx_result_t result;
         valid = esp32_mquickjs_wifi_raw_tx_session_result_status(state->session, &state->wait.send.token, &result);
@@ -393,7 +449,7 @@ static JSValue totals_to_js(JSContext *ctx, const esp32_mquickjs_wifi_raw_tx_que
 {
     JSGCRef ref; JSValue *result = JS_PushGCRef(ctx, &ref);
     *result = JS_NewObject(ctx); if (JS_IsException(*result)) goto fail;
-#define TOTAL(name) SET(result, #name, JS_NewUint32(ctx, totals->name))
+#define TOTAL(name) ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, #name, JS_NewUint32(ctx, totals->name), fail)
     TOTAL(admitted); TOTAL(submitted); TOTAL(settled); TOTAL(succeeded); TOTAL(failed);
     TOTAL(unknown); TOTAL(rejected); TOTAL(aborted); TOTAL(dropped);
 #undef TOTAL
@@ -406,6 +462,7 @@ static JSValue session_future_finish(JSContext *ctx, esp32_mquickjs_future_drive
 {
     if (state->error != ESP_OK) return session_error(ctx, session_operation_name(state->operation), "WIFI_RAW_TX_SESSION_FAILED",
         state->error, state->stage, state->admitted, state->validation, state->queue_result);
+    if (state->operation == SESSION_WRITABLE) return JS_UNDEFINED;
     if (state->operation == SESSION_CLOSE) {
         native_status_t status = {0};
         if (!handle_snapshot(state->handle, &status) || !status.closed)
@@ -435,15 +492,15 @@ static JSValue session_future_finish(JSContext *ctx, esp32_mquickjs_future_drive
         }
         *result = esp32_mquickjs_wifi_raw_tx_result_to_js(ctx, &snapshot.native, state->options.interface, snapshot.channel);
         if (JS_IsException(*result)) goto fail;
-        SET(result, "sessionGeneration", JS_NewUint32(ctx, snapshot.generation));
-        SET(result, "admissionSequence", JS_NewUint32(ctx, snapshot.sequence));
+        ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "sessionGeneration", JS_NewUint32(ctx, snapshot.generation), fail);
+        ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "admissionSequence", JS_NewUint32(ctx, snapshot.sequence), fail);
     } else {
         esp32_mquickjs_wifi_raw_tx_flush_status_t snapshot;
         if (!esp32_mquickjs_wifi_raw_tx_session_flush_status(state->session, &state->wait.flush, &snapshot)) goto stale;
         *result = totals_to_js(ctx, &snapshot.totals); if (JS_IsException(*result)) goto fail;
-        SET(result, "sessionGeneration", JS_NewUint32(ctx, snapshot.generation));
-        SET(result, "throughSequence", JS_NewUint32(ctx, snapshot.fence));
-        SET(result, "pending", JS_NewUint32(ctx, snapshot.pending));
+        ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "sessionGeneration", JS_NewUint32(ctx, snapshot.generation), fail);
+        ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "throughSequence", JS_NewUint32(ctx, snapshot.fence), fail);
+        ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "pending", JS_NewUint32(ctx, snapshot.pending), fail);
     }
     return JS_PopGCRef(ctx, &ref);
 stale:
@@ -486,6 +543,7 @@ static const esp32_mquickjs_future_driver_t s_open_driver = DRIVER(session_open_
 static const esp32_mquickjs_future_driver_t s_send_driver = DRIVER(session_send_capture);
 static const esp32_mquickjs_future_driver_t s_flush_driver = DRIVER(session_flush_capture);
 static const esp32_mquickjs_future_driver_t s_close_driver = DRIVER(session_close_capture);
+static const esp32_mquickjs_future_driver_t s_writable_driver = DRIVER(session_writable_capture);
 
 static JSValue session_wait_call(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv, session_operation_t operation)
 {
@@ -502,7 +560,7 @@ static JSValue session_wait_call(JSContext *ctx, JSValue *this_val, int argc, JS
         *owner = JS_IsException(*owner) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *owner, "WiFiRawTxSession");
         *owner = JS_IsException(*owner) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *owner, "prototype");
     }
-    static const char *const methods[] = {"open", "send", "flush", "close"};
+    static const char *const methods[] = {"open", "send", "flush", "close", "waitWritable"};
     *method = JS_IsException(*owner) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *owner, methods[operation]);
     JSValue result = JS_IsException(*method) ? JS_EXCEPTION : esp32_mquickjs_future_call_and_wait(ctx,
         esp32_mquickjs_get_active_runtime(), *method, *receiver, argc, argv);
@@ -518,17 +576,20 @@ JSValue js_wifi_raw_tx_session_flush(JSContext *ctx, JSValue *this_val, int argc
 JSValue js_wifi_raw_tx_session_close(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 { return session_wait_call(ctx, this_val, argc, argv, SESSION_CLOSE); }
 
+JSValue js_wifi_raw_tx_session_wait_writable(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{ return session_wait_call(ctx, this_val, argc, argv, SESSION_WRITABLE); }
+
 static JSValue admission_to_js(JSContext *ctx, const esp32_mquickjs_wifi_raw_tx_admission_t *admission)
 {
     JSGCRef ref; JSValue *result = JS_PushGCRef(ctx, &ref);
     *result = JS_NewObject(ctx); if (JS_IsException(*result)) goto fail;
-    SET(result, "sessionGeneration", JS_NewUint32(ctx, admission->generation));
-    SET(result, "firstSequence", JS_NewUint32(ctx, admission->first_sequence));
-    SET(result, "lastSequence", JS_NewUint32(ctx, admission->last_sequence));
-    SET(result, "batchSequence", JS_NewUint32(ctx, admission->batch_sequence));
-    SET(result, "admittedPackets", JS_NewUint32(ctx, admission->admitted_packets));
-    SET(result, "evictedPackets", JS_NewUint32(ctx, admission->evicted_packets));
-    SET(result, "evictedBatches", JS_NewUint32(ctx, admission->evicted_batches));
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "sessionGeneration", JS_NewUint32(ctx, admission->generation), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "firstSequence", JS_NewUint32(ctx, admission->first_sequence), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "lastSequence", JS_NewUint32(ctx, admission->last_sequence), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "batchSequence", JS_NewUint32(ctx, admission->batch_sequence), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "admittedPackets", JS_NewUint32(ctx, admission->admitted_packets), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "evictedPackets", JS_NewUint32(ctx, admission->evicted_packets), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "evictedBatches", JS_NewUint32(ctx, admission->evicted_batches), fail);
     return JS_PopGCRef(ctx, &ref);
 fail:
     JS_PopGCRef(ctx, &ref); return JS_EXCEPTION;
@@ -607,25 +668,32 @@ JSValue js_wifi_raw_tx_session_status(JSContext *ctx, JSValue *this_val, int arg
     session_options_t options = handle->options;
     JSGCRef ref; JSValue *result = JS_PushGCRef(ctx, &ref);
     *result = JS_NewObject(ctx); if (JS_IsException(*result)) goto fail;
-    SET(result, "state", JS_NewString(ctx, status.closed ? "closed" : status.faulted ? "faulted" : status.close_requested ? "closing" : "open"));
-    SET(result, "sessionGeneration", JS_NewUint32(ctx, status.generation));
-    SET(result, "radioGeneration", status.radio_generation ? JS_NewUint32(ctx, status.radio_generation) : JS_NULL);
-    SET(result, "interface", JS_NewString(ctx, options.interface == ESP32_MQUICKJS_WIFI_RAW_TX_STATION ? "station" : "access-point"));
-    SET(result, "channel", status.channel ? JS_NewUint32(ctx, status.channel) : JS_NULL);
-    SET(result, "sequenceControl", JS_NewString(ctx, options.driver_sequence ? "driver" : "application"));
-    SET(result, "capacityPackets", JS_NewUint32(ctx, status.capacity));
-    SET(result, "queuedPackets", JS_NewUint32(ctx, status.queued));
-    SET(result, "pendingPackets", JS_NewUint32(ctx, status.totals.admitted - status.totals.settled));
-    SET(result, "activeSequence", status.active_sequence ? JS_NewUint32(ctx, status.active_sequence) : JS_NULL);
-    SET(result, "requestIdentity", status.lane_identity ? JS_NewUint32(ctx, status.lane_identity) : JS_NULL);
-    SET(result, "workerBusy", JS_NewBool(status.worker_busy));
-    SET(result, "periodicJobs", JS_NewUint32(ctx, status.periodic_children));
-    SET(result, "faulted", JS_NewBool(status.faulted));
-    SET(result, "cleanupPending", JS_NewBool(status.close_requested && !status.closed));
-    SET(result, "error", status.error ? JS_NewInt32(ctx, status.error) : JS_NULL);
-    SET(result, "stage", status.stage ? JS_NewString(ctx, status.stage) : JS_NULL);
-    SET(result, "cleanupError", status.cleanup_error ? JS_NewInt32(ctx, status.cleanup_error) : JS_NULL);
-    SET(result, "cleanupStage", status.cleanup_stage ? JS_NewString(ctx, status.cleanup_stage) : JS_NULL);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "state", JS_NewString(ctx, status.closed ? "closed" : status.faulted ? "faulted" : status.close_requested ? "closing" : "open"), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "sessionGeneration", JS_NewUint32(ctx, status.generation), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "radioGeneration", status.radio_generation ? JS_NewUint32(ctx, status.radio_generation) : JS_NULL, fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "interface", JS_NewString(ctx, options.interface == ESP32_MQUICKJS_WIFI_RAW_TX_STATION ? "station" : "access-point"), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "channel", status.channel ? JS_NewUint32(ctx, status.channel) : JS_NULL, fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "sequenceControl", JS_NewString(ctx, options.driver_sequence ? "driver" : "application"), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "capacityPackets", JS_NewUint32(ctx, status.capacity), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "capacityBytes", JS_NewUint32(ctx, status.capacity_bytes), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "usedBytes", JS_NewUint32(ctx, status.used_bytes), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "availableBytes", JS_NewUint32(ctx, status.capacity_bytes - status.used_bytes), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "availablePackets", JS_NewUint32(ctx, status.capacity - status.queued - status.in_flight), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "highWaterBytes", JS_NewUint32(ctx, status.high_water_bytes), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "inFlight", JS_NewUint32(ctx, status.in_flight), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "maxInFlight", JS_NewUint32(ctx, status.max_in_flight), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "queuedPackets", JS_NewUint32(ctx, status.queued), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "pendingPackets", JS_NewUint32(ctx, status.totals.admitted - status.totals.settled), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "activeSequence", status.active_sequence ? JS_NewUint32(ctx, status.active_sequence) : JS_NULL, fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "requestIdentity", status.lane_identity ? JS_NewUint32(ctx, status.lane_identity) : JS_NULL, fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "workerBusy", JS_NewBool(status.worker_busy), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "periodicJobs", JS_NewUint32(ctx, status.periodic_children), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "faulted", JS_NewBool(status.faulted), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "cleanupPending", JS_NewBool(status.close_requested && !status.closed), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "error", status.error ? JS_NewInt32(ctx, status.error) : JS_NULL, fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "stage", status.stage ? JS_NewString(ctx, status.stage) : JS_NULL, fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "cleanupError", status.cleanup_error ? JS_NewInt32(ctx, status.cleanup_error) : JS_NULL, fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "cleanupStage", status.cleanup_stage ? JS_NewString(ctx, status.cleanup_stage) : JS_NULL, fail);
     return JS_PopGCRef(ctx, &ref);
 fail:
     JS_PopGCRef(ctx, &ref); return JS_EXCEPTION;
@@ -656,9 +724,9 @@ bool esp32_mquickjs_init_wifi_raw_tx_session_runtime(JSContext *ctx, esp32_mquic
     *owner = JS_IsException(*owner) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *owner, "WiFiRawTxSession");
     *owner = JS_IsException(*owner) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *owner, "prototype");
     if (JS_IsException(*owner)) goto done;
-    static const char *const methods[] = {"send", "flush", "close"};
-    static const esp32_mquickjs_future_driver_t *const drivers[] = {&s_send_driver, &s_flush_driver, &s_close_driver};
-    for (unsigned i = 0; i < 3; ++i) {
+    static const char *const methods[] = {"send", "flush", "close", "waitWritable"};
+    static const esp32_mquickjs_future_driver_t *const drivers[] = {&s_send_driver, &s_flush_driver, &s_close_driver, &s_writable_driver};
+    for (unsigned i = 0; i < 4; ++i) {
         *method = JS_GetPropertyStr(ctx, *owner, methods[i]);
         if (JS_IsException(*method) || !esp32_mquickjs_future_register_driver(ctx, runtime, *method, drivers[i])) goto done;
     }

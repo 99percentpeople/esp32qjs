@@ -48,8 +48,24 @@ bool esp32_mquickjs_wifi_raw_tx_queue_init(queue_t *q, slot_t *slots, uint16_t c
     memset(slots, 0, sizeof(*slots) * capacity);
     *q = (queue_t){.initialized = true, .generation = generation, .capacity = capacity,
         .slots = slots, .free_count = capacity, .next_flush_identity = 1,
+        .max_in_flight = ESP32_MQUICKJS_WIFI_RAW_TX_DEFAULT_MAX_IN_FLIGHT, .capacity_bytes = (uint32_t)capacity * ESP32_MQUICKJS_WIFI_RAW_TX_MAX_FRAME_BYTES,
         .pending_head = NONE, .pending_tail = NONE, .active = NONE};
     return true;
+}
+
+bool esp32_mquickjs_wifi_raw_tx_queue_limits(queue_t *q, uint32_t bytes, uint16_t window)
+{
+    if (!valid(q) || q->closed || q->last_sequence != 0U || bytes < ESP32_MQUICKJS_WIFI_RAW_TX_MIN_FRAME_BYTES ||
+        bytes > (uint32_t)q->capacity * ESP32_MQUICKJS_WIFI_RAW_TX_MAX_FRAME_BYTES || window == 0U || window > q->capacity) return false;
+    q->capacity_bytes = bytes;
+    q->max_in_flight = window;
+    return true;
+}
+
+bool esp32_mquickjs_wifi_raw_tx_queue_writable(const queue_t *q, uint16_t packets, uint32_t bytes)
+{
+    return valid(q) && !q->closed && packets != 0U && packets <= q->free_count &&
+        packets <= UINT32_MAX - q->last_sequence && bytes <= q->capacity_bytes - q->used_bytes;
 }
 
 static void count_terminal(totals_t *totals, esp32_mquickjs_wifi_raw_tx_queue_outcome_t outcome, bool dropped)
@@ -80,6 +96,7 @@ static void drop_slot(queue_t *q, uint16_t index, payload_t *removed)
 {
     slot_t *slot = &q->slots[index];
     *removed = slot->payload;
+    q->used_bytes -= slot->payload.length;
     settle(q, slot->sequence, ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_ABORTED, true);
     memset(slot, 0, sizeof(*slot));
     ++q->free_count;
@@ -89,7 +106,7 @@ static void drop_slot(queue_t *q, uint16_t index, payload_t *removed)
 static void evict_batch(queue_t *q, payload_t *removed, esp32_mquickjs_wifi_raw_tx_admission_t *result)
 {
     uint16_t previous = NONE, first = q->pending_head;
-    while (first != NONE && q->slots[first].batch_sequence == q->active_batch) {
+    while (first != NONE && q->slots[first].batch_started) {
         previous = first;
         first = q->slots[first].next;
     }
@@ -122,30 +139,36 @@ esp32_mquickjs_wifi_raw_tx_queue_result_t esp32_mquickjs_wifi_raw_tx_queue_admit
         return ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_INVALID;
     if (q->closed) return ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_CLOSED;
     if (count > UINT32_MAX - q->last_sequence) return ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_EXHAUSTED;
+    uint32_t incoming_bytes = 0;
     for (unsigned i = 0; i < count; ++i) {
         payload_t *frame = &frames[i];
-        if (frame->data == NULL || frame->length < 24U || frame->length > 1500U ||
+        if (frame->data == NULL || frame->length < ESP32_MQUICKJS_WIFI_RAW_TX_MIN_FRAME_BYTES || frame->length > ESP32_MQUICKJS_WIFI_RAW_TX_MAX_FRAME_BYTES ||
             aliases_queue(q, frame->data, frame->length) ||
             overlaps(frame->data, frame->length, frames, sizeof(*frames) * count) ||
             overlaps(frame->data, frame->length, removed, sizeof(*removed) * q->capacity) ||
             overlaps(frame->data, frame->length, output, sizeof(*output))) return ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_INVALID;
+        incoming_bytes += frame->length;
         /* Captured inputs are linear owned allocations. Reject aliases before
          * evicting anything; this is bounded by the 128-packet queue limit. */
         for (unsigned j = 0; j < i; ++j)
             if (overlaps(frame->data, frame->length, frames[j].data, frames[j].length))
                 return ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_INVALID;
     }
-    if (q->free_count < count) {
+    if (incoming_bytes > q->capacity_bytes) return ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_FULL;
+    if (q->free_count < count || incoming_bytes > q->capacity_bytes - q->used_bytes) {
         if (overflow == ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_REJECT_NEWEST) return ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_FULL;
         unsigned evictable = 0;
+        uint32_t evictable_bytes = 0;
         for (uint16_t i = q->pending_head; i != NONE; i = q->slots[i].next)
-            if (q->slots[i].batch_sequence != q->active_batch) ++evictable;
-        if (q->free_count + evictable < count) return ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_FULL;
+            if (!q->slots[i].batch_started) { ++evictable; evictable_bytes += q->slots[i].payload.length; }
+        if (q->free_count + evictable < count ||
+            incoming_bytes > q->capacity_bytes - q->used_bytes + evictable_bytes) return ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_FULL;
     }
     esp32_mquickjs_wifi_raw_tx_admission_t result = {.generation = q->generation,
         .first_sequence = q->last_sequence + 1U, .last_sequence = q->last_sequence + count,
         .batch_sequence = q->last_sequence + 1U, .admitted_packets = count};
-    while (q->free_count < count) evict_batch(q, removed, &result);
+    while (q->free_count < count || incoming_bytes > q->capacity_bytes - q->used_bytes)
+        evict_batch(q, removed, &result);
     for (unsigned i = 0; i < count; ++i) {
         uint16_t index = 0;
         while (q->slots[index].allocated) ++index;
@@ -158,26 +181,35 @@ esp32_mquickjs_wifi_raw_tx_queue_result_t esp32_mquickjs_wifi_raw_tx_queue_admit
         ++q->queued;
         --q->free_count;
     }
+    q->used_bytes += incoming_bytes;
+    if (q->used_bytes > q->high_water_bytes) q->high_water_bytes = q->used_bytes;
     q->last_sequence = result.last_sequence;
     q->totals.admitted += count;
     *output = result;
     return ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_OK;
 }
 
-static bool active_ticket(const queue_t *q, const esp32_mquickjs_wifi_raw_tx_ticket_t *ticket)
+static uint16_t active_index(const queue_t *q, const esp32_mquickjs_wifi_raw_tx_ticket_t *ticket)
 {
-    return valid(q) && ticket != NULL && ticket->generation == q->generation && ticket->sequence != 0U &&
-        q->active != NONE && q->active < q->capacity && q->slots[q->active].sequence == ticket->sequence;
+    if (!valid(q) || ticket == NULL || ticket->generation != q->generation || ticket->sequence == 0U) return NONE;
+    for (uint16_t i = 0; i < q->capacity; ++i)
+        if (q->slots[i].in_flight && q->slots[i].sequence == ticket->sequence) return i;
+    return NONE;
 }
 
 bool esp32_mquickjs_wifi_raw_tx_queue_take(queue_t *q, esp32_mquickjs_wifi_raw_tx_ticket_t *ticket, payload_t *borrowed)
 {
-    if (!valid(q) || q->closed || q->active != NONE || q->pending_head == NONE || ticket == NULL || borrowed == NULL ||
+    if (!valid(q) || q->closed || q->in_flight >= q->max_in_flight || q->pending_head == NONE || ticket == NULL || borrowed == NULL ||
         ticket->sequence != 0U || ticket->generation != 0U || borrowed->data != NULL || borrowed->length != 0U ||
         aliases_queue(q, ticket, sizeof(*ticket)) || aliases_queue(q, borrowed, sizeof(*borrowed)) ||
         overlaps(ticket, sizeof(*ticket), borrowed, sizeof(*borrowed))) return false;
-    q->active = q->pending_head;
-    slot_t *slot = &q->slots[q->active];
+    uint16_t index = q->pending_head;
+    if (q->active == NONE) q->active = index;
+    slot_t *slot = &q->slots[index];
+    slot->in_flight = true;
+    ++q->in_flight;
+    for (uint16_t i = 0; i < q->capacity; ++i)
+        if (q->slots[i].allocated && q->slots[i].batch_sequence == slot->batch_sequence) q->slots[i].batch_started = true;
     q->pending_head = slot->next;
     if (q->pending_head == NONE) q->pending_tail = NONE;
     slot->next = NONE;
@@ -190,8 +222,9 @@ bool esp32_mquickjs_wifi_raw_tx_queue_take(queue_t *q, esp32_mquickjs_wifi_raw_t
 
 bool esp32_mquickjs_wifi_raw_tx_queue_accept(queue_t *q, const esp32_mquickjs_wifi_raw_tx_ticket_t *ticket)
 {
-    if (!active_ticket(q, ticket) || aliases_queue(q, ticket, sizeof(*ticket)) || q->slots[q->active].accepted) return false;
-    q->slots[q->active].accepted = true;
+    uint16_t index = active_index(q, ticket);
+    if (index == NONE || aliases_queue(q, ticket, sizeof(*ticket)) || q->slots[index].accepted) return false;
+    q->slots[index].accepted = true;
     ++q->totals.submitted;
     for (unsigned i = 0; i < MAX_FLUSHES; ++i)
         if (q->flushes[i].identity != 0U && ticket->sequence <= q->flushes[i].status.fence)
@@ -202,18 +235,23 @@ bool esp32_mquickjs_wifi_raw_tx_queue_accept(queue_t *q, const esp32_mquickjs_wi
 bool esp32_mquickjs_wifi_raw_tx_queue_finish(queue_t *q, esp32_mquickjs_wifi_raw_tx_ticket_t *ticket,
     esp32_mquickjs_wifi_raw_tx_queue_outcome_t outcome, payload_t *retired)
 {
-    if (!active_ticket(q, ticket) || (unsigned)outcome > ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_ABORTED ||
+    uint16_t index = active_index(q, ticket);
+    if (index == NONE || (unsigned)outcome > ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_ABORTED ||
         retired == NULL || retired->data != NULL || retired->length != 0U ||
         aliases_queue(q, ticket, sizeof(*ticket)) || aliases_queue(q, retired, sizeof(*retired)) ||
         overlaps(ticket, sizeof(*ticket), retired, sizeof(*retired))) return false;
-    slot_t *slot = &q->slots[q->active];
+    slot_t *slot = &q->slots[index];
     if ((outcome <= ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_UNKNOWN && !slot->accepted) ||
         (outcome == ESP32_MQUICKJS_WIFI_RAW_TX_QUEUE_REJECTED && slot->accepted)) return false;
     *retired = slot->payload;
+    q->used_bytes -= slot->payload.length;
+    --q->in_flight;
     settle(q, slot->sequence, outcome, false);
     memset(slot, 0, sizeof(*slot));
     ++q->free_count;
     q->active = NONE;
+    for (uint16_t i = 0; i < q->capacity; ++i)
+        if (q->slots[i].in_flight) { q->active = i; break; }
     if (q->pending_head == NONE || q->slots[q->pending_head].batch_sequence != q->active_batch) q->active_batch = 0;
     memset(ticket, 0, sizeof(*ticket));
     return true;

@@ -92,8 +92,8 @@ static void job_timer(void *opaque)
 esp_err_t esp32_mquickjs_wifi_raw_tx_periodic_job_new(session_t *session, payload_t *frame,
     const esp32_mquickjs_wifi_raw_tx_periodic_options_t *options, job_t **output)
 {
-    if (session == NULL || frame == NULL || frame->data == NULL || frame->length < 24U ||
-        frame->length > 1500U || options == NULL || output == NULL || *output != NULL) return ESP_ERR_INVALID_ARG;
+    if (session == NULL || frame == NULL || frame->data == NULL || frame->length < ESP32_MQUICKJS_WIFI_RAW_TX_MIN_FRAME_BYTES ||
+        frame->length > ESP32_MQUICKJS_WIFI_RAW_TX_MAX_FRAME_BYTES || options == NULL || output == NULL || *output != NULL) return ESP_ERR_INVALID_ARG;
     esp32_mquickjs_wifi_raw_tx_periodic_t ledger = {0};
     if (!ledger_api(init)(&ledger, 1, options, esp_timer_get_time())) return ESP_ERR_INVALID_ARG;
     job_t *job = esp32_mquickjs_memory_wireless_calloc("wifi.raw-tx", 1, sizeof(*job), ESP32_MQUICKJS_MEMORY_PINNED_INTERNAL, ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
@@ -219,7 +219,7 @@ static void job_worker(void *opaque)
         esp_timer_create_args_t args = {.callback = job_timer, .arg = job,
             .dispatch_method = ESP_TIMER_TASK, .name = "raw-tx-periodic", .skip_unhandled_events = true};
         error = esp_timer_create(&args, &timer); stage = "timer-create";
-        if (error == ESP_OK) { error = esp_timer_start_periodic(timer, 1000); stage = "timer-start"; }
+        if (error == ESP_OK) { error = esp_timer_start_periodic(timer, ESP32_MQUICKJS_WIFI_RAW_TX_SERVICE_RETRY_US); stage = "timer-start"; }
     }
     xSemaphoreTake(job->mutex, portMAX_DELAY);
     job->timer = timer;
@@ -290,7 +290,7 @@ static void job_worker(void *opaque)
     xSemaphoreTake(job->mutex, portMAX_DELAY);
     job->timer = timer; job->timer_stopped = timer_stopped;
     job->timer_transition = false;
-    job->next_service_us = esp_timer_get_time() + (cleanup == ESP_OK ? 1000 : 100000);
+    job->next_service_us = esp_timer_get_time() + (cleanup == ESP_OK ? ESP32_MQUICKJS_WIFI_RAW_TX_SERVICE_RETRY_US : ESP32_MQUICKJS_WIFI_RAW_TX_CLEANUP_RETRY_US);
     job->cleanup_error = cleanup; job->cleanup_stage = cleanup == ESP_OK ? NULL : cleanup_stage;
     session_t *released_session = NULL;
     payload_t released_frame = {0};

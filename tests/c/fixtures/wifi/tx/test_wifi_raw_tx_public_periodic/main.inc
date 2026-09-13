@@ -27,7 +27,7 @@ int main(void) {
     job_t *job=state->job;assert(job_api(retain)(job));esp_timer_handle_t timer=job->timer;
     /* Future storage can disappear before native transmission finishes. */
     periodic_expire(state);periodic_destroy(state);
-    assert(s_raw_tx.status.operation_active && session->periodic_children==1);
+    assert(test_broker_status().operation_active && session->periodic_children==1);
     driver_callback(&callback_info);fire_timer(timer);drain_workers();fire_timer(timer);drain_workers();
     esp32_mquickjs_wifi_raw_tx_periodic_job_status_t snapshot;
     assert(job_api(status)(job,&snapshot) && snapshot.retired && !snapshot.worker_busy);

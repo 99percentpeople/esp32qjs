@@ -5,9 +5,13 @@ MAC packets. It requires the `wifi` feature. The implementation is Candidate;
 RF, coexistence, runtime GC and target-matrix qualification remain pending.
 
 - `wifi.monitor.capabilities()` reports `apiVersion: "wifi-monitor/1"`, target,
-  SDK version, `frameTypes`, callable/filter `supports`, and resource `limits`.
+  SDK version, `packetTypes`, `frameTypes`, callable/filter `supports`, and resource `limits`.
   It is read-only and does not initialize Radio. Capability support does not
   guarantee admission with the current owners or regulatory configuration.
+  `packetTypes` lists SDK callback categories (`management`, `control`, `data`, `misc`).
+  `frameTypes` lists the common parser's 39 named PV0 layouts as
+  `{ type, subtype, name }`: 14 management, 10 control and 15 data. It describes
+  parser coverage, not guaranteed RF capture or Raw TX support. `misc` is not MAC type 3.
 - `wifi.monitor.open(options?)` constructs and starts a `WiFiMonitorSession`.
 - `session.receive(timeoutMs?)` returns a `WiFiMonitorFrame` or `null`, with the
   same deadline/cancellation rules as [EventQueue](event-queues.md). Omit the
@@ -41,6 +45,7 @@ defaults; `null` does not. Inputs are captured before Radio mutation.
 | `channel` | `"current"`; or a numeric channel supported by the target and current regulatory settings |
 | `filter.types` | management/control/data/misc; array of 0–4 distinct values; empty matches none |
 | `filter.subtypes` | unrestricted; array of 0–16 distinct integers 0–15; empty matches none |
+| `filter.frames` | unrestricted; up to 64 distinct `{ type: 0–3, subtype: 0–15 }` pairs; empty matches none |
 | `filter.sourceMac`, `destinationMac`, `bssid` | unrestricted; one colon-separated MAC string or 1–8 distinct addresses |
 | `filter.minimumRssi` | unrestricted; integer −128–127 dBm |
 | `filter.validOnly` | true; reject RX error, metadata-only, malformed or type-mismatched headers |
@@ -51,7 +56,6 @@ defaults; `null` does not. Inputs are captured before Radio mutation.
 | `buffering.poolCapacity` | 16; integer 1–128 |
 | `buffering.queueCapacity` | 16; integer 1–128 |
 | `buffering.overflow` | `"drop-newest"` only |
-| `powerSavePolicy` | `"preserve"` or `"require-none"`; the latter currently checks startup PS and does not hold a wake lock |
 
 MACs in one role are ORed; distinct roles are ANDed. Addresses are parsed from
 validated MAC headers, without decoding payloads. Sampling and rate admission
@@ -324,3 +328,41 @@ control, data and misc; misc callbacks carry metadata without packet bytes.
 These bounds are independent, not a promise that every maximum can be allocated
 simultaneously. The sole v1 replaces the former flat capability fields and indexed
 `filtered` array directly; no aliases are provided.
+
+## Frame identity and exact filtering
+
+`info.packet.category` preserves the SDK callback category. `info.packet.frameType`
+is the common `{ type, subtype, name }` descriptor, or null when no readable PV0
+Frame Control exists. Unknown/reserved identities retain their numbers with
+`name: null`. A descriptor does not imply `capture.parseValid`; short MAC headers
+and driver/header mismatches can have an identity while parsing remains invalid.
+The parser does not support MAC type 3 layouts; current `misc` callbacks provide
+metadata only and cannot satisfy an exact frame filter.
+
+```js
+var capture = wifi.monitor.open({
+  filter: {
+    frames: [{ type: 0, subtype: 8 }, { type: 2, subtype: 0 }]
+  }
+});
+```
+
+This admits Beacon or ordinary Data, without matching Management subtype 0 or
+Data subtype 8. Pairs are ORed together; `frames`, `types`, `subtypes`, MAC and
+other predicates are ANDed. Duplicate pairs, missing fields, names instead of
+numbers, fractions and unknown item keys are rejected. Full capability descriptors
+can be passed directly: optional `name` must agree with the catalogue for the
+numeric pair (null only for unnamed layouts). Filtering requires a
+readable PV0 Frame Control and a matching driver category. `validOnly` additionally
+requires successful structural parsing and an error-free SDK receive status.
+`supports.frameFilter` reports this exact-pair facility. It applies to `open()`
+and `configure()` and uses fixed native masks without callback allocations.
+
+Monitor and CSI accept the same `WiFiRxFilter` field names: `types`, `subtypes`,
+`frames`, address predicates, RSSI, decimation and rate limit. `frames` uses the
+shared descriptor parser. `validOnly` remains source-specific: Monitor checks
+MAC parsing/RX status; CSI checks sample/channel-estimate validity. A shared
+filter does not imply identical native observations or supported layouts.
+
+Capture preserves the existing power-save mode. Use `wifi.setPowerSave()` or an
+explicit `wifi.acquireWakeLock()` in JavaScript when the experiment requires it.

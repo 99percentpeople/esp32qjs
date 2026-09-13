@@ -1,4 +1,5 @@
 #pragma once
+#include "esp32_mquickjs_wifi_raw_tx_limits.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -6,7 +7,6 @@
  * No allocator, SDK, JS, timer or callback pointer is stored here. The adapter
  * owns frame storage and must retain it independently through native completion.
  * This is not yet a public periodic API or an autonomous timer implementation. */
-#define ESP32_MQUICKJS_WIFI_RAW_TX_PERIODIC_MIN_INTERVAL_US 1000U
 
 typedef enum {
     ESP32_MQUICKJS_WIFI_RAW_TX_PERIODIC_SKIP,

@@ -43,7 +43,7 @@ JSValue js_wifi_wapi_capabilities(JSContext *ctx, JSValue *self, int argc, JSVal
     WAPI_SET("exactAuthSelection", JS_FALSE);
     WAPI_SET("nativeOwner", JS_NewString(ctx, "supplicant"));
     WAPI_SET("rebuildsInitializedDriver", JS_TRUE);
-    WAPI_SET("maxTimeoutMs", JS_NewInt32(ctx, 60000));
+    WAPI_SET("maxTimeoutMs", JS_NewInt32(ctx, INT32_MAX));
     return JS_PopGCRef(ctx, &ref);
 fail:
     JS_PopGCRef(ctx, &ref); return JS_EXCEPTION;

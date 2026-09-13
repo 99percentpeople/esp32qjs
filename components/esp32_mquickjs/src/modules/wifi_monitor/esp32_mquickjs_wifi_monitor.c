@@ -1,3 +1,4 @@
+#include "esp32_mquickjs_wifi_frame_type.h"
 #include "esp32_mquickjs_wifi_monitor.h"
 #include "esp32_mquickjs_memory.h"
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
@@ -416,7 +417,6 @@ JSValue js_wifi_monitor_session_status(JSContext *ctx, JSValue *this_val, int ar
     NUMBER(result, "queueCapacity", session->options.queue_capacity);
     NUMBER(result, "snapLength", session->options.snap_length);
     SET(result, "requireComplete", JS_NewBool(session->options.require_complete));
-    SET(result, "powerSavePolicy", JS_NewString(ctx, session->options.capture.require_power_save_none ? "require-none" : "preserve"));
     NUMBER(result, "allocatedPoolBytes", snapshot.allocated_bytes);
     NUMBER(result, "leasedFrames", snapshot.counters.leased_frames);
     NUMBER(result, "lastEspCode", native->capture.last_error);
@@ -502,6 +502,9 @@ JSValue js_wifi_monitor_capabilities(JSContext *ctx, JSValue *this_val, int argc
         JSValue value = JS_NewString(ctx, frame_types[i]);
         if (JS_IsException(value) || JS_IsException(JS_SetPropertyUint32(ctx, *child, i, value))) goto fail;
     }
+    SET(result, "packetTypes", *child);
+    *child = esp32_mquickjs_wifi_frame_types_to_js(ctx);
+    if (JS_IsException(*child)) goto fail;
     SET(result, "frameTypes", *child);
     *child = JS_NewObject(ctx);
     if (JS_IsException(*child)) goto fail;
@@ -512,6 +515,7 @@ JSValue js_wifi_monitor_capabilities(JSContext *ctx, JSValue *this_val, int argc
     SET(child, "fixedChannel", JS_TRUE);
     SET(child, "typeFilter", JS_TRUE);
     SET(child, "subtypeFilter", JS_TRUE);
+    SET(child, "frameFilter", JS_TRUE);
     SET(child, "sourceMacFilter", JS_TRUE);
     SET(child, "destinationMacFilter", JS_TRUE);
     SET(child, "bssidFilter", JS_TRUE);

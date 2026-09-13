@@ -9923,10 +9923,10 @@ esp_err_t esp32_mquickjs_wifi_radio_raw_tx_submit(
     if (s_radio.fault_stage != NULL) { err = s_radio.fault_error; goto done; }
     wifi_radio_live_lease_t *owner = wifi_radio_promiscuous_owner(lease->identity);
     wifi_mode_t required = interface == ESP32_MQUICKJS_WIFI_RAW_TX_STATION ? WIFI_MODE_STA : WIFI_MODE_AP;
-    if (owner == NULL || owner->required_mode != required || owner->raw_tx_identity != 0U) goto done;
+    if (owner == NULL || owner->required_mode != required) goto done;
     esp32_mquickjs_wifi_raw_tx_broker_status_t status;
     esp32_mquickjs_wifi_raw_tx_broker_status(&status);
-    if (status.operation_active || status.callbacks_active != 0U || status.registration_uncertain ||
+    if (status.in_flight >= status.max_in_flight || status.registration_uncertain ||
         status.unregister_written || status.identity_exhausted) goto done;
     err = esp_wifi_get_mode(&mode);
     if (err != ESP_OK) goto done;
@@ -9951,7 +9951,7 @@ esp_err_t esp32_mquickjs_wifi_radio_raw_tx_submit(
         err = ESP_ERR_INVALID_STATE;
         goto done;
     }
-    owner->raw_tx_channel_pinned = !owner->fixed_channel;
+    if (owner->raw_tx_identity == 0U) owner->raw_tx_channel_pinned = !owner->fixed_channel;
     owner->fixed_channel = true;
     owner->primary_channel = actual;
     owner->secondary_channel = (uint8_t)secondary;
@@ -9960,10 +9960,10 @@ esp_err_t esp32_mquickjs_wifi_radio_raw_tx_submit(
         bytes, length, &policy, token, validation);
     if (token->identity != 0U) {
         taskENTER_CRITICAL(&s_radio.lock);
-        owner->raw_tx_identity = token->identity;
+        if (owner->raw_tx_identity == 0U) owner->raw_tx_identity = token->identity;
         taskEXIT_CRITICAL(&s_radio.lock);
         *actual_channel = actual;
-    } else wifi_radio_raw_tx_unpin(owner);
+    } else if (owner->raw_tx_identity == 0U) wifi_radio_raw_tx_unpin(owner);
 done:
     wifi_radio_operation_unlock();
     return err;
@@ -9978,17 +9978,25 @@ bool esp32_mquickjs_wifi_radio_raw_tx_retire(
     if (!wifi_radio_lease_valid(lease) || lease->client != ESP32_MQUICKJS_WIFI_RADIO_CLIENT_RAW_TX ||
         token->generation != lease->generation || token->radio_lease_identity != lease->identity) goto done;
     wifi_radio_live_lease_t *owner = wifi_radio_promiscuous_owner(lease->identity);
-    if (owner == NULL || owner->raw_tx_identity == 0U || owner->raw_tx_identity != token->identity) goto done;
+    if (owner == NULL || owner->raw_tx_identity == 0U) goto done;
     if (wifi_radio_raw_tx_recovery_exact_locked(&s_radio.lifecycle) &&
         token->identity == s_raw_tx_recovery.operation.identity &&
         token->generation == s_raw_tx_recovery.operation.generation &&
         token->radio_lease_identity == s_raw_tx_recovery.operation.radio_lease_identity) {
         esp32_mquickjs_wifi_raw_tx_broker_status_t native;
-        esp32_mquickjs_wifi_raw_tx_broker_status(&native);
+        (void)esp32_mquickjs_wifi_raw_tx_broker_result(token, &native);
         if (!native.native_terminated) goto done;
     }
     retired = esp32_mquickjs_wifi_raw_tx_broker_retire(token);
-    if (retired) wifi_radio_raw_tx_unpin(owner);
+    if (retired) {
+        uint32_t remaining = esp32_mquickjs_wifi_raw_tx_broker_owner_identity(lease->identity);
+        if (remaining == 0U) wifi_radio_raw_tx_unpin(owner);
+        else {
+            taskENTER_CRITICAL(&s_radio.lock);
+            owner->raw_tx_identity = remaining;
+            taskEXIT_CRITICAL(&s_radio.lock);
+        }
+    }
 done:
     wifi_radio_operation_unlock();
     return retired;
@@ -10007,8 +10015,11 @@ static bool wifi_radio_raw_tx_recovery_owner_locked(const esp32_mquickjs_wifi_ra
         lease->identity != s_raw_tx_recovery.operation.radio_lease_identity ||
         lease->generation != s_raw_tx_recovery.operation.generation) return false;
     wifi_radio_live_lease_t *owner = wifi_radio_promiscuous_owner(lease->identity);
-    if (owner == NULL || (owner->raw_tx_identity != 0U && owner->raw_tx_identity != s_raw_tx_recovery.operation.identity)) return false;
+    if (owner == NULL) return false;
+    /* Physical termination covers every record for this exact lease/generation.
+     * Its representative identity may advance as a Session retires its window. */
     if (!s_radio.driver_owned) return s_raw_tx_recovery.stopped && s_raw_tx_recovery.sdk_fenced;
+    if (owner->raw_tx_identity != s_raw_tx_recovery.operation.identity) return false;
     esp32_mquickjs_wifi_raw_tx_broker_status_t native;
     esp32_mquickjs_wifi_raw_tx_broker_status(&native);
     return owner->raw_tx_identity == s_raw_tx_recovery.operation.identity && native.operation_active &&

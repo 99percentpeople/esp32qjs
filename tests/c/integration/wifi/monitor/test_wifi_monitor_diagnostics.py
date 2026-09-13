@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from tests.support.wireless_vm_fixture import ROOT, INTERNAL, build, extract, run
 
+from tests.c.integration.wifi.monitor.test_wifi_rx_target import unit
+
 MONITOR = ROOT / 'components/esp32_mquickjs/src/modules/wifi_monitor/esp32_mquickjs_wifi_monitor.c'
 
 
@@ -34,6 +36,9 @@ def production_diagnostics(target):
                        (queue, 'esp32_mquickjs_event_queue_stats_t')]:
         body += re.search(r'typedef struct \{[^}]+\} ' + name + ';', text).group(0) + '\n'
     body += source[source.index('#define SET('):source.index('static monitor_session_t *monitor_session_from_this')]
+    body += unit(INTERNAL / 'esp32_mquickjs_wifi_rx.h')
+    body += unit(MONITOR.parent.parent / 'wifi_common/esp32_mquickjs_wifi_rx.c')
+    body += unit(MONITOR.parent.parent / 'wifi_common/esp32_mquickjs_wifi_frame_type.c')
     body += BOUNDARIES
     body += ''.join(extract(source, name) for name in [
         'monitor_queue_status', 'js_wifi_monitor_session_stats', 'js_wifi_monitor_capabilities'])

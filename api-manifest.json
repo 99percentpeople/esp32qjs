@@ -10311,6 +10311,28 @@
       }
     },
     {
+      "qualifiedName": "WiFiRawTxSession.prototype.waitWritable",
+      "surface": "WiFiRawTxSession.prototype",
+      "name": "waitWritable",
+      "arity": 1,
+      "implementation": "js_wifi_raw_tx_session_wait_writable",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_WIFI",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_wifi_raw_tx_session_proto"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "WiFiRawTxSession"
+      },
+      "documentation": {
+        "file": "docs/api/wifi-raw-tx.md",
+        "ownerToken": "WiFiRawTxSession"
+      }
+    },
+    {
       "qualifiedName": "WiFiRocSession.prototype.close",
       "surface": "WiFiRocSession.prototype",
       "name": "close",

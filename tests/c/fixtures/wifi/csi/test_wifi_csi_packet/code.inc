@@ -65,6 +65,26 @@ static void filter_and_identity(void){
     assert(!memcmp(slot->metadata.addresses[ESP32_MQUICKJS_WIFI_RX_RECEIVER],bytes+4,6));
     assert(!memcmp(slot->metadata.addresses[ESP32_MQUICKJS_WIFI_RX_DESTINATION],bytes+4,6));
     assert(esp32_mquickjs_wifi_csi_slot_discard_event(&resources,&event));
+    resources.filter=(esp32_mquickjs_wifi_csi_filter_t){.sample_every=1,.frame_filter=true,
+        .frame_subtype_masks={[0]=1U<<8,[2]=1U<<0}};
+    input.copied_length=input.driver_packet_length=40;
+    const uint8_t controls[]={0x80,0x08,0x00,0x88};
+    allocations=calls;
+    for(unsigned i=0;i<4;i++){
+        bytes[0]=controls[i];
+        int result=esp32_mquickjs_wifi_csi_callback_publish(&resources,&metadata,samples,4,&input,publish,NULL);
+        assert(result==(i<2?ESP32_MQUICKJS_WIFI_CSI_PUBLISH_ACCEPTED:ESP32_MQUICKJS_WIFI_CSI_PUBLISH_FILTERED));
+        if(i<2)assert(esp32_mquickjs_wifi_csi_slot_discard_event(&resources,&event));
+    }
+    bytes[0]=0x80;
+    assert(esp32_mquickjs_wifi_csi_callback_publish(&resources,&metadata,samples,4,NULL,publish,NULL)==ESP32_MQUICKJS_WIFI_CSI_PUBLISH_FILTERED);
+    input.copied_length=1;
+    assert(esp32_mquickjs_wifi_csi_callback_publish(&resources,&metadata,samples,4,&input,publish,NULL)==ESP32_MQUICKJS_WIFI_CSI_PUBLISH_FILTERED);
+    input.copied_length=40;bytes[0]=0x81; /* non-PV0 */
+    assert(esp32_mquickjs_wifi_csi_callback_publish(&resources,&metadata,samples,4,&input,publish,NULL)==ESP32_MQUICKJS_WIFI_CSI_PUBLISH_FILTERED);
+    assert(calls==allocations&&resources.max_packet_bytes==0);
+    resources.filter=(esp32_mquickjs_wifi_csi_filter_t){.sample_every=1};
+    bytes[0]=0xd4;input.copied_length=input.driver_packet_length=10;
     slot->slot_generation=UINT32_MAX-1;
     assert(esp32_mquickjs_wifi_csi_callback_publish(&resources,&metadata,samples,4,&input,publish,NULL)==ESP32_MQUICKJS_WIFI_CSI_PUBLISH_ACCEPTED);
     esp32_mquickjs_wifi_csi_event_t stale=event;assert(stale.slot_generation==UINT32_MAX);

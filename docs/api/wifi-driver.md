@@ -325,7 +325,7 @@ checkpoint has the explicit retry path below. A required policy value that canno
 known record can also reject capture after lifecycle admission. Missing RF
 history alone no longer rejects an otherwise healthy configured source.
 
-`timeoutMs` is an integer from 1 through 60000, default 10000.
+`timeoutMs` is an integer from 1 through 2147483647, default 10000.
 `allowApRestart` is the explicit off-source AP permission described above.
 It provides a shared budget for native event/netif waits across reconstruction.
 Synchronous SDK calls and mutex acquisition are not preempted, so this is not a

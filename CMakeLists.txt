@@ -95,3 +95,6 @@ include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_eloop.cmake")
 # CSI receipts run after original libpp ABI/hash checks above.
 include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_csi_rx_copy.cmake")
 include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_tx_rate.cmake")
+
+include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_raw_tx_management.cmake")
+include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_raw_tx_identity.cmake")

@@ -46,10 +46,10 @@ test("wifi/ap-lifecycle-hardware", function () {
       inspect(result, name);
       test.equal(result.channel, 4, "exclusive AP uses requested channel");
       stage = "exclusive-stop-" + i;
-      state = wifi.stopAP(5000);
+      state = wifi.stopAP({ timeoutMs: 5000 });
       test.equal(state.radio.clients.total, 0, "exclusive AP close returns all owners");
       test.equal(state.radio.faultError, null, "exclusive AP close is healthy");
-      wifi.stopAP(5000);
+      wifi.stopAP({ timeoutMs: 5000 });
       cycles.push({ kind: "exclusive", generation: state.radio.generation });
     }
     stage = "station-connect";
@@ -68,7 +68,7 @@ test("wifi/ap-lifecycle-hardware", function () {
       test.equal(stationIp(), originalIp, "adding AP preserves Station IP");
       test.equal(result.channel, connection.channel, "shared AP follows Station channel");
       stage = "shared-stop-" + i;
-      state = wifi.stopAP(5000);
+      state = wifi.stopAP({ timeoutMs: 5000 });
       test.equal(state.connected, true, "removing AP preserves Station connection");
       test.equal(state.radio.generation, generation, "removing AP does not rebuild Radio");
       test.equal(state.radio.clients.wifiAccessPoint, 0, "only AP owner retires");
@@ -82,7 +82,7 @@ test("wifi/ap-lifecycle-hardware", function () {
     throw error;
   } finally {
     try {
-      wifi.stopAP(5000);
+      wifi.stopAP({ timeoutMs: 5000 });
       wifi.disconnect();
       wifi.stop({ timeoutMs: 5000 });
     } catch (cleanupError) {

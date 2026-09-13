@@ -24,20 +24,27 @@ class WiFiRawTxSessionOptions(unittest.TestCase):
         for name in ['wifi_rx', 'wifi_raw_tx_validate', 'wifi_raw_tx_snapshot', 'wifi_raw_tx_broker', 'wifi_raw_tx_queue', 'wifi_raw_tx_session']:
             extra += unit(INTERNAL / ('esp32_mquickjs_' + name + '.h'))
         extra += 'typedef esp32_mquickjs_wifi_raw_tx_session_options_t session_options_t;\n'
+        extra += 'typedef struct {session_options_t options;uint32_t minimum_packets,minimum_bytes,timeout_ms;} esp32_mquickjs_future_driver_state_t;\n'
         extra += unit(CORE / 'esp32_mquickjs_options.c')
         radio = (ROOT / 'components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c').read_text()
         extra += extract(radio, 'esp32_mquickjs_wifi_radio_5ghz_channel_bit')
         driver = (ROOT / 'components/esp32_mquickjs/src/modules/wifi_driver/esp32_mquickjs_wifi_driver.c').read_text()
         extra += extract(driver, 'esp32_mquickjs_wifi_tx_rate_capture')
-        for name in ['capture_timeout', 'capture_send_options', 'capture_open_options']:
+        for name in ['capture_timeout', 'capture_send_options', 'capture_open_options', 'capture_writable_options']:
             extra += extract(source, name)
         cls.binary = build(cls.temp.name, extra, MAIN)
 
     def test_complete_capture_defaults_enums_and_queue_bounds(self):
         cases = [
             ('undefined', True), ('({})', True),
-            ('({interface:"access-point",channel:36,sequenceControl:"application",validation:"basic",timeoutMs:60000,queue:{capacityPackets:128,overflow:"drop-oldest-batch"}})', True),
+            ('({interface:"access-point",channel:36,sequenceControl:"application",timeoutMs:2147483647,queue:{capacityPackets:128,overflow:"drop-oldest-batch"}})', True),
             ('({channel:"current",queue:{capacityPackets:1},timeoutMs:1})', True),
+            ('({maxInFlight:8,queue:{capacityPackets:8,capacityBytes:192}})', True),
+            ('({maxInFlight:0})', False), ('({maxInFlight:9})', False),
+            ('({maxInFlight:2,queue:{capacityPackets:1}})', False),
+            ('({queue:{capacityBytes:23}})', False), ('({queue:{capacityPackets:1,capacityBytes:1501}})', False),
+            ('({get maxInFlight(){throw new Error("sentinel");}})', False),
+            ('({queue:{get capacityBytes(){throw new Error("sentinel");}}})', False),
             ('({rate:{phy:"11g",rate:"6m"}})', True),
             ('({rate:{phy:"ht20",rate:"6m"}})', False),
             ('({rate:{phy:"11g",rate:"6m",dcm:0}})', False),
@@ -50,7 +57,7 @@ class WiFiRawTxSessionOptions(unittest.TestCase):
             ('({channel:"current\\u0000"})', False), ('({channel:15})', False),
             ('({channel:178})', False), ('({channel:1.5})', False),
             ('({interface:"station\\u0000"})', False), ('({sequenceControl:"driver\\u0000"})', False),
-            ('({timeoutMs:0})', False), ('({timeoutMs:60001})', False),
+            ('({timeoutMs:0})', False), ('({timeoutMs:2147483648})', False),
             ('({timeoutMs:"1000"})', False), ('({unknown:true})', False), ('null', False), ('[]', False),
             ('({get channel(){throw new Error("sentinel");}})', False),
             ('({queue:{get capacityPackets(){throw new Error("sentinel");}}})', False),
@@ -62,11 +69,23 @@ class WiFiRawTxSessionOptions(unittest.TestCase):
 
     def test_send_timeout_is_the_only_per_send_option(self):
         for expression, valid in [('undefined', True), ('({timeoutMs:1})', True),
-                                  ('({timeoutMs:60000})', True), ('({timeoutMs:1.5})', False),
+                                  ('({timeoutMs:2147483647})', True), ('({timeoutMs:1.5})', False),
                                   ('({channel:6})', False), ('({timeoutMs:0})', False),
                                   ('({get timeoutMs(){throw new Error("sentinel");}})', False)]:
             with self.subTest(expression=expression):
                 run([str(self.binary), 'send', expression, str(int(valid)), 'sentinel' if 'sentinel' in expression else ''])
+
+
+    def test_writable_thresholds_gc_and_allocation_failure(self):
+        for expression, valid in [('undefined', True), ('({})', True),
+            ('({minimumPackets:4,minimumBytes:96,timeoutMs:100})', True),
+            ('({minimumPackets:0})', False), ('({minimumPackets:33})', False),
+            ('({minimumBytes:48001})', False), ('({minimumBytes:-1})', False),
+            ('({timeoutMs:0})', False), ('({reserve:true})', False),
+            ('({get minimumBytes(){throw new Error("sentinel");}})', False)]:
+            with self.subTest(expression=expression):
+                run([str(self.binary), 'writable', expression, str(int(valid)),
+                     'sentinel' if 'sentinel' in expression else ''])
 
 
 MAIN = fixture_text('wifi/tx/test_wifi_raw_tx_session_options/main.inc')

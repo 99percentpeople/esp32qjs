@@ -11,9 +11,60 @@ Returns `WiFiRawTxCapabilities` without starting Radio. Includes
 types and limits. AP is listed only when the SDK build enables SoftAP. The AP
 interface requires an already running AP; sending does not create an AP network.
 
-The current allowlist is Beacon, Probe Request, Probe Response, Action and Data
-subtype 0. QoS, encrypted/Protected frames, Null/CF data, other management and
-arbitrary control frames are unsupported. Minimum length is 24 and maximum is
+`frameTypes` is a duplicate-free array of `WiFiFrameType` descriptors:
+`{ type: 0 | 1 | 2 | 3, subtype: number, name: string | null }`. Numeric fields
+are the PV0 Frame Control identity; `name` uses the common RX/TX catalogue. The
+reviewed local C3/S3/C5 builds report `supports.extendedManagement: true` and
+include all 14 named Protocol Version 0 management subtypes plus plain Data:
+
+| Management family | Identifiers |
+| --- | --- |
+| Association | `association-request`, `association-response` |
+| Reassociation | `reassociation-request`, `reassociation-response` |
+| Discovery | `probe-request`, `probe-response`, `beacon`, `timing-advertisement`, `atim` |
+| Authentication / departure | `authentication`, `deauthentication`, `disassociation` |
+| Action | `action`, `action-no-ack` |
+
+`data` is the additional Data subtype 0 identifier. This management
+extension is experimental: the build creates a separate, hash-checked SDK
+archive and changes only its management-subtype admission branch. The shared
+SDK remains untouched, prior SDK fixes are retained, and unreviewed objects
+fail the build. The feature macro is enabled only after that gate succeeds.
+This is a framework extension beyond Espressif's documented Raw TX allowlist;
+it is not a claim that Espressif supports these extra types or that each type
+has completed physical/RF qualification.
+
+See the [implementation and verification record](../investigations/2026-09-13-raw-tx-management.md)
+for the SDK patch boundary and remaining hardware acceptance.
+The [shared frame identity record](../investigations/2026-09-13-wifi-frame-identity.md)
+describes the current RX/TX descriptor contract and exact Monitor filtering.
+
+Without the extension, the native implementation advertises only `beacon`,
+`probe-request`, `probe-response`, `action` and `data`, with
+`supports.extendedManagement: false`.
+Only supported types are listed; array order has no meaning. One-shot and Session
+results use the same descriptor as `frameType`. For example, Beacon is
+`{ type: 0, subtype: 8, name: "beacon" }`; ordinary Data is
+`{ type: 2, subtype: 0, name: "data" }`. Names are descriptive; numeric pairs
+identify the frame. All currently advertised TX descriptors have a known name.
+The array and its descriptors are fresh snapshots; changing them does not configure transmission.
+
+```js
+var caps = wifi.rawTx.capabilities();
+var supportsProbeRequest = caps.frameTypes.some(function (frame) {
+  return frame.type === 0 && frame.subtype === 4;
+});
+```
+
+This is a frame-type capability check. It does not validate a particular packet
+or guarantee admission under the current Radio state. `send` infers the type
+from the MAC header; callers do not supply a separate `frameType` option.
+
+The management extension covers frame subtypes, not every frame variant or
+security exchange. Reserved management subtypes 7/15, nonzero protocol versions,
+QoS, encrypted/Protected frames, Null/CF data, and control frames remain
+unsupported. PMF configuration is unchanged; the framework does not encrypt or
+authenticate management frames or bypass a receiver's PMF checks. Minimum length is 24 and maximum is
 1500 bytes, including the complete variable MAC header. `callerFcs` is false.
 There is no PHY preamble or RF IQ input.
 
@@ -45,13 +96,12 @@ closed by a getter is rejected rather than accessed through an old pointer.
 | `interface` | `"station"` by default, or `"access-point"` when enabled/running |
 | `channel` | `"current"` by default, or a target-supported numeric channel admitted by Radio |
 | `sequenceControl` | `"driver"` by default, or `"application"` when disconnected |
-| `validation` | `"strict"` by default, or `"basic"`; both retain all mandatory MAC/SDK checks |
-| `timeoutMs` | Integer 1–60000, default 1000; covers the entire Future including waiting and initialization |
+| `timeoutMs` | Integer 1–2147483647, default 1000; covers the entire Future including waiting and initialization |
 
 Unknown keys, null/array options, invalid enums (including NUL suffixes), fractions
-and out-of-range values are rejected. Neither validation mode bypasses SDK frame
-constraints. The current strict mode adds no arbitrary management-body parser or
-FCS/container detector. Input must be a pure 802.11 MAC frame without Radiotap,
+and out-of-range values are rejected. C retains mandatory MAC/SDK validation, including the build-specific management
+subtype boundary. It does not parse arbitrary management bodies or detect FCS/containers;
+application content validation belongs in JavaScript. Input must be a pure 802.11 MAC frame without Radiotap,
 PCAP record headers or caller-added FCS. A valid-looking header cannot establish
 that arbitrary trailing bytes are not a caller-added FCS.
 
@@ -129,12 +179,18 @@ The native scheduler admits at most nine requests, grants them in request order,
 and keeps the current grant through original native completion and required
 Radio cleanup. Cancelling a waiting request removes only that request. Worker
 queue saturation does not release an already granted operation into a second
-send. The arbiter is shared by one-shot and Session producers; each packet rejoins
-the request order after the preceding packet retires, except a temporary-rate
-Session retains its exclusive grant until rate restoration.
+send. The arbiter is shared by one-shot and Session producers. A Session retains
+its grant while its native window is occupied, then rejoins the request order once
+that window drains. A continuously replenished window may delay other producers;
+there is no per-producer fairness guarantee. A temporary-rate Session retains its
+exclusive grant until rate restoration.
 
-The SDK callback has no request cookie. Mismatching callback metadata does not
-complete the current operation. A late completion can retire its quarantined
+The public SDK callback has no request cookie. For the pinned C3/S3/C5 SDK, a
+hash-checked build-local adapter binds each native descriptor before submission
+and consumes that exact descriptor before recycling. It changes two call-site
+relocations, leaving RF bytes unchanged. Identical frames and out-of-order callbacks
+therefore retain independent identities; callback order and MAC addresses are not
+identity sources. Mismatching metadata or an unknown descriptor quarantines work. A late completion can retire its quarantined
 operation; a missing completion, submission error with uncertain native ownership,
 or correlation fault can keep the lane unavailable. Runtime teardown waits for
 this native cleanup and can remain blocked. Runtime restart is not a recovery
@@ -218,10 +274,11 @@ does not publish a partially opened JS object.
 | interface | `"station"` / `"access-point"`; default `"station"` |
 | channel | `"current"` or a supported numeric channel; default `"current"` |
 | sequenceControl | `"driver"` / `"application"`; default `"driver"` |
-| validation | `"strict"` / `"basic"`; same mandatory constraints as one-shot |
-| timeoutMs | Opening deadline, integer 1–60000; default 1000 |
+| timeoutMs | Opening deadline, integer 1–2147483647; default 1000 |
 | rate | Optional `WiFiTxRateConfig`; exclusive pre-start interface lease, described below |
-| queue.capacityPackets | Integer 1–128, including the in-flight packet; default 32 |
+| maxInFlight | Integer 1–8, at most `capacityPackets`; default 1 |
+| queue.capacityPackets | Integer 1–128, including all in-flight packets; default 32 |
+| queue.capacityBytes | Integer 24–`capacityPackets * 1500`; default `capacityPackets * 1500` |
 | queue.overflow | `"reject-newest"` / `"drop-oldest-batch"`; default `"reject-newest"` |
 
 The Session retains its Radio lease while idle. A numeric channel stays pinned
@@ -229,9 +286,20 @@ until close; `"current"` follows the actual channel observed at each submission.
 Without `rate`, opening the AP interface requires an already running AP. Configuration, sequence
 and association constraints are checked again at actual driver admission.
 
-Ordinary queue processing uses native workers triggered by the runtime poller
-and requires the JS runtime to yield. Running periodic jobs provide their own
-native timer wakeups, described below. Unknown options are rejected.
+Admission and TX completion wake a coalesced native worker independently of JS
+polling. A single boot-owned timer retries saturated worker admission and pending
+cleanup; it disarms when Sessions have no work. No dedicated task stack is added.
+AP temporary-rate helper transitions still run on the runtime task. Unknown options
+are rejected.
+
+`maxInFlight` controls outstanding driver submissions within a Session. Driver calls
+remain serialized; Wi-Fi shares one physical transmitter/channel. Completion can be
+out of order. This is a submission pipeline, not simultaneous RF transmission or a
+throughput guarantee. `limits.maximumInFlight` reports the compiled maximum.
+
+The queue byte budget counts retained frame payloads, including in-flight slots.
+Transient JS capture, broker copies, SDK buffers and control storage are additional
+wireless memory allocations. `capacityBytes` is not a whole-driver heap limit.
 
 ### Temporary Session rate
 
@@ -332,10 +400,38 @@ in-flight frame and the unsent remainder of its batch remain protected, includin
 between packets. If eligible batches cannot make enough room, admission fails
 without eviction. Close can discard all unsent frames, including that remainder.
 
+## `session.waitWritable(options?)`
+
+Waits until the open Session has at least `minimumPackets` free slots (default 1)
+and `minimumBytes` free payload bytes (default `minimumPackets * 24`, the minimum
+frame size). Explicit 0 requests a packet-slot-only capacity observation. `timeoutMs` defaults to 1000;
+all three options are integers, packet/byte thresholds must fit the configured
+capacity, and the timeout range is 1–2147483647 ms. Returns `undefined`; also
+supports `Future.call(session.waitWritable, session, [options])`.
+
+It observes capacity without reserving it or evicting packets. A competing producer
+may consume that space before enqueue. Close, fault or admission-identity exhaustion
+fails the wait. Timeout/cancellation only stop waiting and never cancel admitted
+frames. Use `minimumBytes` when the next batch size is known.
+
+```js
+var tx = wifi.rawTx.open({
+  queue: { capacityPackets: 64, capacityBytes: 65536 },
+  maxInFlight: 4
+});
+// frames is an application-provided collection of valid Uint8Array frames.
+var bytes = 0;
+for (var i = 0; i < frames.length; i++) bytes += frames[i].byteLength;
+tx.waitWritable({ minimumPackets: frames.length, minimumBytes: bytes, timeoutMs: 5000 });
+tx.enqueueBatch(frames);
+var completion = tx.flush(5000);
+tx.close();
+```
+
 ## `session.send(frame, options?)`
 
 Admits one packet and cooperatively waits for its exact native result. The only
-per-call option is `timeoutMs` (integer 1–60000, default 1000). Use
+per-call option is `timeoutMs` (integer 1–2147483647, default 1000). Use
 `Future.call(session.send, session, [frame, options])` for asynchronous waiting.
 
 Returns the one-shot `WiFiRawTxResult` fields plus `sessionGeneration` and
@@ -354,7 +450,7 @@ enters Radio. A timeout never cancels unrelated Session packets or producers.
 ## `session.flush(timeoutMs?)`
 
 Waits for all admissions through the fence captured when the Future starts.
-Default timeout is 1000 ms; allowed range is 1–60000. It also supports
+Default timeout is 1000 ms; allowed range is 1–2147483647. It also supports
 `Future.call(session.flush, session, [timeoutMs])`. Enqueues after that fence cannot
 extend the wait or alter its result.
 
@@ -373,6 +469,10 @@ Outstanding flushes retain their own native Session reference through close.
 `status()` reports `state` (`open`, `closing`, `closed`, `faulted`), Session/Radio
 generation, interface, observed channel, sequence policy, queue capacity, queued
 and pending packet counts, active sequence, request identity and worker activity.
+`queuedPackets` excludes in-flight packets; `pendingPackets` includes them.
+`inFlight` and `maxInFlight` describe the native window. `capacityBytes`, `usedBytes`,
+`availableBytes`, `highWaterBytes` and `availablePackets` describe queue ownership.
+A representative `activeSequence` does not imply FIFO completion.
 `requestIdentity` can represent a waiter that has not yet acquired the shared
 grant. `periodicJobs` counts native periodic children still retaining timer/worker/
 template ownership, including jobs still cleaning up after stop or close.
@@ -441,7 +541,7 @@ is retained by the timer or native worker.
 | startDelayUs | Integer 0–4294967295; default 0, measured from native job creation |
 | busyPolicy | `"skip"` (default) or `"stop"` |
 | stopOnError | Boolean, default true |
-| timeoutMs | Startup Future deadline, integer 1–60000; default 1000 |
+| timeoutMs | Startup Future deadline, integer 1–2147483647; default 1000 |
 
 Returns a `WiFiRawPeriodicTx`. There are at most 8 native jobs across all Sessions,
 including retired jobs whose native caller reference has not yet been released.

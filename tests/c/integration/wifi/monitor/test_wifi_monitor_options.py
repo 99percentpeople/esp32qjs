@@ -27,9 +27,13 @@ def production_options_code(band):
                       'esp32_mquickjs_wifi_radio_5ghz_channel_bit')
     body = '#include "mquickjs_priv.h"\n#include <math.h>\n#define CONFIG_ESP32_MQUICKJS_FEATURE_WIFI 1\n'
     body += '#define CONFIG_SOC_WIFI_SUPPORT_5G ' + str(band) + '\n'
+    body += unit(INTERNAL / 'esp32_mquickjs_wifi_rx.h')
+    body += unit(ROOT / 'components/esp32_mquickjs/src/modules/wifi_common/esp32_mquickjs_wifi_rx.c')
     body += filter_types + options_type + '\n' + limits
     body += unit(INTERNAL / 'esp32_mquickjs_wifi_monitor_options.h')
     body += INJECT_PROPERTIES + helpers + channel
+    body += unit(ROOT / 'components/esp32_mquickjs/src/modules/wifi_common/esp32_mquickjs_wifi_frame_type.c')
+    body += unit(ROOT / 'components/esp32_mquickjs/src/modules/wifi_common/esp32_mquickjs_wifi_frame_filter.c')
     body += unit(ROOT / 'components/esp32_mquickjs/src/modules/wifi_monitor/esp32_mquickjs_wifi_monitor_options.c')
     return body
 
@@ -50,8 +54,8 @@ class WiFiMonitorOptions(unittest.TestCase):
     def test_defaults_and_complete_capture(self):
         self.check('undefined', scenario=1)
         self.check('({})', scenario=1)
-        self.check('({channel:"current",filter:{},capture:{},buffering:{},powerSavePolicy:"preserve"})', scenario=1)
-        self.check('({channel:6,powerSavePolicy:"require-none",filter:{types:["management","data"],subtypes:[0,15],'
+        self.check('({channel:"current",filter:{},capture:{},buffering:{}})', scenario=1)
+        self.check('({channel:6,filter:{types:["management","data"],subtypes:[0,15],'
                    'sourceMac:["02:00:00:00:00:01","02:00:00:00:00:02"],destinationMac:"ff:ff:ff:ff:ff:ff",'
                    'bssid:"AA:BB:CC:DD:EE:FF",minimumRssi:-128,sampleEvery:4294967295,maximumRateHz:1000000,validOnly:false},'
                    'capture:{snapLength:16384,requireComplete:true},buffering:{poolCapacity:128,queueCapacity:128,overflow:"drop-newest"}})', scenario=2)
@@ -63,7 +67,7 @@ class WiFiMonitorOptions(unittest.TestCase):
     def test_unknown_fields_nul_null_and_enum_rejections(self):
         for expression in ['null', 'true', '[]', '1', '"options"',
                            '({legacy:true})', '({"channel\\x00":6})', '({channel:"current\\x00"})',
-                           '({channel:"6"})', '({powerSavePolicy:"none"})', '({powerSavePolicy:"preserve\\x00"})',
+                           '({channel:"6"})', '({powerSavePolicy:"none"})', '({powerSavePolicy:"preserve"})', '({powerSavePolicy:"require-none"})', '({powerSavePolicy:"preserve\\x00"})',
                            '({filter:null})', '({capture:[]})', '({buffering:null})',
                            '({filter:{unknown:true}})', '({capture:{schema:"legacy"}})',
                            '({buffering:{overflow:"drop-oldest"}})', '({buffering:{overflow:"drop-newest\\x00"}})',
@@ -75,6 +79,22 @@ class WiFiMonitorOptions(unittest.TestCase):
                            '({filter:{types:"data"}})', '({filter:{subtypes:1}})',
                            '({filter:{validOnly:1}})', '({capture:{requireComplete:"true"}})']:
             self.check(expression, valid=False)
+
+    def test_exact_frame_pairs(self):
+        self.check('({filter:{frames:[{type:0,subtype:8},{type:2,subtype:0}]}})', scenario=4)
+        self.check('({filter:{frames:[]}})', scenario=5)
+        self.check('({filter:{frames:[{type:0,subtype:8,name:"beacon"},{type:2,subtype:0,name:"data"}]}})', scenario=4)
+        self.check('({filter:{frames:[{type:3,subtype:15,name:null}]}})')
+        self.check('(function(){var a=[];for(var t=0;t<4;t++)for(var s=0;s<16;s++)a.push({type:t,subtype:s});return {filter:{frames:a}};})()', scenario=6)
+        self.check('({filter:{frames:new Array(65)}})', valid=False)
+        self.check('(function(){var a=0,b=0,c=0;return {filter:{frames:[{get type(){if(++a!==1)throw new Error("twice");return 0;},get subtype(){if(++b!==1)throw new Error("twice");return 8;},get name(){if(++c!==1)throw new Error("twice");return "beacon";}}]}};})()')
+        for frames in ['null', '{}', '[null]', '[{type:4,subtype:0}]',
+                       '[{type:0,subtype:16}]', '[{type:0}]', '[{subtype:0}]',
+                       '[{type:"0",subtype:0}]', '[{type:0.5,subtype:0}]',
+                       '[{type:0,subtype:0,name:"beacon"}]', '[{type:0,subtype:8,name:null}]',
+                       '[{type:3,subtype:0,name:"beacon"}]', '[{type:0,subtype:8,name:1}]',
+                       '[{type:0,subtype:8},{type:0,subtype:8}]']:
+            self.check('({filter:{frames:'+frames+'}})', valid=False)
 
     def test_mac_shapes_duplicates_and_bounds(self):
         for value in ['null', '[]', '[1]', '"AA:BB:CC:DD:EE"', '"AA-BB-CC-DD-EE-FF"',

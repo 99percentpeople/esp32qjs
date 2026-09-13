@@ -27,9 +27,9 @@ static void failures(void) {
         assert(capture.state==ESP32_MQUICKJS_WIFI_MONITOR_STOPPED && !capture.promiscuous.acquired && !capture.channel_claimed);
         assert(subscribes==(stage==6?1U:0U));cleanup();
     }
-    setup(false);ps_none=false;capture.options.require_power_save_none=true;
-    assert(esp32_mquickjs_wifi_monitor_capture_start(&capture)==ESP_ERR_INVALID_STATE);
-    assert(!strcmp(capture.last_stage,"power-save-policy") && !subscribes);cleanup();
+    setup(false);ps_none=false;
+    assert(esp32_mquickjs_wifi_monitor_capture_start(&capture)==ESP_OK);
+    assert(subscribes);cleanup();
     setup(true);fail_stage=6;subscribe_retained=hold_rx=true;cleanup_error=-88;
     assert(esp32_mquickjs_wifi_monitor_capture_start(&capture)==-16);
     assert(capture.last_error==-16 && capture.cleanup_error==-88 && capture.promiscuous.acquired && capture.channel_claimed);

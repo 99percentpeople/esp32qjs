@@ -13,7 +13,6 @@ typedef enum {
 typedef struct {
     esp32_mquickjs_wifi_rx_filter_t filter;
     uint8_t channel; /* 0 follows Radio; nonzero holds a fixed-channel lease. */
-    bool require_power_save_none;
 } esp32_mquickjs_wifi_monitor_capture_options_t;
 typedef struct {
     bool initialized, channel_claimed;

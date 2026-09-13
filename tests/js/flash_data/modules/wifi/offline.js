@@ -22,6 +22,19 @@ test("wifi/offline", function () {
 
   test.ok(status && typeof status === "object", "wifi.status() should return an object");
   test.ok(typeof wifi.DEFAULT_TIMEOUT_MS === "number", "wifi timeout constant");
+  var rawTxCaps = wifi.rawTx.capabilities();
+  var rawTxTypes = ["beacon", "probe-request", "probe-response", "action", "data"];
+  test.equal(rawTxCaps.supports.extendedManagement, true, "reviewed management extension is enabled");
+  rawTxTypes = rawTxTypes.concat(["association-request","association-response","reassociation-request","reassociation-response","timing-advertisement","atim","disassociation","authentication","deauthentication","action-no-ack"]);
+  test.ok(Array.isArray(rawTxCaps.frameTypes), "Raw TX frame types are an array");
+  test.equal(rawTxCaps.frameTypes.length, rawTxTypes.length, "Raw TX allowlist size");
+  for (var rawTxTypeIndex = 0; rawTxTypeIndex < rawTxTypes.length; rawTxTypeIndex++) {
+    test.ok(rawTxCaps.frameTypes.some(function (frame) { return frame.name === rawTxTypes[rawTxTypeIndex]; }),
+      "Raw TX type uses the send result identifier: " + rawTxTypes[rawTxTypeIndex]);
+  }
+  rawTxCaps.frameTypes.length = 0;
+  test.equal(wifi.rawTx.capabilities().frameTypes.length, rawTxTypes.length,
+    "mutating a capability snapshot does not change the native allowlist");
   test.ok(typeof wifi.connect === "function", "wifi.connect should exist");
   test.ok(typeof wifi.connectAsync === "undefined", "wifi.connectAsync should not exist");
   test.ok(typeof wifi.disconnect === "function", "wifi.disconnect should exist");
@@ -133,7 +146,10 @@ test("wifi/offline", function () {
   test.ok(typeof status.lastDisconnectReason === "number", "disconnect reason should be numeric");
   test.ok(typeof status.lastDisconnectReasonName === "string", "disconnect reason name should be string");
   aps = wifi.scan({ showHidden: true });
-  test.ok(typeof aps.length === "number", "wifi.scan should return an array-like result");
+  test.ok(Array.isArray(aps.records), "wifi.scan returns a records array");
+  test.ok(typeof aps.complete === "boolean" && typeof aps.timedOut === "boolean",
+    "wifi.scan reports completion metadata");
+  test.ok(aps.complete !== aps.timedOut, "scan completes normally or at its deadline");
 
   try {
     wifi.scan(function () {});
@@ -211,9 +227,9 @@ test("wifi/offline", function () {
   test.ok(syncFractionalTimeoutError.indexOf("between 1 and 60000") >= 0,
     "sys.time.sync should reject fractional timeoutMs");
 
-  disconnected = wifi.disconnect();
+  disconnected = wifi.disconnect({ timeoutMs: 1000 });
   test.ok(disconnected && typeof disconnected === "object", "wifi.disconnect should return a status object");
-  disconnectFuture = Future.call(wifi.disconnect, wifi, [100]);
+  disconnectFuture = Future.call(wifi.disconnect, wifi, [{ timeoutMs: 100 }]);
   test.ok(disconnectFuture instanceof Future,
     "Future.call(wifi.disconnect) should use the native driver");
   disconnected = disconnectFuture.wait(500);

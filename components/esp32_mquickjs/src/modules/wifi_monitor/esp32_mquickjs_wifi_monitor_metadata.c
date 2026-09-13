@@ -1,3 +1,4 @@
+#include "esp32_mquickjs_wifi_frame_type.h"
 #include "esp32_mquickjs_wifi_monitor.h"
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
 #include "esp32_mquickjs_core.h"
@@ -98,10 +99,9 @@ JSValue esp32_mquickjs_wifi_monitor_info_to_js(JSContext *ctx,
         if (JS_IsException(*packet)) goto fail;
         static const char *const types[] = {"management", "control", "data", "misc", "unknown"};
         unsigned type = (unsigned)d->type;
-        SET(packet, "type", JS_NewString(ctx, types[type < 5 ? type : 4]));
-        OPTIONAL_NUMBER(packet, "subtype", h->frame_control_valid, h->subtype);
-        const char *subtype = parsed ? esp32_mquickjs_wifi_rx_subtype_name(h->type, h->subtype) : NULL;
-        STRING(packet, "subtypeName", subtype);
+        SET(packet, "category", JS_NewString(ctx, types[type < 5 ? type : 4]));
+        SET(packet, "frameType", h->frame_control_valid && h->version == 0 ?
+            esp32_mquickjs_wifi_frame_type_to_js(ctx, (h->frame_control >> 2) & 3, (h->frame_control >> 4) & 15) : JS_NULL);
         OPTIONAL_NUMBER(packet, "frameControl", h->frame_control_valid, h->frame_control);
         OPTIONAL_NUMBER(packet, "durationId", h->duration_valid, h->duration_id);
         OPTIONAL_NUMBER(packet, "sequenceControl", h->sequence_valid, h->sequence_control);

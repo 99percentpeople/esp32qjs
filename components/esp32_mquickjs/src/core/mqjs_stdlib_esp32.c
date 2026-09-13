@@ -1382,6 +1382,7 @@ static const JSPropDef js_wifi_raw_tx_session_proto[] = {
     JS_CFUNC_DEF("enqueue", 1, js_wifi_raw_tx_session_enqueue),
     JS_CFUNC_DEF("enqueueBatch", 1, js_wifi_raw_tx_session_enqueue_batch),
     JS_CFUNC_DEF("flush", 1, js_wifi_raw_tx_session_flush),
+    JS_CFUNC_DEF("waitWritable", 1, js_wifi_raw_tx_session_wait_writable),
     JS_CFUNC_DEF("status", 0, js_wifi_raw_tx_session_status),
     JS_CFUNC_DEF("stats", 0, js_wifi_raw_tx_session_stats),
     JS_CFUNC_DEF("close", 0, js_wifi_raw_tx_session_close),

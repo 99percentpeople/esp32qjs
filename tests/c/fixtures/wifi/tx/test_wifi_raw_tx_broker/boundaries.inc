@@ -1,3 +1,5 @@
+void esp32_mquickjs_wifi_raw_tx_pump_wake(void) {}
+esp_err_t esp32_mquickjs_wifi_raw_tx_pump_init(void) {return ESP_OK;}
 
 #define esp32_mquickjs_memory_wireless_alloc(owner,size,kind,role) heap_caps_malloc(size,MALLOC_CAP_8BIT)
 #define esp32_mquickjs_memory_wireless_calloc(owner,count,size,kind,role) heap_caps_calloc(count,size,MALLOC_CAP_8BIT)

@@ -40,9 +40,9 @@ class WiFiPublicRestart(unittest.TestCase):
             ('undefined', 10000), ('({})', 10000), ('({timeoutMs:undefined})', 10000),
             ('({allowApRestart:undefined})', 10000), ('({allowApRestart:false})', 10000),
             ('({allowApRestart:1})', 0), ('({allowApRestart:null})', 0), ('({allowApRestart:"true"})', 0),
-            ('({timeoutMs:1})', 1), ('({timeoutMs:60000})', 60000),
+            ('({timeoutMs:1})', 1), ('({timeoutMs:60000})', 60000), ('({timeoutMs:60001})', 60001), ('({timeoutMs:2147483647})', 2147483647),
             ('null', 0), ('[]', 0), ('({timeoutMs:0})', 0), ('({timeoutMs:-1})', 0),
-            ('({timeoutMs:60001})', 0), ('({timeoutMs:1.5})', 0), ('({timeoutMs:"10"})', 0),
+            ('({timeoutMs:2147483648})', 0), ('({timeoutMs:1.5})', 0), ('({timeoutMs:"10"})', 0),
             ('({timeoutMs:4294967297})', 0), ('({timeoutMs:0/0})', 0), ('({timeoutMs:1/0})', 0),
             ('({"timeoutMs\\u0000":10})', 0), ('({force:true})', 0),
             ('({requireExclusive:false})', 0), ('({mode:"station"})', 0)]:

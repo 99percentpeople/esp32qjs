@@ -20,12 +20,12 @@ int main(int argc,char **argv) {
         } else {
             assert(!JS_HasException(ctx));
             if(scenario==1) {
-                assert(!output.capture.channel && !output.capture.require_power_save_none);
+                assert(!output.capture.channel);
                 assert(output.capture.filter.type_mask==15 && output.capture.filter.sample_every==1 && output.capture.filter.valid_only);
                 assert(!output.capture.filter.subtype_filter && !output.capture.filter.source.count && !output.require_complete);
                 assert(output.pool_capacity==16 && output.queue_capacity==16 && output.snap_length==2048);
             } else if(scenario==2) {
-                assert(output.capture.channel==6 && output.capture.require_power_save_none);
+                assert(output.capture.channel==6);
                 assert(output.capture.filter.type_mask==5 && output.capture.filter.subtype_filter && output.capture.filter.subtype_mask==32769);
                 assert(output.capture.filter.source.count==2 && output.capture.filter.source.values[1][5]==2);
                 assert(output.capture.filter.destination.count==1 && output.capture.filter.destination.values[0][0]==255);
@@ -33,6 +33,16 @@ int main(int argc,char **argv) {
                 assert(output.capture.filter.minimum_rssi_set && output.capture.filter.minimum_rssi==-128);
                 assert(output.capture.filter.sample_every==UINT32_MAX && output.capture.filter.maximum_rate_hz==1000000 && !output.capture.filter.valid_only);
                 assert(output.snap_length==16384 && output.pool_capacity==128 && output.queue_capacity==128 && output.require_complete);
+            } else if(scenario==4) {
+                assert(output.capture.filter.frame_filter);
+                assert(output.capture.filter.frame_subtype_masks[0]==256 && output.capture.filter.frame_subtype_masks[1]==0);
+                assert(output.capture.filter.frame_subtype_masks[2]==1 && output.capture.filter.frame_subtype_masks[3]==0);
+            } else if(scenario==6) {
+                assert(output.capture.filter.frame_filter);
+                for(unsigned i=0;i<4;i++) assert(output.capture.filter.frame_subtype_masks[i]==0xffff);
+            } else if(scenario==5) {
+                assert(output.capture.filter.frame_filter);
+                for(unsigned i=0;i<4;i++) assert(!output.capture.filter.frame_subtype_masks[i]);
             } else if(scenario==3) {
                 assert(!output.capture.filter.type_mask && output.capture.filter.subtype_filter && !output.capture.filter.subtype_mask);
             }

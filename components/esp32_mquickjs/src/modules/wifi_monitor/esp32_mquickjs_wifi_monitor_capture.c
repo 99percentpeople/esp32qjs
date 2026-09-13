@@ -123,10 +123,6 @@ esp_err_t esp32_mquickjs_wifi_monitor_capture_start(esp32_mquickjs_wifi_monitor_
     err = esp32_mquickjs_wifi_radio_get_status(&radio_status);
     if (err != ESP_OK) goto fail;
     capture->radio_generation = radio_status.generation;
-    if (capture->options.require_power_save_none &&
-        (!radio_status.power_save_available || radio_status.power_save != WIFI_PS_NONE)) {
-        stage = "power-save-policy"; err = ESP_ERR_INVALID_STATE; goto fail;
-    }
     if (capture->options.channel != 0) {
         stage = "channel-claim";
         err = esp32_mquickjs_wifi_radio_set_channel(&capture->radio, capture->options.channel, WIFI_SECOND_CHAN_NONE);

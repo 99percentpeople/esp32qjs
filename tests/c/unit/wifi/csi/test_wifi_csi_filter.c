@@ -81,6 +81,40 @@ int main(void)
     assert(!esp32_mquickjs_wifi_csi_filter_accept(&resources, &metadata));
     assert(resources.filter_phase == 0);
     assert(esp32_mquickjs_wifi_csi_filter_accept(&resources, &metadata));
+    resources.filter.sample_every = 1;
+    resources.filter_phase = 0;
+    resources.filter.frame_filter = true;
+    resources.filter.frame_subtype_masks[0] = 1U << 8; /* Beacon */
+    resources.filter.frame_subtype_masks[2] = 1U << 0; /* ordinary Data */
+    metadata.frame_subtype_available = true;
+    for (unsigned type = 0; type < 4; ++type) {
+        for (unsigned subtype = 0; subtype < 16; ++subtype) {
+            metadata.frame_type = type;
+            metadata.frame_subtype = subtype;
+            bool wanted = (type == 0 && subtype == 8) || (type == 2 && subtype == 0);
+            assert(esp32_mquickjs_wifi_csi_filter_accept(&resources, &metadata) == wanted);
+        }
+    }
+    metadata.frame_type = 0; metadata.frame_subtype = 8;
+    metadata.frame_subtype_available = false;
+    assert(!esp32_mquickjs_wifi_csi_filter_accept(&resources, &metadata));
+    metadata.frame_subtype_available = true;
+    resources.filter.frame_types_set = true; resources.filter.frame_types = 1U << 2;
+    assert(!esp32_mquickjs_wifi_csi_filter_accept(&resources, &metadata));
+    metadata.frame_type = 2; metadata.frame_subtype = 0;
+    assert(esp32_mquickjs_wifi_csi_filter_accept(&resources, &metadata));
+    resources.filter.frame_subtypes_set = true; resources.filter.frame_subtypes = 1U << 8;
+    assert(!esp32_mquickjs_wifi_csi_filter_accept(&resources, &metadata));
+    resources.filter.frame_types_set = resources.filter.frame_subtypes_set = false;
+    memset(resources.filter.frame_subtype_masks, 0, sizeof(resources.filter.frame_subtype_masks));
+    assert(!esp32_mquickjs_wifi_csi_filter_accept(&resources, &metadata));
+    /* Even an explicit type-3 mask never admits an SDK misc/no-header record. */
+    resources.filter.frame_subtype_masks[3] = 1;
+    metadata.frame_type = ESP32_MQUICKJS_WIFI_PACKET_MISC;
+    assert(!esp32_mquickjs_wifi_csi_filter_accept(&resources, &metadata));
+    metadata.frame_type = ESP32_MQUICKJS_WIFI_PACKET_UNKNOWN;
+    assert(!esp32_mquickjs_wifi_csi_filter_accept(&resources, &metadata));
+    resources.filter.frame_filter = false;
     resources.filter.source_mac_count = ESP32_MQUICKJS_WIFI_CSI_MAX_MAC_FILTERS + 1;
     assert(!esp32_mquickjs_wifi_csi_filter_accept(&resources, &metadata));
     assert(esp32_mquickjs_wifi_csi_resources_deinit(&resources));

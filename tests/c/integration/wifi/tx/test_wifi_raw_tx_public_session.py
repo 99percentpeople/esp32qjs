@@ -30,7 +30,7 @@ class WiFiRawTxPublicSession(unittest.TestCase):
             code += re.search(r'typedef enum \{[^}]*\} ' + name + ';', future).group(0)
         code += 'typedef struct esp32_mquickjs_future_driver_state esp32_mquickjs_future_driver_state_t;\n'
         start = source.index('typedef esp32_mquickjs_wifi_raw_tx_session_t native_session_t;')
-        code += source[start:source.index('#define SET', start)]
+        code += source[start:source.index('static const char *session_operation_name', start)]
         for name in ['handle_retain', 'handle_release', 'handle_snapshot', 'session_future_destroy',
                      'session_future_start', 'session_future_poll', 'session_future_cancel', 'session_future_timeout', 'session_future_expire']:
             code += extract(source, name)

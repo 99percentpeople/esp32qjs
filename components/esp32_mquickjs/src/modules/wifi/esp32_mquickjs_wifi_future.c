@@ -515,9 +515,9 @@ bool esp32_mquickjs_wifi_parse_station_config_for_operation(JSContext *ctx, int 
         goto done;
     }
     if (!JS_IsUndefined(*property)) {
-        if (!wifi_to_integer(ctx, *property, 1, 60000, &integer)) {
+        if (!wifi_to_integer(ctx, *property, 1, INT32_MAX, &integer)) {
             if (!JS_HasException(ctx)) JS_ThrowRangeError(
-                ctx, "wifi.connect({ timeoutMs }) expects 1..60000");
+                ctx, "wifi.connect({ timeoutMs }) expects 1..2147483647");
             goto done;
         }
         *timeout_ms = (uint32_t)integer;
@@ -921,9 +921,9 @@ static bool wifi_scan_future_prepare(JSContext *ctx,
             goto fail;
         }
         if (!JS_IsUndefined(*property)) {
-            if (!wifi_to_integer(ctx, *property, 1, 60000, &integer)) {
+            if (!wifi_to_integer(ctx, *property, 1, INT32_MAX, &integer)) {
                 JS_ThrowRangeError(
-                    ctx, "wifi.scan({ timeoutMs }) expects 1..60000");
+                    ctx, "wifi.scan({ timeoutMs }) expects 1..2147483647");
                 goto fail;
             }
             state->timeout_ms = (uint32_t)integer;
@@ -983,9 +983,11 @@ static bool wifi_disconnect_future_prepare(
     (void)this_ref;
     if (out_state == NULL || argc < 0 || argc > 1) {
         JS_ThrowTypeError(
-            ctx, "wifi.disconnect(timeoutMs?) expects at most one timeout");
+            ctx, "wifi.disconnect(options?) expects at most one argument");
         return false;
     }
+    uint32_t timeout_ms;
+    if (!esp32_mquickjs_wifi_capture_disconnect(ctx, argc ? argv[0].val : JS_UNDEFINED, &timeout_ms)) return false;
     state = esp32_mquickjs_memory_wireless_calloc(
         "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
         ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
@@ -994,17 +996,7 @@ static bool wifi_disconnect_future_prepare(
         return false;
     }
     state->kind = WIFI_FUTURE_DISCONNECT;
-    state->timeout_ms = ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS;
-    if (argc == 1 &&
-        (!JS_IsNumber(ctx, argv[0].val) ||
-         esp32_mquickjs_wifi_value_to_timeout_ms(
-             ctx, argv[0].val, ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS,
-             &state->timeout_ms) != 0)) {
-        esp32_mquickjs_memory_payload_free(state);
-        JS_ThrowTypeError(
-            ctx, "wifi.disconnect(timeoutMs) expects a non-negative integer");
-        return false;
-    }
+    state->timeout_ms = timeout_ms;
     *out_state = state;
     return true;
 }
@@ -1180,6 +1172,39 @@ static esp32_mquickjs_future_poll_t wifi_future_poll(
         : ESP32_MQUICKJS_FUTURE_PENDING;
 }
 
+static JSValue wifi_scan_future_result(JSContext *ctx,
+    esp32_mquickjs_future_driver_state_t *state, bool timed_out)
+{
+    JSGCRef records_ref, result_ref;
+    JSValue *records = JS_PushGCRef(ctx, &records_ref);
+    JSValue *result = JS_PushGCRef(ctx, &result_ref);
+    *result = JS_UNDEFINED;
+    *records = state->started
+        ? esp32_mquickjs_wifi_make_scan_results_array(ctx, state->scan_max_records)
+        : JS_NewArray(ctx, 0);
+    /* Reading the SDK list and native retirement are distinct. A delayed
+     * SCAN_DONE keeps the native lane isolated after this Future returns. */
+    esp_err_t err = state->started ? esp32_mquickjs_wifi_cancel_scan(state->generation) : ESP_OK;
+    state->completed = true;
+    if (JS_IsException(*records)) goto fail;
+    if (err != ESP_OK) {
+        esp32_mquickjs_wifi_throw_scan_error(ctx, err);
+        goto fail;
+    }
+    *result = JS_NewObject(ctx);
+    if (JS_IsException(*result) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "records", *records) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "complete", JS_NewBool(!timed_out)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "timedOut", JS_NewBool(timed_out))) goto fail;
+    JSValue value = JS_PopGCRef(ctx, &result_ref);
+    JS_PopGCRef(ctx, &records_ref);
+    return value;
+fail:
+    JS_PopGCRef(ctx, &result_ref);
+    JS_PopGCRef(ctx, &records_ref);
+    return JS_EXCEPTION;
+}
+
 static JSValue wifi_future_finish(JSContext *ctx,
                                   esp32_mquickjs_future_driver_state_t *state)
 {
@@ -1197,11 +1222,7 @@ static JSValue wifi_future_finish(JSContext *ctx,
                 ctx, "WIFI_SCAN_FAILED", "wifi.scan", ESP_FAIL, -1,
                 state->scan_status);
         }
-        JSValue result = esp32_mquickjs_wifi_make_scan_results_array(ctx, state->scan_max_records);
-        esp_err_t err = esp32_mquickjs_wifi_cancel_scan(state->generation);
-        if (JS_IsException(result)) return result;
-        if (err != ESP_OK) return esp32_mquickjs_wifi_throw_scan_error(ctx, err);
-        return result;
+        return wifi_scan_future_result(ctx, state, false);
     }
     esp32_mquickjs_wifi_clear_connect_future();
     if (state->kind == WIFI_FUTURE_DISCONNECT) {
@@ -1226,6 +1247,22 @@ static JSValue wifi_future_finish(JSContext *ctx,
     return esp32_mquickjs_wifi_throw_operation_error(
         ctx, "WIFI_CONNECT_FAILED", "wifi.connect", ESP_FAIL,
         state->connect_reason, UINT32_MAX);
+}
+
+static JSValue wifi_scan_future_on_timeout(JSContext *ctx,
+    esp32_mquickjs_future_driver_state_t *state, uint32_t timeout_ms)
+{
+    (void)timeout_ms;
+    if (state == NULL || state->cancel_requested) return wifi_future_finish(ctx, state);
+    /* A completion already published for this generation wins the race with
+     * the deadline. A queued-but-unstarted scan must not read another AP list. */
+    if (state->started) {
+        if (wifi_future_poll(state) == ESP32_MQUICKJS_FUTURE_READY)
+            return wifi_future_finish(ctx, state);
+        esp_err_t err = esp32_mquickjs_wifi_stop_scan_for_results(state->generation);
+        if (err != ESP_OK) return esp32_mquickjs_wifi_throw_scan_error(ctx, err);
+    }
+    return wifi_scan_future_result(ctx, state, true);
 }
 
 static esp32_mquickjs_cancel_result_t wifi_future_cancel(
@@ -1295,6 +1332,7 @@ static const esp32_mquickjs_future_driver_t s_wifi_scan_future_driver = {
     .cancel = wifi_future_cancel,
     .destroy = wifi_future_destroy,
     .timeout_ms = wifi_future_timeout_ms,
+    .on_timeout = wifi_scan_future_on_timeout,
 };
 
 static const esp32_mquickjs_future_driver_t s_wifi_connect_future_driver = {

@@ -492,9 +492,9 @@ pre-start rate configuration, framework write records and failure recovery.
   details and ap-reopen-* / ap-prestart-* in Radio diagnostics;
   eventPhase may be ap-start. A SoftAP-disabled build returns
   WIFI_AP_UNSUPPORTED without starting the driver.
-- `wifi.stopAP(timeoutMs?)`
+- `wifi.stopAP(options?)`
   Remove AP and release its netif, then return `WiFiStatus`; repeated calls
-  are harmless. The optional scalar timeout is an integer from 1 to 60000 ms,
+  are harmless. `options.timeoutMs` is an integer from 1 to 2147483647 ms,
   default 1000. It shares one budget across AP_STOP/fence, AP netif retirement
   and any remaining coordinated cleanup; a retry gives the retained suffix a
   fresh budget. Synchronous SDK calls, mutex acquisition and result construction
@@ -870,14 +870,16 @@ pre-start rate configuration, framework write records and failure recovery.
   `{ option, espCode, espName }`; malformed/conflicting options fail before
   Radio/driver effects. Nested `driver` fields use the same validation and
   duplicate-field rules as the top-level options described above.
-- `wifi.disconnect(timeoutMs = wifi.DEFAULT_TIMEOUT_MS)`
+- `wifi.disconnect(options?)`
+  `options.timeoutMs` is an integer from 1 to 2147483647 ms; omission uses
+  `wifi.DEFAULT_TIMEOUT_MS` (15000 ms by default, configurable at build time).
   Disconnect through the native Future driver and return only after the
   station state has converged to disconnected. Once submitted to ESP-IDF the
   disconnect side effect cannot be cancelled; a queued call remains
   cancellable before it starts.
 - `wifi.scan(options?)`
-  Run an event-driven AP scan and return an array of
-  `WiFiScanRecord` values (fields below). Options are `channel`, `channels`,
+  Run an event-driven AP scan and return a `WiFiScanResult` object:
+  `{ records: WiFiScanRecord[], complete: boolean, timedOut: boolean }`. Options are `channel`, `channels`,
   `ssid`, `bssid`, `showHidden`, `mode`, `activeMinMs`, `activeMaxMs`,
   `passiveMs`, `homeChannelDwellMs`,
   `coexistenceBackgroundScan`, `maxRecords`, and `timeoutMs`; unknown fields
@@ -887,8 +889,26 @@ pre-start rate configuration, framework write records and failure recovery.
   `xx:xx:xx:xx:xx:xx` form (hex letters may use either case). Both filters may
   be supplied together. The same exact MAC syntax applies to connect's BSSID.
   Filters are copied during Future capture, then copied to native scan storage
-  before SDK submission. Timeout/cancel can release the Future while its native
-  filter copy stays isolated until native completion and AP-list cleanup.
+  before SDK submission. At the operation deadline, the framework requests a
+  synchronous native scan stop and returns the AP records found so far with
+  `complete: false, timedOut: true`. No discovered APs (or expiry before native
+  start) returns an empty `records` array. A matching terminal event already
+  queued at the deadline is processed normally; successful completion returns
+  `complete: true, timedOut: false`. `complete` describes scan completion, not
+  whether `maxRecords` omitted additional APs.
+  Native stop and result cleanup can add latency beyond `timeoutMs`; it is not
+  a strict wall-clock return bound. SDK stop/read/cleanup failures and allocation
+  errors still throw; they are not disguised as an empty successful scan.
+  Explicit Future cancellation still cancels and discards results. An outer
+  `Future.timeout()` wrapper retains its own timeout behavior.
+  The native filter copy and Radio reservation remain isolated until SCAN_DONE
+  and AP-list cleanup, even when partial records have already been returned.
+  A new scan can therefore temporarily report `WIFI_SCAN_BUSY`; inspect
+  `wifi.status().scanDraining` and `scanCleanupError` for pending retirement.
+  Cleanup failures occurring after a partial result was returned are reported
+  through that status; they cannot retroactively reject the completed Future.
+  See the [partial-scan implementation record](../investigations/2026-09-13-wifi-scan-partial-results.md)
+  for callback-race tests and remaining hardware validation.
   `homeChannelDwellMs` is an integer from 30 through 150, default 30: time on
   the home channel between scan channels. `coexistenceBackgroundScan` is a
   boolean, default false, passed to the SDK's return-home-under-coexistence
@@ -945,8 +965,8 @@ Example:
 
 ```js
 print(JSON.stringify(wifi.status()));
-var aps = wifi.scan({ showHidden: true });
-print(aps.length);
+var scan = wifi.scan({ showHidden: true, timeoutMs: 1500 });
+print(scan.records.length, scan.complete, scan.timedOut);
 wifi.setPowerSave("minimum");
 wifi.connect("your-ssid", { password: "your-password" });
 print(JSON.stringify(net.status()));
@@ -1058,6 +1078,29 @@ own timeout and the timer callback barrier has its separate 1,000 ms limit.
 GOT_IP cannot complete a disconnect Future or a cancelled connection; during
 handoff it cannot mark the replacement connection successful. Scans are also
 rejected while the connection is draining.
+
+`wifi.disconnect`, `wifi.stopAP` and `wifi.stop` share `WiFiWaitOptions`:
+`{timeoutMs?: number}`. Omission, `undefined`, `{}` and `{timeoutMs:undefined}`
+use each operation's default. Explicit lifecycle timeouts must be integers 1..2147483647;
+scalars, null, arrays, unknown fields and extra arguments are rejected before
+native mutation. The native shared wait additionally checks the converted tick interval before admission.
+
+| Operation | Default wait | Successful result | Deadline / failure consequence |
+| --- | --- | --- | --- |
+| `disconnect` | `wifi.DEFAULT_TIMEOUT_MS` | `WiFiStatus` after native disconnected state | Throws; a submitted disconnect continues and its native slot may remain quarantined |
+| `stopAP` | 1000 ms | `WiFiStatus` after AP retirement; APSTA preserves Station | Throws; retains unfinished cleanup for an explicit retry |
+| `stop` | 1000 ms | `WiFiStatus` after admitted whole-Radio shutdown | Throws; retains unfinished cleanup; does not forcibly close foreign owners |
+
+These budgets do not preempt synchronous SDK calls. `stop` and `stopAP` share
+their budget across native cleanup waits; `disconnect` remains a native Future
+operation. An options object does not make the three operations use identical
+scheduling or cancellation. For example:
+
+```js
+wifi.disconnect({ timeoutMs: 5000 });
+wifi.stopAP({ timeoutMs: 5000 });
+wifi.stop({ timeoutMs: 5000 });
+```
 
 `wifi.disconnect()` completes when native DISCONNECTED is observed; its success
 does not promise that the IP-event fence has finished. Repeating disconnect

@@ -49,6 +49,17 @@ esp32_mquickjs_wifi_rx_filter_result_t esp32_mquickjs_wifi_rx_filter_evaluate(
     if (filter->subtype_filter && (!view->header_type_matches ||
         view->header.subtype >= 16 || (filter->subtype_mask & (1U << view->header.subtype)) == 0))
         return ESP32_MQUICKJS_WIFI_RX_FILTER_SUBTYPE;
+    if (filter->frame_filter) {
+        const esp32_mquickjs_wifi_rx_header_t *header = &view->header;
+        /* Unknown layouts can still have a PV0 identity. Metadata-only, short
+         * FC, unsupported version and mismatched SDK categories cannot match. */
+        if (!header->frame_control_valid || header->version != 0 || !view->header_type_matches)
+            return ESP32_MQUICKJS_WIFI_RX_FILTER_SUBTYPE;
+        unsigned type = (header->frame_control >> 2) & 3U;
+        unsigned subtype = (header->frame_control >> 4) & 15U;
+        if ((filter->frame_subtype_masks[type] & (1U << subtype)) == 0)
+            return ESP32_MQUICKJS_WIFI_RX_FILTER_SUBTYPE;
+    }
     if (!wifi_rx_filter_mac(&filter->source, view, ESP32_MQUICKJS_WIFI_RX_SOURCE) ||
         !wifi_rx_filter_mac(&filter->destination, view, ESP32_MQUICKJS_WIFI_RX_DESTINATION) ||
         !wifi_rx_filter_mac(&filter->bssid, view, ESP32_MQUICKJS_WIFI_RX_BSSID))

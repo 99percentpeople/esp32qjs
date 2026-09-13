@@ -1,4 +1,5 @@
 #include "esp32_mquickjs_wifi_raw_tx.h"
+#include "esp32_mquickjs_js_macros.h"
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
 #include "esp32_mquickjs_wifi_raw_tx_periodic_job.h"
 #include "esp32_mquickjs_future.h"
@@ -8,7 +9,6 @@
 #include "esp_heap_caps.h"
 
 #define job_api(name) esp32_mquickjs_wifi_raw_tx_periodic_job_##name
-#define SET(object, name, value) do { if (!esp32_mquickjs_set_property_ref(ctx, object, name, value)) goto fail; } while (0)
 typedef esp32_mquickjs_wifi_raw_tx_periodic_job_t job_t;
 typedef esp32_mquickjs_wifi_raw_tx_periodic_job_status_t status_t;
 typedef struct {
@@ -85,7 +85,7 @@ static bool periodic_options(JSContext *ctx, JSGCRef *input,
     static const char *const keys[] = {"frame", "intervalUs", "count", "startDelayUs", "busyPolicy", "stopOnError", "timeoutMs"};
     static const char *const busy[] = {"skip", "stop"};
     esp32_mquickjs_wifi_raw_tx_periodic_options_t options = {.stop_on_error = true};
-    uint32_t deadline = 1000;
+    uint32_t deadline = ESP32_MQUICKJS_WIFI_RAW_TX_DEFAULT_TIMEOUT_MS;
     JSGCRef field_ref;
     JSValue *field = JS_PushGCRef(ctx, &field_ref);
     bool ok = false;
@@ -100,7 +100,7 @@ static bool periodic_options(JSContext *ctx, JSGCRef *input,
     if (!JS_IsUndefined(*field) && !esp32_mquickjs_value_to_bounded_u32(ctx, *field, minimum, maximum, target)) goto invalid
     OPTIONAL_U32("count", 0, UINT32_MAX, &options.count);
     OPTIONAL_U32("startDelayUs", 0, UINT32_MAX, &options.start_delay_us);
-    OPTIONAL_U32("timeoutMs", 1, 60000, &deadline);
+    OPTIONAL_U32("timeoutMs", 1, INT32_MAX, &deadline);
 #undef OPTIONAL_U32
     *field = JS_GetPropertyStr(ctx, input->val, "busyPolicy");
     if (JS_IsException(*field)) goto done;
@@ -135,17 +135,17 @@ static JSValue periodic_error(JSContext *ctx, esp32_mquickjs_future_driver_state
     *details = JS_NewObject(ctx); if (JS_IsException(*details)) goto fail;
     esp_err_t error = timeout ? ESP_ERR_TIMEOUT : state->error != ESP_OK ? state->error :
         status.error != ESP_OK ? status.error : ESP_ERR_INVALID_STATE;
-    SET(details, "espCode", JS_NewInt32(ctx, error));
-    SET(details, "espName", JS_NewString(ctx, esp_err_to_name(error)));
-    SET(details, "validationCode", JS_NewUint32(ctx, state->validation));
-    SET(details, "stage", timeout ? JS_NewString(ctx, "deadline") : status.stage ? JS_NewString(ctx, status.stage) : JS_NewString(ctx, "periodic-state"));
-    SET(details, "periodicGeneration", status.ledger.generation ? JS_NewUint32(ctx, status.ledger.generation) : JS_NULL);
-    SET(details, "scheduled", JS_NewUint32(ctx, status.ledger.scheduled));
-    SET(details, "issued", JS_NewUint32(ctx, status.ledger.issued));
-    SET(details, "submitted", JS_NewUint32(ctx, status.ledger.submitted));
-    SET(details, "cleanupPending", JS_NewBool(state->job != NULL && !status.retired));
-    SET(details, "cleanupError", status.cleanup_error ? JS_NewInt32(ctx, status.cleanup_error) : JS_NULL);
-    SET(details, "cleanupStage", status.cleanup_stage ? JS_NewString(ctx, status.cleanup_stage) : JS_NULL);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "espCode", JS_NewInt32(ctx, error), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "espName", JS_NewString(ctx, esp_err_to_name(error)), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "validationCode", JS_NewUint32(ctx, state->validation), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "stage", timeout ? JS_NewString(ctx, "deadline") : status.stage ? JS_NewString(ctx, status.stage) : JS_NewString(ctx, "periodic-state"), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "periodicGeneration", status.ledger.generation ? JS_NewUint32(ctx, status.ledger.generation) : JS_NULL, fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "scheduled", JS_NewUint32(ctx, status.ledger.scheduled), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "issued", JS_NewUint32(ctx, status.ledger.issued), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "submitted", JS_NewUint32(ctx, status.ledger.submitted), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "cleanupPending", JS_NewBool(state->job != NULL && !status.retired), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "cleanupError", status.cleanup_error ? JS_NewInt32(ctx, status.cleanup_error) : JS_NULL, fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "cleanupStage", status.cleanup_stage ? JS_NewString(ctx, status.cleanup_stage) : JS_NULL, fail);
     (void)esp32_mquickjs_throw_native_error(ctx, timeout ? "WIFI_RAW_TX_TIMEOUT" :
         state->validation != ESP32_MQUICKJS_WIFI_RAW_TX_VALID ? "WIFI_RAW_TX_INVALID_FRAME" : "WIFI_RAW_TX_PERIODIC_FAILED",
         state->closing ? "WiFiRawPeriodicTx.close" : "WiFiRawTxSession.startPeriodic",
@@ -175,7 +175,7 @@ static bool periodic_capture(JSContext *ctx, JSGCRef *receiver, int argc, JSGCRe
         "wireless.future", 1, sizeof(*state), ESP32_MQUICKJS_MEMORY_DEFAULT,
         ESP32_MQUICKJS_MEMORY_BUDGET_CONTROL);
     if (state == NULL) { JS_ThrowOutOfMemory(ctx); return false; }
-    state->closing = closing; state->timeout_ms = 1000;
+    state->closing = closing; state->timeout_ms = ESP32_MQUICKJS_WIFI_RAW_TX_DEFAULT_TIMEOUT_MS;
     if (closing) {
         periodic_handle_t *handle = periodic_handle(ctx, receiver->val);
         if (handle == NULL) goto fail;
@@ -319,27 +319,27 @@ static JSValue periodic_status_to_js(JSContext *ctx, const status_t *snapshot)
     *result = JS_NewObject(ctx); if (JS_IsException(*result)) goto fail;
     const char *state = status.retired && status.close_requested ? "closed" : status.ledger.faulted ? "faulted" :
         status.close_requested ? "closing" : status.ledger.running ? "running" : "stopped";
-    SET(result, "state", JS_NewString(ctx, state));
-    SET(result, "periodicGeneration", JS_NewUint32(ctx, status.ledger.generation));
-    SET(result, "intervalUs", JS_NewUint32(ctx, status.ledger.options.interval_us));
-    SET(result, "count", JS_NewUint32(ctx, status.ledger.options.count));
-#define TOTAL(js, native) SET(result, js, JS_NewUint32(ctx, status.ledger.native))
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "state", JS_NewString(ctx, state), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "periodicGeneration", JS_NewUint32(ctx, status.ledger.generation), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "intervalUs", JS_NewUint32(ctx, status.ledger.options.interval_us), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "count", JS_NewUint32(ctx, status.ledger.options.count), fail);
+#define TOTAL(js, native) ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, js, JS_NewUint32(ctx, status.ledger.native), fail)
     TOTAL("scheduled", scheduled); TOTAL("issued", issued); TOTAL("submitted", submitted); TOTAL("completed", completed);
     TOTAL("failed", failed); TOTAL("unknown", unknown); TOTAL("rejected", rejected); TOTAL("aborted", aborted);
     TOTAL("dropped", dropped); TOTAL("skippedBusy", skipped_busy); TOTAL("skippedLate", skipped_late);
 #undef TOTAL
-    SET(result, "activeSequence", status.ledger.active.sequence ? JS_NewUint32(ctx, status.ledger.active.sequence) : JS_NULL);
-#define FLAG(js, value) SET(result, js, JS_NewBool(value))
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "activeSequence", status.ledger.active.sequence ? JS_NewUint32(ctx, status.ledger.active.sequence) : JS_NULL, fail);
+#define FLAG(js, value) ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, js, JS_NewBool(value), fail)
     FLAG("retired", status.retired); FLAG("stopRequested", status.stop_requested); FLAG("closeRequested", status.close_requested);
     FLAG("workerBusy", status.worker_busy); FLAG("timerPresent", status.timer_present);
     FLAG("timerQuiesced", status.timer_quiesced); FLAG("timerTransition", status.timer_transition);
     FLAG("faulted", status.ledger.faulted); FLAG("exhausted", status.ledger.exhausted); FLAG("uncertain", status.ledger.uncertain);
     FLAG("cleanupPending", !status.retired && !status.ledger.running);
 #undef FLAG
-    SET(result, "error", status.error ? JS_NewInt32(ctx, status.error) : JS_NULL);
-    SET(result, "stage", status.stage ? JS_NewString(ctx, status.stage) : JS_NULL);
-    SET(result, "cleanupError", status.cleanup_error ? JS_NewInt32(ctx, status.cleanup_error) : JS_NULL);
-    SET(result, "cleanupStage", status.cleanup_stage ? JS_NewString(ctx, status.cleanup_stage) : JS_NULL);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "error", status.error ? JS_NewInt32(ctx, status.error) : JS_NULL, fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "stage", status.stage ? JS_NewString(ctx, status.stage) : JS_NULL, fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "cleanupError", status.cleanup_error ? JS_NewInt32(ctx, status.cleanup_error) : JS_NULL, fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "cleanupStage", status.cleanup_stage ? JS_NewString(ctx, status.cleanup_stage) : JS_NULL, fail);
     return JS_PopGCRef(ctx, &ref);
 fail:
     JS_PopGCRef(ctx, &ref); return JS_EXCEPTION;

@@ -48,6 +48,21 @@ int main(void) {
     filter.minimum_rssi_set=true;filter.minimum_rssi=-59;assert(EVAL()==ESP32_MQUICKJS_WIFI_RX_FILTER_RSSI);
     filter.minimum_rssi=-60;assert(EVAL()==ACCEPT);filter.minimum_rssi_set=false;
 
+    /* Exact pairs must not accidentally admit their cross product. */
+    filter.type_mask=15;filter.frame_filter=true;
+    filter.frame_subtype_masks[0]=1U<<8;filter.frame_subtype_masks[2]=1U;
+    packet(0x0080,24,WIFI_PKT_MGMT,0,&view);assert(EVAL()==ACCEPT);
+    packet(0x0008,24,WIFI_PKT_DATA,0,&view);assert(EVAL()==ACCEPT);
+    packet(0x0000,24,WIFI_PKT_MGMT,0,&view);assert(EVAL()==ESP32_MQUICKJS_WIFI_RX_FILTER_SUBTYPE);
+    packet(0x0088,26,WIFI_PKT_DATA,0,&view);assert(EVAL()==ESP32_MQUICKJS_WIFI_RX_FILTER_SUBTYPE);
+    filter.valid_only=false;
+    packet(0x0080,24,WIFI_PKT_DATA,0,&view);assert(EVAL()==ESP32_MQUICKJS_WIFI_RX_FILTER_SUBTYPE);
+    packet(0x0081,24,WIFI_PKT_MGMT,0,&view);assert(EVAL()==ESP32_MQUICKJS_WIFI_RX_FILTER_SUBTYPE);
+    packet(0,0,WIFI_PKT_MISC,0,&view);assert(EVAL()==ESP32_MQUICKJS_WIFI_RX_FILTER_SUBTYPE);
+    memset(filter.frame_subtype_masks,0,sizeof(filter.frame_subtype_masks));
+    packet(0x0080,24,WIFI_PKT_MGMT,0,&view);assert(EVAL()==ESP32_MQUICKJS_WIFI_RX_FILTER_SUBTYPE);
+    filter.frame_filter=false;filter.valid_only=true;filter.type_mask=4;
+
     /* OR within a bounded MAC list, AND across roles, using actual DS parser. */
     const uint8_t source[]={2,2,3,4},destination[]={1,3,1,3},bssid[]={3,1,2,0};
     for(unsigned ds=0;ds<4;ds++) {

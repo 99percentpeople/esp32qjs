@@ -1,5 +1,6 @@
 """Synthetic CSI callbacks through production pool, Frame/Batch/View/Source + VM."""
 from tests.support.fixtures import fixture_text
+from tests.c.integration.wifi.monitor.test_wifi_rx_target import unit
 import pathlib
 import sys
 import tempfile
@@ -19,8 +20,8 @@ class WifiCsiStorageGc(unittest.TestCase):
         types=csi[csi.index('typedef struct {\n    uint32_t generation;\n} wifi_csi_session_ref_t;'):csi.index('static const char *TAG')]
         constants='\n'.join(line for line in csi.splitlines() if line.startswith('#define WIFI_CSI_BATCH_') or line.startswith('#define WIFI_CSI_BINARY_VERSION'))
         extra=SDK+constants+'\n'+types
-        for path in [CORE/'esp32_mquickjs_native_pool.c',CORE/'esp32_mquickjs_native_lease.c',CSI/'esp32_mquickjs_wifi_csi_resources.c',CSI/'esp32_mquickjs_wifi_csi_packet.c',CSI.parent/'wifi_common/esp32_mquickjs_wifi_rx.c',CSI/'esp32_mquickjs_wifi_csi_store.c',CSI/'esp32_mquickjs_wifi_csi_batch.c',CSI/'esp32_mquickjs_wifi_csi_wire.c',CSI.parent/'wifi_common/esp32_mquickjs_wifi_rx_wire.c',CSI.parent/'wifi_common/esp32_mquickjs_wifi_rx_wire_metadata.c',CORE/'esp32_mquickjs_options.c']:
-            text=path.read_text()
+        for path in [CORE/'esp32_mquickjs_native_pool.c',CORE/'esp32_mquickjs_native_lease.c',CSI/'esp32_mquickjs_wifi_csi_resources.c',CSI/'esp32_mquickjs_wifi_csi_packet.c',CSI.parent/'wifi_common/esp32_mquickjs_wifi_rx.c',CSI.parent/'wifi_common/esp32_mquickjs_wifi_frame_type.c',CSI/'esp32_mquickjs_wifi_csi_store.c',CSI/'esp32_mquickjs_wifi_csi_batch.c',CSI/'esp32_mquickjs_wifi_csi_wire.c',CSI.parent/'wifi_common/esp32_mquickjs_wifi_rx_wire.c',CSI.parent/'wifi_common/esp32_mquickjs_wifi_rx_wire_metadata.c',CORE/'esp32_mquickjs_options.c']:
+            text=unit(path) if path.name=='esp32_mquickjs_wifi_frame_type.c' else path.read_text()
             if path.name=='esp32_mquickjs_options.c':
                 header=(ROOT/'components/esp32_mquickjs/internal/esp32_mquickjs_options.h').read_text().replace('#include "esp32_mquickjs_types.h"','')
                 text=text.replace('#include "esp32_mquickjs_options.h"',header)

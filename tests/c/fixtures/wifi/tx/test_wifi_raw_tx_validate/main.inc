@@ -20,6 +20,9 @@ int main(void) {
     /* All protocol type/subtype combinations; no unsupported null/CF/QoS claim. */
     for(unsigned type=0;type<4;type++)for(unsigned subtype=0;subtype<16;subtype++) {
         bool allowed=(type==0 && (subtype==4 || subtype==5 || subtype==8 || subtype==13)) || (type==2 && subtype==0);
+#if defined(ESP32_MQUICKJS_RAW_TX_EXTENDED_MANAGEMENT) && ESP32_MQUICKJS_RAW_TX_EXTENDED_MANAGEMENT
+        if(type==0) allowed=subtype!=7 && subtype!=15;
+#endif
         frame_t out;control((type<<2)|(subtype<<4));
         assert((esp32_mquickjs_wifi_raw_tx_validate(bytes,64,&policy,&out)==ESP32_MQUICKJS_WIFI_RAW_TX_VALID)==allowed);
     }

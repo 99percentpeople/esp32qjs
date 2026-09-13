@@ -28,7 +28,7 @@ int main(int argc,char **argv) {
             uint32_t n;assert(esp32_mquickjs_value_to_bounded_u32(ctx,generation,0,UINT32_MAX,&n) && n==55);
         } else if(ok) {
             assert(bytes && length==24 && bytes[0]==0x80 && options.interval_us>=1000);
-            assert(timeout>=1 && timeout<=60000);
+            assert(timeout>=1 && timeout<=INT32_MAX);
             assert(options.stop_on_error==(strcmp(argv[4],"false")!=0));
         } else {
             assert(JS_HasException(ctx) && options.interval_us==999);*error=JS_GetException(ctx);

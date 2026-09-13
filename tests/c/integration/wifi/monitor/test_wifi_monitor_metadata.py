@@ -18,6 +18,7 @@ class WiFiMonitorMetadata(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         body = '#define CONFIG_ESP32_MQUICKJS_FEATURE_WIFI 1\n'
         body += production_monitor_wire(he=True)
+        body += unit(ROOT / 'components/esp32_mquickjs/src/modules/wifi_common/esp32_mquickjs_wifi_frame_type.c')
         body += unit(ROOT / 'components/esp32_mquickjs/src/modules/wifi_monitor/esp32_mquickjs_wifi_monitor_metadata.c')
         cls.binary = build(cls.temp.name, body, MAIN)
 

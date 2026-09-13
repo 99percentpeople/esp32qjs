@@ -1,4 +1,5 @@
 #pragma once
+#include "esp32_mquickjs_wifi_raw_tx_limits.h"
 #include "sdkconfig.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -6,7 +7,6 @@
 #if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI
 /* Eight Session requests plus the one-shot Future lane. A Session may hold at
  * most one request, independently of its packet queue capacity. */
-#define ESP32_MQUICKJS_WIFI_RAW_TX_LANE_CAPACITY 9U
 typedef struct { uint32_t identity; uint8_t index; } esp32_mquickjs_wifi_raw_tx_lane_token_t;
 typedef enum {
     ESP32_MQUICKJS_WIFI_RAW_TX_LANE_OK,

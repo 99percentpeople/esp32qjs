@@ -28,7 +28,7 @@ test("espnow/wifi-radio-hardware", function () {
   test.equal(after.started, true,
     "the boot-scoped radio may remain started after lease release");
 
-  networks = wifi.scan();
+  networks = wifi.scan().records;
   test.ok(typeof networks.length === "number",
     "Wi-Fi scan should reuse a radio started before its event handler");
   test.equal(wifi.status().started, true,

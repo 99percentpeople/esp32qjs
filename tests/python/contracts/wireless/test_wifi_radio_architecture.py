@@ -298,7 +298,7 @@ class WifiRadioArchitectureTests(unittest.TestCase):
             "connect(ssid: string | ByteSource, options?: WiFiConnectOptions): WiFiConnectResult",
             types,
         )
-        self.assertIn("scan(options?: WiFiScanOptions): WiFiScanRecord[]", types)
+        self.assertIn("scan(options?: WiFiScanOptions): WiFiScanResult", types)
 
     def test_internal_feature_is_a_transitive_wifi_dependency(self):
         catalog = json.loads(

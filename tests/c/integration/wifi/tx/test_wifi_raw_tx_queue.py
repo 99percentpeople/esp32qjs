@@ -6,6 +6,16 @@ from tests.support.native_compile import compile_run
 
 
 class WiFiRawTxQueue(unittest.TestCase):
+    def test_out_of_order_window_byte_capacity_and_fence(self):
+        code = PRELUDE + unit(INTERNAL / 'esp32_mquickjs_wifi_raw_tx_queue.h')
+        code += unit(ROOT / 'components/esp32_mquickjs/src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx_queue.c')
+        compile_run(self, code + fixture_text('wifi/tx/test_wifi_raw_tx_queue/window.inc'))
+
+    def test_byte_eviction_preserves_multiple_started_batches(self):
+        code = PRELUDE + unit(INTERNAL / 'esp32_mquickjs_wifi_raw_tx_queue.h')
+        code += unit(ROOT / 'components/esp32_mquickjs/src/modules/wifi_raw_tx/esp32_mquickjs_wifi_raw_tx_queue.c')
+        compile_run(self, code + fixture_text('wifi/tx/test_wifi_raw_tx_queue/byte_eviction.inc'))
+
     def test_atomic_batches_protected_active_batch_and_flush_fences(self):
         code = PRELUDE
         code += unit(INTERNAL / 'esp32_mquickjs_wifi_raw_tx_queue.h')

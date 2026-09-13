@@ -35,6 +35,20 @@ esp32_mquickjs_wifi_raw_tx_validation_t esp32_mquickjs_wifi_raw_tx_validate(
         case 4: frame.frame_type = ESP32_MQUICKJS_WIFI_RAW_TX_PROBE_REQUEST; break;
         case 5: frame.frame_type = ESP32_MQUICKJS_WIFI_RAW_TX_PROBE_RESPONSE; break;
         case 13: frame.frame_type = ESP32_MQUICKJS_WIFI_RAW_TX_ACTION; break;
+#if defined(ESP32_MQUICKJS_RAW_TX_EXTENDED_MANAGEMENT) && ESP32_MQUICKJS_RAW_TX_EXTENDED_MANAGEMENT
+        /* Only enabled after the build-local SDK archive passes its hash gate.
+         * Reserved subtypes 7/15 and Protected frames remain rejected. */
+        case 0: frame.frame_type = ESP32_MQUICKJS_WIFI_RAW_TX_ASSOCIATION_REQUEST; break;
+        case 1: frame.frame_type = ESP32_MQUICKJS_WIFI_RAW_TX_ASSOCIATION_RESPONSE; break;
+        case 2: frame.frame_type = ESP32_MQUICKJS_WIFI_RAW_TX_REASSOCIATION_REQUEST; break;
+        case 3: frame.frame_type = ESP32_MQUICKJS_WIFI_RAW_TX_REASSOCIATION_RESPONSE; break;
+        case 6: frame.frame_type = ESP32_MQUICKJS_WIFI_RAW_TX_TIMING_ADVERTISEMENT; break;
+        case 9: frame.frame_type = ESP32_MQUICKJS_WIFI_RAW_TX_ATIM; break;
+        case 10: frame.frame_type = ESP32_MQUICKJS_WIFI_RAW_TX_DISASSOCIATION; break;
+        case 11: frame.frame_type = ESP32_MQUICKJS_WIFI_RAW_TX_AUTHENTICATION; break;
+        case 12: frame.frame_type = ESP32_MQUICKJS_WIFI_RAW_TX_DEAUTHENTICATION; break;
+        case 14: frame.frame_type = ESP32_MQUICKJS_WIFI_RAW_TX_ACTION_NO_ACK; break;
+#endif
         default: return ESP32_MQUICKJS_WIFI_RAW_TX_UNSUPPORTED_FRAME;
         }
     } else if (type == 2) {

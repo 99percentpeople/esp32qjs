@@ -217,7 +217,7 @@ bool esp32_mquickjs_wifi_csi_filter_accept(
         filter->destination_mac_count > ESP32_MQUICKJS_WIFI_CSI_MAX_MAC_FILTERS ||
         filter->bssid_count > ESP32_MQUICKJS_WIFI_CSI_MAX_MAC_FILTERS ||
         filter->sample_every == 0 || filter->maximum_rate_hz > 1000000U ||
-        (filter->frame_types & ~31U) != 0) return false;
+        (filter->frame_types & ~15U) != 0) return false;
     if ((filter->source_mac_count > 0U &&
          (!(metadata->address_mask & (1U << ESP32_MQUICKJS_WIFI_RX_SOURCE)) ||
           !wifi_csi_mac_in_list(metadata->addresses[ESP32_MQUICKJS_WIFI_RX_SOURCE],
@@ -243,6 +243,15 @@ bool esp32_mquickjs_wifi_csi_filter_accept(
     }
     if (filter->frame_subtypes_set && (!metadata->frame_subtype_available ||
         metadata->frame_subtype > 15 || !(filter->frame_subtypes & (1U << metadata->frame_subtype)))) {
+        atomic_fetch_add_explicit(&resources->counters.filtered_frame_subtype, 1, memory_order_relaxed);
+        return false;
+    }
+    /* Identity comes only from this callback's proven PV0 header; a missing
+     * header or the SDK misc category cannot masquerade as MAC type 3. */
+    if (filter->frame_filter && (!metadata->frame_subtype_available ||
+        (unsigned)metadata->frame_type >= ESP32_MQUICKJS_WIFI_PACKET_MISC ||
+        metadata->frame_subtype > 15 ||
+        !(filter->frame_subtype_masks[metadata->frame_type] & (1U << metadata->frame_subtype)))) {
         atomic_fetch_add_explicit(&resources->counters.filtered_frame_subtype, 1, memory_order_relaxed);
         return false;
     }

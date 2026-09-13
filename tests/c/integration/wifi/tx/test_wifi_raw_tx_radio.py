@@ -18,8 +18,8 @@ from tests.c.integration.wifi.config.test_wifi_config_controls import ROOT, RADI
 from tests.support.wireless_vm_fixture import extract
 
 
-def radio_code(profile):
-    code = production_code(profile)
+def radio_code(profile, identity=False):
+    code = production_code(profile, identity=identity)
     code = code.replace('static esp_err_t esp_wifi_80211_tx(',
                         'static void radio_send_hook(void);\nstatic esp_err_t esp_wifi_80211_tx(')
     code = code.replace('++sends;driver_bytes=bytes;', '++sends;driver_bytes=bytes;radio_send_hook();')
@@ -67,7 +67,7 @@ def radio_code(profile):
                  'wifi_radio_raw_tx_policy', 'wifi_radio_raw_tx_unpin',
                  'esp32_mquickjs_wifi_radio_raw_tx_submit', 'esp32_mquickjs_wifi_radio_raw_tx_retire']:
         code += extract(radio, name)
-    return code + MAIN
+    return code + (MAIN[:MAIN.index('int main(void)')] + fixture_text('wifi/tx/test_wifi_raw_tx_radio/window.inc') if identity else MAIN)
 
 
 class WiFiRawTxRadio(unittest.TestCase):
@@ -84,6 +84,10 @@ class WiFiRawTxRadio(unittest.TestCase):
                 self.assertEqual(built.returncode, 0, built.stderr)
                 result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_window_holds_channel_and_owner_until_last_completion(self):
+        from tests.support.native_compile import compile_run
+        compile_run(self, radio_code('esp32c5/representative', identity=True))
 
 
 BOUNDARIES = fixture_text('wifi/tx/test_wifi_raw_tx_radio/boundaries.inc')

@@ -609,23 +609,6 @@ done:
     return ok;
 }
 
-bool esp32_mquickjs_wifi_capture_stop_ap_timeout(JSContext *ctx, JSValue value, uint32_t *timeout_ms)
-{
-    if (timeout_ms == NULL) {
-        JS_ThrowTypeError(ctx, "missing native Wi-Fi AP stop timeout");
-        return false;
-    }
-    *timeout_ms = 0;
-    if (JS_IsUndefined(value)) { *timeout_ms = 1000; return true; }
-    uint32_t captured;
-    if (!esp32_mquickjs_value_to_bounded_u32(ctx, value, 1, 60000, &captured)) {
-        if (!JS_HasException(ctx)) JS_ThrowTypeError(ctx, "wifi.stopAP timeoutMs expects an integer from 1 to 60000");
-        return false;
-    }
-    *timeout_ms = captured;
-    return true;
-}
-
 static bool wifi_capture_lifecycle_timeout(JSContext *ctx, JSValue options,
     const char *operation, uint32_t default_ms, uint32_t *timeout_ms)
 {
@@ -646,8 +629,8 @@ static bool wifi_capture_lifecycle_timeout(JSContext *ctx, JSValue options,
     *value = JS_GetPropertyStr(ctx, *root, "timeoutMs");
     if (JS_IsException(*value)) goto done;
     if (!JS_IsUndefined(*value) &&
-        !esp32_mquickjs_value_to_bounded_u32(ctx, *value, 1, 60000, &captured)) {
-        if (!JS_HasException(ctx)) JS_ThrowTypeError(ctx, "%s timeoutMs expects an integer from 1 to 60000", operation);
+        !esp32_mquickjs_value_to_bounded_u32(ctx, *value, 1, INT32_MAX, &captured)) {
+        if (!JS_HasException(ctx)) JS_ThrowTypeError(ctx, "%s timeoutMs expects an integer from 1 to 2147483647", operation);
         goto done;
     }
     *timeout_ms = captured;
@@ -661,6 +644,16 @@ done:
 bool esp32_mquickjs_wifi_capture_stop(JSContext *ctx, JSValue options, uint32_t *timeout_ms)
 {
     return wifi_capture_lifecycle_timeout(ctx, options, "wifi.stop", 1000, timeout_ms);
+}
+
+bool esp32_mquickjs_wifi_capture_stop_ap_timeout(JSContext *ctx, JSValue options, uint32_t *timeout_ms)
+{
+    return wifi_capture_lifecycle_timeout(ctx, options, "wifi.stopAP", 1000, timeout_ms);
+}
+
+bool esp32_mquickjs_wifi_capture_disconnect(JSContext *ctx, JSValue options, uint32_t *timeout_ms)
+{
+    return wifi_capture_lifecycle_timeout(ctx, options, "wifi.disconnect", ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS, timeout_ms);
 }
 
 bool esp32_mquickjs_wifi_capture_restart(JSContext *ctx, JSValue options, uint32_t *timeout_ms, bool *allow_ap_restart)
@@ -683,8 +676,8 @@ bool esp32_mquickjs_wifi_capture_restart(JSContext *ctx, JSValue options, uint32
     *value = JS_GetPropertyStr(ctx, *root, "timeoutMs");
     if (JS_IsException(*value)) goto done;
     if (!JS_IsUndefined(*value) &&
-        !esp32_mquickjs_value_to_bounded_u32(ctx, *value, 1, 60000, &captured)) {
-        if (!JS_HasException(ctx)) JS_ThrowTypeError(ctx, "wifi.driver.restart timeoutMs expects an integer from 1 to 60000");
+        !esp32_mquickjs_value_to_bounded_u32(ctx, *value, 1, INT32_MAX, &captured)) {
+        if (!JS_HasException(ctx)) JS_ThrowTypeError(ctx, "wifi.driver.restart timeoutMs expects an integer from 1 to 2147483647");
         goto done;
     }
     *value = JS_GetPropertyStr(ctx, *root, "allowApRestart");

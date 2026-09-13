@@ -55,6 +55,14 @@ int main(void) {
         deinit_error=0;unsigned generation=s_radio.generation;
         assert(esp32_mquickjs_wifi_radio_shutdown_recovery(&token)==ESP_ERR_TIMEOUT);
         assert(raw_native.native_terminated && !s_radio.driver_owned && s_radio.generation==generation && !s_tx_rate_lease.identity);
+        /* A window can retire its anchor before its other terminated records.
+         * Physical proof belongs to the exact lease/generation, not that anchor. */
+        uint32_t anchor=owner->raw_tx_identity;
+        owner->raw_tx_identity=anchor+1;
+        wifi_radio_operation_lock();
+        assert(wifi_radio_raw_tx_recovery_owner_locked(&lease));
+        wifi_radio_operation_unlock();
+        owner->raw_tx_identity=anchor;
         assert(!esp32_mquickjs_wifi_radio_raw_tx_retire(&lease,&wrong));
         assert(esp32_mquickjs_wifi_radio_raw_tx_retire(&lease,&operation) && !owner->raw_tx_identity);
         assert(esp32_mquickjs_wifi_radio_shutdown_recovery(&token)==ESP_ERR_TIMEOUT && lease.acquired);

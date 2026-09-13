@@ -66,7 +66,8 @@ int main(int argc,char **argv) {
             if(scenario==1) check(ctx,"info.packet===null && info.addresses.source===null");
             else {
                 check(ctx,"info.packet.capture.fcs==='unknown' && info.packet.capture.pointerLayoutValid===true");
-                if(scenario==2) check(ctx,"info.packet.subtype===null && info.packet.frameControl===null && info.packet.flags.retry===null && !info.packet.capture.parseValid && info.addresses.source===null");
+                if(scenario==0) check(ctx,"info.packet.category==='data' && info.packet.frameType.type===2 && info.packet.frameType.subtype===0 && info.packet.frameType.name==='data'");
+                if(scenario==2) check(ctx,"info.packet.frameType===null && info.packet.frameControl===null && info.packet.flags.retry===null && !info.packet.capture.parseValid && info.addresses.source===null");
                 else if(scenario==3) check(ctx,"!info.packet.capture.parseValid && info.addresses.source===null && info.packet.capture.payloadLength===0");
                 else check(ctx,"info.packet.capture.parseValid && info.packet.capture.headerLength===24 && info.packet.capture.payloadLength===4 && info.packet.capture.capturedLength===26 && info.packet.capture.payloadCapturedLength===2 && info.packet.capture.truncated && info.packet.flags.toDs && info.packet.flags.retry && info.packet.sequenceControl===4660 && info.addresses.source==='22:22:22:22:22:22' && info.addresses.destination==='33:33:33:33:33:33' && info.addresses.bssid==='11:11:11:11:11:11'");
             }

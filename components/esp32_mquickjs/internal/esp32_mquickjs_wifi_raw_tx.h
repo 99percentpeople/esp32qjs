@@ -33,6 +33,7 @@ void js_wifi_raw_tx_session_finalizer(JSContext *, void *);
 JSValue js_wifi_raw_tx_session_send(JSContext *, JSValue *, int, JSValue *);
 JSValue js_wifi_raw_tx_session_enqueue(JSContext *, JSValue *, int, JSValue *);
 JSValue js_wifi_raw_tx_session_enqueue_batch(JSContext *, JSValue *, int, JSValue *);
+JSValue js_wifi_raw_tx_session_wait_writable(JSContext *, JSValue *, int, JSValue *);
 JSValue js_wifi_raw_tx_session_flush(JSContext *, JSValue *, int, JSValue *);
 JSValue js_wifi_raw_tx_session_status(JSContext *, JSValue *, int, JSValue *);
 JSValue js_wifi_raw_tx_session_stats(JSContext *, JSValue *, int, JSValue *);

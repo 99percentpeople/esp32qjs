@@ -13,7 +13,10 @@ class WiFiRawTxValidate(unittest.TestCase):
         source += unit(INTERNAL / 'esp32_mquickjs_wifi_raw_tx_validate.h')
         source += unit(COMMON / 'esp32_mquickjs_wifi_rx.c')
         source += unit(RAW / 'esp32_mquickjs_wifi_raw_tx_validate.c')
-        compile_run(self, PRELUDE + source + MAIN)
+        for extended in (0,1):
+            with self.subTest(extendedManagement=extended):
+                compile_run(self, PRELUDE + source + MAIN,
+                            cflags=["-DESP32_MQUICKJS_RAW_TX_EXTENDED_MANAGEMENT="+str(extended)])
 
 
 PRELUDE = fixture_text('wifi/tx/test_wifi_raw_tx_validate/prelude.inc')

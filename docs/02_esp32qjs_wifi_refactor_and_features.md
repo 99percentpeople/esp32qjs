@@ -197,15 +197,15 @@ interface WiFiModule {
   watch(options?: WiFiWatchOptions): EventQueue<WiFiEvent>;
 
   start(options?: WiFiStartOptions): WiFiStatus;
-  stop(options?: WiFiStopOptions): WiFiStatus;
+  stop(options?: WiFiWaitOptions): WiFiStatus;
   configure(options: WiFiConfigureOptions): WiFiStatus;
 
   connect(ssid: string | ByteSource, options?: WiFiConnectOptions): WiFiConnectResult;
-  disconnect(timeoutMs?: number): WiFiStatus;
-  scan(options?: WiFiScanOptions): WiFiScanRecord[];
+  disconnect(options?: WiFiWaitOptions): WiFiStatus;
+  scan(options?: WiFiScanOptions): WiFiScanResult;
 
   startAP(options: WiFiAccessPointOptions): WiFiAccessPointStartResult;
-  stopAP(timeoutMs?: number): WiFiStatus;
+  stopAP(options?: WiFiWaitOptions): WiFiStatus;
   apClients(options?: WiFiAPClientsOptions): WiFiAPClient[];
   deauthClient(address: MacAddress): boolean;
 
@@ -377,9 +377,8 @@ interface WiFiRxInfo {
 }
 
 interface WiFiPacketInfo {
-  type: WiFiPacketType;
-  subtype: number | null;
-  subtypeName: string | null;
+  category: WiFiPacketType;
+  frameType: WiFiFrameType | null;
   frameControl: number | null;
   durationId: number | null;
   sequenceControl: number | null;
@@ -604,7 +603,7 @@ interface WiFiEvent {
 **当前实现与目标区分**：`start({ mode?, storage? })` 已注册并复用接口执行器，
 缺省保留已配置 mode/storage，冷启动默认为 Station/RAM；运行中只接纳相同设置。
 AP/APSTA 使用已存配置且广播前校验，详见[启动 options 记录](investigations/2026-09-08-w02-start-options.md)。
-`stop({ timeoutMs? })` 已接入同次调用共享的原生等待预算（默认 1000，整数 1–60000 ms），
+`stop({ timeoutMs? })` 已接入同次调用共享的原生等待预算（默认 1000，整数 1–2147483647 ms），
 超时保留清理后缀；SDK 同步调用不可抢占，因此不是硬性返回 deadline。
 详见[stop timeout 记录](investigations/2026-09-08-w02-stop-timeout.md)。`configure(options)` 已注册，
 支持 Station/AP/APSTA；正式字段以 `types/esp32qjs-c-api.d.ts` 和 manifest 为准。
@@ -616,7 +615,7 @@ interface WiFiStartOptions {
   storage?: "ram" | "flash";
 }
 
-interface WiFiStopOptions {
+interface WiFiWaitOptions {
   timeoutMs?: number;
 }
 
@@ -787,6 +786,8 @@ interface WiFiScanRecord {
 }
 ```
 
+`wifi.scan()` 返回 `{ records, complete, timedOut }`：超时先停止原生扫描并读取部分结果，
+已排队的同代完成事件优先；停止/读取/清理失败仍报错。`maxRecords` 截断不改变 complete。
 `wifi.scan()` owner 必须在 success、timeout、cancel、conversion failure 时按固定 IDF 的资源规则获取/释放扫描结果，禁止泄漏 driver scan buffer；清理仍需等待原生扫描结果不再被 driver 使用。
 
 本轮补充：`channels` 映射 target 支持的 scan channel bitmap，`coexistenceBackgroundScan` 映射对应公开字段，不因顶层已经有 `scan()` 就把这两个字段视为已覆盖。numeric `channel` 与 `channels` 互斥；空 bitmap、bit0 bypass、band 不支持、法规不允许、重复信道及未知字段均明确校验。构建不支持时拒绝，不悄悄变为全信道扫描。
@@ -811,7 +812,10 @@ transition-disable 和 FTM responder 参数；共享 AP parser/native validator 
 [startAP 嵌套 driver](investigations/2026-09-09-w02-ap-driver.md)已接入当前 raw 字段（SSID 留顶层），
 保留整数 TU 和 raw channel 范围，双层同义字段重复拒绝；最终统一安全与 target 校验。
 configure/APSTA 和已支持 raw driver config 已开放；[共享重开](investigations/2026-09-08-w02-ap-reopen.md)现允许在 Station 存活时启用与已存配置匹配的 AP。`startAP({allowDisconnect:true,...})` 已接入现有 stopped 配置事务，可替换运行 AP 或从 STA 启动不同配置的 AP；保留当前 Station mode/已存配置与 storage，明确断开现有连接且不自动重连。准入仍排除其他 feature owner，失败保留中央清理后缀。保持 Station 连接的不同配置激活已接入固定 C3/S3/C5 SDK 的原生 AP 分配前窗口；安全配置/PMF 先安装读回，再创建及启动 AP。失败保留原错误、回滚结果和关闭责任；确认从未启动的 AP 使用事件屏障退休，不伪造 AP_STOP。完整高级认证和 5 GHz/RF 验收仍待完成。
-`stopAP(timeoutMs?)` 已接入默认 1000 ms、整数 1–60000 ms 的共享协作等待预算，
+2026-09-13：`stop`、`stopAP`、`disconnect` 已统一为 `WiFiWaitOptions`，见
+[参数契约与验证](investigations/2026-09-13-wifi-lifecycle-options.md)。
+
+`stopAP({timeoutMs}?)` 已接入默认 1000 ms、整数 1–2147483647 ms 的共享协作等待预算，
 重试只继续已有清理后缀；返回 WiFiStatus 不变。同步 SDK 调用不可抢占。
 startAP 返回配置读回快照 WiFiAccessPointStartResult；当前查询使用 WiFiAccessPointStatus，
 二者不是同名接口合并，也没有兼容别名。见[stopAP timeout 记录](investigations/2026-09-08-w02-stop-ap-timeout.md)。
@@ -1132,10 +1136,11 @@ interface WiFiMonitorCapabilities {
   available: boolean;
   stability: "candidate";
   target: string; idfVersion: string;
-  frameTypes: Array<Exclude<WiFiPacketType, "unknown">>;
+  packetTypes: Array<Exclude<WiFiPacketType, "unknown">>;
+  frameTypes: WiFiFrameType[];
   supports: {
     receive: boolean; frameSource: boolean; receiveBatch: boolean; configure: boolean;
-    fixedChannel: boolean; typeFilter: boolean; subtypeFilter: boolean;
+    fixedChannel: boolean; typeFilter: boolean; subtypeFilter: boolean; frameFilter: boolean;
     sourceMacFilter: boolean; destinationMacFilter: boolean; bssidFilter: boolean;
     rssiFilter: boolean; nativeDecimation: boolean; nativeRateLimit: boolean;
     wireSource: boolean; hostPcapngConverter: boolean;
@@ -1157,6 +1162,7 @@ interface WiFiMonitorOpenOptions {
   filter?: {
     types?: WiFiPacketType[];
     subtypes?: number[];
+    frames?: WiFiFrameSelector[];
     sourceMac?: MacAddress | MacAddress[];
     destinationMac?: MacAddress | MacAddress[];
     bssid?: MacAddress | MacAddress[];
@@ -1177,7 +1183,6 @@ interface WiFiMonitorOpenOptions {
     overflow?: "drop-newest";
   };
 
-  powerSavePolicy?: "preserve" | "require-none";
 }
 
 interface WiFiMonitorAPI {
@@ -1202,7 +1207,7 @@ bytes/copyBytes/source/close。实际单帧接口见 [Monitor API](api/wifi-moni
 不作为实际注册能力。接入记录见[公开单帧 Monitor](investigations/2026-09-09-w03-monitor-public.md)。
 默认 current channel、全部四种
 可交付 callback type、validOnly=true、sampleEvery=1、maximumRateHz=0（不限速），
-pool/queue 各 16、snapLength=2048、requireComplete=false、powerSavePolicy=preserve。
+pool/queue 各 16、snapLength=2048、requireComplete=false，省电策略由 JS 管理。
 pool/queue 各 1–128，snapLength 1–16384，sampleEvery 1–UINT32_MAX，maximumRateHz
 0–1000000，minimumRssi -128–127。types/subtypes 允许空数组表示不匹配任何对应
 帧；每个 MAC role 接收一个字符串或 1–8 个地址，拒绝空列表与重复地址。相同 role
@@ -1333,28 +1338,25 @@ scripts/esp32qjs_monitor.py
 
 ### 10.1 设计边界
 
-`wifi.rawTx` 映射 ESP-IDF `esp_wifi_80211_tx()` 与 TX done callback。v1 只承诺
-ESP-IDF 公开支持的 frame：Beacon、Probe Request、Probe Response、Action 和
-non-QoS Data。不得宣称支持 encrypted frame、QoS Data、任意 Control frame、PHY
-preamble 或 RF IQ。
+`wifi.rawTx` 映射 ESP-IDF `esp_wifi_80211_tx()` 与 TX done callback。
+2026-09-13 按完整管理帧实验平台的新增范围，审查过的 C3/S3/C5 构建使用独立、
+哈希校验的 SDK 副本扩展管理帧子类型门槛：支持 14 种已命名 PV0 管理帧以及
+non-QoS Data，`supports.extendedManagement` 为 true；完整名称见 API 文档。
+这超出 ESP-IDF 官方 Raw TX 白名单，是实验扩展，不能作为官方支持或 RF 验收结论。
+保留长度、接口、Protected、连接状态、序列号及数据帧约束；保留 subtype 7/15、
+QoS、Protected、任意 Control、PHY preamble 和 RF IQ 的拒绝。PMF 配置不改变。
 
 ```ts
+interface WiFiFrameSelector { type: 0 | 1 | 2 | 3; subtype: number; name?: string | null; }
+interface WiFiFrameType extends WiFiFrameSelector { name: string | null; }
+
 interface WiFiRawTxCapabilities {
   apiVersion: "wifi-raw-tx/1";
   target: string;
   idfVersion: string;
   stability: "candidate";
   interfaces: Array<"station" | "access-point">;
-  frameTypes: {
-    beacon: boolean;
-    probeRequest: boolean;
-    probeResponse: boolean;
-    action: boolean;
-    nonQosData: boolean;
-    qosData: false;
-    encryptedData: false;
-    arbitraryControl: false;
-  };
+  frameTypes: WiFiFrameType[];
   rateLeaseInterfaces: ("station")[];
   supports: {
     driverSequence: true;
@@ -1366,6 +1368,7 @@ interface WiFiRawTxCapabilities {
     periodicTx: boolean;
     rateLease: boolean;
     callerFcs: false;
+    extendedManagement: boolean;
   };
   limits: {
     minimumFrameBytes: 24;
@@ -1390,7 +1393,6 @@ interface WiFiRawTxSendOptions {
   interface?: "station" | "access-point";
   channel?: "current" | number;
   sequenceControl?: "driver" | "application";
-  validation?: "strict" | "basic";
   timeoutMs?: number;
 }
 
@@ -1399,7 +1401,7 @@ interface WiFiRawTxResult {
   radioGeneration: number;
   interface: "station" | "access-point";
   channel: number;
-  frameType: "beacon" | "probe-request" | "probe-response" | "action" | "non-qos-data";
+  frameType: WiFiFrameType;
   byteLength: number;
   submittedAtUs: number;
   completedAtUs: number | null;
@@ -1436,7 +1438,6 @@ interface WiFiRawTxOpenOptions {
   interface?: "station" | "access-point";
   channel?: "current" | number;
   sequenceControl?: "driver" | "application";
-  validation?: "strict" | "basic";
   rate?: WiFiTxRateConfig;    // exclusive pre-start Station; known previous write required
   timeoutMs?: number;
   queue?: {
@@ -1479,7 +1480,7 @@ interface WiFiRawPeriodicTx {
 
 ### 10.4 严格验证
 
-`validation: "strict"` 默认检查：
+C 层保留的 MAC/SDK 必要检查：
 
 - 长度 24～1500 字节；
 - protocol version、type/subtype 和可变 MAC header length；
@@ -1596,7 +1597,7 @@ interface WiFiCsiCapabilities {
 }
 ```
 
-CSI BSSID/frameTypes/frameSubtypes、公共 `WiFiRxInfo` 字段及 slot/sequence 耗尽路径
+CSI BSSID/types/subtypes/frames、公共 `WiFiRxInfo` 字段及 slot/sequence 耗尽路径
 已编码接通，实际参数及 null/过滤语义见 [CSI API](api/wifi-csi.md)。默认 packet none
 仍检查同次已证明可读的 header，不分配 packet bytes。完整性依据 driver packet
 report，Host 与 Monitor 共享验证规则。实现和验证状态以
@@ -1641,6 +1642,19 @@ interface WiFiCsiHeCaptureV1 {
 
 ### 11.3 Open options
 
+2026-09-13：移除 Raw TX validation 与 CSI/Monitor powerSavePolicy，放宽已审计
+路径的通用等待上限；授权/恢复策略仍待逐路径处理。见
+[策略限制清理第一批](investigations/2026-09-13-wifi-policy-removal.md)。
+
+2026-09-13：修复 `status().requested` 导出非法空 MAC 数组/null 过滤值的问题，
+快照可作为 JS 再配置输入；生产 round-trip、GC/OOM 已验证，见
+[配置回读修复](investigations/2026-09-13-wifi-csi-requested-roundtrip.md)。
+
+2026-09-13：CSI / Monitor 的输入统一为 `WiFiRxFilter`，加入精确 `frames`
+组合并复用生产解析器；18 项原生、39 项 Python、语法及三目标受影响文件编译
+通过。完整链接与设备阶段验证待执行，见
+[本轮证据](investigations/2026-09-13-wifi-filter-unification.md)。
+
 ```ts
 type WiFiCsiSource =
   | { mode: "associated" }
@@ -1663,8 +1677,9 @@ interface WiFiCsiOpenOptions {
     sourceMac?: MacAddress | MacAddress[];
     destinationMac?: MacAddress | MacAddress[];
     bssid?: MacAddress | MacAddress[];
-    frameTypes?: WiFiPacketType[];
-    frameSubtypes?: number[];
+    types?: Array<Exclude<WiFiPacketType, "unknown">>;
+    subtypes?: number[];
+    frames?: WiFiFrameSelector[];
     minimumRssi?: number;
     sampleEvery?: number;
     maximumRateHz?: number;
@@ -1677,7 +1692,6 @@ interface WiFiCsiOpenOptions {
     overflow?: "drop-newest";
   };
 
-  powerSavePolicy?: "preserve" | "require-none";
 }
 ```
 
@@ -4173,3 +4187,11 @@ TWT 恢复前置增量：[individual 原连接关闭与清理](investigations/20
 结果保留。真实连接关闭后仍要求 TX/PM、timer/native/event 排空；不把缺失的
 RF 成功事件当作资源占用，也不以空位图替代退休证明。完整物理恢复与阶段运行
 仍待完成；本批五目标构建与静态证据不代替竞争测试。
+
+
+### 2026-09-13 Raw TX 多包在途增量
+
+实现与边界见 [Raw TX 流水线记录](investigations/2026-09-13-raw-tx-pipeline.md)：
+`maxInFlight`、payload 字节容量、`waitWritable()`、原生回调精确身份和自主 worker
+唤醒。相近 API 的统一核对也记录于该文档。未提高候选能力的硬件稳定等级，
+本次固件尚未刷写到设备；RF/吞吐/长时间验证仍独立记录。

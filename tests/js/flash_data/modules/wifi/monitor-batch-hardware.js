@@ -40,8 +40,8 @@ test("wifi/monitor-batch-hardware", function () {
     test.ok(batch !== null && batch.frameCount >= 1 && batch.frameCount <= 4,
       "configured AP channel supplies a bounded Beacon Batch");
     info = batch.info(0);
-    test.equal(info.packet.type, "management", "batch metadata preserves driver type");
-    test.equal(info.packet.subtype, 8, "batch metadata preserves Beacon subtype");
+    test.equal(info.packet.category, "management", "batch metadata preserves driver type");
+    test.equal(info.packet.frameType.subtype, 8, "batch metadata preserves Beacon subtype");
     view = batch.bytes(0);
     first = view.getUint8(0);
     rejected = false;

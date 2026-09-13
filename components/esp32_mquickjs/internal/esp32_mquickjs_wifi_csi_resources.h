@@ -62,6 +62,8 @@ typedef struct {
     uint8_t frame_types;
     uint16_t frame_subtypes;
     bool frame_types_set, frame_subtypes_set;
+    uint16_t frame_subtype_masks[4];
+    bool frame_filter;
     uint8_t source_mac_count;
     uint8_t destination_mac_count;
     int8_t minimum_rssi;

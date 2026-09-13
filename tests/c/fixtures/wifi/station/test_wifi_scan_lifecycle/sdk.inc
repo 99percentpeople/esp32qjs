@@ -55,7 +55,7 @@ typedef struct {
     bool runtime_cleanup_pending,cleanup_timer_stopped;int cleanup_error;atomic_uint callbacks_active;
     const char *cleanup_stage;
     bool scan_in_progress,scan_future_registered,scan_draining,scan_results_pending;
-    bool scan_stop_submitted,scan_stop_active;
+    bool scan_stop_submitted,scan_stop_active,scan_results_consumed_early;
     int scan_cleanup_error;
     wifi_scan_config_t native_scan_config;
     uint8_t native_scan_ssid[33], native_scan_bssid[6];

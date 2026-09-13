@@ -44,7 +44,10 @@ test("wifi/raw-tx-hardware", function () {
     first = wifi.rawTx.send(frame, { timeoutMs: 3000 });
     completed(first, frame.length);
     stage = "session-open";
-    session = wifi.rawTx.open({ timeoutMs: 3000, queue: { capacityPackets: 2 } });
+    session = wifi.rawTx.open({ timeoutMs: 3000, maxInFlight: 2,
+      queue: { capacityPackets: 2, capacityBytes: frame.length * 2 } });
+    test.equal(session.status().maxInFlight, 2, "configured native window");
+    test.equal(session.status().capacityBytes, frame.length * 2, "payload byte budget");
     before = session.stats();
     rejected = false;
     try { session.enqueueBatch([frame, frame, frame]); }
@@ -52,12 +55,16 @@ test("wifi/raw-tx-hardware", function () {
     test.ok(rejected, "oversized batch must reject before queue admission");
     test.equal(session.stats().admitted, before.admitted, "rejected batch admits no prefix");
     stage = "batch";
+    session.waitWritable({ minimumPackets: 2, minimumBytes: frame.length * 2, timeoutMs: 3000 });
     admission = session.enqueueBatch([frame, frame]);
     test.equal(admission.admittedPackets, 2, "whole bounded batch admitted");
     flushed = session.flush(5000);
     test.equal(flushed.pending, 0, "batch fence completes");
     test.equal(flushed.submitted, 2, "both batch packets reach SDK");
     test.equal(flushed.settled, 2, "both batch packets settle");
+    session.waitWritable({ minimumPackets: 2, minimumBytes: frame.length * 2 });
+    test.equal(session.status().usedBytes, 0, "completed payload bytes return");
+    test.equal(session.status().availablePackets, 2, "completed slots return");
     stage = "session-send";
     sent = session.send(frame, { timeoutMs: 3000 });
     completed(sent, frame.length);

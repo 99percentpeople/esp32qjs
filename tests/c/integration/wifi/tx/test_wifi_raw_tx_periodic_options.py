@@ -25,21 +25,21 @@ class WiFiRawTxPeriodicOptions(unittest.TestCase):
         extra += 'typedef int esp_err_t;\n'
         extra += structure((INTERNAL / 'esp32_mquickjs_wifi_raw_tx_periodic_job.h').read_text(), 'esp32_mquickjs_wifi_raw_tx_periodic_job_status_t')
         extra += 'typedef esp32_mquickjs_wifi_raw_tx_periodic_job_status_t status_t;\n'
-        extra += re.search(r'^#define SET\(.*$', source, re.M).group(0) + '\n'
+        extra += unit(INTERNAL / 'esp32_mquickjs_js_macros.h')
         extra += extract(source, 'periodic_status_to_js')
         cls.binary = build(cls.temp.name, extra, MAIN)
 
     def test_required_interval_optional_bounds_bool_and_getter_ownership(self):
         cases = [
             ('({frame:view,intervalUs:1000})', True),
-            ('({frame:view,intervalUs:4294967295,count:4294967295,startDelayUs:4294967295,busyPolicy:"stop",stopOnError:false,timeoutMs:60000})', True),
+            ('({frame:view,intervalUs:4294967295,count:4294967295,startDelayUs:4294967295,busyPolicy:"stop",stopOnError:false,timeoutMs:2147483647})', True),
             ('({frame:view})', False), ('({frame:view,intervalUs:999})', False),
             ('({frame:view,intervalUs:1000.5})', False), ('({frame:view,intervalUs:4294967296})', False),
             ('({frame:view,intervalUs:1000,count:-1})', False),
             ('({frame:view,intervalUs:1000,count:4294967296})', False),
             ('({frame:view,intervalUs:1000,startDelayUs:-1})', False),
             ('({frame:view,intervalUs:1000,timeoutMs:0})', False),
-            ('({frame:view,intervalUs:1000,timeoutMs:60001})', False),
+            ('({frame:view,intervalUs:1000,timeoutMs:2147483648})', False),
             ('({frame:view,intervalUs:1000,busyPolicy:"skip\\u0000"})', False),
             ('({frame:view,intervalUs:1000,stopOnError:0})', False),
             ('({frame:view,intervalUs:1000,unknown:true})', False), ('null', False), ('[]', False),

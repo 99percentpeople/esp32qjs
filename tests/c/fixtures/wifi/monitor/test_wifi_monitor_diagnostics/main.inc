@@ -42,7 +42,21 @@ int main(int argc,char **argv) {
                 check(ctx,"value.apiVersion==='wifi-monitor/1' && value.target==='" CONFIG_IDF_TARGET "' && value.idfVersion==='fixture-sdk' && value.stability==='candidate'");
                 check(ctx,"value.supports.configure && value.supports.fixedChannel && value.supports.sourceMacFilter && value.supports.destinationMacFilter && value.supports.bssidFilter && value.supports.nativeRateLimit && value.supports.nativeDecimation && value.supports.receiveBatch && value.supports.wireSource && value.supports.hostPcapngConverter");
                 check(ctx,"value.limits.maxSessions===8 && value.limits.maxPoolCapacity===128 && value.limits.maxQueueCapacity===128 && value.limits.maxSnapLength===16384 && value.limits.maxBatchFrames===128 && value.limits.maxMacsPerRole===8");
-                check(ctx,"value.frameTypes.join(',')==='management,control,data,misc' && value.timestampAccuracy==='callback-time' && value.configure===undefined && value.maxSnapLength===undefined");
+                check(ctx,"value.packetTypes.join(',')==='management,control,data,misc' && value.frameTypes.length===39 && value.frameTypes[0].type===0 && value.frameTypes[0].subtype===0 && value.frameTypes[0].name==='association-request' && value.supports.frameFilter===true && value.timestampAccuracy==='callback-time' && value.configure===undefined && value.maxSnapLength===undefined");
+                for(unsigned type=0;type<4;type++) {
+                    for(unsigned subtype=0;subtype<16;subtype++) {
+                        *root=esp32_mquickjs_wifi_frame_type_to_js(ctx,type,subtype);
+                        assert(!JS_IsException(*root));
+                        assert(JS_GetPropertyStr(ctx,*root,"type")==JS_NewUint32(ctx,type));
+                        assert(JS_GetPropertyStr(ctx,*root,"subtype")==JS_NewUint32(ctx,subtype));
+                        if(type==3 || (type==0 && (subtype==7 || subtype==15)))
+                            assert(JS_GetPropertyStr(ctx,*root,"name")==JS_NULL);
+                    }
+                }
+                assert(JS_IsException(esp32_mquickjs_wifi_frame_type_to_js(ctx,4,0)));
+                (void)JS_GetException(ctx);
+                assert(JS_IsException(esp32_mquickjs_wifi_frame_type_to_js(ctx,0,16)));
+                (void)JS_GetException(ctx);
                 assert(JS_IsException(js_wifi_monitor_capabilities(ctx,NULL,1,NULL)));
                 (void)JS_GetException(ctx);
             } else if(scenario==1) {

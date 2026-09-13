@@ -17,6 +17,8 @@ typedef struct {
     uint8_t type_mask;
     bool subtype_filter, minimum_rssi_set, valid_only;
     uint16_t subtype_mask;
+    bool frame_filter;
+    uint16_t frame_subtype_masks[4]; /* indexed by MAC type, never SDK category */
     int8_t minimum_rssi;
     esp32_mquickjs_wifi_rx_mac_filter_t source, destination, bssid;
     uint32_t sample_every, maximum_rate_hz; /* rate 0 disables rate limiting */
