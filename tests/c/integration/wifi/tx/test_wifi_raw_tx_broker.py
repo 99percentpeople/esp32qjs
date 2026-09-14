@@ -21,6 +21,7 @@ def production_code(profile, identity=False):
     symbols = {key.split('::')[-1]: value['declaration']
                for key, value in inventory[profile]['symbols'].items()}
     code = PRELUDE
+    code += '#define CONFIG_IDF_TARGET_ESP32C5 ' + str(int(profile.startswith('esp32c5/'))) + '\n'
     if identity: code += "#define ESP32_MQUICKJS_RAW_TX_DESCRIPTOR_IDENTITY 1\n"
     for name in ['wifi_interface_t', 'wifi_phy_rate_t', 'wifi_tx_status_t',
                  'wifi_tx_info_t', 'esp_80211_tx_info_t']:
@@ -41,6 +42,13 @@ def production_code(profile, identity=False):
 
 
 class WiFiRawTxBroker(unittest.TestCase):
+    def test_descriptor_status_capture_all_bytes_and_optional_pointer(self):
+        from tests.support.native_compile import compile_run
+        for profile in ('esp32c3/representative', 'esp32s3/representative-psram', 'esp32c5/representative'):
+            with self.subTest(profile=profile):
+                compile_run(self, production_code(profile, identity=True) +
+                            fixture_text('wifi/tx/test_wifi_raw_tx_broker/mac_status.inc'))
+
     def test_native_completion_storage_quarantine_and_registration_fence(self):
         compiler = shutil.which('cc')
         if compiler is None:

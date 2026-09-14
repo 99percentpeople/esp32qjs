@@ -8305,7 +8305,7 @@
       "task": "W-08"
     },
     "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_cancel_service": {
-      "completionContract": "docs/api/wifi-nan.md#等待关闭和-gc",
+      "completionContract": "docs/api/wifi-nan.md#waiting-closing-and-gc",
       "contract": "reviewed",
       "evidence": [
         "scripts/patch_idf_nan.py",
@@ -8322,7 +8322,7 @@
       "fieldCoverage": "review-required",
       "implementation": "in-progress",
       "jsPath": "WiFiNanService.prototype.close",
-      "ownershipContract": "docs/api/wifi-nan.md#发布订阅与事件",
+      "ownershipContract": "docs/api/wifi-nan.md#publishing-subscribing-and-events",
       "task": "W-08",
       "validation": {
         "build": "passed: reviewed C3/S3/C5 build configurations; target gates apply",
@@ -8470,7 +8470,7 @@
       }
     },
     "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_publish_service": {
-      "completionContract": "docs/api/wifi-nan.md#等待关闭和-gc",
+      "completionContract": "docs/api/wifi-nan.md#waiting-closing-and-gc",
       "contract": "reviewed",
       "evidence": [
         "scripts/patch_idf_nan.py",
@@ -8487,7 +8487,7 @@
       "fieldCoverage": "review-required",
       "implementation": "in-progress",
       "jsPath": "WiFiNanSession.prototype.publish",
-      "ownershipContract": "docs/api/wifi-nan.md#发布订阅与事件",
+      "ownershipContract": "docs/api/wifi-nan.md#publishing-subscribing-and-events",
       "task": "W-08",
       "validation": {
         "build": "passed: reviewed C3/S3/C5 build configurations; target gates apply",
@@ -8496,7 +8496,7 @@
       }
     },
     "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_send_message": {
-      "completionContract": "docs/api/wifi-nan.md#消息发送",
+      "completionContract": "docs/api/wifi-nan.md#sending-messages",
       "contract": "reviewed",
       "evidence": [
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_message.inc",
@@ -8511,7 +8511,7 @@
       "fieldCoverage": "review-required",
       "implementation": "in-progress",
       "jsPath": "WiFiNanService.prototype.send",
-      "ownershipContract": "docs/api/wifi-nan.md#消息发送",
+      "ownershipContract": "docs/api/wifi-nan.md#sending-messages",
       "task": "W-08",
       "validation": {
         "build": "passed: reviewed C3/S3/C5 build configurations; target gates apply",
@@ -8520,7 +8520,7 @@
       }
     },
     "components/esp_wifi/wifi_apps/nan_app/include/esp_nan.h::esp_wifi_nan_subscribe_service": {
-      "completionContract": "docs/api/wifi-nan.md#等待关闭和-gc",
+      "completionContract": "docs/api/wifi-nan.md#waiting-closing-and-gc",
       "contract": "reviewed",
       "evidence": [
         "scripts/patch_idf_nan.py",
@@ -8537,7 +8537,7 @@
       "fieldCoverage": "review-required",
       "implementation": "in-progress",
       "jsPath": "WiFiNanSession.prototype.subscribe",
-      "ownershipContract": "docs/api/wifi-nan.md#发布订阅与事件",
+      "ownershipContract": "docs/api/wifi-nan.md#publishing-subscribing-and-events",
       "task": "W-08",
       "validation": {
         "build": "passed: reviewed C3/S3/C5 build configurations; target gates apply",

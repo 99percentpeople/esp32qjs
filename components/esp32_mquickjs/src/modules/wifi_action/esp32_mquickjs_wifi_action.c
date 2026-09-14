@@ -5,6 +5,7 @@
 #include "esp32_mquickjs_wifi_action_sdk.h"
 #include "esp32_mquickjs_wifi_radio.h"
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_native_status.h"
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_options.h"
 #include "esp32_mquickjs_memory.h"
@@ -117,8 +118,8 @@ static JSValue action_error(JSContext *ctx, const char *code, esp_err_t error, c
     JSValue *details = JS_PushGCRef(ctx, &ref);
     *details = JS_NewObject(ctx);
     if (JS_IsException(*details) ||
-        !esp32_mquickjs_set_property_ref(ctx, details, "espCode", JS_NewInt32(ctx, error)) ||
-        !esp32_mquickjs_set_property_ref(ctx, details, "espName", JS_NewString(ctx, esp_err_to_name(error))) ||
+        !esp32_mquickjs_set_property_ref(ctx, details, "native",
+            esp32_mquickjs_native_code_to_js(ctx, "esp_err_t", error, esp_err_to_name(error))) ||
         !esp32_mquickjs_set_property_ref(ctx, details, "stage", stage ? JS_NewString(ctx, stage) : JS_NULL)) {
         JS_PopGCRef(ctx, &ref); return JS_EXCEPTION;
     }
@@ -351,7 +352,9 @@ static JSValue action_finish(JSContext *ctx, esp32_mquickjs_future_driver_state_
     SET(result, "interface", JS_NewString(ctx, state->request->ifx == WIFI_IF_STA ? "station" : "access-point"));
     SET(result, "channel", JS_NewUint32(ctx, state->request->channel));
     SET(result, "payloadBytes", JS_NewUint32(ctx, state->request->data_len));
-    SET(result, "driverStatus", JS_NewString(ctx, state->result.tx_status == WIFI_ACTION_TX_DONE ? "success" : state->result.tx_status == WIFI_ACTION_TX_FAILED ? "failed" : "unknown"));
+    SET(result, "completion", esp32_mquickjs_tx_enum_completion_to_js(ctx,
+        state->result.tx_status != -1, "wifi_action_tx_status_type_t", state->result.tx_status,
+        WIFI_ACTION_TX_DONE, WIFI_ACTION_TX_FAILED, "WIFI_ACTION_TX_DONE", "WIFI_ACTION_TX_FAILED"));
     SET(result, "terminalStatus", JS_NewString(ctx, state->result.terminal_status == WIFI_ACTION_TX_DURATION_COMPLETED ? "duration-completed" : "cancelled"));
     return JS_PopGCRef(ctx, &ref);
 fail:

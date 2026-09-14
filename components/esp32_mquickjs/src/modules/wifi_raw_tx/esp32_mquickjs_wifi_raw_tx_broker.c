@@ -76,7 +76,25 @@ static void raw_tx_status_locked(unsigned index, esp32_mquickjs_wifi_raw_tx_brok
         if (s_raw_tx.records[i].native.token.identity != 0U) ++out->in_flight;
 }
 
-static void raw_tx_complete(const esp_80211_tx_info_t *info, void *descriptor, bool exact)
+#if ESP32_MQUICKJS_RAW_TX_DESCRIPTOR_IDENTITY
+static int raw_tx_read_mac_status_byte(void *descriptor)
+{
+    if (descriptor == NULL) return -1;
+    /* Pinned SDK EB layout: TX-info pointer at word 11 (C3/S3) or 14 (C5);
+     * LMAC completion byte is always at TX-info offset 19. Observed from
+     * ieee80211_get_tx_info_from_eb on the reviewed C3/S3/C5 objects. */
+#if CONFIG_IDF_TARGET_ESP32C5
+    const unsigned txinfo_word = 14;
+#else
+    const unsigned txinfo_word = 11;
+#endif
+    void *tx_info = ((void **)descriptor)[txinfo_word];
+    if (tx_info == NULL) return -1;
+    return (int)((const uint8_t *)tx_info)[19];
+}
+#endif
+
+static void raw_tx_complete(const esp_80211_tx_info_t *info, void *descriptor, bool exact, int mac_status_byte)
 {
     portENTER_CRITICAL(&s_raw_tx_lock);
     if (s_raw_tx.status.callbacks_active == UINT32_MAX) {
@@ -88,7 +106,7 @@ static void raw_tx_complete(const esp_80211_tx_info_t *info, void *descriptor, b
     portEXIT_CRITICAL(&s_raw_tx_lock);
     uint64_t now = (uint64_t)esp_timer_get_time();
     esp32_mquickjs_wifi_raw_tx_snapshot_t snapshot;
-    bool valid = esp32_mquickjs_wifi_raw_tx_snapshot(info, now, &snapshot);
+    bool valid = esp32_mquickjs_wifi_raw_tx_snapshot(info, now, mac_status_byte, &snapshot);
     portENTER_CRITICAL(&s_raw_tx_lock);
     unsigned index = RAW_TX_NONE;
     if (exact) {
@@ -154,7 +172,7 @@ static void raw_tx_callback(const esp_80211_tx_info_t *info)
      * registration non-null so the SDK builds its ordinary callback metadata. */
     (void)info;
 #else
-    raw_tx_complete(info, NULL, false);
+    raw_tx_complete(info, NULL, false, -1);
 #endif
 }
 
@@ -210,8 +228,11 @@ void *esp32qjs_raw_tx_alloc(const void *bytes, int kind, int length)
 }
 void esp32qjs_raw_tx_info(void *descriptor, esp_80211_tx_info_t *info)
 {
+    /* Read the LMAC completion byte before the public converter collapses it
+     * into wifi_tx_status_t 0/1. Descriptor remains valid for this callback. */
+    int mac_status_byte = raw_tx_read_mac_status_byte(descriptor);
     ieee80211_get_tx_info_from_eb(descriptor, info);
-    raw_tx_complete(info, descriptor, true);
+    raw_tx_complete(info, descriptor, true, mac_status_byte);
 }
 #endif
 

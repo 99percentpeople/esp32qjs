@@ -31,6 +31,7 @@ class WiFiActionCaptureGC(unittest.TestCase):
         code += source[start:source.index('\n};', start) + 3]
         code += unit(CORE / 'esp32_mquickjs_options.c')
         code += BOUNDARIES
+        code += unit(INTERNAL / "esp32_mquickjs_native_status.h")
         code += re.search(r'^#define SET\(.*$', source, re.M).group(0) + '\n'
         for name in ('action_hex', 'action_mac', 'action_capture_options', 'action_capture_payload',
                      'action_capture', 'action_finish', 'js_wifi_action_capabilities',
@@ -69,6 +70,8 @@ class WiFiActionCaptureGC(unittest.TestCase):
                      'sentinel' if 'sentinel' in expression else ''])
 
     def test_result_status_and_capabilities_gc_allocation(self):
+        for outcome in ('failed', 'absent'):
+            run([str(self.binary), 'finish', outcome, '1', ''])
         for mode in ('finish', 'status', 'capabilities'):
             with self.subTest(mode=mode):
                 run([str(self.binary), mode, '', '1', ''])

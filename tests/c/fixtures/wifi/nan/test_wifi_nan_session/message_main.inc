@@ -34,6 +34,12 @@ int main(void){
  message_tx.buffer_retired=true;tick();esp32_mquickjs_wifi_nan_message_release(m);m=NULL;
  message_inline=false;assert(!esp32_mquickjs_wifi_nan_message_create(d,&params,1000,&m));
  assert(!esp32_mquickjs_wifi_nan_message_activate(m));tick();
+ message_tx.tx_done=true;message_tx.tx_succeeded=false;message_tx.completed_us=clock_us;
+ esp32_mquickjs_wifi_nan_message_status(m,&snapshot);
+ assert(snapshot.done && !snapshot.error && snapshot.tx.tx_done && !snapshot.tx.tx_succeeded && !snapshot.retired);
+ message_tx.buffer_retired=true;tick();esp32_mquickjs_wifi_nan_message_release(m);m=NULL;
+ message_inline=false;assert(!esp32_mquickjs_wifi_nan_message_create(d,&params,1000,&m));
+ assert(!esp32_mquickjs_wifi_nan_message_activate(m));tick();
  esp32_mquickjs_wifi_nan_message_cancel(m,true);assert(m->status.timed_out&&m->status.done&&!m->status.retired);
  esp32_mquickjs_wifi_nan_message_release(m);m=NULL;assert(s_nan_message_handles==1);
  message_tx.tx_done=message_tx.tx_succeeded=message_tx.buffer_retired=true;tick();

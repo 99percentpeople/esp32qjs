@@ -8,6 +8,7 @@
 #include "esp32_mquickjs_wifi_nan_pairing.h"
 #include "utils/esp32_mquickjs_byte_source.h"
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_native_status.h"
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_memory.h"
 #include "esp32_mquickjs_options.h"
@@ -675,13 +676,7 @@ static JSValue nan_finish(JSContext *ctx, esp32_mquickjs_future_driver_state_t *
         return nan_path_error(ctx, state->path, nan_operation_name(state->operation), ESP_OK, false);
     }
 #endif
-    if (state->message) {
-        esp32_mquickjs_wifi_nan_message_status_t status;
-        esp32_mquickjs_wifi_nan_message_status(state->message, &status);
-        if (status.done && !status.error && status.tx.tx_done && status.tx.tx_succeeded)
-            return nan_message_result_to_js(ctx, &status);
-        return nan_message_error(ctx, state->message, ESP_OK, false);
-    }
+    if (state->message) return nan_message_finish(ctx, state->message);
     if (state->discovery) {
         esp32_mquickjs_wifi_nan_discovery_status_t status;
         esp32_mquickjs_wifi_nan_discovery_status(state->discovery, &status);

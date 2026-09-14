@@ -3,6 +3,7 @@
 #if CONFIG_ESP32_MQUICKJS_FEATURE_ESPNOW
 
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_native_status.h"
 #include "esp32_mquickjs_event_queue.h"
 #include "esp32_mquickjs_espnow_tx_queue.h"
 #include "esp32_mquickjs_future.h"
@@ -155,7 +156,7 @@ typedef struct {
     StaticTask_t tx_task_buffer;
     _Atomic uint32_t active_queued_slot;
     _Atomic bool queued_send_completed;
-    _Atomic bool queued_send_delivered;
+    _Atomic int queued_send_status;
     _Atomic int queued_send_error;
     _Atomic int64_t queued_send_started_us;
     _Atomic uint32_t next_batch_sequence;
@@ -168,6 +169,14 @@ typedef struct {
     _Atomic uint32_t tx_completed_batches;
     _Atomic uint32_t tx_completed_packets;
     _Atomic uint32_t tx_failed_packets;
+    _Atomic uint32_t tx_submitted_packets;
+    _Atomic uint32_t tx_settled_packets;
+    _Atomic uint32_t tx_succeeded_packets;
+    _Atomic uint32_t tx_unknown_packets;
+    _Atomic uint32_t tx_submit_rejected_packets;
+    _Atomic uint32_t tx_timed_out_packets;
+    bool tx_has_completion;
+    int tx_last_status;
     _Atomic uint32_t tx_high_water_packets;
     _Atomic int tx_last_error;
     bool has_pmk;
@@ -194,6 +203,8 @@ typedef struct {
     _Atomic uint32_t sent_bytes;
     _Atomic uint32_t send_successes;
     _Atomic uint32_t send_failures;
+    _Atomic uint32_t send_unknowns;
+    _Atomic uint32_t send_rejections;
     _Atomic uint32_t send_timeouts;
 } espnow_session_t;
 
@@ -232,7 +243,8 @@ struct esp32_mquickjs_future_driver_state {
     int64_t completed_at_us;
     esp_err_t err;
     const char *failed_step;
-    bool mac_delivered;
+    bool tx_completed;
+    int tx_status;
     bool timed_out;
     bool recovery_failed;
     bool result_bool;
@@ -642,7 +654,8 @@ static JSValue espnow_throw_error(
     *details = JS_NewObject(ctx);
     if (JS_IsException(*details) ||
         !esp32_mquickjs_set_property_ref(
-            ctx, details, "espCode", JS_NewInt32(ctx, esp_code)) ||
+            ctx, details, "native",
+            esp32_mquickjs_native_code_to_js(ctx, "esp_err_t", esp_code, esp_err_to_name(esp_code))) ||
         !esp32_mquickjs_set_property_ref(
             ctx, details, "address",
             address != NULL ? JS_NewString(ctx, normalized_address)
@@ -900,14 +913,17 @@ static void espnow_send_callback(const esp_now_send_info_t *send_info,
         !atomic_load_explicit(&state->completed, memory_order_acquire) &&
         memcmp(state->address, send_info->des_addr,
                ESPNOW_ADDRESS_BYTES) == 0) {
-        state->mac_delivered = status == ESP_NOW_SEND_SUCCESS;
+        state->tx_status = status;
+        state->tx_completed = true;
         state->completed_at_us = esp_timer_get_time();
         if (status == ESP_NOW_SEND_SUCCESS) {
             atomic_fetch_add_explicit(&session->send_successes, 1,
                                       memory_order_relaxed);
-        } else {
+        } else if (status == ESP_NOW_SEND_FAIL) {
             atomic_fetch_add_explicit(&session->send_failures, 1,
                                       memory_order_relaxed);
+        } else {
+            atomic_fetch_add_explicit(&session->send_unknowns, 1, memory_order_relaxed);
         }
         atomic_store_explicit(&session->active_send, NULL,
                               memory_order_release);
@@ -922,8 +938,8 @@ static void espnow_send_callback(const esp_now_send_info_t *send_info,
         queued_slot < session->tx_queue_capacity &&
         memcmp(session->tx_packets[queued_slot].address,
                send_info->des_addr, ESPNOW_ADDRESS_BYTES) == 0) {
-        atomic_store_explicit(&session->queued_send_delivered,
-                              status == ESP_NOW_SEND_SUCCESS,
+        atomic_store_explicit(&session->queued_send_status,
+                              status,
                               memory_order_release);
         atomic_store_explicit(&session->queued_send_error, ESP_OK,
                               memory_order_release);
@@ -932,9 +948,11 @@ static void espnow_send_callback(const esp_now_send_info_t *send_info,
         if (status == ESP_NOW_SEND_SUCCESS) {
             atomic_fetch_add_explicit(&session->send_successes, 1,
                                       memory_order_relaxed);
-        } else {
+        } else if (status == ESP_NOW_SEND_FAIL) {
             atomic_fetch_add_explicit(&session->send_failures, 1,
                                       memory_order_relaxed);
+        } else {
+            atomic_fetch_add_explicit(&session->send_unknowns, 1, memory_order_relaxed);
         }
         TaskHandle_t tx_task = atomic_load_explicit(
             &session->tx_task, memory_order_acquire);
@@ -980,7 +998,7 @@ static void espnow_update_tx_high_water(espnow_session_t *session,
 static void espnow_complete_queued_send(espnow_session_t *session)
 {
     bool batch_completed = false;
-    bool delivered;
+    int status;
     int err;
 
     if (session == NULL ||
@@ -988,32 +1006,36 @@ static void espnow_complete_queued_send(espnow_session_t *session)
                               memory_order_acquire)) {
         return;
     }
-    delivered = atomic_load_explicit(&session->queued_send_delivered,
+    status = atomic_load_explicit(&session->queued_send_status,
                                      memory_order_acquire);
     err = atomic_load_explicit(&session->queued_send_error,
                                memory_order_acquire);
     portENTER_CRITICAL(&session->lock);
     (void)esp32_mquickjs_espnow_tx_queue_complete_active(
         &session->tx_queue, &batch_completed);
-    portEXIT_CRITICAL(&session->lock);
     atomic_store_explicit(&session->active_queued_slot,
                           ESP32_MQUICKJS_ESPNOW_TX_SLOT_NONE,
                           memory_order_release);
     atomic_store_explicit(&session->queued_send_completed, false,
                           memory_order_release);
-    atomic_fetch_add_explicit(&session->tx_completed_packets, 1,
+    atomic_fetch_add_explicit(&session->tx_settled_packets, 1,
                               memory_order_relaxed);
     if (batch_completed) {
         atomic_fetch_add_explicit(&session->tx_completed_batches, 1,
                                   memory_order_relaxed);
     }
-    if (err != ESP_OK || !delivered) {
-        atomic_fetch_add_explicit(&session->tx_failed_packets, 1,
-                                  memory_order_relaxed);
-        atomic_store_explicit(&session->tx_last_error,
-                              err != ESP_OK ? err : ESP_FAIL,
-                              memory_order_relaxed);
+    if (err != ESP_OK) {
+        atomic_fetch_add_explicit(&session->tx_submit_rejected_packets, 1, memory_order_relaxed);
+        atomic_store_explicit(&session->tx_last_error, err, memory_order_relaxed);
+    } else {
+        atomic_fetch_add_explicit(&session->tx_completed_packets, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(status == ESP_NOW_SEND_SUCCESS ? &session->tx_succeeded_packets :
+            status == ESP_NOW_SEND_FAIL ? &session->tx_failed_packets : &session->tx_unknown_packets,
+            1, memory_order_relaxed);
+        session->tx_has_completion = true;
+        session->tx_last_status = status;
     }
+    portEXIT_CRITICAL(&session->lock);
     if (session->runtime != NULL) {
         esp32_mquickjs_notify_activity(session->runtime);
     }
@@ -1062,9 +1084,7 @@ static void espnow_fail_queued_timeout(espnow_session_t *session)
                           memory_order_release);
     atomic_fetch_add_explicit(&session->send_timeouts, 1,
                               memory_order_relaxed);
-    atomic_fetch_add_explicit(&session->send_failures, 1,
-                              memory_order_relaxed);
-    atomic_fetch_add_explicit(&session->tx_failed_packets, 1,
+    atomic_fetch_add_explicit(&session->tx_timed_out_packets, 1,
                               memory_order_relaxed);
     atomic_store_explicit(&session->tx_last_error, ESP_ERR_TIMEOUT,
                           memory_order_relaxed);
@@ -1113,7 +1133,7 @@ static bool espnow_start_tracked_send(espnow_session_t *session)
     }
     atomic_store_explicit(&session->active_send, NULL,
                           memory_order_release);
-    atomic_fetch_add_explicit(&session->send_failures, 1,
+    atomic_fetch_add_explicit(&session->send_rejections, 1,
                               memory_order_relaxed);
     state->completed_at_us = esp_timer_get_time();
     atomic_store_explicit(&state->completed, true, memory_order_release);
@@ -1136,7 +1156,7 @@ static bool espnow_start_queued_send(espnow_session_t *session)
     packet = &session->tx_packets[slot];
     atomic_store_explicit(&session->active_queued_slot, slot,
                           memory_order_release);
-    atomic_store_explicit(&session->queued_send_delivered, false,
+    atomic_store_explicit(&session->queued_send_status, 0,
                           memory_order_release);
     atomic_store_explicit(&session->queued_send_error, ESP_OK,
                           memory_order_release);
@@ -1156,11 +1176,12 @@ static bool espnow_start_queued_send(espnow_session_t *session)
     if (err == ESP_OK) {
         atomic_fetch_add_explicit(&session->sent_packets, 1,
                                   memory_order_relaxed);
+        atomic_fetch_add_explicit(&session->tx_submitted_packets, 1, memory_order_relaxed);
         atomic_fetch_add_explicit(&session->sent_bytes, packet->length,
                                   memory_order_relaxed);
         return true;
     }
-    atomic_fetch_add_explicit(&session->send_failures, 1,
+    atomic_fetch_add_explicit(&session->send_rejections, 1,
                               memory_order_relaxed);
     atomic_store_explicit(&session->queued_send_error, err,
                           memory_order_release);
@@ -2022,7 +2043,7 @@ static bool espnow_open_capture(
     atomic_init(&session->active_queued_slot,
                 ESP32_MQUICKJS_ESPNOW_TX_SLOT_NONE);
     atomic_init(&session->queued_send_completed, false);
-    atomic_init(&session->queued_send_delivered, false);
+    atomic_init(&session->queued_send_status, 0);
     atomic_init(&session->queued_send_error, ESP_OK);
     atomic_init(&session->queued_send_started_us, 0);
     atomic_init(&session->next_batch_sequence, 1);
@@ -2035,6 +2056,14 @@ static bool espnow_open_capture(
     atomic_init(&session->tx_completed_batches, 0);
     atomic_init(&session->tx_completed_packets, 0);
     atomic_init(&session->tx_failed_packets, 0);
+    atomic_init(&session->tx_submitted_packets, 0);
+    atomic_init(&session->tx_settled_packets, 0);
+    atomic_init(&session->tx_succeeded_packets, 0);
+    atomic_init(&session->tx_unknown_packets, 0);
+    atomic_init(&session->tx_submit_rejected_packets, 0);
+    atomic_init(&session->tx_timed_out_packets, 0);
+    session->tx_has_completion = false;
+    session->tx_last_status = 0;
     atomic_init(&session->tx_high_water_packets, 0);
     atomic_init(&session->tx_last_error, ESP_OK);
     atomic_init(&session->callbacks_active, 0);
@@ -2051,6 +2080,8 @@ static bool espnow_open_capture(
     atomic_init(&session->sent_bytes, 0);
     atomic_init(&session->send_successes, 0);
     atomic_init(&session->send_failures, 0);
+    atomic_init(&session->send_unknowns, 0);
+    atomic_init(&session->send_rejections, 0);
     atomic_init(&session->send_timeouts, 0);
     if (state->has_pmk) {
         memcpy(session->pmk, state->pmk, ESP_NOW_KEY_LEN);
@@ -3720,6 +3751,11 @@ static JSValue espnow_send_finish(
                                   state->address,
                                   s_espnow_session.channel);
     }
+    if (!state->tx_completed) {
+        JS_PopGCRef(ctx, &result_ref);
+        return espnow_throw_error(ctx, "ESPNOW_SEND_FAILED", ESP_ERR_INVALID_STATE,
+            state->address, s_espnow_session.channel);
+    }
     espnow_format_address(state->address, address);
     *result = JS_NewObject(ctx);
     if (JS_IsException(*result) ||
@@ -3729,8 +3765,10 @@ static JSValue espnow_send_finish(
             ctx, result, "bytes",
             JS_NewInt64(ctx, (int64_t)state->payload_length)) ||
         !esp32_mquickjs_set_property_ref(
-            ctx, result, "macDelivered",
-            JS_NewBool(state->mac_delivered)) ||
+            ctx, result, "completion",
+            esp32_mquickjs_tx_enum_completion_to_js(ctx, true, "esp_now_send_status_t",
+                state->tx_status, ESP_NOW_SEND_SUCCESS, ESP_NOW_SEND_FAIL,
+                "ESP_NOW_SEND_SUCCESS", "ESP_NOW_SEND_FAIL")) ||
         !esp32_mquickjs_set_property_ref(
             ctx, result, "completedAtUs",
             JS_NewInt64(ctx, state->completed_at_us))) {
@@ -5017,6 +5055,10 @@ static JSValue espnow_status_to_js(JSContext *ctx,
     uint32_t queued_packets = 0;
     int tx_last_error = atomic_load_explicit(
         &session->tx_last_error, memory_order_relaxed);
+    portENTER_CRITICAL(&session->lock);
+    bool tx_has_completion = session->tx_has_completion;
+    int tx_last_status = session->tx_last_status;
+    portEXIT_CRITICAL(&session->lock);
 
     *result = JS_NewObject(ctx);
     *power_save = JS_NewObject(ctx);
@@ -5113,6 +5155,10 @@ static JSValue espnow_status_to_js(JSContext *ctx,
             JS_NewUint32(ctx, atomic_load_explicit(
                                   &session->send_failures,
                                   memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "sendUnknowns",
+            JS_NewUint32(ctx, atomic_load_explicit(&session->send_unknowns, memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "sendRejections",
+            JS_NewUint32(ctx, atomic_load_explicit(&session->send_rejections, memory_order_relaxed))) ||
         !esp32_mquickjs_set_property_ref(
             ctx, result, "sendTimeouts",
             JS_NewUint32(ctx, atomic_load_explicit(
@@ -5182,7 +5228,7 @@ static JSValue espnow_status_to_js(JSContext *ctx,
                                   &session->tx_evicted_packets,
                                   memory_order_relaxed))) ||
         !esp32_mquickjs_set_property_ref(
-            ctx, tx_queue, "completedBatches",
+            ctx, tx_queue, "settledBatches",
             JS_NewUint32(ctx, atomic_load_explicit(
                                   &session->tx_completed_batches,
                                   memory_order_relaxed))) ||
@@ -5196,10 +5242,26 @@ static JSValue espnow_status_to_js(JSContext *ctx,
             JS_NewUint32(ctx, atomic_load_explicit(
                                   &session->tx_failed_packets,
                                   memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(ctx, tx_queue, "submittedPackets",
+            JS_NewUint32(ctx, atomic_load_explicit(&session->tx_submitted_packets, memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(ctx, tx_queue, "settledPackets",
+            JS_NewUint32(ctx, atomic_load_explicit(&session->tx_settled_packets, memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(ctx, tx_queue, "succeededPackets",
+            JS_NewUint32(ctx, atomic_load_explicit(&session->tx_succeeded_packets, memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(ctx, tx_queue, "unknownPackets",
+            JS_NewUint32(ctx, atomic_load_explicit(&session->tx_unknown_packets, memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(ctx, tx_queue, "submitRejectedPackets",
+            JS_NewUint32(ctx, atomic_load_explicit(&session->tx_submit_rejected_packets, memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(ctx, tx_queue, "timedOutPackets",
+            JS_NewUint32(ctx, atomic_load_explicit(&session->tx_timed_out_packets, memory_order_relaxed))) ||
+        !esp32_mquickjs_set_property_ref(ctx, tx_queue, "lastCompletion",
+            esp32_mquickjs_tx_enum_completion_to_js(ctx, tx_has_completion, "esp_now_send_status_t",
+                tx_last_status, ESP_NOW_SEND_SUCCESS, ESP_NOW_SEND_FAIL,
+                "ESP_NOW_SEND_SUCCESS", "ESP_NOW_SEND_FAIL")) ||
         !esp32_mquickjs_set_property_ref(
             ctx, tx_queue, "lastError",
             tx_last_error == ESP_OK ? JS_NULL
-                                    : JS_NewInt32(ctx, tx_last_error)) ||
+                                    : esp32_mquickjs_native_code_to_js(ctx, "esp_err_t", tx_last_error, esp_err_to_name(tx_last_error))) ||
         !esp32_mquickjs_set_property_ref(ctx, result, "txQueue",
                                          *tx_queue) ||
         !esp32_mquickjs_set_property_ref(ctx, power_save, "faulted", JS_NewBool(session->power_save_fault)) ||

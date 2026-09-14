@@ -20,6 +20,10 @@ The user-facing and AI-facing JavaScript API reference is shared under
 documentation, not Skills. Problem-solving Skills belong to a host product and
 are outside this repository.
 
+Write all content under `docs/api/` in English, including headings, prose, tables,
+code comments and human-readable example text. Preserve API identifiers and literals
+whose exact values are required by the contract.
+
 ## Build, Flash, and Debug
 
 Use the repository helper for normal development:

@@ -32,14 +32,28 @@ int main(int argc,char **argv) {
             state.result.token.identity=7;state.result.token.generation=9;state.result.byte_length=24;
             state.result.driver_accepted=state.result.driver_completed=true;
             state.result.completion.status=ESP32_MQUICKJS_WIFI_RAW_TX_DRIVER_SUCCESS;
+            if(!strcmp(argv[2],"failed")) {
+                state.result.completion.raw_status=WIFI_SEND_FAIL;
+                state.result.completion.status=ESP32_MQUICKJS_WIFI_RAW_TX_DRIVER_FAILED;
+            } else if(!strcmp(argv[2],"unknown")) {
+                state.result.completion.raw_status=99;
+                state.result.completion.status=ESP32_MQUICKJS_WIFI_RAW_TX_DRIVER_UNKNOWN;
+            } else if(!strncmp(argv[2],"descriptor-",11)) {
+                int code=atoi(argv[2]+11);
+                state.result.completion.mac_status_available=true;
+                state.result.completion.mac_status_byte=(uint8_t)code;
+                state.result.completion.raw_status=code==1 ? WIFI_SEND_SUCCESS : WIFI_SEND_FAIL;
+                state.result.completion.status=code==1 ? ESP32_MQUICKJS_WIFI_RAW_TX_DRIVER_SUCCESS : ESP32_MQUICKJS_WIFI_RAW_TX_DRIVER_FAILED;
+                if(!strcmp(argv[2],"descriptor-sdk-unknown")) {
+                    state.result.completion.raw_status=99;
+                    state.result.completion.status=ESP32_MQUICKJS_WIFI_RAW_TX_DRIVER_UNKNOWN;
+                }
+            } else if(!strcmp(argv[2],"incomplete")) state.result.driver_completed=false;
             terminated_snapshot=!strcmp(argv[1],"terminated-status");
             *result=!strcmp(argv[1],"finish") ? raw_tx_finish(ctx,&state) :
                 (!strcmp(argv[1],"status") || terminated_snapshot) ? esp32_mquickjs_wifi_raw_tx_status(ctx) : js_wifi_raw_tx_capabilities(ctx,NULL,0,NULL);
             ok=!JS_IsException(*result);
-            if(!nth){total=calls;assert(ok);}
-            if(ok && !strcmp(argv[1],"finish")) {
-                JSValue flag=JS_GetPropertyStr(ctx,*result,"driverCompleted");assert(flag==JS_TRUE);
-            }
+            if(!nth){total=calls;assert(ok == (strcmp(argv[2],"incomplete") != 0));}
             if(ok && (!strcmp(argv[1],"status") || terminated_snapshot)) {
                 int32_t number;
                 assert(!JS_ToInt32(ctx,&number,JS_GetPropertyStr(ctx,*result,"laneIdentity")) && number==77);
@@ -71,6 +85,30 @@ int main(int argc,char **argv) {
             }
         }
         inject=false;collect=false;
+        if(ok && !strcmp(argv[1],"finish")) {
+            assert(!JS_IsException(JS_SetPropertyStr(ctx,JS_GetGlobalObject(ctx),"tx",*result)));
+            const char *check = "tx.driverStatus === undefined && tx.rawStatus === undefined && tx.rawStatusName === undefined && tx.driverAccepted === undefined && tx.driverCompleted === undefined && tx.macStatusByte === undefined && tx.macStatusName === undefined";
+            *root=JS_Eval(ctx,check,strlen(check),"completion-shape",JS_EVAL_RETVAL);assert(*root==JS_TRUE);
+            bool descriptor=!strncmp(argv[2],"descriptor-",11);
+            const char *domain=descriptor ? "tx.completion.native.domain === 'esp_wifi_tx_descriptor_status'" :
+                "tx.completion.native.domain === 'wifi_tx_status_t'";
+            *root=JS_Eval(ctx,domain,strlen(domain),"completion-domain",JS_EVAL_RETVAL);assert(*root==JS_TRUE);
+            const char *outcome = !strcmp(argv[2],"unknown") ?
+                "tx.completion.status === 'unknown' && tx.completion.native.code === 99 && tx.completion.native.name === null" :
+                !strcmp(argv[2],"failed") ? "tx.completion.status === 'failed' && tx.completion.native.code === 1 && tx.completion.native.name === 'WIFI_SEND_FAIL'" :
+                "tx.completion.status === 'success' && tx.completion.native.code === 0 && tx.completion.native.name === 'WIFI_SEND_SUCCESS'";
+            char descriptor_check[256];
+            if(descriptor) {
+                int code=atoi(argv[2]+11);
+                const char *name=code==1 ? "'success'" : code==2 || code==3 ? "'frame-exchange'" :
+                    code==4 ? "'discarded'" : "null";
+                const char *status=!strcmp(argv[2],"descriptor-sdk-unknown") ? "unknown" : code==1 ? "success" : "failed";
+                snprintf(descriptor_check,sizeof(descriptor_check),
+                    "tx.completion.status === '%s' && tx.completion.native.code === %d && tx.completion.native.name === %s",status,code,name);
+                outcome=descriptor_check;
+            }
+            *root=JS_Eval(ctx,outcome,strlen(outcome),"completion-value",JS_EVAL_RETVAL);assert(*root==JS_TRUE);
+        }
         if(ok && !strcmp(argv[1],"capabilities")) {
             assert(!JS_IsException(JS_SetPropertyStr(ctx,JS_GetGlobalObject(ctx),"caps",*result)));
 #if defined(ESP32_MQUICKJS_RAW_TX_EXTENDED_MANAGEMENT) && ESP32_MQUICKJS_RAW_TX_EXTENDED_MANAGEMENT
@@ -106,7 +144,7 @@ int main(int argc,char **argv) {
                 esp32_mquickjs_wifi_raw_tx_validated_frame_t validated={0};
                 assert(esp32_mquickjs_wifi_raw_tx_validate(bytes,sizeof(bytes),&policy,&validated)==ESP32_MQUICKJS_WIFI_RAW_TX_VALID);
                 esp32_mquickjs_wifi_raw_tx_broker_status_t native={0};
-                native.frame_type=validated.frame_type;
+                native.frame_type=validated.frame_type; native.driver_accepted=native.driver_completed=true;
                 *root=esp32_mquickjs_wifi_raw_tx_result_to_js(ctx,&native,ESP32_MQUICKJS_WIFI_RAW_TX_STATION,1);
                 assert(!JS_IsException(*root));
                 args[1].val=JS_GetPropertyStr(ctx,*root,"frameType");

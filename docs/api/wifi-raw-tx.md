@@ -124,17 +124,26 @@ submission. The chosen channel stays pinned through native retirement, including
 after a public timeout. Sending does not change interface-global PHY rate settings.
 
 The result contains sequence, radioGeneration, interface, observed channel,
-frameType, byteLength, submittedAtUs, completedAtUs, driverAccepted,
-driverCompleted, driverStatus, rate, rawRate and rawStatus. Sequence is a boot-lived
-framework operation identity, **not** the packet's 802.11 sequence-control field.
-Timestamps use the local monotonic clock, not UTC; completedAtUs is callback time.
-`driverStatus` is `"success"`, `"failed"` or `"unknown"`. A failed MAC completion
-is a completed result; SDK submission errors throw. Completion is not a peer
-application ACK. `rawStatus` is the SDK `wifi_tx_status_t` enum: 0 is
-`WIFI_SEND_SUCCESS`, 1 is `WIFI_SEND_FAIL`. It is not an `esp_err_t`, an 802.11
-reason code, or a detailed explanation of why transmission failed.
-`driverAccepted: true` with `driverCompleted: true` and `rawStatus: 1` means
-submission succeeded and the later MAC completion reported failure. It does
+frameType, byteLength, submittedAtUs, completedAtUs, completion, rate and rawRate.
+Sequence is a boot-lived framework operation identity, **not** the packet's 802.11
+sequence-control field. Timestamps use the local monotonic clock; completedAtUs
+is callback time. One-shot and Session sends use the same result converter.
+
+`completion.status` is `"success"`, `"failed"` or `"unknown"`.
+It follows the public SDK completion, independently of whether the finer native
+code has a known name. `completion.native` contains one `{domain, code, name}`
+observation: the descriptor status when available, otherwise `wifi_tx_status_t`.
+See the mapping below and [shared TX completion](tx-completion.md).
+These are not `esp_err_t` or 802.11 reason codes.
+A normal result always has an observed completion, including MAC failure.
+
+```js
+var result = wifi.rawTx.send(frameBytes, { timeoutMs: 1000 });
+console.log(result.completion.status, result.completion.native.name);
+```
+
+`completion.status: "failed"` means submission succeeded
+and the later MAC completion reported failure. It does
 not establish address/association rejection, nor prove whether the frame was
 transmitted over the air. A broadcast/unicast difference alone does not isolate
 an address check: their MAC acknowledgment behavior differs. Diagnose RF/ACK
@@ -150,6 +159,36 @@ for the measured cases and remaining ACK evidence limits.
 After native completion, `rate` maps the target SDK enum name;
 unknown numeric codes remain null. `rawRate` preserves the original code. Rate
 names do not infer PHY mode, GI duration, throughput or acknowledgment.
+
+When the reviewed descriptor-identity hook observes the TX-info completion byte,
+`completion.native.domain` is `esp_wifi_tx_descriptor_status`. The hook reads
+the pinned SDK descriptor before its public getter collapses the byte into
+`wifi_tx_status_t` 0/1. The raw byte and its reviewed observation label directly
+populate `completion.native.code` and `completion.native.name`:
+
+| `native.domain` | `native.code` | `native.name` | Observation |
+| --- | --- | --- | --- |
+| `esp_wifi_tx_descriptor_status` | 1 | `success` | TX success / recycle |
+| `esp_wifi_tx_descriptor_status` | 2, 3 | `frame-exchange` | Frame-exchange discard family |
+| `esp_wifi_tx_descriptor_status` | 4 | `discarded` | MPDU / aged-MSDU discard |
+| `esp_wifi_tx_descriptor_status` | other | `null` | Unknown descriptor value preserved |
+| `wifi_tx_status_t` | 0 | `WIFI_SEND_SUCCESS` | Descriptor unavailable; SDK success |
+| `wifi_tx_status_t` | 1 | `WIFI_SEND_FAIL` | Descriptor unavailable; SDK failure |
+| `wifi_tx_status_t` | other | `null` | Descriptor unavailable; unknown SDK completion |
+
+Always check the domain: code 1 means different things in these two namespaces.
+Descriptor names are framework labels derived from the pinned SDK, not Espressif
+public enum symbols or exact RF/ACK causes. Values 7/8/9 in the LMAC state-machine
+object do not establish meanings for the separate TX-info field; their descriptor
+names remain null. An observed but unknown descriptor code stays in the descriptor
+domain and does not fall back to a less detailed number. For example, descriptor
+8 with SDK failure yields `status: "failed"`, code 8 and name null.
+
+```js
+var result = wifi.rawTx.send(frameBytes, { timeoutMs: 1000 });
+console.log(result.completion.status, result.completion.native.domain,
+            result.completion.native.code, result.completion.native.name);
+```
 
 ```js
 // Supply a valid MAC frame built for your network and target.
@@ -180,7 +219,7 @@ the original completion is safe to retire. Future result-conversion OOM uses the
 same ownership transfer; do not blindly resend after an ambiguous error.
 
 Capture/frame rejection uses `WIFI_RAW_TX_INVALID_FRAME`; native failures use
-`WIFI_RAW_TX_SEND_FAILED`, with `espCode`, `espName`, `stage` and `validationCode`.
+`WIFI_RAW_TX_SEND_FAILED`, with `details.native` (`esp_err_t`), `stage` and `validationCode`.
 Read `wifi.status().radio.rawTx` for operationActive/operationIdentity, quarantined,
 correlationFault, cleanupPending/cleanupStage/cleanupError, submitError,
 registrationError and identityExhausted. `nativeTerminated` indicates retained
@@ -482,7 +521,7 @@ per-call option is `timeoutMs` (integer 1–2147483647, default 1000). Use
 Returns the one-shot `WiFiRawTxResult` fields plus `sessionGeneration` and
 `admissionSequence`. The existing `sequence` remains the native broker identity.
 Later packets cannot overwrite an earlier pending result. MAC failure is a
-completed result with `driverStatus: "failed"`; an evicted/closed queued packet
+completed result with `completion.status: "failed"`; an evicted/closed queued packet
 produces an error. A submission with uncertain native ownership produces
 `WIFI_RAW_TX_UNCERTAIN` and leaves native cleanup pending.
 
@@ -543,7 +582,7 @@ finalizer.
 
 Operational errors use `WIFI_RAW_TX_SESSION_FAILED`, `WIFI_RAW_TX_ADMISSION_FAILED`,
 `WIFI_RAW_TX_INVALID_FRAME`, `WIFI_RAW_TX_UNCERTAIN` or `WIFI_RAW_TX_TIMEOUT`, with
-`espCode`, `espName`, `stage`, `admitted`, `validationCode` and `queueCode` details.
+`native` (`esp_err_t`), `stage`, `admitted`, `validationCode` and `queueCode` details.
 `admitted` describes this send's queue admission, not proof of RF transmission.
 
 Global `wifi.status().radio.rawTx` also reports `liveSessions`,
@@ -623,7 +662,7 @@ Raw TX/Session diagnostics before retrying an ambiguous startup error.
 
 - `state`: running, stopped, closing, closed or faulted; `periodicGeneration`,
   `intervalUs`, `count` and nullable `activeSequence`.
-- `scheduled`, `issued`, `submitted`, `completed`, `failed`, `unknown`, `rejected`,
+- `scheduled`, `issued`, `submitted`, `completed`, `succeeded`, `failed`, `unknown`, `rejected`,
   `aborted`, `dropped`, `skippedBusy` and `skippedLate`.
 - `retired`, `stopRequested`, `closeRequested`, `workerBusy`, `timerPresent`,
   `timerQuiesced`, `timerTransition`, `faulted`, `exhausted`, `uncertain`,
@@ -631,8 +670,9 @@ Raw TX/Session diagnostics before retrying an ambiguous startup error.
 
 `scheduled = issued + skippedBusy + skippedLate`. Issued is a scheduling
 reservation, not proof of queue/SDK acceptance. Submitted records SDK acceptance;
-completed counts MAC terminal results, including failed/unknown. Failed also
-includes rejected and dropped packets. These are worker-published observations;
+completed counts MAC terminal results, including failed/unknown, and equals
+succeeded + failed + unknown. Failed counts only MAC failure; rejected and dropped
+remain separate. stopOnError still stops for failure, rejection or drop. These are worker-published observations;
 a temporarily unchanged counter does not prove no RF has happened. Timer fields
 reflect completed native steps; timerTransition indicates an SDK step in progress.
 

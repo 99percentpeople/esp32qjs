@@ -101,10 +101,10 @@ bool esp32_mquickjs_wifi_raw_tx_periodic_finish(periodic_t *periodic, ticket_t *
     bool completion = outcome <= ESP32_MQUICKJS_WIFI_RAW_TX_PERIODIC_UNKNOWN;
     if (completion != periodic->active_submitted) return false;
     if (completion) ++periodic->completed;
+    if (outcome == ESP32_MQUICKJS_WIFI_RAW_TX_PERIODIC_FAILED) ++periodic->failed;
     if (outcome == ESP32_MQUICKJS_WIFI_RAW_TX_PERIODIC_FAILED ||
         outcome == ESP32_MQUICKJS_WIFI_RAW_TX_PERIODIC_REJECTED ||
         outcome == ESP32_MQUICKJS_WIFI_RAW_TX_PERIODIC_DROPPED) {
-        ++periodic->failed;
         if (periodic->options.stop_on_error) { periodic->running = false; periodic->faulted = true; }
     }
     if (outcome == ESP32_MQUICKJS_WIFI_RAW_TX_PERIODIC_UNKNOWN) ++periodic->unknown;

@@ -135,7 +135,8 @@ static void nan_message_observe_locked(esp32_mquickjs_wifi_nan_message_t *m,
     if (!m->status.activated || m->status.done) return;
     if (m->submit_returned && m->status.tx.tx_done && m->status.tx.completed_us <= m->deadline_us) {
         m->status.done = true;
-        m->status.error = m->status.tx.tx_succeeded ? ESP_OK : ESP_FAIL;
+        /* A failed TX completion is an observation, not a submit error. */
+        m->status.error = ESP_OK;
     } else if (now >= m->deadline_us) {
         nan_message_cancel_locked(m, true);
     } else if (m->submit_returned && m->status.tx.buffer_retired) {

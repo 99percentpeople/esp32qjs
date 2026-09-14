@@ -11,6 +11,9 @@ typedef struct {
     uint64_t ticket;
     int64_t completed_us, retired_us;
     bool entered, allocated, tx_done, tx_succeeded, buffer_retired;
+    /* USD retains its Action enum; synchronous NAN currently exposes only bool. */
+    bool has_native_status;
+    int native_status;
 } esp32_mquickjs_wifi_nan_message_tx_status_t;
 #if CONFIG_ESP_WIFI_NAN_SYNC_ENABLE
 /* One framework follow-up at a time. context is a retained native output word,

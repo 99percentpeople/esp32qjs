@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from tests.support.fixtures import fixture_text
 from tests.c.integration.wifi.csi.test_wifi_csi_rx_link import tool, elf
+from tests.support.wireless_vm_fixture import extract
 
 
 class WiFiRawTxIdentitySdk(unittest.TestCase):
@@ -34,8 +35,9 @@ class WiFiRawTxIdentitySdk(unittest.TestCase):
                 pp = (archive.parent/'libpp.a').read_bytes()
                 identity.verify_pp(pp, target)
                 import patch_idf_twt_probe_wake as archive_tools
-                changed_pp = archive_tools.patch_archive(pp, member_patches={'pp.o': lambda data: data[:-1]+bytes([data[-1]^1])})
-                with self.assertRaises(ValueError): identity.verify_pp(changed_pp, target)
+                for member in ('pp.o', 'lmac.o'):
+                    changed_pp = archive_tools.patch_archive(pp, member_patches={member: lambda data: data[:-1]+bytes([data[-1]^1])})
+                    with self.assertRaises(ValueError): identity.verify_pp(changed_pp, target)
                 for member in identity.HOOKS:
                     source = subprocess.check_output([ar, 'p', str(archive), member])
                     if member == 'ieee80211_output.o': source = management.patch_object(source, target)
@@ -80,6 +82,9 @@ class WiFiRawTxIdentitySdk(unittest.TestCase):
                     prefix += unit(COMMON/'esp32_mquickjs_wifi_rx.c')
                     prefix += unit(raw/'esp32_mquickjs_wifi_raw_tx_validate.c')
                     prefix += unit(raw/'esp32_mquickjs_wifi_raw_tx_snapshot.c')
+                    broker = (raw/'esp32_mquickjs_wifi_raw_tx_broker.c').read_text()
+                    fixture = fixture.replace('/* Production descriptor observation hook is inserted here. */',
+                        extract(broker, 'raw_tx_read_mac_status_byte') + extract(broker, 'esp32qjs_raw_tx_info'))
                     fixture = fixture.replace('static const u8 mac[6]={2,3,4,5,6,7};',
                         'static const u8 mac[6]={0x10,0xbd,0xa3,0xc8,0x54,0xe8};')
                     fixture = fixture[:fixture.index('int main(void)')] + \
@@ -103,7 +108,7 @@ class WiFiRawTxIdentitySdk(unittest.TestCase):
                     fixture = fixture.replace('                    CHECK(!metadata_failure,20+metadata_failure);',
                         '                    CHECK(registered_output()==0,13);\n                    CHECK(!metadata_failure,20+metadata_failure);')
                     fixture = fixture.replace('    CHECK(locks>0 && locks==unlocks,31);',
-                        '    CHECK(pool_allocations==32 && cache_recycles==16 && identity_transfers==16,32);\n    CHECK(locks>0 && locks==unlocks,31);')
+                        '    CHECK(pool_allocations==expected_completions*2 && cache_recycles==expected_completions && identity_transfers==expected_completions,32);\n    CHECK(locks>0 && locks==unlocks,31);')
                     for name,replacement in (
                         ('ieee80211_search_node','fixture_search_node'),
                         ('ieee80211_output_raw_process','fixture_raw_process'),
@@ -127,6 +132,7 @@ class WiFiRawTxIdentitySdk(unittest.TestCase):
                 built = subprocess.run([cc, '-Os', '-march=rv32imac', '-mabi=ilp32', '-mno-relax', '-nostdlib',
                     '-ffunction-sections', '-fdata-sections', '-fno-builtin', '-DEXPECT_EXTENDED=1',
                     '-DCONFIG_ESP32_MQUICKJS_FEATURE_WIFI=1', '-DESP32_MQUICKJS_RAW_TX_EXTENDED_MANAGEMENT=1',
+                    '-DCONFIG_IDF_TARGET_ESP32C5='+str(int(target=='esp32c5')),
                     '-DEB_TXINFO_WORD='+('14' if target=='esp32c5' else '11'), str(root/'fixture.c'),
                     str(root/'ieee80211_output.o'), str(root/'ieee80211.o'),
                     *link_flags,

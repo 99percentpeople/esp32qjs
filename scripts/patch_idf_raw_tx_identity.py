@@ -21,6 +21,13 @@ PP_HASHES = {
     'esp32c5': '104bb7f94ecca8339a61fb9b682828e281c00fafdbea6a8c8ad37212b49bede5',
     'esp32s3': 'c53d962a8b87e6da1a22a80b12af18f86e46998f409c9f9c4a1a62e126775725',
 }
+# Descriptor status names also depend on the reviewed TX-info writers. The
+# LMAC state-machine byte at the same offset belongs to a different structure.
+LMAC_HASHES = {
+    'esp32c3': 'c2aaca7c0905cd7ea26bf2c9730bf9d6461474c62ab2c7a1d049947994972472',
+    'esp32s3': 'dfa15aeaa934655ac82da7af4ae4552c67d8b05d3879a4730b7b24fd3a9b0306',
+    'esp32c5': 'e4bb60c6af41febc510dad605700a55f35fb5a68877127a654ea824fcea00845',
+}
 # Original API member and the reviewed predecessor TX-rate fix. Both retain
 # the same ROM function-table initialization relocations.
 API_HASHES = {
@@ -34,11 +41,14 @@ OUTPUT_PROCESS = 'esp32qjs_raw_tx_output_process'
 
 
 def verify_pp(source: bytes, target: str) -> None:
-    def verify(member):
-        if hashlib.sha256(member).hexdigest() != PP_HASHES.get(target):
-            raise ValueError('Unreviewed Raw TX descriptor recycle lifetime: '+target+'/pp.o')
-        return member
-    rewrite_archive(source, member_patches={'pp.o': verify})
+    def verify(data, name, hashes):
+        if hashlib.sha256(data).hexdigest() != hashes.get(target):
+            raise ValueError('Unreviewed Raw TX completion object: '+target+'/'+name)
+        return data
+    rewrite_archive(source, member_patches={
+        'pp.o': lambda data: verify(data, 'pp.o', PP_HASHES),
+        'lmac.o': lambda data: verify(data, 'lmac.o', LMAC_HASHES),
+    })
 
 
 HOOKS = {

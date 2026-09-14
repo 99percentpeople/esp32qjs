@@ -16,14 +16,16 @@ int main(void) {
                 ==ESP32_MQUICKJS_WIFI_RAW_TX_VALID,10);
             CHECK(ieee80211_raw_frame_sanity_check(0,expected_frame,expected_length,expected_sequence)==0,11);
             for(completion_prefix=0;completion_prefix<=8;completion_prefix+=8) {
-                for(completion_status=0;completion_status<2;completion_status++) {
+                for(completion_status=0;completion_status<256;completion_status++) {
                     CHECK(esp_wifi_80211_tx(0,expected_frame,expected_length,expected_sequence)==0,12);
                     CHECK(!metadata_failure,20+metadata_failure);
                 }
             }
         }
     }
-    CHECK(posted==16 && allocated_hooks==16 && completed_hooks==16 && public_callbacks==16,30);
+    const unsigned expected_completions=2*2*2*256;
+    CHECK(posted==expected_completions && allocated_hooks==expected_completions &&
+        completed_hooks==expected_completions && public_callbacks==expected_completions,30);
     CHECK(locks>0 && locks==unlocks,31);
     return 0;
 }

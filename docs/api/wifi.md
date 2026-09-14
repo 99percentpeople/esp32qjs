@@ -1544,9 +1544,10 @@ Implementation, deferred tests and remaining work are recorded in
 Vendor IEs on configured interfaces, including pre-start capture. See [Wi-Fi Vendor IE](wifi-vendor-ie.md) for slot
 ownership, startup handoff, cleanup and pending reception support.
 
-`wifi.action.send(options)`、`wifi.action.status()` 与 `wifi.action.capabilities()`
-已接入 Candidate，详见 [Action TX/ROC](wifi-action.md)。`wifi.action.remainOnChannel(options)`
-及 `WiFiRocSession.status()/wait()/close()` 已接入；完整故障恢复仍待完成。
+`wifi.action.send(options)`, `wifi.action.status()` and `wifi.action.capabilities()`
+are available as Candidate APIs; see [Action TX/ROC](wifi-action.md).
+`wifi.action.remainOnChannel(options)` and `WiFiRocSession.status()/wait()/close()`
+are available; complete fault recovery remains pending.
 
 Enterprise credential configuration and native Future controls are documented in
 [Wi-Fi enterprise](wifi-enterprise.md); check `wifi.enterprise` presence.

@@ -86,6 +86,8 @@ void esp32qjs_nan_usd_tx_status_capture(const wifi_event_action_tx_status_t *eve
                     if (t->message.identity && t->message.ticket == t->ticket) {
                         t->message.tx_done = true;
                         t->message.tx_succeeded = t->tx_success;
+                        t->message.has_native_status = true;
+                        t->message.native_status = event->status;
                         t->message.completed_us = t->completed_us;
                     }
                 }

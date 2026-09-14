@@ -4,6 +4,7 @@
     { "id": "runtime", "title": "ESP32QJS runtime and execution rules", "path": "api/runtime.md", "requiresAnyFeatures": [] },
     { "id": "global-helpers", "title": "ESP32QJS global helper API", "path": "api/global-helpers.md", "requiresAnyFeatures": [] },
     { "id": "native-errors", "title": "ESP32QJS native operational errors", "path": "api/native-errors.md", "requiresAnyFeatures": [] },
+    { "id": "tx-completion", "title": "ESP32QJS TX completion and native codes", "path": "api/tx-completion.md", "requiresAnyFeatures": ["wifi", "espnow"] },
     { "id": "futures", "title": "ESP32QJS Future API", "path": "api/futures.md", "requiresAnyFeatures": [] },
     { "id": "event-queues", "title": "ESP32QJS EventQueue API", "path": "api/event-queues.md", "requiresAnyFeatures": [] },
     { "id": "timers", "title": "ESP32QJS timer API", "path": "api/timers.md", "requiresAnyFeatures": [] },

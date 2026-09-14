@@ -5,6 +5,7 @@
 #include "esp32_mquickjs_wifi_radio.h"
 #include "esp32_mquickjs_wifi.h"
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_native_status.h"
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_options.h"
 #include "esp32_mquickjs_memory.h"
@@ -59,8 +60,8 @@ static JSValue session_error(JSContext *ctx, const char *operation, const char *
     JSValue *details = JS_PushGCRef(ctx, &ref);
     *details = JS_NewObject(ctx);
     if (JS_IsException(*details)) goto fail;
-    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "espCode", JS_NewInt32(ctx, error), fail);
-    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "espName", JS_NewString(ctx, esp_err_to_name(error)), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "native",
+        esp32_mquickjs_native_code_to_js(ctx, "esp_err_t", error, esp_err_to_name(error)), fail);
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "stage", stage ? JS_NewString(ctx, stage) : JS_NULL, fail);
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "admitted", JS_NewBool(admitted), fail);
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "validationCode", JS_NewUint32(ctx, validation), fail);
@@ -452,6 +453,8 @@ static JSValue totals_to_js(JSContext *ctx, const esp32_mquickjs_wifi_raw_tx_que
 #define TOTAL(name) ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, #name, JS_NewUint32(ctx, totals->name), fail)
     TOTAL(admitted); TOTAL(submitted); TOTAL(settled); TOTAL(succeeded); TOTAL(failed);
     TOTAL(unknown); TOTAL(rejected); TOTAL(aborted); TOTAL(dropped);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "completed",
+        JS_NewUint32(ctx, totals->succeeded + totals->failed + totals->unknown), fail);
 #undef TOTAL
     return JS_PopGCRef(ctx, &ref);
 fail:

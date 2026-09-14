@@ -17,6 +17,26 @@ namespace ESP32QJS {
     details: object;
   }
 
+  /** Numeric namespace and exact native value. Unknown symbolic names are null. */
+  interface NativeCode<Domain extends string = string, Name extends string = string> {
+    domain: Domain;
+    code: number;
+    name: Name | null;
+  }
+  type EspNativeCode = NativeCode<"esp_err_t">;
+  /** A correlated driver observation; never an application receipt. */
+  interface TxCompletion<Native extends NativeCode | null = NativeCode | null> {
+    status: "success" | "failed" | "unknown";
+    native: Native;
+  }
+  /** Prefer the reviewed descriptor observation; fall back to the public SDK enum. */
+  type WiFiRawTxCompletion = TxCompletion<
+    NativeCode<"esp_wifi_tx_descriptor_status", "success" | "frame-exchange" | "discarded"> |
+    NativeCode<"wifi_tx_status_t", "WIFI_SEND_SUCCESS" | "WIFI_SEND_FAIL">
+  >;
+  type WiFiActionNativeCode = NativeCode<"wifi_action_tx_status_type_t", "WIFI_ACTION_TX_DONE" | "WIFI_ACTION_TX_FAILED">;
+  type EspNowCompletion = TxCompletion<NativeCode<"esp_now_send_status_t", "ESP_NOW_SEND_SUCCESS" | "ESP_NOW_SEND_FAIL">>;
+
   /** Opaque generation-checked token returned by the timer globals. */
   type TimerHandle = number & { readonly __timerHandleBrand: never };
 
@@ -4146,15 +4166,10 @@ namespace ESP32QJS {
     byteLength: number;
     submittedAtUs: number;
     completedAtUs: number;
-    driverAccepted: boolean;
-    driverCompleted: boolean;
-    /** MAC/driver completion, not application delivery or a peer ACK. */
-    driverStatus: "success" | "failed" | "unknown";
+    completion: WiFiRawTxCompletion;
     /** Target SDK rate name after native completion; null for unknown numeric codes. */
     rate: WiFiTxRate | null;
     rawRate: number;
-    /** SDK wifi_tx_status_t: 0=success, 1=failed; not esp_err_t or a detailed failure reason. */
-    rawStatus: number;
   }
   interface WiFiRawTxNativeStatus {
     /** Generation captured with operationIdentity in the same broker snapshot. */
@@ -4251,7 +4266,8 @@ namespace ESP32QJS {
   interface WiFiActionResult {
     sequence: number; radioGeneration: number; operationId: number;
     interface: "station" | "access-point"; channel: number; payloadBytes: number;
-    driverStatus: "success" | "failed" | "unknown";
+    /** Null if the operation ended without a TX observation. */
+    completion: TxCompletion<WiFiActionNativeCode> | null;
     terminalStatus: "duration-completed" | "cancelled";
   }
   interface WiFiFtmError extends NativeError {
@@ -4488,7 +4504,7 @@ namespace ESP32QJS {
     evictedBatches: number;
   }
   interface WiFiRawTxStats {
-    admitted: number; submitted: number; settled: number;
+    admitted: number; submitted: number; settled: number; completed: number;
     succeeded: number; failed: number; unknown: number;
     rejected: number; aborted: number; dropped: number;
   }
@@ -4546,7 +4562,7 @@ namespace ESP32QJS {
     periodicGeneration: number;
     intervalUs: number;
     count: number;
-    scheduled: number; issued: number; submitted: number; completed: number;
+    scheduled: number; issued: number; submitted: number; completed: number; succeeded: number;
     failed: number; unknown: number; rejected: number; aborted: number; dropped: number;
     skippedBusy: number; skippedLate: number;
     activeSequence: number | null;
@@ -4622,15 +4638,17 @@ namespace ESP32QJS {
     error: number | null;
     rollbackError: number | null;
   }
-  interface WiFiTxRateError extends NativeError, WiFiTxRateStatus {
+  interface WiFiTxRateError extends NativeError {
     code: "WIFI_TX_RATE_FAILED";
     operation: "wifi.driver.configureTxRate" | "wifi.driver.txRateStatus";
-    espCode: number;
-    stage: "admission" | "write";
-    attempted: boolean;
-    driverAccepted: boolean;
-    rollbackAttempted: boolean;
-    restored: boolean;
+    details: WiFiTxRateStatus & {
+      espCode: number;
+      stage: "admission" | "write";
+      attempted: boolean;
+      driverAccepted: boolean;
+      rollbackAttempted: boolean;
+      restored: boolean;
+    };
   }
   interface WiFiDriverReadError extends NativeError {
     code: "WIFI_DRIVER_READ_FAILED";
@@ -6776,7 +6794,7 @@ namespace ESP32QJS {
     /** 1..120000 ms, default 10000; ends the wait, retains native ownership. */
     timeoutMs?: number;
   }
-  interface WiFiNanSendResult {
+  interface WiFiNanSendSnapshot {
     identity: number;
     serviceIdentity: number;
     serviceId: number;
@@ -6785,13 +6803,16 @@ namespace ESP32QJS {
     bytes: number;
     /** Worker entered submission; false txSubmitted alone does not prove no transmission. */
     submitStarted: boolean;
-    /** Successful send results have all three TX flags true; error details may differ. */
+    /** SDK acceptance; successful and failed completion results both set this. */
     txSubmitted: boolean;
-    txCompleted: boolean;
-    txSucceeded: boolean;
+    /** Null only in pre-completion error snapshots; sync NAN has native:null. */
+    completion: TxCompletion<WiFiActionNativeCode | null> | null;
     /** May still be false when TX completion ends the public Future. */
     bufferRetired: boolean;
     cancelRequested: boolean;
+  }
+  interface WiFiNanSendResult extends WiFiNanSendSnapshot {
+    completion: TxCompletion<WiFiActionNativeCode | null>;
   }
   interface WiFiNanDataPathOptions {
     peerServiceId: number;
@@ -6863,7 +6884,8 @@ namespace ESP32QJS {
       "WiFiNanSession.publish" | "WiFiNanSession.subscribe" | "WiFiNanService.ready" | "WiFiNanService.close" | "WiFiNanService.send" |
       "WiFiNanService.preparePairing" | "WiFiNanService.requestPairing" | "WiFiNanService.receivePairing" | "WiFiNanService.pairingCredentials" | "WiFiNanPairing.confirm" | "WiFiNanPairing.ready" | "WiFiNanPairing.close" |
       "WiFiNanService.requestDataPath" | "WiFiNanService.receiveDataPath" | "WiFiNanDataPath.ready" | "WiFiNanDataPath.respond" | "WiFiNanDataPath.close";
-    details: (WiFiNanStatus | WiFiNanServiceStatus | WiFiNanSendResult | WiFiNanDataPathStatus | WiFiNanPairingStatus) & { espCode: number; espName: string; waitTimedOut: boolean };
+    details: ((WiFiNanStatus | WiFiNanServiceStatus | WiFiNanDataPathStatus | WiFiNanPairingStatus) & { espCode: number; espName: string; waitTimedOut: boolean }) |
+      (WiFiNanSendSnapshot & { native: EspNativeCode; waitTimedOut: boolean });
   }
 
   interface WiFiWapiStatus {
@@ -7379,10 +7401,20 @@ namespace ESP32QJS {
     rejectedPackets: number;
     evictedBatches: number;
     evictedPackets: number;
-    completedBatches: number;
+    /** Batches settled by the queue completion worker, including submit rejection. */
+    settledBatches: number;
     completedPackets: number;
     failedPackets: number;
-    lastError: number | null;
+    submittedPackets: number;
+    /** Completed callbacks plus submit rejections settled by the worker. */
+    settledPackets: number;
+    succeededPackets: number;
+    unknownPackets: number;
+    submitRejectedPackets: number;
+    /** Deadline observations; do not imply that native transmission was prevented. */
+    timedOutPackets: number;
+    lastCompletion: EspNowCompletion | null;
+    lastError: EspNativeCode | null;
   }
 
   interface EspNowStatus {
@@ -7406,7 +7438,10 @@ namespace ESP32QJS {
     sentPackets: number;
     sentBytes: number;
     sendSuccesses: number;
+    /** Only ESP_NOW_SEND_FAIL callbacks. */
     sendFailures: number;
+    sendUnknowns: number;
+    sendRejections: number;
     sendTimeouts: number;
     txQueue: EspNowTxQueueStatus;
     powerSave: {
@@ -7468,7 +7503,7 @@ namespace ESP32QJS {
   interface EspNowSendResult {
     address: EspNowAddress;
     bytes: number;
-    macDelivered: boolean;
+    completion: EspNowCompletion;
     completedAtUs: number;
   }
 
@@ -7519,7 +7554,7 @@ namespace ESP32QJS {
     code: EspNowErrorCode;
     operation: "espnow";
     details: {
-      espCode: number;
+      native: EspNativeCode;
       address: string | null;
       channel: number | null;
     };

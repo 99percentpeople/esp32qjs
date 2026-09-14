@@ -7,6 +7,7 @@
 #include "esp32_mquickjs_wifi_raw_tx_session.h"
 #include "esp32_mquickjs_wifi_raw_tx_periodic_job.h"
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_native_status.h"
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_options.h"
 #include "esp32_mquickjs_memory.h"
@@ -142,8 +143,8 @@ static JSValue raw_tx_error(JSContext *ctx, const char *code, esp_err_t error,
     JSValue *details = JS_PushGCRef(ctx, &ref);
     *details = JS_NewObject(ctx);
     if (JS_IsException(*details) ||
-        !esp32_mquickjs_set_property_ref(ctx, details, "espCode", JS_NewInt32(ctx, error)) ||
-        !esp32_mquickjs_set_property_ref(ctx, details, "espName", JS_NewString(ctx, esp_err_to_name(error))) ||
+        !esp32_mquickjs_set_property_ref(ctx, details, "native",
+            esp32_mquickjs_native_code_to_js(ctx, "esp_err_t", error, esp_err_to_name(error))) ||
         !esp32_mquickjs_set_property_ref(ctx, details, "stage", stage ? JS_NewString(ctx, stage) : JS_NULL) ||
         !esp32_mquickjs_set_property_ref(ctx, details, "validationCode", JS_NewUint32(ctx, validation))) {
         JS_PopGCRef(ctx, &ref); return JS_EXCEPTION;
@@ -402,7 +403,7 @@ JSValue esp32_mquickjs_wifi_raw_tx_result_to_js(JSContext *ctx,
     esp32_mquickjs_wifi_raw_tx_interface_t interface, uint8_t channel)
 {
     int frame_control = native != NULL ? raw_tx_frame_control(native->frame_type) : -1;
-    if (native == NULL || native->native_terminated || frame_control < 0) return JS_ThrowInternalError(ctx, "invalid Raw TX completion frame type");
+    if (native == NULL || !native->driver_accepted || !native->driver_completed || native->native_terminated || frame_control < 0) return JS_ThrowInternalError(ctx, "Raw TX result requires native acceptance, completion and a valid frame type");
     JSGCRef ref;
     JSValue *result = JS_PushGCRef(ctx, &ref);
     *result = JS_NewObject(ctx);
@@ -415,14 +416,23 @@ JSValue esp32_mquickjs_wifi_raw_tx_result_to_js(JSContext *ctx,
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "byteLength", JS_NewUint32(ctx, native->byte_length), fail);
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "submittedAtUs", JS_NewFloat64(ctx, (double)native->submitted_at_us), fail);
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "completedAtUs", JS_NewFloat64(ctx, (double)native->completion.callback_time_us), fail);
-    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "driverAccepted", JS_NewBool(native->driver_accepted), fail);
-    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "driverCompleted", JS_NewBool(native->driver_completed), fail);
-    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "driverStatus", JS_NewString(ctx, native->completion.status == ESP32_MQUICKJS_WIFI_RAW_TX_DRIVER_SUCCESS ? "success" :
-        native->completion.status == ESP32_MQUICKJS_WIFI_RAW_TX_DRIVER_FAILED ? "failed" : "unknown"), fail);
+    int code = native->completion.raw_status;
+    const char *status = code == WIFI_SEND_SUCCESS ? "success" : code == WIFI_SEND_FAIL ? "failed" : "unknown";
+    const char *domain = "wifi_tx_status_t";
+    const char *name = code == WIFI_SEND_SUCCESS ? "WIFI_SEND_SUCCESS" : code == WIFI_SEND_FAIL ? "WIFI_SEND_FAIL" : NULL;
+    if (native->completion.mac_status_available) {
+        /* Prefer the finer observation in the same native envelope. Its code
+         * namespace changes too: descriptor 1 is success, SDK enum 1 is fail.
+         * An unknown descriptor name must not erase the SDK completion status. */
+        domain = "esp_wifi_tx_descriptor_status";
+        code = native->completion.mac_status_byte;
+        name = esp32_mquickjs_wifi_raw_tx_mac_status_name(native->completion.mac_status_byte);
+    }
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "completion", esp32_mquickjs_tx_completion_to_js(ctx,
+        true, status, domain, code, name), fail);
     const char *rate = native->driver_completed ? esp32_mquickjs_wifi_tx_rate_name(native->completion.raw_rate) : NULL;
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "rate", rate != NULL ? JS_NewString(ctx, rate) : JS_NULL, fail);
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "rawRate", JS_NewInt32(ctx, native->completion.raw_rate), fail);
-    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "rawStatus", JS_NewInt32(ctx, native->completion.raw_status), fail);
     return JS_PopGCRef(ctx, &ref);
 fail:
     JS_PopGCRef(ctx, &ref); return JS_EXCEPTION;

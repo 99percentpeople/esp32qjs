@@ -18,18 +18,20 @@ void *esp32qjs_raw_tx_alloc(const void *bytes,int kind,int length) {
     if(bound) allocated_hooks++;
     return bound;
 }
-void esp32qjs_raw_tx_info(void *descriptor,esp_80211_tx_info_t *info) {
-    if(descriptor!=bound) __builtin_trap();
+static void raw_tx_complete(const esp_80211_tx_info_t *info,void *descriptor,bool exact,int mac_status_byte) {
+    if(descriptor!=bound || !exact) __builtin_trap();
     completed_hooks++;
-    ieee80211_get_tx_info_from_eb(descriptor,info);
-    if(!esp32_mquickjs_wifi_raw_tx_snapshot(info,123,&observed)) metadata_failure=1;
+    if(!esp32_mquickjs_wifi_raw_tx_snapshot(info,123,mac_status_byte,&observed)) metadata_failure=1;
     else if(observed.interface!=ESP32_MQUICKJS_WIFI_RAW_TX_STATION) metadata_failure=2;
     else if(!observed.destination_available || memcmp(observed.destination,expected_frame+4,6)) metadata_failure=3;
     else if(!observed.source_available || memcmp(observed.source,expected_frame+10,6)) metadata_failure=4;
     else if(observed.raw_body_length!=expected_length-24) metadata_failure=5;
     else if(observed.status!=(completion_status==1 ? ESP32_MQUICKJS_WIFI_RAW_TX_DRIVER_SUCCESS :
         ESP32_MQUICKJS_WIFI_RAW_TX_DRIVER_FAILED)) metadata_failure=6;
+    else if(!observed.mac_status_available || observed.mac_status_byte!=completion_status) metadata_failure=7;
+    else if(observed.raw_status!=(completion_status==1 ? WIFI_SEND_SUCCESS : WIFI_SEND_FAIL)) metadata_failure=8;
 }
+/* Production descriptor observation hook is inserted here. */
 static void completed(void *info) {
     (void)info;
     if(completed_hooks!=public_callbacks+1) __builtin_trap();

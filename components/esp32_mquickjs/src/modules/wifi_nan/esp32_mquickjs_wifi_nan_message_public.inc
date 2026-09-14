@@ -10,8 +10,12 @@ static JSValue nan_message_result_to_js(JSContext *ctx, const esp32_mquickjs_wif
     SET(result, "bytes", JS_NewInt32(ctx, s->bytes));
     SET(result, "submitStarted", JS_NewBool(s->submit_started));
     SET(result, "txSubmitted", JS_NewBool(s->submitted));
-    SET(result, "txCompleted", JS_NewBool(s->tx.tx_done));
-    SET(result, "txSucceeded", JS_NewBool(s->tx.tx_succeeded));
+    SET(result, "completion", s->tx.has_native_status ?
+        esp32_mquickjs_tx_enum_completion_to_js(ctx, s->tx.tx_done, "wifi_action_tx_status_type_t",
+            s->tx.native_status, WIFI_ACTION_TX_DONE, WIFI_ACTION_TX_FAILED,
+            "WIFI_ACTION_TX_DONE", "WIFI_ACTION_TX_FAILED") :
+        esp32_mquickjs_tx_completion_to_js(ctx, s->tx.tx_done,
+            s->tx.tx_succeeded ? "success" : "failed", NULL, 0, NULL));
     SET(result, "bufferRetired", JS_NewBool(s->tx.buffer_retired));
     SET(result, "cancelRequested", JS_NewBool(s->cancelled));
     return JS_PopGCRef(ctx, &ref);
@@ -26,14 +30,22 @@ static JSValue nan_message_error(JSContext *ctx, esp32_mquickjs_wifi_nan_message
     if (!error) error = status.error ? status.error : ESP_ERR_INVALID_STATE;
     JSGCRef ref; JSValue *details = JS_PushGCRef(ctx, &ref);
     *details = nan_message_result_to_js(ctx, &status); if (JS_IsException(*details)) goto fail;
-    SET(details, "espCode", JS_NewInt32(ctx, error));
-    SET(details, "espName", JS_NewString(ctx, esp_err_to_name(error)));
+    SET(details, "native", esp32_mquickjs_native_code_to_js(ctx, "esp_err_t", error, esp_err_to_name(error)));
     SET(details, "waitTimedOut", JS_NewBool(timeout));
     (void)esp32_mquickjs_throw_native_error(ctx, timeout || status.timed_out ? "WIFI_NAN_TIMEOUT" :
         status.cancelled ? "WIFI_NAN_CLOSED" : "WIFI_NAN_FAILED", "WiFiNanService.send",
         "NAN message did not complete; inspect send ownership before submitting another message", *details);
 fail:
     JS_PopGCRef(ctx, &ref); return JS_EXCEPTION;
+}
+
+static JSValue nan_message_finish(JSContext *ctx, esp32_mquickjs_wifi_nan_message_t *message)
+{
+    esp32_mquickjs_wifi_nan_message_status_t status;
+    esp32_mquickjs_wifi_nan_message_status(message, &status);
+    if (status.done && !status.error && !status.cancelled && !status.timed_out && status.tx.tx_done)
+        return nan_message_result_to_js(ctx, &status);
+    return nan_message_error(ctx, message, ESP_OK, false);
 }
 
 static bool nan_message_bytes(JSContext *ctx, JSValue value, uint8_t *out, size_t capacity, uint16_t *length)

@@ -42,8 +42,11 @@ power-save control, and explicit timeout recovery.
 - `session.peer(address)` returns a generation-checked handle or `null`, while
   `session.peers()` returns key-free status snapshots.
 - `peer.send(data, options?)` and `session.broadcast(data, options?)` share one
-  FIFO transmit lane. `macDelivered` is the MAC result and is not an
-  application acknowledgement.
+  FIFO transmit lane. Results contain address, bytes, completedAtUs and
+  `completion`, following [shared TX completion](tx-completion.md). Its native
+  domain is `esp_now_send_status_t`; retain code/name including unknown numbers.
+  MAC failure returns `completion.status: "failed"` normally. Broadcast success
+  provides no receiver count or application acknowledgement.
 - `peer.enqueue(packet)`, `peer.enqueueBatch(packets)`,
   `session.enqueueBroadcast(packet)`, and
   `session.enqueueBroadcastBatch(packets)` are synchronous fire-and-forget
@@ -55,17 +58,26 @@ power-save control, and explicit timeout recovery.
   batches that have not started. Each admitted packet receives one native send
   attempt. `session.flushTx(timeoutMs?)` waits for this native queue to drain.
   `status().txQueue` reports capacity, depth,
-  high-water, admission, eviction, completion, failure, and last ESP-IDF error
-  counters. Each admitted packet makes at most one native `esp_now_send()`
+  high-water, admission and eviction counters. `completedPackets` counts MAC
+  callbacks; `succeededPackets`, `failedPackets` and `unknownPackets` split those
+  callbacks. `submittedPackets` counts SDK acceptance; `submitRejectedPackets`
+  counts admission/SDK failure after queue acceptance. `rejectedPackets` and
+  `rejectedBatches` are queue admission rejection before a native attempt.
+  `settledPackets` and `settledBatches` count the completion worker's settlements,
+  including submit rejection; they exclude queued timeout/discard cleanup.
+  `timedOutPackets` counts queue deadlines, not proven physical aborts.
+  `lastCompletion` retains the latest observed MAC completion with its native
+  enum; `lastError` separately retains a nullable esp_err_t NativeCode for the
+  latest submit/timeout error. Historical observations persist until session reset. Each admitted packet makes at most one native `esp_now_send()`
   call. A native admission failure, including `ESP_ERR_ESPNOW_NO_MEM`, marks
-  that packet failed immediately; the queue does not delay and resubmit it.
+  that packet submit-rejected immediately; the queue does not delay and resubmit it.
 - `session.setPowerSave(options)` borrows the shared Radio interval and sets the
   ESP-NOW wake window. `{ enabled: false }` restores the always-awake window and
   the captured Radio interval; it does not unconditionally overwrite the interval
   with zero. Close uses the same restoration suffix, including after failed open
   or partial configuration. Successful window restoration is not repeated if
   interval restoration fails. Interval ownership survives native ESP-NOW deinit.
-  Errors use `ESPNOW_POWER_SAVE_FAILED` with the original `espCode`. If a native
+  Errors use `ESPNOW_POWER_SAVE_FAILED` with the original `details.native` code. If a native
   setting is uncertain, the Session becomes failed and must close; `recover()`
   cannot repair this policy fault. Admission rejection before mutation preserves
   a healthy Session. `status().powerSave.faulted` and `restorePending` describe
@@ -79,7 +91,7 @@ power-save control, and explicit timeout recovery.
   ESP-NOW, releases the shared radio lease, clears keys, and invalidates peers.
   It reports success only after those native steps finish. A failed unregister,
   power-save cleanup, deinit or Radio release reports `ESPNOW_CLEANUP_PENDING`
-  with the underlying `details.espCode`; native state, queue retention and the
+  with the underlying `details.native`; native state, queue retention and the
   unfinished cleanup suffix remain owned. Successful earlier steps are not
   repeated. The session stays closing, blocks normal operations/reopen, and a
   later `close()` can retry. The retained handle is retired only after closure;
@@ -126,3 +138,8 @@ one native ESP-NOW rebuild. When native admission returns
 `ESP_ERR_ESPNOW_NO_MEM`, a tracked send completes with `ESPNOW_SEND_FAILED` and
 a queued packet is recorded as failed in `txQueue`. Single-attempt delivery
 leaves backoff, acknowledgement, and retransmission policy to the application.
+
+Session `sendSuccesses`, `sendFailures` and `sendUnknowns` count only correlated
+MAC callbacks. `sendRejections` counts admission/SDK rejection of a native attempt;
+`sendTimeouts` counts waiting deadlines separately. These diagnostics are live
+observations, not a single atomic snapshot of all send and queue activity.

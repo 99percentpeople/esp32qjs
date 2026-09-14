@@ -4,6 +4,7 @@
 #include "esp32_mquickjs_wifi_raw_tx_periodic_job.h"
 #include "esp32_mquickjs_future.h"
 #include "esp32_mquickjs_core.h"
+#include "esp32_mquickjs_native_status.h"
 #include "esp32_mquickjs_options.h"
 #include "esp32_mquickjs_memory.h"
 #include "esp_heap_caps.h"
@@ -135,8 +136,8 @@ static JSValue periodic_error(JSContext *ctx, esp32_mquickjs_future_driver_state
     *details = JS_NewObject(ctx); if (JS_IsException(*details)) goto fail;
     esp_err_t error = timeout ? ESP_ERR_TIMEOUT : state->error != ESP_OK ? state->error :
         status.error != ESP_OK ? status.error : ESP_ERR_INVALID_STATE;
-    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "espCode", JS_NewInt32(ctx, error), fail);
-    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "espName", JS_NewString(ctx, esp_err_to_name(error)), fail);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "native",
+        esp32_mquickjs_native_code_to_js(ctx, "esp_err_t", error, esp_err_to_name(error)), fail);
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "validationCode", JS_NewUint32(ctx, state->validation), fail);
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "stage", timeout ? JS_NewString(ctx, "deadline") : status.stage ? JS_NewString(ctx, status.stage) : JS_NewString(ctx, "periodic-state"), fail);
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, details, "periodicGeneration", status.ledger.generation ? JS_NewUint32(ctx, status.ledger.generation) : JS_NULL, fail);
@@ -325,6 +326,8 @@ static JSValue periodic_status_to_js(JSContext *ctx, const status_t *snapshot)
     ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "count", JS_NewUint32(ctx, status.ledger.options.count), fail);
 #define TOTAL(js, native) ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, js, JS_NewUint32(ctx, status.ledger.native), fail)
     TOTAL("scheduled", scheduled); TOTAL("issued", issued); TOTAL("submitted", submitted); TOTAL("completed", completed);
+    ESP32_MQUICKJS_SET_OR_GOTO(ctx, result, "succeeded",
+        JS_NewUint32(ctx, status.ledger.completed - status.ledger.failed - status.ledger.unknown), fail);
     TOTAL("failed", failed); TOTAL("unknown", unknown); TOTAL("rejected", rejected); TOTAL("aborted", aborted);
     TOTAL("dropped", dropped); TOTAL("skippedBusy", skipped_busy); TOTAL("skippedLate", skipped_late);
 #undef TOTAL

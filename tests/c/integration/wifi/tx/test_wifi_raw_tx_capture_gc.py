@@ -35,6 +35,7 @@ class WiFiRawTxCaptureGC(unittest.TestCase):
         extra += unit(COMMON / 'esp32_mquickjs_wifi_rx.c')
         extra += unit(COMMON / 'esp32_mquickjs_wifi_frame_type.c')
         extra += unit(RAW / 'esp32_mquickjs_wifi_raw_tx_validate.c')
+        extra += unit(RAW / 'esp32_mquickjs_wifi_raw_tx_snapshot.c')
         extra += re.search(r'typedef enum \{[^}]*\} esp32_mquickjs_wifi_radio_client_t;', HEADER.read_text()).group(0)
         extra += structure(HEADER.read_text(), 'esp32_mquickjs_wifi_radio_lease_t')
         extra += structure(source, 'raw_tx_options_t')
@@ -43,6 +44,7 @@ class WiFiRawTxCaptureGC(unittest.TestCase):
         extra += source[start:source.index('\n};', start) + 3]
         extra += unit(CORE / 'esp32_mquickjs_options.c')
         extra += BOUNDARIES
+        extra += unit(INTERNAL / "esp32_mquickjs_native_status.h")
         extra += unit(INTERNAL / 'esp32_mquickjs_js_macros.h')
         for name in ['raw_tx_capture_options', 'esp32_mquickjs_wifi_raw_tx_capture_bytes', 'raw_tx_capture_bytes', 'raw_tx_capture',
                      'raw_tx_frame_control', 'esp32_mquickjs_wifi_raw_tx_result_to_js', 'raw_tx_finish', 'js_wifi_raw_tx_capabilities', 'esp32_mquickjs_wifi_raw_tx_status']:
@@ -85,6 +87,12 @@ class WiFiRawTxCaptureGC(unittest.TestCase):
 
     def test_result_and_capabilities_construction_allocation_failure_and_gc(self):
         run([str(self.binary), 'finish', '', '1', ''])
+        run([str(self.binary), 'finish', 'failed', '1', ''])
+        run([str(self.binary), 'finish', 'unknown', '1', ''])
+        for code in (0, 1, 2, 3, 4, 7, 8, 9, 200, 255):
+            run([str(self.binary), 'finish', 'descriptor-' + str(code), '1', ''])
+        run([str(self.binary), 'finish', 'descriptor-sdk-unknown', '1', ''])
+        run([str(self.binary), 'finish', 'incomplete', '1', ''])
         run([str(self.binary), 'capabilities', '', '1', ''])
         run([str(self.binary), 'status', '', '1', ''])
         run([str(self.binary), 'terminated-status', '', '1', ''])

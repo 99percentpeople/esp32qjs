@@ -1,46 +1,58 @@
 # Wi-Fi WAPI
 
-需要 Wi-Fi 和 `CONFIG_ESP_WIFI_WAPI_PSK`。固定 SDK 的 C3/S3/C5 支持 WAPI-PSK；
-未编译此选项时不注册 `wifi.wapi`。当前为 **Candidate**，运行和 RF 验收后置。
+Requires Wi-Fi and `CONFIG_ESP_WIFI_WAPI_PSK`. The pinned SDK supports WAPI-PSK on
+C3/S3/C5; `wifi.wapi` is not registered when this option is disabled. This API is
+currently **Candidate**; runtime and RF acceptance remain pending.
 
-| 方法 | 行为 |
+| Method | Behavior |
 | --- | --- |
-| `wifi.wapi.capabilities()` | 返回 `wifi-wapi/1`、PSK、原生 owner 与控制边界 |
-| `wifi.wapi.status()` | 返回非秘密策略、实际原生生命周期及故障快照，不初始化 Radio |
-| `wifi.wapi.enable(options?)` | 允许 SDK supplicant 初始化实际 WAPI 支持 |
-| `wifi.wapi.disable(options?)` | 禁止 SDK supplicant 在下一次初始化时创建 WAPI 支持；已初始化时通过完整重建立即应用 |
+| `wifi.wapi.capabilities()` | Returns `wifi-wapi/1`, PSK support, native ownership and control boundaries |
+| `wifi.wapi.status()` | Returns policy, actual native lifecycle and fault snapshots without secrets; does not initialize the Radio |
+| `wifi.wapi.enable(options?)` | Allows the SDK supplicant to initialize native WAPI support |
+| `wifi.wapi.disable(options?)` | Prevents the SDK supplicant from creating WAPI support at its next initialization; if already initialized, applies the policy immediately through a full rebuild |
 
-`options` 只接受 `timeoutMs`：整数 1..2147483647 ms，默认 10000。未知字段、非整数和
-非法范围在修改前拒绝。控制使用普通同步生命周期等待预算，不是 Future 方法。
+`options` accepts only `timeoutMs`: an integer from 1..2147483647 ms, default 10000.
+Unknown fields, non-integers and out-of-range values are rejected before mutation.
+Control methods use the normal synchronous lifecycle wait budget; they are not Future methods.
 
-默认策略为 enabled，与 SDK 启用 WAPI 构建的行为一致。首次 Radio 初始化前，控制
-只选择初始化策略，不隐式启动 Wi-Fi；此时 `policyApplied` 为 false。已有原生实例
-需要从健康、完整停止且没有任何 Radio owner 的状态重建，沿用 `wifi.driver.restart`
-的 checkpoint、helper 排空、物理 deinit/init、配置重放和读回。**成功后会按保存的
-Station/AP/APSTA 配置启动接口**；调用前应使用 wifi.stop 并关闭其他功能 owner。
-AP 配置因此会重新广播。相同且已应用的策略为幂等操作，不重复初始化。
+The default policy is enabled, matching SDK builds with WAPI enabled. Before the
+first Radio initialization, control methods only select the initialization policy
+and do not implicitly start Wi-Fi; `policyApplied` is false at this point. Rebuilding
+an existing native instance requires a healthy, fully stopped Radio with no owners.
+The rebuild follows the `wifi.driver.restart` checkpoint, helper draining, physical
+deinit/init, configuration replay and readback process. **On success, interfaces
+start with the saved Station/AP/APSTA configuration**; call wifi.stop and close
+other feature owners first. This causes a configured AP to broadcast again.
+Requesting the same, already applied policy is idempotent and does not reinitialize it.
 
-SDK 的 WAPI init/deinit 只由原来的 supplicant 生命周期调用；enable 不再注册第二份
-callback table，disable 不会在活动连接期间释放原生认证状态。整个重建使用原有
-Radio 排他生命周期；原生与 helper 失败保留已完成前缀及待清理后缀。超时不回滚
-已经提交的策略或保证物理操作未发生，应查询 status 和 wifi.status().radio。
-原生清理结果不确定时保留原始错误并要求设备重启，runtime restart 不构成恢复证明。
+SDK WAPI init/deinit is called only through the existing supplicant lifecycle;
+enable does not register a second callback table, and disable does not release
+native authentication state during an active connection. The entire rebuild uses
+the existing exclusive Radio lifecycle. Native and helper failures preserve completed
+steps and pending cleanup. A timeout neither rolls back an accepted policy nor
+guarantees that no physical operation occurred; inspect status and wifi.status().radio.
+If native cleanup is uncertain, the original error is retained and a device restart
+is required. A runtime restart does not prove recovery.
 
-状态字段：
+Status fields:
 
-- `requestedEnabled`：接受的策略；`policyRevision` 在修改时递增，不回绕。
-- `enabled`：实际原生 WAPI 是否初始化；修改中或不确定时为 null。
-- `supplicantActive`、`nativeGeneration`：实际 SDK 生命周期观察，代次不回绕。
-- `policyApplied`：当前原生实例已应用请求策略；`busy` 表示正在执行原生生命周期调用。
-- `restartRequired`：原生清理不确定；`runtimeCleanupPending`：配置/helper 清理未完成。
-- `error`、`cleanupError`：原始原生错误，不含密码或密钥。
+- `requestedEnabled`: the accepted policy; `policyRevision` increments on changes without wrapping.
+- `enabled`: whether native WAPI is actually initialized; null during mutation or when uncertain.
+- `supplicantActive`, `nativeGeneration`: observations of the actual SDK lifecycle; generations do not wrap.
+- `policyApplied`: the current native instance has applied the requested policy; `busy` indicates a native lifecycle call in progress.
+- `restartRequired`: native cleanup is uncertain; `runtimeCleanupPending`: configuration/helper cleanup is incomplete.
+- `error`, `cleanupError`: original native errors, without passwords or keys.
 
-WAPI-PSK 连接继续使用 `wifi.connect(ssid, {password, minimumAuthMode:"wapi", ...})`
-及现有 Station 凭据 owner；本模块不另存密码，不接受证书模式，也不支持 WAPI SoftAP。
-`minimumAuthMode` 是 SDK 认证下限，**不是 WAPI-only 选择器**；capabilities 的
-`exactAuthSelection` 为 false。应核对连接结果的实际认证模式，不能仅凭 threshold
-或模块 enabled 宣称建立了 WAPI 连接。disable 不删除已保存的 Station 凭据。
+WAPI-PSK connections continue to use `wifi.connect(ssid, {password, minimumAuthMode:"wapi", ...})`
+and the existing Station credential owner. This module does not store another
+password, accept certificate mode or support WAPI SoftAP. `minimumAuthMode` is the
+SDK authentication threshold, **not a WAPI-only selector**; capabilities reports
+`exactAuthSelection` as false. Check the actual authentication mode of the connection
+result; neither the threshold nor an enabled module proves that a WAPI connection
+was established. Disabling WAPI does not delete saved Station credentials.
 
-当前公开控制、原生生命周期包装和类型已编码；定向编译记录见 Wi-Fi 实施表。
-原生 callback/TX 退休、GC/OOM、故障注入、三目标全矩阵和 WAPI 对端认证验收仍待
-集中执行，不以源码、局部链接或普通 WPA 连接代替 WAPI RF 证据。
+Public controls, native lifecycle wrappers and types are implemented; see the Wi-Fi
+implementation table for targeted build records. Native callback/TX retirement,
+GC/OOM, fault injection, the full three-target matrix and WAPI peer authentication
+acceptance remain scheduled for consolidated validation. Source inspection, partial
+linking and ordinary WPA connections do not replace WAPI RF evidence.

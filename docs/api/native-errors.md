@@ -21,3 +21,8 @@ exclude payload bytes, Wi-Fi passwords, BLE/ESP-NOW keys, certificate contents,
 and other secrets. The exact module unions are
 declared by `NativeError`, `SPIError`, `TlsError`, `WiFiError`, `EspNowError`,
 `BLEError`, and `HTTPError` in `types/esp32qjs-c-api.d.ts`.
+
+TX operations use `details.native: {domain, code, name}` as specified in
+[TX completion and native codes](tx-completion.md). Their callback completion
+enums remain separate from SDK call error codes. Other modules retain their
+documented error domains and details.

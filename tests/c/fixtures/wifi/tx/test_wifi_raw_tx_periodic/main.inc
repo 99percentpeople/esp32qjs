@@ -63,7 +63,7 @@ int main(void) {
     assert(api(due)(&p,10001,false,&other)==E(HALTED));complete(&p,&t);
     assert(api(drained)(&p));invariant(&p);
     p=create(6,0,false,true);assert(api(due)(&p,600,false,&t)==E(ISSUE));
-    assert(api(finish)(&p,&t,E(REJECTED)) && p.failed==1 && p.rejected==1 && p.faulted);
+    assert(api(finish)(&p,&t,E(REJECTED)) && p.failed==0 && p.rejected==1 && p.faulted);
     assert(api(drained)(&p));invariant(&p);
     p=create(7,0,false,true);assert(api(due)(&p,600,false,&t)==E(ISSUE));
     assert(api(submitted)(&p,&t));assert(api(finish)(&p,&t,E(FAILED)));
@@ -76,7 +76,7 @@ int main(void) {
     p=create(81,0,false,false);assert(api(due)(&p,600,false,&t)==E(ISSUE));
     assert(api(busy)(&p,&t) && !t.sequence && p.skipped_busy==1 && !p.issued);invariant(&p);
     assert(api(due)(&p,1600,false,&t)==E(ISSUE));assert(api(finish)(&p,&t,E(DROPPED)));
-    assert(p.dropped==1 && p.failed==1 && p.running);invariant(&p);
+    assert(p.dropped==1 && p.failed==0 && p.running);invariant(&p);
     /* An SDK error with uncertain ownership is never no-submit proof. */
     p=create(9,0,false,false);assert(api(due)(&p,600,false,&t)==E(ISSUE));
     assert(api(uncertain)(&p,&t));api(close)(&p);

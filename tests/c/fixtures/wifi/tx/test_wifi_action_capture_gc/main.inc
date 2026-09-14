@@ -30,6 +30,8 @@ int main(int argc,char **argv) {
             wifi_action_tx_req_t request={.ifx=WIFI_IF_STA,.channel=6,.data_len=1};
             esp32_mquickjs_future_driver_state_t state={.request=&request,.token={.generation=7,.identity=45},
                 .result={.tx_status=WIFI_ACTION_TX_DONE,.terminal_status=WIFI_ACTION_TX_DURATION_COMPLETED,.operation_id=255}};
+            if(!strcmp(argv[2],"failed")) state.result.tx_status=WIFI_ACTION_TX_FAILED;
+            if(!strcmp(argv[2],"absent")) state.result.tx_status=-1;
             *result=!strcmp(argv[1],"finish") ? action_finish(ctx,&state) : !strcmp(argv[1],"status") ?
                 esp32_mquickjs_wifi_action_status(ctx) : js_wifi_action_capabilities(ctx,NULL,0,NULL);
             ok=!JS_IsException(*result);
@@ -41,6 +43,15 @@ int main(int argc,char **argv) {
             }
         }
         inject=false;collect=false;
+        if(ok && !strcmp(argv[1],"finish")) {
+            assert(!JS_IsException(JS_SetPropertyStr(ctx,JS_GetGlobalObject(ctx),"tx",*result)));
+            const char *check = !strcmp(argv[2],"absent") ?
+                "tx.completion === null && tx.terminalStatus === 'duration-completed'" :
+                !strcmp(argv[2],"failed") ? "tx.completion.status === 'failed' && tx.completion.native.domain === 'wifi_action_tx_status_type_t' && tx.completion.native.code === 1 && tx.completion.native.name === 'WIFI_ACTION_TX_FAILED'" :
+                "tx.completion.status === 'success' && tx.completion.native.code === 0 && tx.completion.native.name === 'WIFI_ACTION_TX_DONE'";
+            *message=JS_Eval(ctx,check,strlen(check),"completion",JS_EVAL_RETVAL);assert(*message==JS_TRUE);
+            assert(JS_IsUndefined(JS_GetPropertyStr(ctx,*result,"driverStatus")));
+        }
         if(!ok) {
             assert(JS_HasException(ctx));*result=JS_GetException(ctx);
             if(!nth && argv[4][0]) {

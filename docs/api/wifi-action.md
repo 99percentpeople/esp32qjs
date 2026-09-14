@@ -38,15 +38,15 @@ current-channel operation does not grant permission to change other owners' RF s
 
 The result contains `sequence` (boot non-reused framework identity),
 `radioGeneration`, `operationId` (native 8-bit diagnostic, **not** a reusable token),
-`interface`, `channel`, `payloadBytes`, `driverStatus` (`success`, `failed`, `unknown`)
+`interface`, `channel`, `payloadBytes`, `completion` (see [shared TX completion](tx-completion.md))
 and `terminalStatus` (`duration-completed`, `cancelled`). Sending success is only an
 SDK observation, never peer receipt or protocol success. A native cancellation
 can be caused by higher-priority work. The Future waits for residency termination,
-not only TX_DONE; missing TX status is reported as `unknown`.
+not only TX_DONE; missing TX status is reported as `completion: null`.
+Observed TX status retains its `wifi_action_tx_status_type_t` code and SDK name.
 
 SDK admission/submission failures throw `WIFI_ACTION_SEND_FAILED`; deadline expiry
-throws `WIFI_ACTION_TIMEOUT`. Details include this call's `stage`, raw `espCode` and
-`espName`. Timeout/cancel stops waiting and requests native cancellation after the
+throws `WIFI_ACTION_TIMEOUT`. Details include this call's `stage` and `native` with domain `esp_err_t`, code and name. Timeout/cancel stops waiting and requests native cancellation after the
 submission worker returns. It cannot interrupt a blocked SDK call or undo an RF
 transmission. A successful cancel request is not itself proof of termination.
 
