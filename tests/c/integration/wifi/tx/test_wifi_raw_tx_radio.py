@@ -21,8 +21,9 @@ from tests.support.wireless_vm_fixture import extract
 def radio_code(profile, identity=False):
     code = production_code(profile, identity=identity)
     code = code.replace('static esp_err_t esp_wifi_80211_tx(',
-                        'static void radio_send_hook(void);\nstatic esp_err_t esp_wifi_80211_tx(')
+                        'static bool expected_sequence=true;\nstatic void radio_send_hook(void);\nstatic esp_err_t esp_wifi_80211_tx(')
     code = code.replace('++sends;driver_bytes=bytes;', '++sends;driver_bytes=bytes;radio_send_hook();')
+    code = code.replace('length==24 && sequence', 'length==24 && sequence==expected_sequence')
     # The baseline broker fixture asserts STA; this integration also sends AP.
     code = code.replace('interface==WIFI_IF_STA && length==24',
                         '(interface==WIFI_IF_STA || interface==WIFI_IF_AP) && length==24')
@@ -64,7 +65,7 @@ def radio_code(profile, identity=False):
     for name in ['wifi_radio_lease_valid', 'wifi_radio_acquire_locked', 'wifi_radio_promiscuous_owner',
                  'wifi_radio_refresh_channel', 'wifi_radio_get_channel_locked', 'wifi_radio_release_channel_locked',
                  'wifi_radio_release_locked', 'esp32_mquickjs_wifi_radio_release',
-                 'wifi_radio_raw_tx_policy', 'wifi_radio_raw_tx_unpin',
+                 'wifi_radio_raw_tx_unpin',
                  'esp32_mquickjs_wifi_radio_raw_tx_submit', 'esp32_mquickjs_wifi_radio_raw_tx_retire']:
         code += extract(radio, name)
     return code + (MAIN[:MAIN.index('int main(void)')] + fixture_text('wifi/tx/test_wifi_raw_tx_radio/window.inc') if identity else MAIN)

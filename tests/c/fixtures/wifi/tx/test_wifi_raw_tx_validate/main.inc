@@ -44,33 +44,27 @@ int main(void) {
     rejects(0x0008,SIZE_MAX,ESP32_MQUICKJS_WIFI_RAW_TX_INVALID_LENGTH);
     policy.driver_sequence=false;
     accepts(0x08,24,24,ESP32_MQUICKJS_WIFI_RAW_TX_NON_QOS_DATA);
-    policy.connection_active=true;
-    rejects(0x08,24,ESP32_MQUICKJS_WIFI_RAW_TX_DRIVER_SEQUENCE_REQUIRED);
-    rejects(0x80,24,ESP32_MQUICKJS_WIFI_RAW_TX_DRIVER_SEQUENCE_REQUIRED);
-    policy.driver_sequence=true;policy.associated_path=true;
-    for(unsigned interface=0;interface<2;interface++) {
-        policy.interface=interface;
-        for(unsigned ds=0;ds<4;ds++) {
-            frame_t out;control(0x08|(ds<<8));
-            assert((esp32_mquickjs_wifi_raw_tx_validate(bytes,32,&policy,&out)==ESP32_MQUICKJS_WIFI_RAW_TX_VALID)==(ds==(interface?2:1)));
-        }
-        for(unsigned flag=0x800;flag<=0x2000;flag<<=1) {
-            rejects(0x08|(interface?0x200:0x100)|flag,32,ESP32_MQUICKJS_WIFI_RAW_TX_CONNECTION_FLAGS);
-            rejects(0xd0|flag,32,ESP32_MQUICKJS_WIFI_RAW_TX_CONNECTION_FLAGS);
+    /* Structural preflight is independent of live association and sequence.
+     * All well-formed Data DS layouts and Retry/PM/More Data bits reach SDK. */
+    for(unsigned sequence=0;sequence<2;++sequence) {
+        policy.driver_sequence=sequence;
+        for(unsigned interface=0;interface<2;++interface) {
+            policy.interface=interface;
+            for(unsigned ds=0;ds<4;++ds)
+                accepts(0x08|(ds<<8),32,ds==3?30:24,ESP32_MQUICKJS_WIFI_RAW_TX_NON_QOS_DATA);
+            for(unsigned flag=0x800;flag<=0x2000;flag<<=1) {
+                accepts(0x08|(interface?0x200:0x100)|flag,32,24,ESP32_MQUICKJS_WIFI_RAW_TX_NON_QOS_DATA);
+                accepts(0xd0|flag,32,24,ESP32_MQUICKJS_WIFI_RAW_TX_ACTION);
+            }
         }
     }
-    policy.associated_path=false;
-    accepts(0x3808,24,24,ESP32_MQUICKJS_WIFI_RAW_TX_NON_QOS_DATA); /* unrelated addresses */
-    policy.connection_active=false;
     frame_t out;control(0x08);
     assert(esp32_mquickjs_wifi_raw_tx_validate(NULL,24,&policy,&out)==ESP32_MQUICKJS_WIFI_RAW_TX_INVALID_ARGUMENT);
     assert(esp32_mquickjs_wifi_raw_tx_validate(bytes,24,NULL,&out)==ESP32_MQUICKJS_WIFI_RAW_TX_INVALID_ARGUMENT);
     assert(esp32_mquickjs_wifi_raw_tx_validate(bytes,24,&policy,NULL)==ESP32_MQUICKJS_WIFI_RAW_TX_INVALID_ARGUMENT);
     assert(esp32_mquickjs_wifi_raw_tx_validate(bytes,24,&policy,(frame_t *)bytes)==ESP32_MQUICKJS_WIFI_RAW_TX_INVALID_ARGUMENT);
     assert(esp32_mquickjs_wifi_raw_tx_validate((const uint8_t *)(UINTPTR_MAX-10),24,&policy,&out)==ESP32_MQUICKJS_WIFI_RAW_TX_INVALID_ARGUMENT);
-    policy.associated_path=true;
-    rejects(0x08,24,ESP32_MQUICKJS_WIFI_RAW_TX_INVALID_ARGUMENT);
-    policy.associated_path=false;policy.interface=99;
+    policy.interface=99;
     rejects(0x08,24,ESP32_MQUICKJS_WIFI_RAW_TX_INVALID_ARGUMENT);
     policy.interface=ESP32_MQUICKJS_WIFI_RAW_TX_STATION;
     /* Actual guard-page spans: no read before length admission or beyond header. */

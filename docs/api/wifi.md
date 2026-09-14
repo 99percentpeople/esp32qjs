@@ -1,5 +1,42 @@
 # `wifi` Module
 
+## Common calls and error interpretation
+
+| Purpose | Exact call shape | Meaning |
+| --- | --- | --- |
+| Discover support | `wifi.capabilities()` | Availability and supported option values, not argument signatures. |
+| Inspect link/radio | `wifi.status()` | Current association, driver state and configuration/cleanup diagnostics. |
+| Inspect IP readiness | `net.status()` | Addresses, routes and interface readiness; separate from association. |
+| Connect Station | `wifi.connect(ssid, options?)` | SSID is the first positional string or ByteSource. Password and timeout belong in the second options object. |
+| Configure interfaces | `wifi.configure(options)` | Station config belongs in `options.station`; AP config in `options.accessPoint`. Configuring Station does not connect it. |
+| Scan | `wifi.scan(options?)` | Returns `{records, complete, timedOut}`; inspect `records`, not the result as an array. |
+
+```js
+wifi.connect("your-ssid", { password: "your-password", timeoutMs: 15000 });
+```
+
+`wifi.connect({ssid: "...", password: "..."})` and
+`wifi.connect("...", "password")` are invalid. `wifi.configure({ssid: "..."})`
+is also invalid: use a `station` object when configuring that interface.
+`wifi.configure` accepts only its documented top-level fields; Station-specific
+PMF/security options belong in `station`. Full method references below describe
+admission, option dependencies, results and completion semantics.
+
+| Failure | Interpretation |
+| --- | --- |
+| `TypeError` / `RangeError` about SSID/options | Input validation failed before that native operation; it is not a router authentication result. |
+| `WIFI_CONFIG_FAILED`, `details.configuration.stage: "station-config-readback"`, `espName: "ESP_ERR_INVALID_RESPONSE"` | Configuration readback/acceptance failed after writing. This does not identify the mismatched field or establish an RF/password problem. Inspect rollback and cleanup metadata. |
+| Driver start failure | Distinct from configuration capture and association; inspect `code`, `operation` and `details`. |
+| Association/connect failure | Interpret its documented reason and current Wi-Fi state; a successful scan alone does not prove connection. |
+
+Configuration errors carry `details.configuration` (stage, rollback attempted/
+complete, rollback stage/error and persistent mutation possibility). A completed
+rollback is not a successful configuration. See [Native errors](native-errors.md).
+An `exec` transport interruption is a host-level unconfirmed outcome, not a
+firmware Wi-Fi diagnosis.
+
+## Reference
+
 Wi-Fi uses RAM storage by default. Explicit `wifi.configure({storage:"flash", ...})`
 can persist configuration in NVS; inspect `wifi.status().radio.storage`.
 `wifi` owns 802.11 Station and shared-radio controls. IP addresses, routes,
@@ -75,7 +112,9 @@ pre-start rate configuration, framework write records and failure recovery.
   Each entry contains `band` and `channels`: valid 2.4 GHz country bounds are
   enumerated; 5 GHz requires a manual, nonzero native country mask. Missing,
   invalid or implicit regulatory information yields null, never an unrestricted
-  range. `countryError` is the raw SDK/admission error, or null on a successful
+  range. Null channels mean the framework cannot enumerate the effective set;
+  they do not disable scanning. Scans may delegate to the SDK's regulatory table.
+  `countryError` is the raw SDK/admission error, or null on a successful
   read. An uninitialized/faulted/retiring driver still returns static discovery,
   with null channels. The read holds the Radio mutex and JS conversion uses a
   copied country value after unlock. Snapshots may become stale immediately.
@@ -934,14 +973,19 @@ pre-start rate configuration, framework write records and failure recovery.
   36–177 and is rejected on targets without 5 GHz. A numeric `channel` and
   `channels` are mutually exclusive; `channel: "all"` may accompany a list.
   Under the native SCAN reservation, explicit selections are checked against
-  the current country and band mode before scan submission. A disallowed
-  channel returns `WIFI_SCAN_FAILED` with `ESP_ERR_NOT_ALLOWED`. Explicit
-  5 GHz selections require a manual, nonzero country mask; the SDK does not
-  expose its implicit regulatory table. When that prerequisite cannot be
-  established, the call reports `ESP_ERR_NOT_SUPPORTED` rather than silently
-  scanning a smaller set. Unfiltered/all-channel scans still use SDK rules.
-  Checks describe admission-time state; the SDK remains responsible for RF
-  regulations if its effective country changes during the scan.
+  the current band mode, 2.4 GHz country bounds, and any manual nonzero 5 GHz
+  country mask before scan submission. A channel outside these explicit bounds
+  returns `WIFI_SCAN_FAILED` with `ESP_ERR_NOT_ALLOWED`.
+  Under auto policy, or with a zero 5 GHz mask, explicit 5 GHz selections are
+  passed unchanged to the SDK without requiring a country setter or manual
+  mask. A mask is ignored under auto policy, as specified by the SDK.
+  The SDK applies its effective regulatory table and scanning rules, including
+  DFS restrictions; the requested list is a filter, not a guarantee that every
+  requested channel will be scanned or actively probed. The SDK may scan a
+  permitted subset or reject a request; native errors are propagated.
+  Unfiltered/all-channel scans also use SDK rules. Checks describe admission-time
+  state; the SDK remains responsible if its effective country changes during
+  the scan. This call does not change or persist country configuration.
 
   Each record contains `ssid`, `bssid`, `rssi`, `channel`, `authMode`, `hidden`,
   `secondaryChannel`, `band`, `pairwiseCipher`, `groupCipher`, `antenna`,

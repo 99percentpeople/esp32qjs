@@ -43,13 +43,22 @@ int main(void) {
     s_radio.operation.identity=0;
     bytes[0]=0x88;
     assert(send_frame(&lease,&token,true)==ESP_ERR_INVALID_ARG && !sends && !registrations);bytes[0]=0x80;
-    station_connected=true;
-    assert(send_frame(&lease,&token,false)==ESP_ERR_INVALID_ARG && !sends && !registrations);
-    bytes[1]=0x08; /* Retry on the actual connected management path. */
-    assert(send_frame(&lease,&token,true)==ESP_ERR_INVALID_ARG && !sends && !registrations);bytes[1]=0;
-    mac_error=72;assert(send_frame(&lease,&token,true)==72 && !sends && !registrations);mac_error=0;
-    station_connected=false;channel_error=73;
+    channel_error=73;
     assert(send_frame(&lease,&token,true)==73 && !sends && !registrations);channel_error=0;
+    /* Association getters must not gate raw frame submission. The SDK sees
+     * the original sequence policy and connected-path Retry/PM/More Data bits. */
+    station_connected=true;association_error=71;mac_error=72;synchronous=true;
+    for(unsigned seq=0;seq<2;++seq) {
+        expected_sequence=seq;
+        for(unsigned flag=0x800;flag<=0x2000;flag<<=1) {
+            bytes[1]=flag>>8;
+            unsigned before=sends;
+            assert(send_frame(&lease,&token,seq)==ESP_OK && sends==before+1);
+            assert(!memcmp(driver_bytes,bytes,sizeof(bytes)));
+            assert(validation==ESP32_MQUICKJS_WIFI_RAW_TX_VALID && radio(retire)(&lease,&token));
+        }
+    }
+    expected_sequence=true;bytes[1]=0;synchronous=false;
     fail_alloc=true;
     assert(send_frame(&lease,&token,true)==ESP_ERR_NO_MEM && !token.identity);
     assert(!s_radio.leases[0].fixed_channel && !s_radio.leases[0].raw_tx_identity);fail_alloc=false;
@@ -82,15 +91,28 @@ int main(void) {
     s_radio.clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_WIFI_AP]=1;
     acquire(&lease);callback_info.ifidx=WIFI_IF_AP;
     connected_clients.num=1;memcpy(connected_clients.sta[0].mac,destination,6);
-    assert(send_frame(&lease,&token,false)==ESP_ERR_INVALID_ARG && sends==calls);
-    bytes[0]=0x08;bytes[1]=0x01; /* AP must use FromDS on this actual path. */
-    assert(send_frame(&lease,&token,true)==ESP_ERR_INVALID_ARG && sends==calls);
+    expected_sequence=false;
+    assert(send_frame(&lease,&token,false)==ESP_OK && radio(retire)(&lease,&token));
+    expected_sequence=true;
+    bytes[0]=0x08;bytes[1]=0x01; /* SDK, not framework, judges AP ToDS. */
+    assert(send_frame(&lease,&token,true)==ESP_OK && radio(retire)(&lease,&token));
     bytes[1]=0x02;
     assert(send_frame(&lease,&token,true)==ESP_OK && radio(retire)(&lease,&token));
+    /* A native rejection is preserved with its ownership; preflight must not
+     * turn it into INVALID_ARG or release a possibly referenced buffer. */
+    synchronous=false;send_error=81;expected_sequence=false;calls=sends;
+    assert(send_frame(&lease,&token,false)==81 && sends==calls+1 && token.identity);
+    assert(validation==ESP32_MQUICKJS_WIFI_RAW_TX_VALID);
+    esp32_mquickjs_wifi_raw_tx_broker_status_t rejected;broker(status)(&rejected);
+    assert(rejected.submit_error==81 && rejected.quarantined && !rejected.driver_accepted);
+    assert(!radio(retire)(&lease,&token) && s_radio.leases[0].fixed_channel);
+    assert(broker(quiesce)(7,&token)==ESP_OK && broker(reset_after_deinit)(7));
+    assert(radio(retire)(&lease,&token));
     esp32_mquickjs_wifi_radio_release(&lease);assert(!lease.acquired);
     assert(s_radio.clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_WIFI_AP]==1);
     assert(!s_radio.clients[ESP32_MQUICKJS_WIFI_RADIO_CLIENT_RAW_TX] && allocations==frees);
     /* Exercise the shared callback task boundary as well as synchronous sends. */
+    assert(broker(register)(7)==ESP_OK);
     start_callback();finish_callback();
     assert(broker(unregister)(7)==ESP_OK && broker(reset_after_deinit)(7));
     assert(!operation_depth && !critical_depth);

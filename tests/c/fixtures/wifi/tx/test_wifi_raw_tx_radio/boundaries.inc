@@ -51,14 +51,14 @@ static uint8_t driver_channel=6;
 static esp_err_t esp_wifi_get_mode(wifi_mode_t *mode) {
     assert(operation_depth==1 && !critical_depth);*mode=driver_mode;return mode_error;
 }
-static esp_err_t esp_wifi_sta_get_ap_info(wifi_ap_record_t *ap) {
+esp_err_t esp_wifi_sta_get_ap_info(wifi_ap_record_t *ap) {
     assert(operation_depth==1 && !critical_depth);*ap=connected_ap;
     return association_error ? association_error : station_connected ? ESP_OK : ESP_ERR_WIFI_NOT_CONNECT;
 }
-static esp_err_t esp_wifi_ap_get_sta_list(wifi_sta_list_t *clients) {
+esp_err_t esp_wifi_ap_get_sta_list(wifi_sta_list_t *clients) {
     assert(operation_depth==1 && !critical_depth);*clients=connected_clients;return association_error;
 }
-static esp_err_t esp_wifi_get_mac(wifi_interface_t interface,uint8_t *mac) {
+esp_err_t esp_wifi_get_mac(wifi_interface_t interface,uint8_t *mac) {
     assert(operation_depth==1 && !critical_depth && (interface==WIFI_IF_STA || interface==WIFI_IF_AP));
     memcpy(mac,source_address,6);return mac_error;
 }

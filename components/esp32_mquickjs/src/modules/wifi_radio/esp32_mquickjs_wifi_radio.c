@@ -6838,14 +6838,16 @@ esp_err_t esp32_mquickjs_wifi_radio_validate_scan_channels(
     if (band != WIFI_BAND_MODE_2G_ONLY && band != WIFI_BAND_MODE_5G_ONLY &&
         band != WIFI_BAND_MODE_AUTO) { err = ESP_ERR_NOT_SUPPORTED; goto done; }
     if (ghz5 != 0) {
-        /* Zero/auto means an implicit SDK regulatory table, not "all allowed".
-         * Public SDK getters do not expose that table. Never silently trim a
-         * requested list or invent a country-to-channel table here. */
-        if (country.policy != WIFI_COUNTRY_POLICY_MANUAL || country.wifi_5g_channel_mask == 0) {
+        /* AUTO ignores the configured mask; a zero mask delegates to the SDK's
+         * regulatory table even under MANUAL. Submit the original scan request
+         * in either case and let the SDK select permitted channels/scan modes.
+         * Only a MANUAL, nonzero mask is an explicit preflight restriction. */
+        if (country.policy != WIFI_COUNTRY_POLICY_AUTO && country.policy != WIFI_COUNTRY_POLICY_MANUAL) {
             err = ESP_ERR_NOT_SUPPORTED;
             goto done;
         }
-        if ((ghz5 & ~country.wifi_5g_channel_mask) != 0) { err = ESP_ERR_NOT_ALLOWED; goto done; }
+        if (country.policy == WIFI_COUNTRY_POLICY_MANUAL && country.wifi_5g_channel_mask != 0 &&
+            (ghz5 & ~country.wifi_5g_channel_mask) != 0) { err = ESP_ERR_NOT_ALLOWED; goto done; }
     }
 #endif
     err = ESP_OK;
@@ -9845,49 +9847,6 @@ done:
     return err;
 }
 
-static esp_err_t wifi_radio_raw_tx_policy(
-    wifi_mode_t mode, const uint8_t *bytes,
-    esp32_mquickjs_wifi_raw_tx_validation_policy_t *policy)
-{
-    esp_err_t err;
-    uint8_t self[6];
-    if (mode & WIFI_MODE_STA) {
-        wifi_ap_record_t ap = {0};
-        err = esp_wifi_sta_get_ap_info(&ap);
-        if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_CONNECT) return err;
-        if (err == ESP_OK) {
-            policy->connection_active = true;
-            if (policy->interface == ESP32_MQUICKJS_WIFI_RAW_TX_STATION) {
-                err = esp_wifi_get_mac(WIFI_IF_STA, self);
-                if (err != ESP_OK) return err;
-                policy->associated_path = memcmp(bytes + 4, ap.bssid, 6) == 0 && memcmp(bytes + 10, self, 6) == 0;
-            }
-        }
-    }
-#if CONFIG_ESP_WIFI_SOFTAP_SUPPORT
-    if (mode & WIFI_MODE_AP) {
-        wifi_sta_list_t clients = {0};
-        err = esp_wifi_ap_get_sta_list(&clients);
-        if (err != ESP_OK) return err;
-        if ((unsigned)clients.num > sizeof(clients.sta) / sizeof(clients.sta[0])) return ESP_ERR_INVALID_STATE;
-        if (clients.num != 0) {
-            policy->connection_active = true;
-            if (policy->interface == ESP32_MQUICKJS_WIFI_RAW_TX_ACCESS_POINT) {
-                err = esp_wifi_get_mac(WIFI_IF_AP, self);
-                if (err != ESP_OK) return err;
-                if (memcmp(bytes + 10, self, 6) == 0) {
-                    for (unsigned i = 0; i < (unsigned)clients.num; ++i)
-                        if (memcmp(bytes + 4, clients.sta[i].mac, 6) == 0) policy->associated_path = true;
-                }
-            }
-        }
-    }
-#else
-    if (mode & WIFI_MODE_AP) return ESP_ERR_NOT_SUPPORTED;
-#endif
-    return ESP_OK;
-}
-
 static void wifi_radio_raw_tx_unpin(wifi_radio_live_lease_t *owner)
 {
     taskENTER_CRITICAL(&s_radio.lock);
@@ -9931,10 +9890,8 @@ esp_err_t esp32_mquickjs_wifi_radio_raw_tx_submit(
     err = esp_wifi_get_mode(&mode);
     if (err != ESP_OK) goto done;
     if ((mode & required) != required || mode != s_radio.effective_mode) { err = ESP_ERR_INVALID_STATE; goto done; }
-    err = wifi_radio_raw_tx_policy(mode, bytes, &policy);
-    if (err != ESP_OK) goto done;
-    *validation = esp32_mquickjs_wifi_raw_tx_validate(bytes, length, &policy, &frame);
-    if (*validation != ESP32_MQUICKJS_WIFI_RAW_TX_VALID) { err = ESP_ERR_INVALID_ARG; goto done; }
+    /* The SDK evaluates association-dependent sequence/DS/flag constraints
+     * using its live state; do not gate submission on a separate snapshot. */
     err = wifi_radio_get_channel_locked(&actual, &secondary, &revision);
     if (err != ESP_OK) goto done;
     taskENTER_CRITICAL(&s_radio.lock);

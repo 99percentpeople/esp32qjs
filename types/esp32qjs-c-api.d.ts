@@ -3080,13 +3080,15 @@ namespace ESP32QJS {
     ssid?: string;
     /** Match one nonzero unicast BSSID in xx:xx:xx:xx:xx:xx form. */
     bssid?: string;
-    /** Limit the scan to one target-supported channel. Omit or use all for all channels. */
+    /** Limit the scan to one target-supported channel, subject to SDK regulatory rules. Omit or use all for all channels. */
     channel?: "all" | number;
-    /** Explicit channel lists; omitted bands are skipped. Mutually exclusive with a numeric channel. */
+    /** Explicit channel filters; omitted bands are skipped. Mutually exclusive with a numeric channel.
+     * 5 GHz auto/zero-mask country policies delegate to the SDK; no country setter is required.
+     * The SDK may scan only a permitted subset. */
     channels?: { ghz2?: number[]; ghz5?: number[] };
     /** Include access points that do not advertise an SSID. Defaults to true. */
     showHidden?: boolean;
-    /** Active probes or passive listening; defaults to active. */
+    /** Active probes or passive listening; defaults to active. SDK regulatory rules may require passive scanning. */
     mode?: "active" | "passive";
     /** Active-mode minimum per channel: 0..1500 ms, default 0; at most activeMaxMs. */
     activeMinMs?: number;
@@ -4130,8 +4132,8 @@ namespace ESP32QJS {
     interface?: "station" | "access-point";
     /** Current while idle; pinned for each in-flight submission. */
     channel?: "current" | number;
+    /** Passed unchanged to the SDK; association-dependent restrictions are not prechecked by the framework. */
     sequenceControl?: "driver" | "application";
-    /** Both modes enforce mandatory MAC/SDK constraints; neither detects arbitrary FCS/container bytes. */
     /** Whole Future deadline including waiting/initialization; 1-2147483647 ms, default 1000. */
     timeoutMs?: number;
   }
@@ -4151,6 +4153,7 @@ namespace ESP32QJS {
     /** Target SDK rate name after native completion; null for unknown numeric codes. */
     rate: WiFiTxRate | null;
     rawRate: number;
+    /** SDK wifi_tx_status_t: 0=success, 1=failed; not esp_err_t or a detailed failure reason. */
     rawStatus: number;
   }
   interface WiFiRawTxNativeStatus {
@@ -4461,6 +4464,7 @@ namespace ESP32QJS {
     rate?: WiFiTxRateConfig;
     interface?: "station" | "access-point";
     channel?: "current" | number;
+    /** Passed unchanged at each submission; the SDK decides association-dependent acceptance. */
     sequenceControl?: "driver" | "application";
     /** Opening deadline, 1-2147483647 ms; default 1000. */
     timeoutMs?: number;

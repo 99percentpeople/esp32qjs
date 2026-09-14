@@ -76,9 +76,10 @@ periodic jobs across all Sessions and a minimum interval of 1000 microseconds.
 and, in SoftAP builds, `"access-point"`. A temporary rate requires stopped,
 exclusive Radio ownership and a known previous framework write. AP rate opening
 requires saved AP or APSTA mode and valid AP configuration.
-Application sequence
-is supported only without an established connection; driver sequence is required
-when either a Station connection or an AP client is present.
+Both sequence policies are submitted unchanged to the SDK, without a framework
+association precheck. The SDK documents driver sequence as required after a
+connection is established and can reject application sequence at submission.
+Removing the precheck does not remove SDK restrictions or guarantee acceptance.
 
 ## `wifi.rawTx.send(frame, options?)`
 
@@ -95,7 +96,7 @@ closed by a getter is rejected rather than accessed through an old pointer.
 | --- | --- |
 | `interface` | `"station"` by default, or `"access-point"` when enabled/running |
 | `channel` | `"current"` by default, or a target-supported numeric channel admitted by Radio |
-| `sequenceControl` | `"driver"` by default, or `"application"` when disconnected |
+| `sequenceControl` | `"driver"` by default, or `"application"`; passed unchanged to the SDK |
 | `timeoutMs` | Integer 1–2147483647, default 1000; covers the entire Future including waiting and initialization |
 
 Unknown keys, null/array options, invalid enums (including NUL suffixes), fractions
@@ -110,9 +111,14 @@ channel is checked against live regulatory state; when the driver is initially
 uninitialized, that readback occurs after initialization/start. Failure can leave
 native cleanup pending. AP startup remains explicit through Wi-Fi configuration.
 
-Radio reads actual association/MAC state to validate connected-path DS bits and
-Power Management/More Data/Retry restrictions. SDK association changes are not
-serialized by the framework mutex, so final SDK rejection remains possible.
+The framework checks frame bounds, MAC layout and the build's frame-type
+allowlist. It does not query association/MAC state to gate sequence control,
+connected-path DS bits, Power Management, More Data or Retry flags. These fields
+are passed unchanged to the SDK, which evaluates its live connection state.
+Native submission errors are preserved; structural validation success does not
+imply SDK acceptance. Submission failure can retain quarantined native ownership
+under the existing cleanup contract; inspect status and use `recover()` when
+required. No automatic retry, disconnect or sequence-policy substitution occurs.
 Existing incompatible fixed-channel owners or scan/connect reservations reject
 submission. The chosen channel stays pinned through native retirement, including
 after a public timeout. Sending does not change interface-global PHY rate settings.
@@ -124,7 +130,24 @@ framework operation identity, **not** the packet's 802.11 sequence-control field
 Timestamps use the local monotonic clock, not UTC; completedAtUs is callback time.
 `driverStatus` is `"success"`, `"failed"` or `"unknown"`. A failed MAC completion
 is a completed result; SDK submission errors throw. Completion is not a peer
-application ACK. After native completion, `rate` maps the target SDK enum name;
+application ACK. `rawStatus` is the SDK `wifi_tx_status_t` enum: 0 is
+`WIFI_SEND_SUCCESS`, 1 is `WIFI_SEND_FAIL`. It is not an `esp_err_t`, an 802.11
+reason code, or a detailed explanation of why transmission failed.
+`driverAccepted: true` with `driverCompleted: true` and `rawStatus: 1` means
+submission succeeded and the later MAC completion reported failure. It does
+not establish address/association rejection, nor prove whether the frame was
+transmitted over the air. A broadcast/unicast difference alone does not isolate
+an address check: their MAC acknowledgment behavior differs. Diagnose RF/ACK
+behavior separately; do not turn a failed completion into success or recovery
+when the native operation has already retired normally.
+Controlled C5/S3 tests have observed peer reception of custom-source unicast
+management frames even when C5 reports `WIFI_SEND_FAIL`. Receiver evidence must
+match packet bytes or a test marker; a source-MAC filter must include every
+tested source. Enabling Monitor on the sender also changes reception state and
+can affect completion, so treat it as an experimental variable rather than a
+passive observer. See the [source-address completion investigation](../investigations/2026-09-14-raw-tx-source-completion.md)
+for the measured cases and remaining ACK evidence limits.
+After native completion, `rate` maps the target SDK enum name;
 unknown numeric codes remain null. `rawRate` preserves the original code. Rate
 names do not infer PHY mode, GI duration, throughput or acknowledgment.
 
@@ -304,8 +327,9 @@ does not publish a partially opened JS object.
 
 The Session retains its Radio lease while idle. A numeric channel stays pinned
 until close; `"current"` follows the actual channel observed at each submission.
-Without `rate`, opening the AP interface requires an already running AP. Configuration, sequence
-and association constraints are checked again at actual driver admission.
+Without `rate`, opening the AP interface requires an already running AP.
+Configuration, channel and ownership constraints are checked at actual driver
+admission; association-dependent frame and sequence rules are left to the SDK.
 
 Admission and TX completion wake a coalesced native worker independently of JS
 polling. A single boot-owned timer retries saturated worker admission and pending

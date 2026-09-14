@@ -20,9 +20,8 @@ esp32_mquickjs_wifi_raw_tx_validation_t esp32_mquickjs_wifi_raw_tx_validate(
     if (raw_tx_overlaps(output, sizeof(*output), bytes, length) ||
         raw_tx_overlaps(output, sizeof(*output), policy, sizeof(*policy)))
         return ESP32_MQUICKJS_WIFI_RAW_TX_INVALID_ARGUMENT;
-    if ((policy->interface != ESP32_MQUICKJS_WIFI_RAW_TX_STATION &&
-         policy->interface != ESP32_MQUICKJS_WIFI_RAW_TX_ACCESS_POINT) ||
-        (policy->associated_path && !policy->connection_active))
+    if (policy->interface != ESP32_MQUICKJS_WIFI_RAW_TX_STATION &&
+        policy->interface != ESP32_MQUICKJS_WIFI_RAW_TX_ACCESS_POINT)
         return ESP32_MQUICKJS_WIFI_RAW_TX_INVALID_ARGUMENT;
     uint16_t fc = (uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8);
     if ((fc & 3U) != 0) return ESP32_MQUICKJS_WIFI_RAW_TX_INVALID_HEADER;
@@ -59,15 +58,6 @@ esp32_mquickjs_wifi_raw_tx_validation_t esp32_mquickjs_wifi_raw_tx_validate(
     } else return ESP32_MQUICKJS_WIFI_RAW_TX_UNSUPPORTED_FRAME;
     if (esp32_mquickjs_wifi_rx_parse_header(bytes, length, &frame.header) != ESP32_MQUICKJS_WIFI_RX_PARSED)
         return ESP32_MQUICKJS_WIFI_RAW_TX_INVALID_HEADER;
-    if (policy->connection_active && !policy->driver_sequence)
-        return ESP32_MQUICKJS_WIFI_RAW_TX_DRIVER_SEQUENCE_REQUIRED;
-    if (policy->associated_path) {
-        uint16_t expected = policy->interface == ESP32_MQUICKJS_WIFI_RAW_TX_STATION ? 0x0100U : 0x0200U;
-        if (type == 2 && (fc & 0x0300U) != expected) return ESP32_MQUICKJS_WIFI_RAW_TX_INVALID_DS;
-        /* SDK rejects Retry, Power Management and More Data on connected paths. */
-        if ((fc & (0x0800U | 0x1000U | 0x2000U)) != 0)
-            return ESP32_MQUICKJS_WIFI_RAW_TX_CONNECTION_FLAGS;
-    }
     frame.byte_length = (uint16_t)length;
     memcpy(output, &frame, sizeof(frame));
     return ESP32_MQUICKJS_WIFI_RAW_TX_VALID;

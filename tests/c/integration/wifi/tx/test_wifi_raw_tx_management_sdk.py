@@ -12,6 +12,12 @@ from tests.c.integration.wifi.csi.test_wifi_csi_rx_link import tool, elf
 
 class WiFiRawTxManagementSdk(unittest.TestCase):
     def test_actual_sdk_management_admission_and_preserved_constraints(self):
+        self.run_sdk_fixture()
+
+    def test_addresses_and_reported_unicast_deauth_reach_native_transmit(self):
+        self.run_sdk_fixture("address_matrix.inc", (True,))
+
+    def run_sdk_fixture(self, main_fixture=None, variants=(False, True)):
         qemu=shutil.which('qemu-riscv32')
         if not qemu:
             self.skipTest('qemu-riscv32 required for actual SDK execution')
@@ -25,10 +31,14 @@ class WiFiRawTxManagementSdk(unittest.TestCase):
                 root=Path(directory)
                 original=subprocess.check_output([ar,'p',str(archive),'ieee80211_output.o'])
                 import patch_idf_raw_tx_management as patcher
-                for extended in (False,True):
+                for extended in variants:
                     with self.subTest(extendedManagement=extended):
                         (root/'sdk.o').write_bytes(patcher.patch_object(original,target) if extended else original)
-                        (root/'fixture.c').write_text(fixture_text('wifi/tx/test_wifi_raw_tx_management_sdk/fixture.inc'))
+                        code = fixture_text('wifi/tx/test_wifi_raw_tx_management_sdk/fixture.inc')
+                        if main_fixture is not None:
+                            code = code[:code.index('int main(void) {')] + fixture_text(
+                                'wifi/tx/test_wifi_raw_tx_management_sdk/' + main_fixture)
+                        (root/'fixture.c').write_text(code)
                         command=[cc,'-Os','-march=rv32imac','-mabi=ilp32','-mno-relax','-nostdlib',
                             '-ffunction-sections','-fdata-sections','-fno-builtin','-DEXPECT_EXTENDED='+str(int(extended)),
                             '-DEB_TXINFO_WORD='+('14' if target=='esp32c5' else '11'),

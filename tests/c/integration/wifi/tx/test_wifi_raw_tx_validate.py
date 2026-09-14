@@ -1,4 +1,4 @@
-"""Deferred production Raw TX MAC allowlist/bounds/connected-policy tests."""
+"""Deferred production Raw TX MAC allowlist/bounds/SDK-delegated policy tests."""
 from tests.support.fixtures import fixture_text
 import unittest
 from tests.c.integration.wifi.monitor.test_wifi_rx_target import ROOT, INTERNAL, COMMON, unit
@@ -8,7 +8,7 @@ RAW = ROOT / 'components/esp32_mquickjs/src/modules/wifi_raw_tx'
 
 
 class WiFiRawTxValidate(unittest.TestCase):
-    def test_allowlist_short_spans_variable_headers_and_connection_constraints(self):
+    def test_allowlist_short_spans_variable_headers_and_sdk_delegated_policy(self):
         source = unit(INTERNAL / 'esp32_mquickjs_wifi_rx.h')
         source += unit(INTERNAL / 'esp32_mquickjs_wifi_raw_tx_validate.h')
         source += unit(COMMON / 'esp32_mquickjs_wifi_rx.c')
