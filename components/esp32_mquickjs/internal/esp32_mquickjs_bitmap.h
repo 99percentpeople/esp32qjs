@@ -30,9 +30,6 @@ void js_display_font_finalizer(JSContext *ctx, void *opaque);
 JSValue js_display_command_buffer_constructor(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 void js_display_command_buffer_finalizer(JSContext *ctx, void *opaque);
 
-esp32_mquickjs_bitmap_t *esp32_mquickjs_bitmap_from_value(JSContext *ctx,
-                                                                          JSValue value,
-                                                                          const char *api_name);
 bool esp32_mquickjs_bitmap_normalize_rect(const esp32_mquickjs_bitmap_t *buffer,
                                                   esp32_mquickjs_bitmap_rect_t *rect);
 size_t esp32_mquickjs_bitmap_rect_length(const esp32_mquickjs_bitmap_t *buffer,
@@ -40,7 +37,6 @@ size_t esp32_mquickjs_bitmap_rect_length(const esp32_mquickjs_bitmap_t *buffer,
                                                  int32_t height);
 size_t esp32_mquickjs_bitmap_row_length(const esp32_mquickjs_bitmap_t *buffer,
                                                 int32_t width);
-uint32_t esp32_mquickjs_bitmap_chunk_bytes(const esp32_mquickjs_bitmap_t *buffer);
 bool esp32_mquickjs_bitmap_direct_rect(const esp32_mquickjs_bitmap_t *buffer,
                                                const esp32_mquickjs_bitmap_rect_t *rect,
                                                const uint8_t **out_data,

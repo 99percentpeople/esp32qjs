@@ -474,13 +474,6 @@ void bitmap_release_write(esp32_mquickjs_bitmap_t *buffer)
     }
 }
 
-esp32_mquickjs_bitmap_t *esp32_mquickjs_bitmap_from_value(JSContext *ctx,
-                                                                          JSValue value,
-                                                                          const char *api_name)
-{
-    return bitmap_from_value(ctx, value, api_name);
-}
-
 static void clear_dirty(esp32_mquickjs_bitmap_t *buffer)
 {
     buffer->dirty_x0 = 0;
@@ -1189,14 +1182,6 @@ size_t esp32_mquickjs_bitmap_row_length(const esp32_mquickjs_bitmap_t *buffer,
                                                 int32_t width)
 {
     return esp32_mquickjs_bitmap_rect_length(buffer, width, 1);
-}
-
-uint32_t esp32_mquickjs_bitmap_chunk_bytes(const esp32_mquickjs_bitmap_t *buffer)
-{
-    if (buffer == NULL || buffer->closed || buffer->chunk_size == 0) {
-        return BITMAP_DEFAULT_CHUNK_BYTES;
-    }
-    return (uint32_t)buffer->chunk_size;
 }
 
 bool esp32_mquickjs_bitmap_direct_rect(const esp32_mquickjs_bitmap_t *buffer,

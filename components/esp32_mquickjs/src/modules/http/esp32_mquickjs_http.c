@@ -282,66 +282,6 @@ void esp32_mquickjs_http_free_request(esp32_mquickjs_http_request_t *request)
     memset(request, 0, sizeof(*request));
 }
 
-int esp32_mquickjs_http_clone_request(const esp32_mquickjs_http_request_t *source,
-                                      esp32_mquickjs_http_request_t *target)
-{
-    size_t i;
-
-    if (source == NULL || target == NULL) {
-        return -1;
-    }
-
-    memset(target, 0, sizeof(*target));
-    target->timeout_ms = source->timeout_ms;
-    target->max_body_bytes = source->max_body_bytes;
-    target->body_len = source->body_len;
-    target->body_present = source->body_present;
-    target->body_binary = source->body_binary;
-
-    if (source->url != NULL) {
-        target->url = esp32_mquickjs_http_strdup(source->url);
-        if (target->url == NULL) {
-            goto fail;
-        }
-    }
-    if (source->method != NULL) {
-        target->method = esp32_mquickjs_http_strdup(source->method);
-        if (target->method == NULL) {
-            goto fail;
-        }
-    }
-    if (source->body_len > 0) {
-        target->body = esp32_mquickjs_memory_payload_alloc(
-            "http.body", source->body_len,
-            ESP32_MQUICKJS_MEMORY_EXTERNAL);
-        if (target->body == NULL) {
-            goto fail;
-        }
-        memcpy(target->body, source->body, source->body_len);
-    }
-    if (source->header_count > 0) {
-        target->headers = heap_caps_calloc(source->header_count, sizeof(*target->headers), MALLOC_CAP_8BIT);
-        if (target->headers == NULL) {
-            goto fail;
-        }
-        for (i = 0; i < source->header_count; ++i) {
-            target->headers[i].key = esp32_mquickjs_http_strdup(source->headers[i].key);
-            target->headers[i].value = esp32_mquickjs_http_strdup(source->headers[i].value);
-            if (target->headers[i].key == NULL || target->headers[i].value == NULL) {
-                target->header_count = i + 1;
-                goto fail;
-            }
-        }
-        target->header_count = source->header_count;
-    }
-
-    return 0;
-
-fail:
-    esp32_mquickjs_http_free_request(target);
-    return -1;
-}
-
 void esp32_mquickjs_http_free_response(esp32_mquickjs_http_response_t *response)
 {
     if (response == NULL) {
@@ -353,20 +293,6 @@ void esp32_mquickjs_http_free_response(esp32_mquickjs_http_response_t *response)
     esp32_mquickjs_memory_payload_free(response->body);
     esp32_mquickjs_http_free_headers(response->headers, response->header_count);
     heap_caps_free(response);
-}
-
-JSValue esp32_mquickjs_http_call_function(JSContext *ctx,
-                                          JSValue func,
-                                          JSValue this_val,
-                                          int argc,
-                                          JSValue *argv)
-{
-    return esp32_mquickjs_call(ctx,
-                               esp32_mquickjs_get_active_runtime(),
-                               func,
-                               this_val,
-                               argc,
-                               argv);
 }
 
 static const char *http_status_text(int32_t status)

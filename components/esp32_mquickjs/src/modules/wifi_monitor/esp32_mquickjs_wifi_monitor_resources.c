@@ -264,12 +264,6 @@ done:
     return result;
 }
 
-void esp32_mquickjs_wifi_monitor_sink(void *opaque, const esp32_mquickjs_wifi_rx_target_view_t *view,
-    esp32_mquickjs_wifi_rx_filter_result_t result, uint64_t callback_time_us)
-{
-    (void)esp32_mquickjs_wifi_monitor_publish(opaque, view, result, callback_time_us);
-}
-
 static bool monitor_change_owner(esp32_mquickjs_wifi_monitor_resources_t *resources,
     const esp32_mquickjs_wifi_monitor_event_t *event, uint8_t expected, bool take)
 {

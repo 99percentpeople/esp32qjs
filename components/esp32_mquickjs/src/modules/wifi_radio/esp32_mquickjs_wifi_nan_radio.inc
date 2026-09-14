@@ -49,16 +49,6 @@ static esp_err_t wifi_radio_nan_snapshot_locked(const esp32_mquickjs_wifi_radio_
     return ESP_OK;
 }
 
-esp_err_t esp32_mquickjs_wifi_radio_nan_status(const esp32_mquickjs_wifi_radio_operation_t *token,
-    esp32_mquickjs_wifi_nan_radio_status_t *status)
-{
-    if (!status) return ESP_ERR_INVALID_ARG;
-    wifi_radio_operation_lock();
-    esp_err_t error = wifi_radio_nan_snapshot_locked(token, status);
-    wifi_radio_operation_unlock();
-    return error;
-}
-
 #if CONFIG_ESP_WIFI_NAN_SYNC_ENABLE
 esp_err_t esp32_mquickjs_wifi_radio_nan_query(const esp32_mquickjs_wifi_radio_operation_t *token,
     const esp32_mquickjs_wifi_nan_query_t *query, esp32_mquickjs_wifi_nan_query_result_t *out)

@@ -155,6 +155,4 @@ bool esp32_mquickjs_memory_block_resize(esp32_mquickjs_memory_block_t *block,
                                        size_t size);
 void *esp32_mquickjs_memory_block_borrow(esp32_mquickjs_memory_block_t *block);
 void esp32_mquickjs_memory_block_release(esp32_mquickjs_memory_block_t *block);
-size_t esp32_mquickjs_memory_block_size(
-    const esp32_mquickjs_memory_block_t *block);
 bool esp32_mquickjs_memory_block_free(esp32_mquickjs_memory_block_t *block);

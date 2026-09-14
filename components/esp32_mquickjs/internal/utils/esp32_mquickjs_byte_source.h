@@ -88,13 +88,6 @@ JSValue esp32_mquickjs_new_owned_byte_view(JSContext *ctx,
                                            uint8_t *data,
                                            size_t length);
 
-JSValue esp32_mquickjs_new_retained_byte_view(
-    JSContext *ctx,
-    const uint8_t *data,
-    size_t length,
-    esp32_mquickjs_byte_view_release_fn release,
-    void *release_opaque);
-
 /* Internal allocation policy. Non-NULL labels must have boot lifetime.
  * Wireless wrappers/read leases use control quota; array input copies use
  * copy quota. Data ownership and destruction match the generic factories.

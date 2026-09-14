@@ -44,8 +44,6 @@ uint64_t esp32_mquickjs_wifi_radio_eap_identity(void);
 bool esp32_mquickjs_wifi_radio_eap_ready(void);
 esp_err_t esp32_mquickjs_wifi_eap_capture_owners(esp32_mquickjs_wifi_radio_lease_t owners[3]);
 /* Runtime/helper task entry points, not SDK callback or JS APIs. */
-esp_err_t esp32_mquickjs_wifi_eap_activate(esp32_mquickjs_wifi_eap_profile_t *profile,
-    esp32_mquickjs_wifi_eap_install_result_t *result);
 bool esp32_mquickjs_wifi_eap_prepare_runtime_destroy(void);
 esp_err_t esp32_mquickjs_wifi_eap_disconnect_ready(bool *ready);
 #endif

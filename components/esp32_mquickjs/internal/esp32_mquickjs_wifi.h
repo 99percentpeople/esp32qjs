@@ -468,7 +468,6 @@ bool esp32_mquickjs_wifi_connection_reserved_locked(void);
 void esp32_mquickjs_wifi_set_scanning_locked(bool scanning);
 void esp32_mquickjs_wifi_clear_scan_future(void);
 void esp32_mquickjs_wifi_clear_connect_future(void);
-const char *esp32_mquickjs_wifi_reason_to_string(int32_t reason);
 JSValue esp32_mquickjs_wifi_make_status_object(JSContext *ctx);
 JSValue esp32_mquickjs_wifi_make_scan_results_array(JSContext *ctx, uint16_t max_records);
 /* Converts a caller-owned immutable record; performs no SDK read or consume. */

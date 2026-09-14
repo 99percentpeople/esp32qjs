@@ -52,14 +52,7 @@ JSValue js_http_get_max_body_bytes(JSContext *ctx, JSValue *this_val, int argc, 
 char *esp32_mquickjs_http_strdup(const char *value);
 void esp32_mquickjs_http_free_headers(esp32_mquickjs_http_header_t *headers, size_t header_count);
 void esp32_mquickjs_http_free_request(esp32_mquickjs_http_request_t *request);
-int esp32_mquickjs_http_clone_request(const esp32_mquickjs_http_request_t *source,
-                                      esp32_mquickjs_http_request_t *target);
 void esp32_mquickjs_http_free_response(esp32_mquickjs_http_response_t *response);
-JSValue esp32_mquickjs_http_call_function(JSContext *ctx,
-                                          JSValue func,
-                                          JSValue this_val,
-                                          int argc,
-                                          JSValue *argv);
 esp32_mquickjs_http_operation_t *esp32_mquickjs_http_operation_create(void);
 bool esp32_mquickjs_http_operation_destroy(esp32_mquickjs_http_operation_t *operation);
 bool esp32_mquickjs_http_operation_cancel(esp32_mquickjs_http_operation_t *operation);

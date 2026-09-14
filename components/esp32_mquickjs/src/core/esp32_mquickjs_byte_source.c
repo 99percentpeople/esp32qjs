@@ -623,14 +623,6 @@ JSValue esp32_mquickjs_new_owned_byte_view(JSContext *ctx, uint8_t *data,
     return esp32_mquickjs_new_wireless_owned_byte_view(NULL, ctx, data, length);
 }
 
-JSValue esp32_mquickjs_new_retained_byte_view(JSContext *ctx,
-    const uint8_t *data, size_t length,
-    esp32_mquickjs_byte_view_release_fn release, void *release_opaque)
-{
-    return esp32_mquickjs_new_wireless_retained_byte_view(NULL, ctx, data,
-        length, release, release_opaque);
-}
-
 bool esp32_mquickjs_byte_view_is_open(JSContext *ctx, JSValue value)
 {
     esp32_mquickjs_byte_view_t *view;

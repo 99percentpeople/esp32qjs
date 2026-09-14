@@ -28,8 +28,6 @@ esp_err_t esp32_mquickjs_wifi_radio_nan_begin(const wifi_nan_sync_config_t *conf
 esp_err_t esp32_mquickjs_wifi_radio_nan_usd_begin(
     esp32_mquickjs_wifi_nan_sdk_observer_fn observer, void *opaque,
     esp32_mquickjs_wifi_radio_operation_t *token, esp32_mquickjs_wifi_nan_radio_status_t *status);
-esp_err_t esp32_mquickjs_wifi_radio_nan_status(const esp32_mquickjs_wifi_radio_operation_t *token,
-    esp32_mquickjs_wifi_nan_radio_status_t *status);
 esp_err_t esp32_mquickjs_wifi_radio_nan_poll(const esp32_mquickjs_wifi_radio_operation_t *token,
     esp32_mquickjs_wifi_nan_radio_status_t *status);
 esp_err_t esp32_mquickjs_wifi_radio_nan_close(esp32_mquickjs_wifi_radio_operation_t *token,

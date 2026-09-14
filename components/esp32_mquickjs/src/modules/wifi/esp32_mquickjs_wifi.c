@@ -1616,11 +1616,6 @@ static const char *wifi_reason_to_string(int32_t reason)
     }
 }
 
-const char *esp32_mquickjs_wifi_reason_to_string(int32_t reason)
-{
-    return wifi_reason_to_string(reason);
-}
-
 static const char *wifi_radio_mode_to_string(wifi_mode_t mode)
 {
     switch (mode) {
@@ -2179,22 +2174,6 @@ static JSValue wifi_throw_scan_error(JSContext *ctx, esp_err_t err)
 JSValue esp32_mquickjs_wifi_throw_scan_error(JSContext *ctx, esp_err_t err)
 {
     return wifi_throw_scan_error(ctx, err);
-}
-
-static int js_value_to_timeout_ms(JSContext *ctx,
-                                  JSValue value,
-                                  uint32_t default_timeout_ms,
-                                  uint32_t *out_timeout_ms)
-{
-    if (JS_IsUndefined(value)) {
-        *out_timeout_ms = default_timeout_ms;
-        return 0;
-    }
-    if (!esp32_mquickjs_value_to_bounded_u32(
-            ctx, value, 0, INT32_MAX, out_timeout_ms)) {
-        return -1;
-    }
-    return 0;
 }
 
 esp_err_t esp32_mquickjs_wifi_get_status(esp32_mquickjs_wifi_status_t *status)
@@ -4276,16 +4255,6 @@ esp_err_t esp32_mquickjs_wifi_eap_capture_owners(esp32_mquickjs_wifi_radio_lease
     const esp32_mquickjs_wifi_radio_lease_t *ap = esp32_mquickjs_wifi_ap_control_lease();
     owners[2] = ap ? *ap : (esp32_mquickjs_wifi_radio_lease_t){0};
     return ESP_OK;
-}
-
-esp_err_t esp32_mquickjs_wifi_eap_activate(esp32_mquickjs_wifi_eap_profile_t *profile,
-    esp32_mquickjs_wifi_eap_install_result_t *result)
-{
-    if (!result || !profile) return ESP_ERR_INVALID_ARG;
-    *result = (esp32_mquickjs_wifi_eap_install_result_t){.stage = "helper-admission", .error = ESP_ERR_INVALID_STATE};
-    if (!wifi_driver_helpers_ready() || !wifi_helpers_idle(false)) return ESP_ERR_INVALID_STATE;
-    return esp32_mquickjs_wifi_radio_eap_install(&s_wifi_application, &s_wifi_state.radio_lease,
-        esp32_mquickjs_wifi_ap_control_lease(), profile, result);
 }
 
 bool esp32_mquickjs_wifi_eap_prepare_runtime_destroy(void)

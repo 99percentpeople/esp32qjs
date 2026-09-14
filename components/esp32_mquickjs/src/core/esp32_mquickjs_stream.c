@@ -9,7 +9,6 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "esp_heap_caps.h"
 #include "utils/esp32_mquickjs_byte_source.h"
@@ -522,27 +521,6 @@ static bool stream_slot_eof(esp32_mquickjs_stream_slot_t *slot)
         return slot->handle.source.eof;
     }
     return true;
-}
-
-JSValue esp32_mquickjs_stream_open_file(JSContext *ctx,
-                                        JSValue global_obj,
-                                        const char *path,
-                                        const char *mode)
-{
-    FILE *file;
-    bool path_existed;
-
-    if (mode == NULL || strlen(mode) >= sizeof(s_streams[0].mode)) {
-        return JS_ThrowTypeError(ctx, "unsupported stream mode");
-    }
-    path_existed = access(path, F_OK) == 0;
-    file = fopen(path, mode);
-    if (file == NULL) {
-        return JS_ThrowInternalError(ctx, "open() failed for %s", path);
-    }
-    return esp32_mquickjs_stream_adopt_file(
-        ctx, global_obj, path, mode, file,
-        mode[0] == 'w' || (mode[0] == 'a' && !path_existed));
 }
 
 JSValue esp32_mquickjs_stream_adopt_file(JSContext *ctx,

@@ -98,9 +98,6 @@ esp32_mquickjs_wifi_monitor_publish_result_t esp32_mquickjs_wifi_monitor_publish
     esp32_mquickjs_wifi_monitor_resources_t *resources,
     const esp32_mquickjs_wifi_rx_target_view_t *view,
     esp32_mquickjs_wifi_rx_filter_result_t filter_result, uint64_t callback_time_us);
-/* Compatible with Radio subscribe's sink callback. */
-void esp32_mquickjs_wifi_monitor_sink(void *opaque, const esp32_mquickjs_wifi_rx_target_view_t *view,
-    esp32_mquickjs_wifi_rx_filter_result_t result, uint64_t callback_time_us);
 bool esp32_mquickjs_wifi_monitor_take_event(esp32_mquickjs_wifi_monitor_resources_t *resources,
     const esp32_mquickjs_wifi_monitor_event_t *event);
 bool esp32_mquickjs_wifi_monitor_discard_event(esp32_mquickjs_wifi_monitor_resources_t *resources,

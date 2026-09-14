@@ -21,10 +21,6 @@ bool esp32_mquickjs_fs_parse_stream_ref(JSContext *ctx,
 
 bool esp32_mquickjs_stream_is_stream(JSContext *ctx, JSValue stream_value);
 
-JSValue esp32_mquickjs_stream_open_file(JSContext *ctx,
-                                        JSValue global_obj,
-                                        const char *path,
-                                        const char *mode);
 JSValue esp32_mquickjs_stream_adopt_file(JSContext *ctx,
                                          JSValue global_obj,
                                          const char *path,

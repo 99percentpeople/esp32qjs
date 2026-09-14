@@ -968,22 +968,6 @@ void esp32_mquickjs_memory_block_release(esp32_mquickjs_memory_block_t *block)
     taskEXIT_CRITICAL(&s_memory.lock);
 }
 
-size_t esp32_mquickjs_memory_block_size(
-    const esp32_mquickjs_memory_block_t *block)
-{
-    size_t size = 0;
-
-    if (block == NULL) {
-        return 0;
-    }
-    taskENTER_CRITICAL(&s_memory.lock);
-    if (!block->transitioning) {
-        size = block->size;
-    }
-    taskEXIT_CRITICAL(&s_memory.lock);
-    return size;
-}
-
 bool esp32_mquickjs_memory_block_free(esp32_mquickjs_memory_block_t *block)
 {
     esp32_mquickjs_memory_block_t **cursor;
