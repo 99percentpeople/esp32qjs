@@ -24,7 +24,7 @@ test("wifi/monitor-batch-hardware", function () {
   var first;
   var info;
   var rejected;
-  var volume = fs.volume("/workspace");
+  var volume = fs;
   var outputPath = "wifi-monitor-batch-" + sys.millis() + ".bin";
   var outputOwned = false;
   test.equal(volume.exists(outputPath), false, "test output must not replace a workspace file");

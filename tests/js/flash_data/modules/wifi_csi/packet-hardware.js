@@ -12,7 +12,7 @@ test("wifi_csi/packet-hardware", function () {
   var client = null;
   var response = null;
   var stream = null;
-  var volume = fs.volume("/workspace");
+  var volume = fs;
   var path = "csi-packet-" + sys.millis() + ".bin";
   var outputOwned = false;
   var requestText = "GET / HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n\r\n";

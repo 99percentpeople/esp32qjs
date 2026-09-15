@@ -86,10 +86,13 @@ only outer scheduler progress or a framework-owned cooperative wait feeds the
 outer-JavaScript watchdog. Tight JavaScript therefore cannot hide a turn that
 never returns.
 
-The startup guard owns only its private `qjs_rt` NVS state. It records repeated
-startup or required-secondary-filesystem failures and exposes the safe-mode
-latch. The generic runtime does not decide which application files to skip;
-that policy belongs to the embedding product.
+The startup guard owns only its private `qjs_rt` NVS state. It counts abnormal
+resets, including firmware reboots after startup or filesystem failures. Every
+two resets raise the read-only numeric safe mode: 0 normal, 1 soft, 2 hard.
+The embedding product owns the soft-mode policy; hard mode skips the entire
+configured startup script without depending on product code. External reset,
+power-on, or an operator reboot clears the count and level. Healthy execution
+and JavaScript-only restart retain them.
 
 ## Control-plane boundary
 

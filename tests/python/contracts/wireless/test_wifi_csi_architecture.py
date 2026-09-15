@@ -322,7 +322,7 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
             / "tests/js/flash_data/modules/wifi_csi/batch-transport-hardware.js"
         ).read_text(encoding="utf-8")
 
-        self.assertIn('workspaceFs = fs.volume("/workspace")', hardware_test)
+        self.assertIn('workspaceFs = fs;', hardware_test)
         self.assertIn('workspaceFs.open(path, "wb")', hardware_test)
         self.assertIn('workspaceFs.open(rpcPath, "wb")', hardware_test)
         self.assertIn("stream.write(source)", hardware_test)

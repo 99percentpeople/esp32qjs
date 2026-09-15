@@ -863,22 +863,6 @@ void esp32_mquickjs_set_system_hooks(esp32_mquickjs_runtime_t *runtime,
     runtime->system_opaque = opaque;
 }
 
-void esp32_mquickjs_set_safe_mode_hook(
-    esp32_mquickjs_runtime_t *runtime,
-    esp32_mquickjs_safe_mode_control_fn control)
-{
-    if (runtime != NULL) {
-        runtime->safe_mode_control = control;
-    }
-}
-
-bool esp32_mquickjs_set_safe_mode(esp32_mquickjs_runtime_t *runtime,
-                                  bool enabled)
-{
-    return runtime != NULL && runtime->safe_mode_control != NULL &&
-           runtime->safe_mode_control(runtime->system_opaque, enabled);
-}
-
 bool esp32_mquickjs_get_host_status(esp32_mquickjs_runtime_t *runtime,
                                     esp32_mquickjs_host_status_t *status)
 {
@@ -1563,7 +1547,6 @@ bool esp32_mquickjs_destroy(JSContext *ctx,
     if (destroyed && runtime != NULL) {
         runtime->host_status = NULL;
         runtime->system_control = NULL;
-        runtime->safe_mode_control = NULL;
         runtime->system_opaque = NULL;
     }
     return destroyed;
@@ -1585,7 +1568,6 @@ void esp32_mquickjs_release_persistent_state(esp32_mquickjs_runtime_t *runtime)
 #endif
     runtime->host_status = NULL;
     runtime->system_control = NULL;
-    runtime->safe_mode_control = NULL;
     runtime->system_opaque = NULL;
 }
 

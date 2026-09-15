@@ -9,7 +9,7 @@ test("wifi/monitor-retained-hardware", function () {
     }
     throw new Error("Monitor close did not settle");
   }
-  var volume = fs.volume("/workspace");
+  var volume = fs;
   var path = "wifi-monitor-retained-" + sys.millis() + ".bin";
   var session = null;
   var batch = null;

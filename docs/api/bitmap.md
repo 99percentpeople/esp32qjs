@@ -22,7 +22,9 @@ surface rendering, panel sequencing, and SPI/I2C/GPIO transports.
 - `bitmap.convert(source, options?)`
   Create a new Bitmap and run one fused crop, rotate, flip, resize, color-convert, and dither pass on the Future worker queue. The new Bitmap is published only after the operation succeeds.
 - `bitmap.loadFont(path)`
-  Load an EQF1 fixed bitmap font from LittleFS and return a native `DisplayFont`.
+  Load an EQF1 fixed bitmap font from the filesystem namespace and return a
+  native `DisplayFont`. Relative paths start at `/`. Bundled fonts use
+  `/framework/_sys/...`; application fonts can use `/fonts/...`.
 
 Formats and layouts:
 
@@ -263,7 +265,7 @@ var fb = bitmap.create({
   storage: "auto",
   chunkBytes: 4092,
 });
-var font = bitmap.loadFont("_sys/display/fonts/mono5x7.eqf");
+var font = bitmap.loadFont("/framework/_sys/display/fonts/mono5x7.eqf");
 
 fb.clear(0x0000);
 fb.drawText(8, 8, "ESP32QJS", { color: 0xffff, font: font });

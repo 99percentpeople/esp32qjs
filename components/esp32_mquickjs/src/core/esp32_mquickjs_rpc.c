@@ -1440,8 +1440,10 @@ static bool rpc_decoder_stream_begin(rpc_decoder_slot_t *slot,
     codec_id = (size_t)(slot->codec - s_rpc_codecs) + 1U;
     slot_id = (size_t)(slot - s_rpc_decoders) + 1U;
     path_length = snprintf(slot->stream_path, sizeof(slot->stream_path),
-                           "%s/.esp32qjs-rpc-%u-%u-%08lx",
-                           slot->codec->stream_directory, (unsigned)codec_id,
+                           "%s%s.esp32qjs-rpc-%u-%u-%08lx",
+                           slot->codec->stream_directory,
+                           strcmp(slot->codec->stream_directory, "/") == 0 ? "" : "/",
+                           (unsigned)codec_id,
                            (unsigned)slot_id, (unsigned long)request_id);
     if (path_length <= 0 || (size_t)path_length >= sizeof(slot->stream_path)) {
         slot->stream_path[0] = '\0';

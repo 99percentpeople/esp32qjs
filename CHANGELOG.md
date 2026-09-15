@@ -16,7 +16,9 @@ the first release.
   optional task-watchdog supervision.
 - Add reusable runtime create/start/stop/destroy APIs, JavaScript-only runtime
   restart, full-device reboot receipts, retained runtime logs, startup failure
-  tracking, and an application-owned persistent safe-mode latch.
+  tracking, and numeric safe-mode escalation: two abnormal resets enter soft
+  recovery, four enter hard recovery without loading the startup script.
+  External reboot clears the level; `sys.safeMode` is read-only.
 - Replace the former aggregate `sys.info()` function with lazy `sys.info` and
   `sys.status` trees; add immutable profile constants, bounded FreeRTOS task
   snapshots, detailed internal/DMA/PSRAM memory views, and transport-neutral
@@ -42,11 +44,13 @@ the first release.
 
 ### Storage and loading
 
-- Add immutable `FsVolume` receivers, exact mounted-root validation, secondary
-  LittleFS support, bounded whole-file helpers, atomic text replacement,
-  Future-backed VFS/Stream operations, and ordered filesystem watch events.
-- Keep `load()` relative to the active application volume and add
-  `framework.load()` for read-only system libraries below `/_sys`.
+- Add a unified `fs` namespace with root and nested LittleFS mounts,
+  `fs.mounts()`, path-based `fs.info()` and `fs.watch()`, bounded whole-file
+  helpers, atomic text replacement, and Future-backed VFS/Stream operations.
+  Watch events use absolute paths and include moves across the watched scope.
+- Resolve absolute `load()` paths from `/` and nested relative loads from the
+  script's owning mount; add `framework.load()` for system libraries below
+  `/framework/_sys`.
 - Add a bounded NVS string module with explicit encryption status and purge
   behavior; applications retain ownership of namespace and secret policy.
 - Add allowlisted startup-script bundling and exact-engine 32-bit MQuickJS

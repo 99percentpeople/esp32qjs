@@ -30,7 +30,8 @@ Stream instance shape:
 - `kind`
   Stream kind. File streams currently report `"file"`.
 - `path`
-  Full LittleFS path for file-backed streams, for example `"/littlefs/notes.txt"`.
+  Resolved absolute namespace path, for example `"/notes.txt"` or
+  `"/framework/_sys/data.bin"`. It is retained even if global `fs` changes.
 - `mode`
   The mode string passed to `fs.open(...)`.
 - `readable`

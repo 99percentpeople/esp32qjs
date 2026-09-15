@@ -14,7 +14,7 @@ test("wifi_csi/batch-transport-hardware", function () {
   var codec = null;
   var stream = null;
   var status;
-  var workspaceFs = fs.volume("/workspace");
+  var workspaceFs = fs;
   var prefix = ".__csi_batch_" + sys.millis() + "_" + Math.floor(Math.random() * 0x10000000);
   var path = prefix + ".bin";
   var rpcPath = prefix + "_rpc.bin";
@@ -100,7 +100,7 @@ test("wifi_csi/batch-transport-hardware", function () {
     codec = rpc.createCodec({
       fields: ["data"],
       dynamicFields: [],
-      streamDirectory: "/workspace"
+      streamDirectory: "/"
     });
     rpcInputSource = batch.source({ format: "esp32qjs-csi/1" });
     rpcOutputSource = codec.encode(1, 1, 0, { data: rpcInputSource });

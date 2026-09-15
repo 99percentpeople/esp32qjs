@@ -52,7 +52,7 @@ class StartupPrecompileTests(unittest.TestCase):
             )
             (root / "index.js").write_text(
                 'load("agent/fixed.js");\n'
-                'if (fs.exists("index.js")) {\n  load("index.js");\n}\n',
+                'if (fs.exists("index.js")) {\n  load("/index.js");\n}\n',
                 encoding="utf-8",
             )
             manifest = TOOL.StartupManifest(
@@ -66,7 +66,7 @@ class StartupPrecompileTests(unittest.TestCase):
 
             self.assertIn("globalThis.fixedAgent = true", bundle)
             self.assertNotIn('load("agent/fixed.js")', bundle)
-            self.assertIn('load("index.js")', bundle)
+            self.assertIn('load("/index.js")', bundle)
 
     def test_rejects_missing_and_recursive_manifest_sources(self):
         with tempfile.TemporaryDirectory() as temp_dir:

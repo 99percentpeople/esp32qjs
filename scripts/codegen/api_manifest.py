@@ -162,7 +162,7 @@ SURFACES = {
     ),
     "js_bitmap_proto": ("Bitmap.prototype", "Bitmap", "bitmap", "Bitmap"),
     "js_bitmap": ("bitmap", "BitmapModule", "bitmap", "bitmap"),
-    "js_fs_volume_proto": ("FsVolume.prototype", "FsVolume", "fs", "FsVolume"),
+    "js_fs": ("fs", "FsModule", "fs", "fs"),
     "js_framework": ("framework", "FrameworkModule", "fs", "framework"),
     "js_nvs": ("nvs", "NVSModule", "nvs", "nvs"),
     "js_gpio": ("gpio", "GpioModule", "gpio", "gpio"),
@@ -336,7 +336,6 @@ CLASSES = {
         "DisplayCommandBuffer", "DisplayCommandBuffer", "bitmap", "DisplayCommandBuffer"
     ),
     "Bitmap": ("Bitmap", "Bitmap", "bitmap", "Bitmap"),
-    "FsVolume": ("FsVolume", "FsVolume", "fs", "FsVolume"),
     "I2CBus": ("I2CBus", "I2CBus", "i2c", "I2CBus"),
     "I2CDevice": ("I2CDevice", "I2CDevice", "i2c", "I2CDevice"),
     "SPIBus": ("SPIBus", "SPIBus", "spi", "SPIBus"),
@@ -610,7 +609,7 @@ register_future(
     "esp32_mquickjs_init_stream_runtime",
 )
 register_future(
-    "FsVolume.prototype",
+    "fs",
     ("open", "list", "stat", "exists", "readText", "writeText", "appendText", "remove", "rename", "mkdir"),
     "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
     "esp32_mquickjs_init_fs_runtime",

@@ -41,9 +41,8 @@ config ESP32QJS_SECONDARY_LITTLEFS
     depends on ESP32_MQUICKJS_FEATURE_FS
     default n
     help
-        Mount a second application-defined LittleFS partition. The runtime
-        only provides the mount; application code decides whether and when to
-        create and retain an FsVolume for it.
+        Mount a second application-defined LittleFS partition into the shared
+        filesystem namespace. Applications access it through ordinary fs paths.
 
 config ESP32QJS_SECONDARY_LITTLEFS_PARTITION_LABEL
     string "Secondary LittleFS partition label"
@@ -66,7 +65,7 @@ config ESP32QJS_SECONDARY_LITTLEFS_REQUIRED
         application recovery services can remain available.
 
 config ESP32QJS_AUTORUN_INDEX_JS
-    bool "Auto-run /littlefs/index.js at boot"
+    bool "Auto-run /framework/index.js at boot"
     default y
 
 config ESP32QJS_RUNTIME_TASK_STACK_SIZE
@@ -123,15 +122,18 @@ config ESP32QJS_RUNTIME_JS_WATCHDOG
         enters a native wait still cannot conceal a turn that never returns.
 
 config ESP32QJS_RUNTIME_STARTUP_GUARD
-    bool "Track startup failures and expose persistent safe mode"
+    bool "Escalate safe mode after abnormal resets"
     default y
     help
-        Count watchdog, panic, and uncaught startup-script failures. Two
-        consecutive failures latch sys.safeMode until it is explicitly
-        cleared. Applications decide what safe mode skips.
+        Count watchdog, panic, and firmware-requested failure reboots, including
+        faults after startup completes. Every configured number of failures
+        raises sys.safeMode: 0 normal, 1 application-owned soft recovery,
+        2 hard recovery without the startup script. Level 2 is the maximum.
+        Operator reboots, external reset and power-on clear the fault chain.
+        Healthy execution and JavaScript-only restart do not lower the level.
 
 config ESP32QJS_RUNTIME_STARTUP_FAILURE_LIMIT
-    int "Consecutive startup failures before safe mode"
+    int "Abnormal resets per safe-mode level"
     depends on ESP32QJS_RUNTIME_STARTUP_GUARD
     range 1 10
     default 2

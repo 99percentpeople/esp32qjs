@@ -6,6 +6,11 @@ detection, deterministic CBOR, incremental reassembly, and transparent
 `ByteSpanSource` streaming. Applications supply the field map, opcodes,
 dispatch, security, queueing, and persistence policy layered over the codec.
 
+`streamDirectory`, `fileSource(path)`, and `adoptFile(source, path)` are native
+transport configuration and use absolute VFS namespace paths. Use `/` for
+spooling on a root-mounted writable partition; nested mounts such as `/framework`
+retain their own read-only policy.
+
 - `rpc.createCodec(options)`
   Create and return an `RPCCodec` object. `options.fields` is the
   non-empty ordered list that maps application field names to CBOR integer

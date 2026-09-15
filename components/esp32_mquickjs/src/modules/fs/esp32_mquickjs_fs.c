@@ -61,7 +61,7 @@ typedef struct esp32_mquickjs_fs_change_source {
     struct esp32_mquickjs_fs_runtime *owner;
     esp32_mquickjs_event_queue_t *changes;
     uint32_t event_sequence;
-    char root[ESP32_MQUICKJS_FS_ROOT_MAX];
+    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
     struct esp32_mquickjs_fs_change_source *next;
 } esp32_mquickjs_fs_change_source_t;
 
@@ -70,11 +70,8 @@ typedef struct esp32_mquickjs_fs_runtime {
     esp32_mquickjs_fs_change_source_t *sources;
 } esp32_mquickjs_fs_runtime_t;
 
-typedef struct {
-    char root[ESP32_MQUICKJS_FS_ROOT_MAX];
-} esp32_mquickjs_fs_volume_t;
-
 static bool s_littlefs_mounted;
+static char s_fs_namespace_resource;
 static _Atomic uint32_t s_fs_atomic_temp_counter;
 static esp32_mquickjs_littlefs_mount_t
     s_littlefs_mounts[ESP32_MQUICKJS_MAX_LITTLEFS_MOUNTS];
@@ -99,36 +96,6 @@ static const char *fs_change_kind_name(esp32_mquickjs_fs_change_kind_t kind)
     default:
         return "change";
     }
-}
-
-static bool fs_change_relative_path(const char *root,
-                                    const char *path,
-                                    char *relative,
-                                    size_t relative_size)
-{
-    size_t root_length;
-    const char *suffix;
-
-    if (root == NULL || path == NULL || relative == NULL || relative_size < 2U) {
-        return false;
-    }
-    root_length = strlen(root);
-    if (root_length == 0U || strncmp(path, root, root_length) != 0 ||
-        (path[root_length] != '\0' && path[root_length] != '/')) {
-        return false;
-    }
-    suffix = path + root_length;
-    while (*suffix == '/') {
-        suffix++;
-    }
-    if (*suffix == '\0') {
-        suffix = ".";
-    }
-    if (strlen(suffix) >= relative_size) {
-        return false;
-    }
-    snprintf(relative, relative_size, "%s", suffix);
-    return true;
 }
 
 static JSValue fs_change_to_js(JSContext *ctx,
@@ -203,11 +170,13 @@ void esp32_mquickjs_fs_notify_change(esp32_mquickjs_fs_change_kind_t kind,
     for (source = state->sources; source != NULL; source = source->next) {
         memset(&event, 0, sizeof(event));
         event.kind = kind;
-        if (fs_change_relative_path(source->root, path,
-                                    event.path, sizeof(event.path)) &&
-            (kind != ESP32_MQUICKJS_FS_CHANGE_RENAME ||
-             fs_change_relative_path(source->root, to_path,
-                                     event.to_path, sizeof(event.to_path)))) {
+        if (esp32_mquickjs_fs_path_contains(source->path, path) ||
+            (kind == ESP32_MQUICKJS_FS_CHANGE_RENAME &&
+             esp32_mquickjs_fs_path_contains(source->path, to_path))) {
+            snprintf(event.path, sizeof(event.path), "%s", path);
+            if (kind == ESP32_MQUICKJS_FS_CHANGE_RENAME && to_path != NULL) {
+                snprintf(event.to_path, sizeof(event.to_path), "%s", to_path);
+            }
             event.sequence = ++source->event_sequence;
             if (event.sequence == 0) {
                 event.sequence = ++source->event_sequence;
@@ -236,8 +205,7 @@ static esp32_mquickjs_littlefs_mount_t *find_littlefs_mount_by_root(
         }
         mount_length = strlen(s_littlefs_mounts[i].base_path);
         if (mount_length > matched_length &&
-            strncmp(s_littlefs_mounts[i].base_path, base_path, mount_length) == 0 &&
-            (base_path[mount_length] == '\0' || base_path[mount_length] == '/')) {
+            esp32_mquickjs_fs_path_contains(s_littlefs_mounts[i].base_path, base_path)) {
             matched = &s_littlefs_mounts[i];
             matched_length = mount_length;
         }
@@ -315,20 +283,6 @@ static void forget_littlefs_mount(const char *partition_label)
     }
 }
 
-static const char *fs_volume_root(JSContext *ctx,
-                                  JSValue value,
-                                  const char *api_name)
-{
-    esp32_mquickjs_fs_volume_t *volume;
-
-    if (JS_GetClassID(ctx, value) != JS_CLASS_FS_VOLUME ||
-        (volume = JS_GetOpaque(ctx, value)) == NULL) {
-        JS_ThrowTypeError(ctx, "%s expects an FsVolume receiver", api_name);
-        return NULL;
-    }
-    return volume->root;
-}
-
 static const char *startup_fs_base_path(const esp32_mquickjs_runtime_t *runtime)
 {
     if (runtime != NULL && runtime->startup_fs_root[0] != '\0') {
@@ -337,40 +291,49 @@ static const char *startup_fs_base_path(const esp32_mquickjs_runtime_t *runtime)
     return ESP32_MQUICKJS_LITTLEFS_BASE_PATH;
 }
 
-static bool fs_root_is_available(const char *base_path)
+static bool fs_has_child_mount(const char *path)
 {
-    struct stat st;
+    size_t i;
 
-    return base_path != NULL && base_path[0] == '/' &&
-           strlen(base_path) < ESP32_MQUICKJS_FS_ROOT_MAX &&
-           strstr(base_path, "..") == NULL &&
-           stat(base_path, &st) == 0 && S_ISDIR(st.st_mode);
+    for (i = 0; i < ESP32_MQUICKJS_MAX_LITTLEFS_MOUNTS; ++i) {
+        if (s_littlefs_mounts[i].active &&
+            strcmp(path, s_littlefs_mounts[i].base_path) != 0 &&
+            esp32_mquickjs_fs_path_contains(path, s_littlefs_mounts[i].base_path)) {
+            return true;
+        }
+    }
+    return false;
 }
 
-static JSValue fs_make_volume(JSContext *ctx, const char *root)
+static int fs_mutation_path_error(const char *path, const char *to_path)
 {
-    JSGCRef object_ref;
-    JSValue *object = JS_PushGCRef(ctx, &object_ref);
-    esp32_mquickjs_fs_volume_t *volume;
+    esp32_mquickjs_littlefs_mount_t *mount = find_littlefs_mount_by_root(path);
 
-    if (find_littlefs_mount_exact(root) == NULL) {
-        JS_PopGCRef(ctx, &object_ref);
-        return JS_ThrowRangeError(
-            ctx, "fs.volume(root) requires an exact mounted filesystem root");
+    if (mount == NULL) {
+        return ENOENT;
     }
-    *object = JS_NewObjectClassUser(ctx, JS_CLASS_FS_VOLUME);
-    if (JS_IsException(*object)) {
-        JS_PopGCRef(ctx, &object_ref);
-        return JS_EXCEPTION;
+    if (to_path != NULL && mount != find_littlefs_mount_by_root(to_path)) {
+        return EXDEV;
     }
-    volume = heap_caps_calloc(1, sizeof(*volume), MALLOC_CAP_8BIT);
-    if (volume == NULL) {
-        JS_PopGCRef(ctx, &object_ref);
-        return JS_ThrowOutOfMemory(ctx);
+    if (mount->read_only) {
+        return EROFS;
     }
-    snprintf(volume->root, sizeof(volume->root), "%s", root);
-    JS_SetOpaque(ctx, *object, volume);
-    return JS_PopGCRef(ctx, &object_ref);
+    if (find_littlefs_mount_exact(path) != NULL || fs_has_child_mount(path) ||
+        (to_path != NULL && (find_littlefs_mount_exact(to_path) != NULL ||
+                             fs_has_child_mount(to_path)))) {
+        return EBUSY;
+    }
+    return 0;
+}
+
+static int fs_namespace_stat(const char *path, struct stat *st)
+{
+    if (strcmp(path, "/") == 0 || fs_has_child_mount(path)) {
+        memset(st, 0, sizeof(*st));
+        st->st_mode = S_IFDIR | 0755;
+        return 0;
+    }
+    return stat(path, st);
 }
 
 static uint8_t *load_script_file(const char *path, size_t *out_len)
@@ -433,19 +396,13 @@ static JSValue fs_throw_error(JSContext *ctx,
 }
 
 static int js_value_to_fs_path(JSContext *ctx,
-                               JSValue volume_value,
                                JSValue value,
                                const char *api_name,
                                char *out_path,
                                size_t out_path_size)
 {
     JSCStringBuf path_buf;
-    const char *base_path = fs_volume_root(ctx, volume_value, api_name);
     const char *path;
-
-    if (base_path == NULL) {
-        return -1;
-    }
 
     if (!JS_IsString(ctx, value)) {
         JS_ThrowTypeError(ctx, "%s expects a filesystem path string", api_name);
@@ -453,14 +410,13 @@ static int js_value_to_fs_path(JSContext *ctx,
     }
 
     path = JS_ToCString(ctx, value, &path_buf);
-    if (!esp32_mquickjs_fs_resolve_path(base_path,
+    if (!esp32_mquickjs_fs_resolve_path("/",
                                         path,
                                         out_path,
                                         out_path_size)) {
         JS_ThrowTypeError(ctx,
-                          "%s expects a path under %s",
-                          api_name,
-                          base_path);
+                          "%s expects a path within the filesystem namespace /",
+                          api_name);
         return -1;
     }
 
@@ -472,6 +428,7 @@ static JSValue fs_make_stat_object(JSContext *ctx, const char *path, const struc
 {
     JSGCRef entry_ref;
     JSValue *entry;
+    esp32_mquickjs_littlefs_mount_t *mount = find_littlefs_mount_by_root(path);
 
     entry = JS_PushGCRef(ctx, &entry_ref);
     *entry = JS_NewObject(ctx);
@@ -484,6 +441,10 @@ static JSValue fs_make_stat_object(JSContext *ctx, const char *path, const struc
                                      JS_NewString(ctx, path)) ||
         !esp32_mquickjs_set_property_ref(ctx, entry, "isDir",
                                      JS_NewBool(S_ISDIR(st->st_mode))) ||
+        !esp32_mquickjs_set_property_ref(ctx, entry, "mount",
+                                     JS_NewBool(find_littlefs_mount_exact(path) != NULL)) ||
+        !esp32_mquickjs_set_property_ref(ctx, entry, "readOnly",
+                                     JS_NewBool(mount == NULL || mount->read_only)) ||
         !esp32_mquickjs_set_property_ref(ctx, entry, "size",
                                      JS_NewInt64(ctx, (int64_t)st->st_size))) {
         goto fail;
@@ -516,7 +477,7 @@ bool esp32_mquickjs_mount_littlefs_partition(const char *partition_label,
                                              bool read_only)
 {
     esp_vfs_littlefs_conf_t conf = {
-        .base_path = base_path,
+        .base_path = base_path != NULL ? esp32_mquickjs_fs_vfs_prefix(base_path) : NULL,
         .partition_label = partition_label,
         .format_if_mount_failed = format_if_mount_failed,
         .read_only = read_only,
@@ -531,6 +492,8 @@ bool esp32_mquickjs_mount_littlefs_partition(const char *partition_label,
         strlen(partition_label) >= 17U ||
         strlen(base_path) >= ESP32_MQUICKJS_FS_ROOT_MAX ||
         strstr(base_path, "..") != NULL ||
+        (strlen(base_path) > 1U && base_path[strlen(base_path) - 1U] == '/') ||
+        find_littlefs_mount_exact(base_path) != NULL ||
         (read_only && format_if_mount_failed)) {
         ESP_LOGE(TAG, "Invalid LittleFS partition mount parameters");
         return false;
@@ -566,9 +529,9 @@ bool esp32_mquickjs_mount_littlefs_partition(const char *partition_label,
                  esp_err_to_name(ret));
     }
     if (!remember_littlefs_mount(partition_label, base_path, read_only)) {
-        ESP_LOGW(TAG,
-                 "LittleFS '%s' mounted but filesystem info registry is full",
-                 partition_label);
+        ESP_LOGE(TAG, "LittleFS mount registry is full: %s", partition_label);
+        esp_vfs_littlefs_unregister(partition_label);
+        return false;
     }
     return true;
 }
@@ -592,6 +555,32 @@ void esp32_mquickjs_unmount_littlefs(void)
     s_littlefs_mounted = false;
 }
 
+typedef struct {
+    char root[ESP32_MQUICKJS_FS_ROOT_MAX];
+    uint16_t depth;
+} fs_load_context_t;
+
+static bool fs_enter_load(JSContext *ctx, esp32_mquickjs_runtime_t *runtime,
+                           const char *root, fs_load_context_t *previous)
+{
+    if (runtime == NULL || runtime->load_root_depth == UINT16_MAX) {
+        JS_ThrowInternalError(ctx, "script load context is unavailable");
+        return false;
+    }
+    memcpy(previous->root, runtime->load_root, sizeof(previous->root));
+    previous->depth = runtime->load_root_depth;
+    snprintf(runtime->load_root, sizeof(runtime->load_root), "%s", root);
+    runtime->load_root_depth++;
+    return true;
+}
+
+static void fs_leave_load(esp32_mquickjs_runtime_t *runtime,
+                           const fs_load_context_t *previous)
+{
+    memcpy(runtime->load_root, previous->root, sizeof(runtime->load_root));
+    runtime->load_root_depth = previous->depth;
+}
+
 static JSValue load_from_fs(JSContext *ctx,
                             esp32_mquickjs_runtime_t *runtime,
                             const char *base_path,
@@ -601,26 +590,27 @@ static JSValue load_from_fs(JSContext *ctx,
     size_t source_len = 0;
     uint8_t *source;
     JSValue result;
+    fs_load_context_t previous;
+    esp32_mquickjs_littlefs_mount_t *mount;
 
-    if (!fs_root_is_available(base_path)) {
-        return JS_ThrowInternalError(ctx,
-                                     "filesystem root is not available at %s",
-                                     base_path);
+    if (!esp32_mquickjs_fs_resolve_path(base_path, script_path,
+                                        resolved_path, sizeof(resolved_path))) {
+        return JS_ThrowTypeError(ctx, "load(path) expects a path within /");
     }
-    if (!esp32_mquickjs_fs_resolve_path(base_path,
-                                        script_path,
-                                        resolved_path,
-                                        sizeof(resolved_path))) {
-        return JS_ThrowTypeError(ctx, "load(path) expects a non-empty path under %s",
-                                 base_path);
+    mount = find_littlefs_mount_by_root(resolved_path);
+    if (mount == NULL) {
+        return JS_ThrowReferenceError(ctx, "script filesystem is unavailable: %s", resolved_path);
     }
-
     source = load_script_file(resolved_path, &source_len);
     if (source == NULL) {
         return JS_ThrowReferenceError(ctx, "failed to read script: %s", resolved_path);
     }
-
+    if (!fs_enter_load(ctx, runtime, mount->base_path, &previous)) {
+        esp32_mquickjs_memory_payload_free(source);
+        return JS_EXCEPTION;
+    }
     result = esp32_mquickjs_eval(ctx, runtime, (const char *)source, resolved_path, 0);
+    fs_leave_load(runtime, &previous);
     esp32_mquickjs_memory_payload_free(source);
     return result;
 }
@@ -629,29 +619,13 @@ JSValue esp32_mquickjs_load_from_active_fs(JSContext *ctx,
                                            esp32_mquickjs_runtime_t *runtime,
                                            const char *script_path)
 {
-    JSGCRef global_ref;
-    JSGCRef fs_ref;
-    JSValue *global_obj = JS_PushGCRef(ctx, &global_ref);
-    JSValue *fs_obj = JS_PushGCRef(ctx, &fs_ref);
-    const char *root;
-    JSValue result;
+    const char *root = "/";
 
     if (runtime != NULL && runtime->load_root_depth > 0 &&
         runtime->load_root[0] != '\0') {
-        JS_PopGCRef(ctx, &fs_ref);
-        JS_PopGCRef(ctx, &global_ref);
-        return load_from_fs(ctx, runtime, runtime->load_root, script_path);
+        root = runtime->load_root;
     }
-    *global_obj = JS_GetGlobalObject(ctx);
-    *fs_obj = JS_IsException(*global_obj)
-        ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *global_obj, "fs");
-    root = JS_IsException(*fs_obj)
-        ? NULL : fs_volume_root(ctx, *fs_obj, "load(path)");
-    result = root == NULL
-        ? JS_EXCEPTION : load_from_fs(ctx, runtime, root, script_path);
-    JS_PopGCRef(ctx, &fs_ref);
-    JS_PopGCRef(ctx, &global_ref);
-    return result;
+    return load_from_fs(ctx, runtime, root, script_path);
 }
 
 JSValue esp32_mquickjs_load_startup_from_active_fs(
@@ -663,7 +637,9 @@ JSValue esp32_mquickjs_load_startup_from_active_fs(
     size_t source_len = 0;
     uint8_t *source;
     JSValue compiled;
+    JSValue result;
     const char *startup_root = startup_fs_base_path(runtime);
+    fs_load_context_t previous;
 
     if (runtime == NULL || runtime->startup_bytecode != NULL) {
         return JS_ThrowInternalError(ctx, "startup bytecode is already loaded");
@@ -674,8 +650,7 @@ JSValue esp32_mquickjs_load_startup_from_active_fs(
                                         resolved_path,
                                         sizeof(resolved_path))) {
         return JS_ThrowTypeError(ctx,
-                                 "startup script path must stay under %s",
-                                 startup_root);
+                                 "startup script path must stay within the filesystem namespace /");
     }
 
     source = load_script_file(resolved_path, &source_len);
@@ -683,12 +658,12 @@ JSValue esp32_mquickjs_load_startup_from_active_fs(
         return JS_ThrowReferenceError(ctx, "failed to read startup script: %s", resolved_path);
     }
     if (!JS_IsBytecode(source, source_len)) {
-        JSValue result = esp32_mquickjs_eval(ctx,
-                                             runtime,
-                                             (const char *)source,
-                                             resolved_path,
-                                             0);
-
+        if (!fs_enter_load(ctx, runtime, startup_root, &previous)) {
+            esp32_mquickjs_memory_payload_free(source);
+            return JS_EXCEPTION;
+        }
+        result = esp32_mquickjs_eval(ctx, runtime, (const char *)source, resolved_path, 0);
+        fs_leave_load(runtime, &previous);
         esp32_mquickjs_memory_payload_free(source);
         return result;
     }
@@ -709,7 +684,12 @@ JSValue esp32_mquickjs_load_startup_from_active_fs(
              "Loaded precompiled startup bytecode: path=%s bytes=%u",
              resolved_path,
              (unsigned)source_len);
-    return esp32_mquickjs_run(ctx, runtime, compiled);
+    if (!fs_enter_load(ctx, runtime, startup_root, &previous)) {
+        return JS_EXCEPTION;
+    }
+    result = esp32_mquickjs_run(ctx, runtime, compiled);
+    fs_leave_load(runtime, &previous);
+    return result;
 }
 
 JSValue esp32_mquickjs_load_from_root(JSContext *ctx,
@@ -725,56 +705,69 @@ JSValue esp32_mquickjs_load_from_root(JSContext *ctx,
 
 JSValue js_fs_get_root(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    const char *root;
-
-    (void)argc;
-    (void)argv;
-    root = fs_volume_root(ctx, *this_val, "FsVolume.ROOT");
-    return root == NULL ? JS_EXCEPTION : JS_NewString(ctx, root);
-}
-
-JSValue js_fs_volume(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
-{
-    JSCStringBuf path_buf;
-    const char *path;
-    char root[ESP32_MQUICKJS_FS_ROOT_MAX];
-
-    if (fs_volume_root(ctx, *this_val, "fs.volume(root)") == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (argc < 1 || !JS_IsString(ctx, argv[0])) {
-        return JS_ThrowTypeError(ctx, "fs.volume(root) expects a mounted root path");
-    }
-    path = JS_ToCString(ctx, argv[0], &path_buf);
-    if (path == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (strlen(path) >= sizeof(root)) {
-        return JS_ThrowRangeError(
-            ctx, "fs.volume(root) requires a shorter mounted root path");
-    }
-    snprintf(root, sizeof(root), "%s", path);
-    return fs_make_volume(ctx, root);
-}
-
-JSValue js_fs_volume_constructor(JSContext *ctx, JSValue *this_val,
-                                 int argc, JSValue *argv)
-{
     (void)this_val;
     (void)argc;
     (void)argv;
-    return JS_ThrowTypeError(ctx, "FsVolume cannot be constructed directly; use fs.volume(root)");
+    return JS_NewString(ctx, "/");
 }
 
-void js_fs_volume_finalizer(JSContext *ctx, void *opaque)
+static JSValue fs_make_mount_object(JSContext *ctx,
+                                     const esp32_mquickjs_littlefs_mount_t *mount)
 {
-    (void)ctx;
-    heap_caps_free(opaque);
+    JSGCRef result_ref;
+    JSValue *result = JS_PushGCRef(ctx, &result_ref);
+
+    *result = JS_NewObject(ctx);
+    if (JS_IsException(*result) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "root",
+                                         JS_NewString(ctx, mount->base_path)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "partition",
+                                         JS_NewString(ctx, mount->partition_label)) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "type",
+                                         JS_NewString(ctx, "littlefs")) ||
+        !esp32_mquickjs_set_property_ref(ctx, result, "readOnly",
+                                         JS_NewBool(mount->read_only))) {
+        JS_PopGCRef(ctx, &result_ref);
+        return JS_EXCEPTION;
+    }
+    return JS_PopGCRef(ctx, &result_ref);
+}
+
+JSValue js_fs_mounts(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
+{
+    JSGCRef result_ref;
+    JSValue *result;
+    uint32_t count = 0;
+    size_t i;
+
+    (void)this_val;
+    (void)argv;
+    if (argc != 0) {
+        return JS_ThrowTypeError(ctx, "fs.mounts() expects no arguments");
+    }
+    result = JS_PushGCRef(ctx, &result_ref);
+    *result = JS_NewArray(ctx, 0);
+    if (JS_IsException(*result)) {
+        JS_PopGCRef(ctx, &result_ref);
+        return JS_EXCEPTION;
+    }
+    for (i = 0; i < ESP32_MQUICKJS_MAX_LITTLEFS_MOUNTS; ++i) {
+        if (s_littlefs_mounts[i].active) {
+            JSValue entry = fs_make_mount_object(ctx, &s_littlefs_mounts[i]);
+
+            if (JS_IsException(entry) ||
+                JS_IsException(JS_SetPropertyUint32(ctx, *result, count++, entry))) {
+                JS_PopGCRef(ctx, &result_ref);
+                return JS_EXCEPTION;
+            }
+        }
+    }
+    return JS_PopGCRef(ctx, &result_ref);
 }
 
 JSValue js_fs_info(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
-    const char *root = fs_volume_root(ctx, *this_val, "fs.info()");
+    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH] = "/";
     esp32_mquickjs_littlefs_mount_t *mount;
     size_t total = 0;
     size_t used = 0;
@@ -782,38 +775,31 @@ JSValue js_fs_info(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
     JSValue *result;
     esp_err_t ret;
 
-    (void)argv;
-    if (root == NULL) {
+    (void)this_val;
+    if (argc > 1) {
+        return JS_ThrowTypeError(ctx, "fs.info(path?) expects at most one argument");
+    }
+    if (argc == 1 && !JS_IsUndefined(argv[0]) &&
+        js_value_to_fs_path(ctx, argv[0], "fs.info(path?)", path, sizeof(path)) != 0) {
         return JS_EXCEPTION;
     }
-    if (argc != 0) {
-        return JS_ThrowTypeError(ctx, "fs.info() expects no arguments");
-    }
-    mount = find_littlefs_mount_by_root(root);
+    mount = find_littlefs_mount_by_root(path);
     if (mount == NULL) {
         return JS_ThrowInternalError(ctx,
                                      "filesystem information is unavailable for %s",
-                                     root);
+                                     path);
     }
     ret = esp_littlefs_info(mount->partition_label, &total, &used);
     if (ret != ESP_OK) {
         return JS_ThrowInternalError(ctx,
                                      "filesystem information query failed for %s (%s)",
-                                     root,
+                                     path,
                                      esp_err_to_name(ret));
     }
 
     result = JS_PushGCRef(ctx, &result_ref);
-    *result = JS_NewObject(ctx);
+    *result = fs_make_mount_object(ctx, mount);
     if (JS_IsException(*result) ||
-        !esp32_mquickjs_set_property_ref(ctx,
-                                         result,
-                                         "root",
-                                         JS_NewString(ctx, root)) ||
-        !esp32_mquickjs_set_property_ref(ctx,
-                                         result,
-                                         "readOnly",
-                                         JS_NewBool(mount->read_only)) ||
         !esp32_mquickjs_set_property_ref(ctx,
                                          result,
                                          "totalBytes",
@@ -854,9 +840,9 @@ static bool fs_parse_watch_options(JSContext *ctx,
     }
     if (argc != 1 ||
         !esp32_mquickjs_validate_plain_options(
-            ctx, argv[0], "fs.watch(options?)", allowed, 1)) {
+            ctx, argv[0], "fs.watch(path?, options?)", allowed, 1)) {
         if (!JS_HasException(ctx)) {
-            JS_ThrowTypeError(ctx, "fs.watch(options?) expects { capacity? }");
+            JS_ThrowTypeError(ctx, "fs.watch(path?, options?) expects { capacity? }");
         }
         return false;
     }
@@ -868,7 +854,7 @@ static bool fs_parse_watch_options(JSContext *ctx,
             ctx, *value, 1U, ESP32_MQUICKJS_FS_CHANGE_QUEUE_MAX_LEN,
             &parsed_capacity)) {
         JS_ThrowRangeError(
-            ctx, "fs.watch({ capacity }) expects an integer in 1..%u",
+            ctx, "fs.watch(path?, { capacity }) expects an integer in 1..%u",
             (unsigned)ESP32_MQUICKJS_FS_CHANGE_QUEUE_MAX_LEN);
         JS_PopGCRef(ctx, &value_ref);
         return false;
@@ -884,17 +870,24 @@ JSValue js_fs_watch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
 {
     esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
     esp32_mquickjs_fs_runtime_t *state = fs_runtime(runtime);
-    const char *root = fs_volume_root(ctx, *this_val, "fs.watch()");
+    char path[ESP32_MQUICKJS_MAX_SCRIPT_PATH] = "/";
     JSGCRef queue_ref;
     JSValue *queue_object;
     esp32_mquickjs_event_queue_t *changes;
     esp32_mquickjs_fs_change_source_t *source;
     uint32_t capacity;
 
-    if (root == NULL) {
+    (void)this_val;
+    if (argc > 2) {
+        return JS_ThrowTypeError(ctx, "fs.watch(path?, options?) expects at most two arguments");
+    }
+    if (argc > 0 && !JS_IsUndefined(argv[0]) &&
+        js_value_to_fs_path(ctx, argv[0], "fs.watch(path?, options?)",
+                             path, sizeof(path)) != 0) {
         return JS_EXCEPTION;
     }
-    if (!fs_parse_watch_options(ctx, argc, argv, &capacity)) {
+    if (!fs_parse_watch_options(ctx, argc > 1 ? 1 : 0,
+                                  argc > 1 ? argv + 1 : NULL, &capacity)) {
         return JS_EXCEPTION;
     }
     if (state == NULL || state->lock == NULL) {
@@ -905,7 +898,7 @@ JSValue js_fs_watch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv)
         return JS_ThrowOutOfMemory(ctx);
     }
     source->owner = state;
-    snprintf(source->root, sizeof(source->root), "%s", root);
+    snprintf(source->path, sizeof(source->path), "%s", path);
 
     queue_object = JS_PushGCRef(ctx, &queue_ref);
     *queue_object = esp32_mquickjs_event_queue_new(
@@ -942,7 +935,7 @@ JSValue js_framework_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *
     esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
     JSCStringBuf path_buf;
     const char *path;
-    JSValue result;
+    char resolved_path[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
 
     (void)this_val;
     if (argc < 1 || !JS_IsString(ctx, argv[0])) {
@@ -955,20 +948,14 @@ JSValue js_framework_load(JSContext *ctx, JSValue *this_val, int argc, JSValue *
         return JS_ThrowInternalError(ctx, "framework filesystem is not available");
     }
     path = JS_ToCString(ctx, argv[0], &path_buf);
-    snprintf(runtime->load_root,
-             sizeof(runtime->load_root),
-             "%s",
-             ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
-    runtime->load_root_depth++;
-    result = esp32_mquickjs_load_from_root(ctx,
-                                           runtime,
-                                           ESP32_MQUICKJS_LITTLEFS_BASE_PATH "/_sys",
-                                           path);
-    runtime->load_root_depth--;
-    if (runtime->load_root_depth == 0) {
-        runtime->load_root[0] = '\0';
+    if (path == NULL ||
+        !esp32_mquickjs_fs_resolve_path(ESP32_MQUICKJS_LITTLEFS_BASE_PATH "/_sys",
+                                         path, resolved_path, sizeof(resolved_path)) ||
+        !esp32_mquickjs_fs_path_contains(ESP32_MQUICKJS_LITTLEFS_BASE_PATH "/_sys",
+                                          resolved_path)) {
+        return JS_ThrowTypeError(ctx, "framework.load(path) expects a system library path");
     }
-    return result;
+    return esp32_mquickjs_load_from_root(ctx, runtime, "/", resolved_path);
 }
 
 #define ESP32_MQUICKJS_FS_FUTURE_MAX_ENTRIES 64U
@@ -1144,6 +1131,9 @@ static bool fs_future_prepare_common(
 {
     esp32_mquickjs_future_driver_state_t *state;
     const char *api_name;
+    esp32_mquickjs_littlefs_mount_t *mount;
+    int path_error = 0;
+    bool mutating;
 
     if (out_state == NULL) {
         return false;
@@ -1170,6 +1160,7 @@ static bool fs_future_prepare_common(
         JS_ThrowTypeError(ctx, "%s received invalid arguments", api_name);
         return false;
     }
+    (void)receiver_ref;
     state = heap_caps_calloc(1, sizeof(*state), MALLOC_CAP_8BIT);
     if (state == NULL) {
         JS_ThrowOutOfMemory(ctx);
@@ -1207,29 +1198,32 @@ static bool fs_future_prepare_common(
         snprintf(state->mode, sizeof(state->mode), "%s", mode);
     }
     if (kind == FS_FUTURE_LIST && argc == 0) {
-        const char *root = fs_volume_root(ctx, receiver_ref->val, api_name);
-
-        if (root == NULL) {
-            fs_future_release(state);
-            return false;
-        }
-        snprintf(state->path, sizeof(state->path), "%s", root);
-    } else if (js_value_to_fs_path(ctx, receiver_ref->val, argv[0].val, api_name,
+        snprintf(state->path, sizeof(state->path), "/");
+    } else if (js_value_to_fs_path(ctx, argv[0].val, api_name,
                                    state->path, sizeof(state->path)) != 0) {
         fs_future_release(state);
         return false;
     }
     if (kind == FS_FUTURE_RENAME &&
-        js_value_to_fs_path(ctx, receiver_ref->val, argv[1].val, api_name,
+        js_value_to_fs_path(ctx, argv[1].val, api_name,
                             state->to_path, sizeof(state->to_path)) != 0) {
         fs_future_release(state);
         return false;
     }
-    state->resource_key = esp32_mquickjs_fs_resource_key_for_path(state->path);
-    if (state->resource_key == NULL) {
+    mount = find_littlefs_mount_by_root(state->path);
+    state->resource_key = mount != NULL ? (void *)mount : &s_fs_namespace_resource;
+    mutating = kind == FS_FUTURE_WRITE_TEXT || kind == FS_FUTURE_APPEND_TEXT ||
+               kind == FS_FUTURE_REMOVE || kind == FS_FUTURE_RENAME ||
+               kind == FS_FUTURE_MKDIR ||
+               (kind == FS_FUTURE_OPEN &&
+                (state->mode[0] != 'r' || strchr(state->mode, '+') != NULL));
+    if (mutating) {
+        path_error = fs_mutation_path_error(
+            state->path, kind == FS_FUTURE_RENAME ? state->to_path : NULL);
+    }
+    if (path_error != 0) {
+        (void)fs_throw_error(ctx, api_name, state->path, path_error);
         fs_future_release(state);
-        JS_ThrowInternalError(ctx, "%s could not resolve its filesystem mount",
-                              api_name);
         return false;
     }
     if (kind == FS_FUTURE_READ_TEXT &&
@@ -1534,6 +1528,81 @@ static int fs_write_text_atomic(
         temp_path, sizeof(temp_path), &ops, NULL);
 }
 
+static bool fs_list_add_entry(esp32_mquickjs_future_driver_state_t *state,
+                               const char *path)
+{
+    fs_future_entry_t *grown;
+    fs_future_entry_t *entry;
+    size_t i;
+
+    for (i = 0; i < state->entry_count; ++i) {
+        if (strcmp(state->entries[i].path, path) == 0) {
+            return true;
+        }
+    }
+    if (state->entry_count >= ESP32_MQUICKJS_FS_FUTURE_MAX_ENTRIES) {
+        state->error_number = E2BIG;
+        return false;
+    }
+    grown = esp32_mquickjs_memory_payload_realloc(
+        "fs.read-dir", state->entries,
+        (state->entry_count + 1U) * sizeof(*state->entries),
+        ESP32_MQUICKJS_MEMORY_EXTERNAL);
+    if (grown == NULL) {
+        state->error_number = ENOMEM;
+        return false;
+    }
+    state->entries = grown;
+    entry = &state->entries[state->entry_count];
+    snprintf(entry->path, sizeof(entry->path), "%s", path);
+    if (fs_namespace_stat(path, &entry->stat_value) != 0) {
+        state->error_number = errno;
+        return false;
+    }
+    state->entry_count++;
+    return true;
+}
+
+static void fs_list_namespace(esp32_mquickjs_future_driver_state_t *state)
+{
+    DIR *dir = opendir(state->path);
+    char child[ESP32_MQUICKJS_MAX_SCRIPT_PATH];
+    size_t i;
+
+    if (dir == NULL && ((errno != ENOENT && errno != ENOTDIR) ||
+        (!fs_has_child_mount(state->path) && strcmp(state->path, "/") != 0))) {
+        state->error_number = errno;
+        return;
+    }
+    /* Mounts shadow underlying names, without creating directories on flash. */
+    for (i = 0; i < ESP32_MQUICKJS_MAX_LITTLEFS_MOUNTS; ++i) {
+        if (s_littlefs_mounts[i].active &&
+            esp32_mquickjs_fs_mount_child(state->path, s_littlefs_mounts[i].base_path,
+                                           child, sizeof(child)) &&
+            !fs_list_add_entry(state, child)) {
+            break;
+        }
+    }
+    if (dir != NULL) {
+        struct dirent *raw;
+
+        while (state->error_number == 0 && (raw = readdir(dir)) != NULL) {
+            if (strcmp(raw->d_name, ".") == 0 || strcmp(raw->d_name, "..") == 0) {
+                continue;
+            }
+            if (!esp32_mquickjs_fs_resolve_path(state->path, raw->d_name,
+                                                 child, sizeof(child))) {
+                state->error_number = ENAMETOOLONG;
+                break;
+            }
+            if (!fs_list_add_entry(state, child)) {
+                break;
+            }
+        }
+        closedir(dir);
+    }
+}
+
 static void fs_future_worker(void *opaque)
 {
     esp32_mquickjs_future_driver_state_t *state = opaque;
@@ -1554,52 +1623,9 @@ static void fs_future_worker(void *opaque)
                 (state->mode[0] == 'a' && !path_existed);
         }
     } else if (state->kind == FS_FUTURE_LIST) {
-        DIR *dir = opendir(state->path);
-
-        if (dir == NULL) {
-            state->error_number = errno;
-        } else {
-            struct dirent *entry_raw;
-
-            while ((entry_raw = readdir(dir)) != NULL) {
-                fs_future_entry_t *entry;
-                fs_future_entry_t *grown;
-                int needed;
-
-                if (strcmp(entry_raw->d_name, ".") == 0 ||
-                    strcmp(entry_raw->d_name, "..") == 0) {
-                    continue;
-                }
-                if (state->entry_count >= ESP32_MQUICKJS_FS_FUTURE_MAX_ENTRIES) {
-                    state->error_number = E2BIG;
-                    break;
-                }
-                grown = esp32_mquickjs_memory_payload_realloc(
-                    "fs.read-dir", state->entries,
-                    (state->entry_count + 1U) * sizeof(*state->entries),
-                    ESP32_MQUICKJS_MEMORY_EXTERNAL);
-                if (grown == NULL) {
-                    state->error_number = ENOMEM;
-                    break;
-                }
-                state->entries = grown;
-                entry = &state->entries[state->entry_count];
-                needed = snprintf(entry->path, sizeof(entry->path),
-                                  "%s/%s", state->path, entry_raw->d_name);
-                if (needed <= 0 || (size_t)needed >= sizeof(entry->path)) {
-                    state->error_number = ENAMETOOLONG;
-                    break;
-                }
-                if (stat(entry->path, &entry->stat_value) != 0) {
-                    state->error_number = errno;
-                    break;
-                }
-                state->entry_count++;
-            }
-            closedir(dir);
-        }
+        fs_list_namespace(state);
     } else if (state->kind == FS_FUTURE_STAT || state->kind == FS_FUTURE_EXISTS) {
-        state->result = stat(state->path, &state->stat_value) == 0;
+        state->result = fs_namespace_stat(state->path, &state->stat_value) == 0;
         if (!state->result && state->kind == FS_FUTURE_STAT) {
             state->error_number = errno;
         }
@@ -1706,7 +1732,8 @@ static JSValue fs_future_finish(JSContext *ctx,
             state->error_number == EFBIG) {
             return fs_throw_read_limit_error(ctx, state);
         }
-        return fs_throw_error(ctx, fs_future_action(state), state->path,
+        return fs_throw_error(ctx, fs_future_action(state),
+                              state->path,
                               state->error_number);
     }
     if (state->kind == FS_FUTURE_OPEN) {
@@ -1718,7 +1745,8 @@ static JSValue fs_future_finish(JSContext *ctx,
         result = JS_IsException(*global_obj)
             ? JS_EXCEPTION
             : esp32_mquickjs_stream_adopt_file(ctx, *global_obj, state->path,
-                                               state->mode, state->file,
+                                               state->mode,
+                                               state->file,
                                                state->opened_mutation);
         if (!JS_IsException(result)) {
             state->file = NULL;
@@ -1748,7 +1776,9 @@ static JSValue fs_future_finish(JSContext *ctx,
         return JS_PopGCRef(ctx, &entries_ref);
     }
     if (state->kind == FS_FUTURE_STAT) {
-        return fs_make_stat_object(ctx, state->path, &state->stat_value);
+        return fs_make_stat_object(ctx,
+                                   state->path,
+                                   &state->stat_value);
     }
     if (state->kind == FS_FUTURE_EXISTS) {
         return JS_NewBool(state->result);
@@ -1848,12 +1878,8 @@ bool esp32_mquickjs_init_fs_runtime(JSContext *ctx,
     fs_obj = JS_PushGCRef(ctx, &fs_ref);
     *global_obj = JS_GetGlobalObject(ctx);
     *fs_obj = JS_IsException(*global_obj)
-        ? JS_EXCEPTION : fs_make_volume(ctx, ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
-    if (!JS_IsException(*fs_obj)) {
-        result = esp32_mquickjs_set_property_ref(ctx, global_obj, "fs", *fs_obj);
-    } else {
-        result = false;
-    }
+        ? JS_EXCEPTION : JS_GetPropertyStr(ctx, *global_obj, "fs");
+    result = !JS_IsException(*fs_obj);
     for (index = 0; result && index < sizeof(names) / sizeof(names[0]); ++index) {
         JSGCRef method_ref;
         JSValue *method = JS_PushGCRef(ctx, &method_ref);

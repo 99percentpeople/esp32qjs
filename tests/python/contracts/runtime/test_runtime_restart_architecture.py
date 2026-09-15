@@ -73,7 +73,7 @@ class RuntimeRestartArchitectureTests(SourceContractTestCase):
         self.assertIn("esp32_mquickjs_native_wait_begin", wait_source)
         self.assertIn("esp32_mquickjs_native_wait_end", wait_source)
 
-    def test_startup_guard_latches_safe_mode_after_two_failures(self):
+    def test_startup_guard_enters_recovery_after_two_failures(self):
         source = (
             RUNTIME / "src" / "esp32qjs_runtime.c"
         ).read_text(encoding="utf-8")
@@ -82,8 +82,7 @@ class RuntimeRestartArchitectureTests(SourceContractTestCase):
         self.assertIn("runtime_boot_guard_arm(runtime);", source)
         self.assertIn('runtime_boot_guard_fail(runtime, "startup-exception")', source)
         self.assertIn("runtime_reset_is_startup_failure", source)
-        self.assertIn("runtime->safe_mode_requested = true;", source)
-        self.assertIn("runtime->safe_mode_active = true;", source)
+        self.assertIn("ESP32_MQUICKJS_SAFE_MODE_HARD", source)
         self.assertIn(
             'runtime_boot_guard_fail(runtime, "secondary-filesystem")', source
         )
@@ -117,24 +116,17 @@ class RuntimeRestartArchitectureTests(SourceContractTestCase):
         startup_status = agent_startup.index(
             "var startupState = runtimeState.startup;"
         )
-        workspace_load = agent_startup.index('load("index.js");')
-        workspace_root = agent_startup.index(
-            'workspaceFs = systemFs.volume("/workspace");'
-        )
-        self.assertLess(startup_status, workspace_root)
-        self.assertLess(workspace_root, service_attach)
+        workspace_load = agent_startup.index('load("/index.js");')
+        self.assertLess(startup_status, service_attach)
         self.assertLess(service_attach, workspace_load)
         self.assertIn("filesystem.secondaryMounted === true", agent_startup)
         self.assertIn("var runtimeState = sys.status.runtime;", agent_startup)
         self.assertNotIn("sys.status()", agent_startup)
         self.assertIn(
-            "if (workspaceMounted && !startupState.safeModeActive", agent_startup
+            "if (workspaceMounted && startupState.safeMode === 0", agent_startup
         )
-        self.assertEqual(
-            agent_startup.count('workspaceFs = systemFs.volume("/workspace");'), 1
-        )
-        self.assertIn("globalThis.fs = workspaceFs;", agent_startup)
-        self.assertIn("systemFs: systemFs", agent_startup)
+        self.assertNotIn("globalThis.fs =", agent_startup)
+        self.assertIn('fs.exists("index.js")', agent_startup)
         self.assertNotIn("sys.safeMode", agent_startup)
 
     def test_primary_library_filesystem_supports_read_only_mounts(self):

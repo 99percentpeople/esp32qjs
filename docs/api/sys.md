@@ -227,8 +227,7 @@ sys.status.runtime = {
   },
   startup: {
     phase: "armed" | "stabilizing" | "healthy" | "safe-mode",
-    safeModeActive: boolean,
-    safeModeRequested: boolean,
+    safeMode: 0 | 1 | 2,
     failureCount: number,
     failureLimit: number,
     healthyAfterMs: number,
@@ -454,14 +453,41 @@ The runtime acts after the delay expires and the outer JavaScript turn unwinds.
 The receipt confirms acceptance; observe a new runtime generation or boot ID to
 confirm completion. The lifecycle queue holds one pending request.
 
-`sys.safeMode` is the persistent operator latch. Assigning `false` clears the
-startup failure count and latch for the next boot. The next boot then evaluates
-normal workspace startup policy. Operator lifecycle code owns this latch.
+`sys.safeMode` is a read-only number matching
+`sys.status.runtime.startup.safeMode`:
+
+| Value | Behavior |
+| --- | --- |
+| `0` | Normal startup. |
+| `1` | Soft recovery: the startup script still runs and the application decides what to skip. |
+| `2` | Hard recovery: the runtime skips the entire configured startup script. |
+
+Every `failureLimit` abnormal resets (two by default) raise the level by one,
+up to `2`. Watchdog, panic, CPU lockup, and firmware failure reboots count,
+including faults after the startup observation window. An uncaught startup
+exception followed by a software reboot is counted once, on the next boot.
+The guard persists the abnormal-reset count and last reason in its private NVS.
+Healthy execution does not clear that count or lower the recovery level; the
+healthy window controls startup phase reporting only.
+
+An operator `sys.reboot()`, external RESET, or power cycle clears the level,
+count, and last reason on the next boot. Automatic fault reboots continue the
+same chain. No property assignment is needed. `sys.restartRuntime()` replaces
+only the JavaScript generation and retains the current level; failure of that
+restart followed by a firmware reboot counts as an abnormal reset.
+
+The framework owns hard recovery without depending on an Agent or application.
+A product whose Agent is part of the startup script has no Agent RPC in hard
+recovery and must use physical reset or ROM recovery to restart or reflash.
 
 ```js
-sys.safeMode = false;
-sys.reboot({ reason: "safe-mode-repaired" });
+sys.reboot({ reason: "safe-mode-repaired", delayMs: 250 });
 ```
+
+Trusted remote execution may invoke the same function in soft recovery.
+The delay allows its acceptance receipt to reach the caller before the device
+disconnects. After reconnection, verify a new `sys.status.boot.bootId` and
+`sys.safeMode === 0`; do not treat the scheduling receipt as completed recovery.
 
 ## Errors
 

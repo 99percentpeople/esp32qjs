@@ -17,8 +17,14 @@ bool esp32_mquickjs_fs_resolve_path(const char *base_path,
         return false;
     }
 
+    if (base_path[0] != '/') {
+        return false;
+    }
+    if (input_path[0] == '/') {
+        base_path = "/";
+    }
     base_len = strlen(base_path);
-    if (base_len == 0 || out_path_size <= base_len + 1) {
+    if (out_path_size <= base_len) {
         return false;
     }
 
@@ -30,17 +36,8 @@ bool esp32_mquickjs_fs_resolve_path(const char *base_path,
         return true;
     }
 
-    if (input_path[0] == '/') {
-        if (strncmp(input_path, base_path, base_len) != 0) {
-            return false;
-        }
-        if (input_path[base_len] != '\0' && input_path[base_len] != '/') {
-            return false;
-        }
-        cursor = input_path + base_len;
-    } else {
-        cursor = input_path;
-    }
+    /* Absolute paths use the shared namespace; relative paths use the receiver. */
+    cursor = input_path;
 
     while (*cursor != '\0') {
         const char *segment_start;
@@ -66,29 +63,66 @@ bool esp32_mquickjs_fs_resolve_path(const char *base_path,
         if (segment_len == 2 && segment_start[0] == '.' && segment_start[1] == '.') {
             char *slash;
 
-            if (out_len == base_len) {
+            if (out_len == 1U) {
                 return false;
             }
 
             slash = strrchr(out_path, '/');
-            if (slash == NULL || (size_t)(slash - out_path) < base_len) {
+            if (slash == NULL) {
                 return false;
             }
-            *slash = '\0';
-            out_len = (size_t)(slash - out_path);
+            out_len = slash == out_path ? 1U : (size_t)(slash - out_path);
+            out_path[out_len] = '\0';
             continue;
         }
 
-        if (out_len + 1 + segment_len >= out_path_size) {
+        if (out_len + (out_len > 1U ? 1U : 0U) + segment_len >= out_path_size) {
             return false;
         }
 
-        out_path[out_len++] = '/';
+        if (out_len > 1U) {
+            out_path[out_len++] = '/';
+        }
         memcpy(out_path + out_len, segment_start, segment_len);
         out_len += segment_len;
         out_path[out_len] = '\0';
     }
 
+    return true;
+}
+
+bool esp32_mquickjs_fs_path_contains(const char *root, const char *path)
+{
+    size_t length;
+
+    if (root == NULL || path == NULL || root[0] != '/' || path[0] != '/') {
+        return false;
+    }
+    length = strlen(root);
+    return length == 1U ||
+           (strncmp(root, path, length) == 0 &&
+            (path[length] == '\0' || path[length] == '/'));
+}
+
+bool esp32_mquickjs_fs_mount_child(const char *parent, const char *mount,
+                                   char *out, size_t out_size)
+{
+    const char *child;
+    const char *end;
+    size_t length;
+
+    if (!esp32_mquickjs_fs_path_contains(parent, mount) ||
+        strcmp(parent, mount) == 0 || out == NULL) {
+        return false;
+    }
+    child = mount + (strcmp(parent, "/") == 0 ? 1U : strlen(parent) + 1U);
+    end = strchr(child, '/');
+    length = end == NULL ? strlen(mount) : (size_t)(end - mount);
+    if (length >= out_size) {
+        return false;
+    }
+    memcpy(out, mount, length);
+    out[length] = '\0';
     return true;
 }
 

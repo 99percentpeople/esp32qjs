@@ -243,26 +243,6 @@
       }
     },
     {
-      "name": "FsVolume",
-      "globalName": "FsVolume",
-      "arity": 0,
-      "implementation": "js_fs_volume_constructor",
-      "classId": "JS_CLASS_FS_VOLUME",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "definition": "js_fs_volume_class"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "FsVolume"
-      },
-      "documentation": {
-        "file": "docs/api/fs.md",
-        "ownerToken": "FsVolume"
-      }
-    },
-    {
       "name": "I2CBus",
       "globalName": "I2CBus",
       "arity": 0,
@@ -4032,332 +4012,6 @@
       "documentation": {
         "file": "docs/api/event-queues.md",
         "ownerToken": "EventQueue"
-      }
-    },
-    {
-      "qualifiedName": "FsVolume.prototype.appendText",
-      "surface": "FsVolume.prototype",
-      "name": "appendText",
-      "arity": 2,
-      "implementation": "js_fs_appendText",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
-      "execution": "nativeFuture",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_fs_volume_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "FsVolume"
-      },
-      "documentation": {
-        "file": "docs/api/fs.md",
-        "ownerToken": "FsVolume"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
-        "function": "esp32_mquickjs_init_fs_runtime"
-      }
-    },
-    {
-      "qualifiedName": "FsVolume.prototype.exists",
-      "surface": "FsVolume.prototype",
-      "name": "exists",
-      "arity": 1,
-      "implementation": "js_fs_exists",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
-      "execution": "nativeFuture",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_fs_volume_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "FsVolume"
-      },
-      "documentation": {
-        "file": "docs/api/fs.md",
-        "ownerToken": "FsVolume"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
-        "function": "esp32_mquickjs_init_fs_runtime"
-      }
-    },
-    {
-      "qualifiedName": "FsVolume.prototype.info",
-      "surface": "FsVolume.prototype",
-      "name": "info",
-      "arity": 0,
-      "implementation": "js_fs_info",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
-      "execution": "immediate",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_fs_volume_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "FsVolume"
-      },
-      "documentation": {
-        "file": "docs/api/fs.md",
-        "ownerToken": "FsVolume"
-      }
-    },
-    {
-      "qualifiedName": "FsVolume.prototype.list",
-      "surface": "FsVolume.prototype",
-      "name": "list",
-      "arity": 1,
-      "implementation": "js_fs_list",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
-      "execution": "nativeFuture",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_fs_volume_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "FsVolume"
-      },
-      "documentation": {
-        "file": "docs/api/fs.md",
-        "ownerToken": "FsVolume"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
-        "function": "esp32_mquickjs_init_fs_runtime"
-      }
-    },
-    {
-      "qualifiedName": "FsVolume.prototype.mkdir",
-      "surface": "FsVolume.prototype",
-      "name": "mkdir",
-      "arity": 1,
-      "implementation": "js_fs_mkdir",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
-      "execution": "nativeFuture",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_fs_volume_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "FsVolume"
-      },
-      "documentation": {
-        "file": "docs/api/fs.md",
-        "ownerToken": "FsVolume"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
-        "function": "esp32_mquickjs_init_fs_runtime"
-      }
-    },
-    {
-      "qualifiedName": "FsVolume.prototype.open",
-      "surface": "FsVolume.prototype",
-      "name": "open",
-      "arity": 2,
-      "implementation": "js_fs_open",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
-      "execution": "nativeFuture",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_fs_volume_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "FsVolume"
-      },
-      "documentation": {
-        "file": "docs/api/fs.md",
-        "ownerToken": "FsVolume"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
-        "function": "esp32_mquickjs_init_fs_runtime"
-      }
-    },
-    {
-      "qualifiedName": "FsVolume.prototype.readText",
-      "surface": "FsVolume.prototype",
-      "name": "readText",
-      "arity": 1,
-      "implementation": "js_fs_readText",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
-      "execution": "nativeFuture",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_fs_volume_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "FsVolume"
-      },
-      "documentation": {
-        "file": "docs/api/fs.md",
-        "ownerToken": "FsVolume"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
-        "function": "esp32_mquickjs_init_fs_runtime"
-      }
-    },
-    {
-      "qualifiedName": "FsVolume.prototype.remove",
-      "surface": "FsVolume.prototype",
-      "name": "remove",
-      "arity": 1,
-      "implementation": "js_fs_remove",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
-      "execution": "nativeFuture",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_fs_volume_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "FsVolume"
-      },
-      "documentation": {
-        "file": "docs/api/fs.md",
-        "ownerToken": "FsVolume"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
-        "function": "esp32_mquickjs_init_fs_runtime"
-      }
-    },
-    {
-      "qualifiedName": "FsVolume.prototype.rename",
-      "surface": "FsVolume.prototype",
-      "name": "rename",
-      "arity": 2,
-      "implementation": "js_fs_rename",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
-      "execution": "nativeFuture",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_fs_volume_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "FsVolume"
-      },
-      "documentation": {
-        "file": "docs/api/fs.md",
-        "ownerToken": "FsVolume"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
-        "function": "esp32_mquickjs_init_fs_runtime"
-      }
-    },
-    {
-      "qualifiedName": "FsVolume.prototype.stat",
-      "surface": "FsVolume.prototype",
-      "name": "stat",
-      "arity": 1,
-      "implementation": "js_fs_stat",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
-      "execution": "nativeFuture",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_fs_volume_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "FsVolume"
-      },
-      "documentation": {
-        "file": "docs/api/fs.md",
-        "ownerToken": "FsVolume"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
-        "function": "esp32_mquickjs_init_fs_runtime"
-      }
-    },
-    {
-      "qualifiedName": "FsVolume.prototype.volume",
-      "surface": "FsVolume.prototype",
-      "name": "volume",
-      "arity": 1,
-      "implementation": "js_fs_volume",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
-      "execution": "immediate",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_fs_volume_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "FsVolume"
-      },
-      "documentation": {
-        "file": "docs/api/fs.md",
-        "ownerToken": "FsVolume"
-      }
-    },
-    {
-      "qualifiedName": "FsVolume.prototype.watch",
-      "surface": "FsVolume.prototype",
-      "name": "watch",
-      "arity": 1,
-      "implementation": "js_fs_watch",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
-      "execution": "immediate",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_fs_volume_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "FsVolume"
-      },
-      "documentation": {
-        "file": "docs/api/fs.md",
-        "ownerToken": "FsVolume"
-      }
-    },
-    {
-      "qualifiedName": "FsVolume.prototype.writeText",
-      "surface": "FsVolume.prototype",
-      "name": "writeText",
-      "arity": 2,
-      "implementation": "js_fs_writeText",
-      "visibility": "public",
-      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
-      "execution": "nativeFuture",
-      "stdlib": {
-        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
-        "table": "js_fs_volume_proto"
-      },
-      "typescript": {
-        "file": "types/esp32qjs-c-api.d.ts",
-        "declaration": "FsVolume"
-      },
-      "documentation": {
-        "file": "docs/api/fs.md",
-        "ownerToken": "FsVolume"
-      },
-      "futureRegistration": {
-        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
-        "function": "esp32_mquickjs_init_fs_runtime"
       }
     },
     {
@@ -11442,6 +11096,332 @@
       "documentation": {
         "file": "docs/api/global-helpers.md",
         "ownerToken": "framework"
+      }
+    },
+    {
+      "qualifiedName": "fs.appendText",
+      "surface": "fs",
+      "name": "appendText",
+      "arity": 2,
+      "implementation": "js_fs_appendText",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_fs"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "FsModule"
+      },
+      "documentation": {
+        "file": "docs/api/fs.md",
+        "ownerToken": "fs"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
+        "function": "esp32_mquickjs_init_fs_runtime"
+      }
+    },
+    {
+      "qualifiedName": "fs.exists",
+      "surface": "fs",
+      "name": "exists",
+      "arity": 1,
+      "implementation": "js_fs_exists",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_fs"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "FsModule"
+      },
+      "documentation": {
+        "file": "docs/api/fs.md",
+        "ownerToken": "fs"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
+        "function": "esp32_mquickjs_init_fs_runtime"
+      }
+    },
+    {
+      "qualifiedName": "fs.info",
+      "surface": "fs",
+      "name": "info",
+      "arity": 1,
+      "implementation": "js_fs_info",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_fs"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "FsModule"
+      },
+      "documentation": {
+        "file": "docs/api/fs.md",
+        "ownerToken": "fs"
+      }
+    },
+    {
+      "qualifiedName": "fs.list",
+      "surface": "fs",
+      "name": "list",
+      "arity": 1,
+      "implementation": "js_fs_list",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_fs"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "FsModule"
+      },
+      "documentation": {
+        "file": "docs/api/fs.md",
+        "ownerToken": "fs"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
+        "function": "esp32_mquickjs_init_fs_runtime"
+      }
+    },
+    {
+      "qualifiedName": "fs.mkdir",
+      "surface": "fs",
+      "name": "mkdir",
+      "arity": 1,
+      "implementation": "js_fs_mkdir",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_fs"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "FsModule"
+      },
+      "documentation": {
+        "file": "docs/api/fs.md",
+        "ownerToken": "fs"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
+        "function": "esp32_mquickjs_init_fs_runtime"
+      }
+    },
+    {
+      "qualifiedName": "fs.mounts",
+      "surface": "fs",
+      "name": "mounts",
+      "arity": 0,
+      "implementation": "js_fs_mounts",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_fs"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "FsModule"
+      },
+      "documentation": {
+        "file": "docs/api/fs.md",
+        "ownerToken": "fs"
+      }
+    },
+    {
+      "qualifiedName": "fs.open",
+      "surface": "fs",
+      "name": "open",
+      "arity": 2,
+      "implementation": "js_fs_open",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_fs"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "FsModule"
+      },
+      "documentation": {
+        "file": "docs/api/fs.md",
+        "ownerToken": "fs"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
+        "function": "esp32_mquickjs_init_fs_runtime"
+      }
+    },
+    {
+      "qualifiedName": "fs.readText",
+      "surface": "fs",
+      "name": "readText",
+      "arity": 1,
+      "implementation": "js_fs_readText",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_fs"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "FsModule"
+      },
+      "documentation": {
+        "file": "docs/api/fs.md",
+        "ownerToken": "fs"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
+        "function": "esp32_mquickjs_init_fs_runtime"
+      }
+    },
+    {
+      "qualifiedName": "fs.remove",
+      "surface": "fs",
+      "name": "remove",
+      "arity": 1,
+      "implementation": "js_fs_remove",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_fs"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "FsModule"
+      },
+      "documentation": {
+        "file": "docs/api/fs.md",
+        "ownerToken": "fs"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
+        "function": "esp32_mquickjs_init_fs_runtime"
+      }
+    },
+    {
+      "qualifiedName": "fs.rename",
+      "surface": "fs",
+      "name": "rename",
+      "arity": 2,
+      "implementation": "js_fs_rename",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_fs"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "FsModule"
+      },
+      "documentation": {
+        "file": "docs/api/fs.md",
+        "ownerToken": "fs"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
+        "function": "esp32_mquickjs_init_fs_runtime"
+      }
+    },
+    {
+      "qualifiedName": "fs.stat",
+      "surface": "fs",
+      "name": "stat",
+      "arity": 1,
+      "implementation": "js_fs_stat",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_fs"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "FsModule"
+      },
+      "documentation": {
+        "file": "docs/api/fs.md",
+        "ownerToken": "fs"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
+        "function": "esp32_mquickjs_init_fs_runtime"
+      }
+    },
+    {
+      "qualifiedName": "fs.watch",
+      "surface": "fs",
+      "name": "watch",
+      "arity": 2,
+      "implementation": "js_fs_watch",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
+      "execution": "immediate",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_fs"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "FsModule"
+      },
+      "documentation": {
+        "file": "docs/api/fs.md",
+        "ownerToken": "fs"
+      }
+    },
+    {
+      "qualifiedName": "fs.writeText",
+      "surface": "fs",
+      "name": "writeText",
+      "arity": 2,
+      "implementation": "js_fs_writeText",
+      "visibility": "public",
+      "feature": "CONFIG_ESP32_MQUICKJS_FEATURE_FS",
+      "execution": "nativeFuture",
+      "stdlib": {
+        "file": "components/esp32_mquickjs/src/core/mqjs_stdlib_esp32.c",
+        "table": "js_fs"
+      },
+      "typescript": {
+        "file": "types/esp32qjs-c-api.d.ts",
+        "declaration": "FsModule"
+      },
+      "documentation": {
+        "file": "docs/api/fs.md",
+        "ownerToken": "fs"
+      },
+      "futureRegistration": {
+        "file": "components/esp32_mquickjs/src/modules/fs/esp32_mquickjs_fs.c",
+        "function": "esp32_mquickjs_init_fs_runtime"
       }
     },
     {

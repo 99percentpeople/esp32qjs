@@ -20,7 +20,7 @@ esp32_mquickjs_resource_key_t esp32_mquickjs_fs_resource_key_for_path(
     const char *path);
 
 JSValue js_fs_get_root(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
-JSValue js_fs_volume(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
+JSValue js_fs_mounts(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_fs_open(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_fs_info(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);
 JSValue js_fs_watch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv);

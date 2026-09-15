@@ -25,7 +25,7 @@ test("rpc/offline", function () {
 
   codec = rpc.createCodec({
     fields: ["ok", "data"],
-    streamDirectory: "/littlefs"
+    streamDirectory: "/framework"
   });
   test.ok(codec instanceof RPCCodec,
     "rpc.createCodec() should return an RPCCodec object");

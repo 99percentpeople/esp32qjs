@@ -73,9 +73,10 @@ in the current C API reference:
   `ByteSpanSource`, `Stream`, `load()`, `framework.load()`, and `gc()`.
 - Cross-module contracts: strict native plain-options parsing, bounded integer
   parsing, and the shared `NativeError` operational-failure shape.
-- Storage and lifecycle: immutable `FsVolume`, filesystem watch queues, NVS,
+- Storage and lifecycle: unified `fs` namespace, filesystem watch queues, NVS,
   lazy `sys.info`/`sys.status`, wall-clock synchronization, runtime restart,
-  reboot, startup guarding, and application-owned safe mode.
+  reboot, abnormal-reset counting, application-owned soft safe mode, and
+  framework-owned hard safe mode.
 - Peripherals: GPIO, LEDC, ADC, DAC, I2C bus/device handles, SPI bus/device
   handles, UART ports, and RMT channels.
 - Media and graphics: I2S channels, camera frames, Bitmap operations, display
@@ -119,7 +120,7 @@ same-named importable JavaScript object.
 | --- | --- | --- |
 | Core helpers, `Future`, timers | Candidate | Device-backed repeated cancellation, timeout, GC, pending-driver stop, and runtime-restart soak beyond host capacity/lane and four-stage runtime-allocation fault injection plus USB Serial concrete lifecycle coverage |
 | `EventQueue` | Candidate | Sustained ISR/task producer-overflow qualification across the remaining concrete event sources beyond completed generic host saturation, BLE scan/notification pooled-slot recovery, and creation-time allocation rollback |
-| `FsVolume`, file `Stream`, NVS | Candidate | ESP flash/VFS power-cut and required-workspace recovery beyond host atomic-replacement and vendored LittleFS image fault injection; encrypted-NVS hardware coverage |
+| `fs`, file `Stream`, NVS | Candidate | ESP flash/VFS power-cut and required-workspace recovery beyond host atomic-replacement and vendored LittleFS image fault injection; encrypted-NVS hardware coverage |
 | `sys` and runtime lifecycle | Candidate | Repeated ESP32-C3/ESP32-C5/ESP32-S3 restart, reboot, startup-failure, and required-workspace recovery soak |
 <!-- BEGIN GENERATED FEATURE STABILITY -->
 | `fs`, `nvs` | Candidate | ESP flash/VFS power-cut and required-workspace recovery beyond host atomic-replacement and vendored LittleFS image fault injection; encrypted-NVS hardware coverage |

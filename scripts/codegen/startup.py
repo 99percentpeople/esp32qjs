@@ -136,7 +136,8 @@ def compile_startup(
     temporary_output = output_path.with_name(output_path.name + ".precompile-tmp")
     try:
         result = subprocess.run(
-            [str(tool), "--compile32", str(bundle_path), str(temporary_output)],
+            [str(tool), "--compile32", str(bundle_path), str(temporary_output),
+             "/framework/" + manifest.output],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

@@ -20,7 +20,7 @@ test("bitmap/basic", function () {
   var root = globalThis;
   var wide;
   var closeError = "";
-  var font = bitmap.loadFont("_sys/display/fonts/mono5x7.eqf");
+  var font = bitmap.loadFont("/framework/_sys/display/fonts/mono5x7.eqf");
 
   test.ok(typeof bitmap.create === "function", "bitmap.create should exist");
   test.equal(typeof root["display" + "Buffer"], "undefined",

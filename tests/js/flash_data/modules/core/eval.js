@@ -9,7 +9,7 @@ test("core/eval", function () {
   test.equal(fixedDate.valueOf(), 1234, "Date should preserve an explicit millisecond value");
   test.ok(currentDate.valueOf() >= dateBefore,
     "Date without arguments should use the runtime millisecond clock");
-  test.equal(fs.ROOT, "/littlefs", "filesystem root");
+  test.equal(fs.ROOT, "/", "filesystem root");
   try {
     Future.call(Object.keys, Object, [null]).wait(1000);
   } catch (error) {

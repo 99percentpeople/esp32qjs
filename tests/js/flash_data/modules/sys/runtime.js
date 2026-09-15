@@ -251,11 +251,13 @@ test("sys/runtime", function () {
     "task options should reject arrays");
 
   test.equal(runtimeStatus.generation, 1, "the first runtime generation should be one");
-  test.ok(typeof sys.safeMode === "boolean", "sys.safeMode should expose the persistent boot choice");
+  test.equal(typeof sys.safeMode, "number", "safe mode should be a numeric level");
+  test.ok(sys.safeMode >= 0 && sys.safeMode <= 2, "safe mode should be normal, soft, or hard");
+  test.equal(sys.safeMode, startupStatus.safeMode, "sys.safeMode should report the current boot");
   test.ok(typeof watchdogStatus.systemEnabled === "boolean", "system watchdog status");
   test.ok(typeof watchdogStatus.jsEnabled === "boolean", "JavaScript watchdog status");
   test.ok(watchdogStatus.lastOuterHeartbeatAgeMs >= 0, "outer heartbeat age");
-  test.ok(startupStatus.failureLimit >= 1, "startup failure limit");
+  test.ok(startupStatus.failureLimit >= 1, "abnormal resets per safe-mode level");
   test.ok(startupStatus.healthyAfterMs >= 1000, "startup healthy window");
   test.equal(runtimeStatus.restartCount, 0, "a fresh boot should have no runtime restarts");
   test.ok(runtimeStatus.uptimeMs >= 0, "runtime generation uptime should be non-negative");
@@ -329,8 +331,8 @@ test("sys/runtime", function () {
     "http namespace should exist when either client or server support is enabled");
 
   if (features.fs) {
-    test.equal(runtimeInfo.filesystem.root, fs.ROOT,
-      "runtime filesystem configuration should report the primary root");
+    test.equal(runtimeInfo.filesystem.root, "/framework",
+      "runtime filesystem configuration should report the physical primary mount configuration");
   } else {
     test.equal(typeof globalThis.fs, "undefined", "fs should be hidden when disabled");
   }

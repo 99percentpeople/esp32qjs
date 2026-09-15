@@ -454,7 +454,7 @@ class RemoteConfigTests(unittest.TestCase):
             defaults,
         )
         self.assertIn(
-            'CONFIG_ESP32QJS_SECONDARY_LITTLEFS_BASE_PATH="/workspace"',
+            'CONFIG_ESP32QJS_SECONDARY_LITTLEFS_BASE_PATH="/"',
             defaults,
         )
         self.assertEqual(

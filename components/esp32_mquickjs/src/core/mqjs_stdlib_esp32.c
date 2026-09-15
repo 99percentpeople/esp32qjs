@@ -28,7 +28,6 @@
 #define JS_CLASS_CAMERA_FRAME (JS_CLASS_USER + 21)
 #define JS_CLASS_RMT_SYMBOL_BUFFER (JS_CLASS_USER + 22)
 #define JS_CLASS_RMT_CHANNEL (JS_CLASS_USER + 23)
-#define JS_CLASS_FS_VOLUME (JS_CLASS_USER + 24)
 #define JS_CLASS_TCP_SOCKET (JS_CLASS_USER + 26)
 #define JS_CLASS_TCP_LISTENER (JS_CLASS_USER + 27)
 #define JS_CLASS_UDP_SOCKET (JS_CLASS_USER + 28)
@@ -336,11 +335,11 @@ static const JSClassDef js_bitmap_obj =
 #endif
 
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
-static const JSPropDef js_fs_volume_proto[] = {
+static const JSPropDef js_fs[] = {
     JS_CGETSET_DEF("ROOT", js_fs_get_root, NULL),
-    JS_CFUNC_DEF("volume", 1, js_fs_volume),
-    JS_CFUNC_DEF("info", 0, js_fs_info),
-    JS_CFUNC_DEF("watch", 1, js_fs_watch),
+    JS_CFUNC_DEF("mounts", 0, js_fs_mounts),
+    JS_CFUNC_DEF("info", 1, js_fs_info),
+    JS_CFUNC_DEF("watch", 2, js_fs_watch),
     JS_CFUNC_DEF("open", 2, js_fs_open),
     JS_CFUNC_DEF("list", 1, js_fs_list),
     JS_CFUNC_DEF("stat", 1, js_fs_stat),
@@ -354,10 +353,7 @@ static const JSPropDef js_fs_volume_proto[] = {
     JS_PROP_END,
 };
 
-static const JSClassDef js_fs_volume_class =
-    JS_CLASS_DEF("FsVolume", 0, js_fs_volume_constructor,
-                 JS_CLASS_FS_VOLUME, NULL, js_fs_volume_proto, NULL,
-                 js_fs_volume_finalizer);
+static const JSClassDef js_fs_obj = JS_OBJECT_DEF("fs", js_fs);
 
 static const JSPropDef js_framework[] = {
     JS_CFUNC_DEF("load", 1, js_framework_load),
@@ -688,7 +684,7 @@ static const JSPropDef js_sys[] = {
     JS_PROP_CLASS_DEF("info", &js_sys_info_obj),
     JS_PROP_CLASS_DEF("status", &js_sys_status_obj),
     JS_PROP_CLASS_DEF("time", &js_sys_time_obj),
-    JS_CGETSET_DEF("safeMode", js_sys_safe_mode_get, js_sys_safe_mode_set),
+    JS_CGETSET_DEF("safeMode", js_sys_safe_mode_get, NULL),
     JS_CFUNC_DEF("config", 1, js_sys_config),
     JS_CFUNC_DEF("tasks", 1, js_sys_tasks),
     JS_CFUNC_DEF("restartRuntime", 1, js_sys_restart_runtime),
@@ -1952,7 +1948,7 @@ static const JSPropDef js_global_object_extra[] = {
     JS_PROP_CLASS_DEF("bitmap", &js_bitmap_obj),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_FS
-    JS_PROP_CLASS_DEF("FsVolume", &js_fs_volume_class),
+    JS_PROP_CLASS_DEF("fs", &js_fs_obj),
     JS_PROP_CLASS_DEF("framework", &js_framework_obj),
 #endif
 #if CONFIG_ESP32_MQUICKJS_FEATURE_NVS

@@ -32,20 +32,27 @@ globalThis.application = {
   also collects automatically before a JavaScript heap allocation would
   exhaust its configured heap.
 - `load(path)`
-  Evaluate a script from the immutable volume currently stored in global `fs`.
-  The initial volume is rooted at `/littlefs`; applications can install another
-  mounted volume with `globalThis.fs = fs.volume(path)`.
+  Evaluate a script using the mounted filesystem namespace. Absolute paths
+  always start at `/`. During script evaluation, relative nested loads use the
+  owning mount of that script; outside a load context they start at `/`. For example, a system script uses
+  `load("_sys/display/core.js")` for `/framework/_sys/display/core.js`;
+  application scripts loaded from `/index.js` use the root mount instead.
+  Paths are relative to the mount, not the calling script's directory.
+  Load contexts are restored after success or failure.
 - `framework.load(path)`
-  Evaluate a bundled framework script below `/littlefs/_sys`, regardless of
-  the active application root. Nested `load(...)` calls made while evaluating the
-  framework module also remain on the system partition.
+  Load a bundled library below `/framework/_sys`, for example
+  `framework.load("display.js")`. Relative nested loads stay on `/framework`.
+  An explicit absolute `load("/index.js")` enters the application mount for that
+  script and its nested loads, then restores the system load context.
+  Resource reads use ordinary namespace paths such as
+  `fs.readText("/framework/_sys/fonts/map.json")`; global `fs` stays at `/`.
 - `sleep(ms)`
   Wait for `ms` milliseconds while the Future scheduler, timers, deadlines,
   watchdog, and stop requests continue to advance.
 
 Startup behavior:
 
-- If `/littlefs/index.js` exists, it is loaded automatically before the first `js>` prompt appears.
+- If `index.js` exists on the configured startup volume (normally `/framework/index.js`), it is loaded automatically before the first `js>` prompt appears.
 - `index.js` is the single startup entry point. An external Build Context
   resolver may generate it from selected JavaScript Library entries.
 - A Library entry may initialize a native-feature wrapper, register Board support, or decide whether and when to load writable application code.

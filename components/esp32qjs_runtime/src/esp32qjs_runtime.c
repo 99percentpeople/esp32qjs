@@ -65,8 +65,8 @@ struct esp32qjs_runtime {
     bool js_watchdog_registered;
     uint64_t last_outer_heartbeat_us;
     bool boot_guard_ready;
-    bool safe_mode_requested;
-    bool safe_mode_active;
+    esp32_mquickjs_safe_mode_t safe_mode;
+    bool failure_reboot_pending;
     uint8_t startup_failure_count;
     bool startup_pending;
     bool startup_stabilizing;
@@ -137,13 +137,10 @@ static bool runtime_boot_guard_commit(esp32qjs_runtime_t *runtime)
     }
     err = nvs_set_u8(handle, "version", ESP32QJS_BOOT_GUARD_VERSION);
     if (err == ESP_OK) {
-        err = nvs_set_u8(handle, "safe", runtime->safe_mode_requested ? 1U : 0U);
-    }
-    if (err == ESP_OK) {
         err = nvs_set_u8(handle, "failures", runtime->startup_failure_count);
     }
     if (err == ESP_OK) {
-        err = nvs_set_u8(handle, "pending", runtime->startup_pending ? 1U : 0U);
+        err = nvs_set_u8(handle, "failed", runtime->failure_reboot_pending ? 1U : 0U);
     }
     if (err == ESP_OK) {
         if (runtime->last_startup_failure_reason[0] != '\0') {
@@ -212,16 +209,12 @@ static bool runtime_boot_guard_load(esp32qjs_runtime_t *runtime)
         ESP_LOGE(TAG, "startup guard has invalid NVS state: %s", esp_err_to_name(err));
         return false;
     }
-    if (nvs_get_u8(handle, "safe", &value) == ESP_OK) {
-        runtime->safe_mode_requested = value != 0;
-    }
-    value = 0;
     if (nvs_get_u8(handle, "failures", &value) == ESP_OK) {
         runtime->startup_failure_count = value;
     }
     value = 0;
-    if (nvs_get_u8(handle, "pending", &value) == ESP_OK) {
-        runtime->startup_pending = value != 0;
+    if (nvs_get_u8(handle, "failed", &value) == ESP_OK) {
+        runtime->failure_reboot_pending = value != 0;
     }
     if (nvs_get_str(handle, "reason", runtime->last_startup_failure_reason,
                     &reason_size) != ESP_OK) {
@@ -230,38 +223,50 @@ static bool runtime_boot_guard_load(esp32qjs_runtime_t *runtime)
     nvs_close(handle);
     runtime->boot_guard_ready = true;
 
-    if (runtime->startup_pending) {
-        esp_reset_reason_t reset_reason = esp_reset_reason();
+    esp_reset_reason_t reset_reason = esp_reset_reason();
+    bool fault_reset = runtime_reset_is_startup_failure(reset_reason);
+    bool failed_software_reset = reset_reason == ESP_RST_SW &&
+                                 runtime->failure_reboot_pending;
 
-        runtime->startup_pending = false;
-        if (runtime_reset_is_startup_failure(reset_reason)) {
-            if (runtime->startup_failure_count < UINT8_MAX) {
-                runtime->startup_failure_count++;
-            }
+    if (fault_reset || failed_software_reset) {
+        if (runtime->startup_failure_count < UINT8_MAX) {
+            runtime->startup_failure_count++;
+        }
+        if (fault_reset) {
             runtime_copy_string(runtime->last_startup_failure_reason,
                                 sizeof(runtime->last_startup_failure_reason),
                                 runtime_reset_failure_reason(reset_reason),
-                                "startup-failure");
-            if (runtime->startup_failure_count >=
-                runtime->config.startup_failure_limit) {
-                runtime->safe_mode_requested = true;
-            }
+                                "runtime-failure");
         }
-        (void)runtime_boot_guard_commit(runtime);
+    } else {
+        /* Operator reboots, external reset and power-on end the fault chain. */
+        runtime->startup_failure_count = 0;
+        runtime->last_startup_failure_reason[0] = '\0';
     }
-    runtime->safe_mode_active = runtime->safe_mode_requested;
+    runtime->failure_reboot_pending = false;
+    uint32_t level = runtime->startup_failure_count /
+                     runtime->config.startup_failure_limit;
+    runtime->safe_mode = level >= ESP32_MQUICKJS_SAFE_MODE_HARD
+        ? ESP32_MQUICKJS_SAFE_MODE_HARD : (esp32_mquickjs_safe_mode_t)level;
+    (void)runtime_boot_guard_commit(runtime);
+    if (runtime->safe_mode != ESP32_MQUICKJS_SAFE_MODE_NORMAL) {
+        ESP_LOGW(TAG, "safe mode level=%u, abnormal resets=%u, reason=%s",
+                 (unsigned)runtime->safe_mode,
+                 (unsigned)runtime->startup_failure_count,
+                 runtime->last_startup_failure_reason);
+    }
     return true;
 }
 
 static void runtime_boot_guard_arm(esp32qjs_runtime_t *runtime)
 {
-    if (runtime == NULL || !runtime->boot_guard_ready) {
+    if (runtime == NULL || !runtime->boot_guard_ready ||
+        runtime->safe_mode >= ESP32_MQUICKJS_SAFE_MODE_HARD) {
         return;
     }
     runtime->startup_pending = true;
     runtime->startup_stabilizing = false;
     runtime->startup_returned_us = 0;
-    (void)runtime_boot_guard_commit(runtime);
 }
 
 static void runtime_boot_guard_fail(esp32qjs_runtime_t *runtime,
@@ -272,17 +277,12 @@ static void runtime_boot_guard_fail(esp32qjs_runtime_t *runtime,
     }
     runtime->startup_pending = false;
     runtime->startup_stabilizing = false;
-    if (runtime->startup_failure_count < UINT8_MAX) {
-        runtime->startup_failure_count++;
-    }
+    /* The next software boot counts this reset once, alongside hardware faults. */
+    runtime->failure_reboot_pending = true;
     runtime_copy_string(runtime->last_startup_failure_reason,
                         sizeof(runtime->last_startup_failure_reason),
                         reason,
                         "startup-failure");
-    if (runtime->startup_failure_count >= runtime->config.startup_failure_limit) {
-        runtime->safe_mode_requested = true;
-        runtime->safe_mode_active = true;
-    }
     (void)runtime_boot_guard_commit(runtime);
 }
 
@@ -300,7 +300,8 @@ static void runtime_boot_guard_disarm_intentional(esp32qjs_runtime_t *runtime)
 
 static void runtime_boot_guard_note_returned(esp32qjs_runtime_t *runtime)
 {
-    if (runtime == NULL || !runtime->boot_guard_ready) {
+    if (runtime == NULL || !runtime->boot_guard_ready ||
+        runtime->safe_mode >= ESP32_MQUICKJS_SAFE_MODE_HARD) {
         return;
     }
     runtime->startup_stabilizing = true;
@@ -322,29 +323,6 @@ static void runtime_boot_guard_poll_healthy(esp32qjs_runtime_t *runtime)
     runtime->startup_pending = false;
     runtime->startup_stabilizing = false;
     runtime->startup_returned_us = 0;
-    if (!runtime->safe_mode_active) {
-        runtime->startup_failure_count = 0;
-        runtime->last_startup_failure_reason[0] = '\0';
-    }
-    (void)runtime_boot_guard_commit(runtime);
-}
-
-static bool runtime_set_safe_mode_hook(void *opaque, bool enabled)
-{
-    esp32qjs_runtime_t *runtime = opaque;
-
-    if (runtime == NULL || !runtime->boot_guard_ready) {
-        return false;
-    }
-    runtime->safe_mode_requested = enabled;
-    runtime->startup_pending = false;
-    runtime->startup_stabilizing = false;
-    runtime->startup_returned_us = 0;
-    if (!enabled) {
-        runtime->startup_failure_count = 0;
-        runtime->last_startup_failure_reason[0] = '\0';
-    }
-    return runtime_boot_guard_commit(runtime);
 }
 
 static uint32_t runtime_reason_checksum(const char *reason)
@@ -541,8 +519,7 @@ static bool runtime_host_status(void *opaque,
                         runtime->software_reason,
                         NULL);
     status->safe_mode_available = runtime->boot_guard_ready;
-    status->safe_mode_requested = runtime->safe_mode_requested;
-    status->safe_mode_active = runtime->safe_mode_active;
+    status->safe_mode = runtime->safe_mode;
     status->startup_failure_count = runtime->startup_failure_count;
     status->startup_failure_limit = runtime->config.startup_failure_limit;
     status->startup_healthy_ms = runtime->config.startup_healthy_ms;
@@ -728,7 +705,8 @@ static void runtime_run_startup(esp32qjs_runtime_t *runtime)
 
     if (runtime == NULL || runtime->ctx == NULL ||
         !runtime->config.autorun_startup_script ||
-        !runtime->littlefs_mounted) {
+        !runtime->littlefs_mounted ||
+        runtime->safe_mode >= ESP32_MQUICKJS_SAFE_MODE_HARD) {
         return;
     }
     if (!runtime_startup_path_is_safe(runtime->startup_script)) {
@@ -772,8 +750,6 @@ static bool runtime_create_generation(esp32qjs_runtime_t *runtime)
                                      runtime_host_status,
                                      runtime_request_control_hook,
                                      runtime);
-    esp32_mquickjs_set_safe_mode_hook(&runtime->engine,
-                                      runtime_set_safe_mode_hook);
     esp32_mquickjs_set_cooperate_hook(&runtime->engine, runtime_cooperate, runtime);
     runtime->engine.js_heap_size = runtime->config.js_heap_size;
     runtime->engine.js_heap_in_psram = esp_ptr_external_ram(runtime->js_heap);
@@ -1101,6 +1077,7 @@ static bool runtime_handle_due_control(esp32qjs_runtime_t *runtime)
     runtime_set_state(runtime, ESP32_MQUICKJS_RUNTIME_FAILED);
     if (runtime->config.restart_failure_action ==
         ESP32_MQUICKJS_RESTART_FAILURE_REBOOT) {
+        runtime_boot_guard_fail(runtime, "runtime-restart-failed");
         runtime_store_software_reason("runtime-restart-failed");
         esp_restart();
     } else {
@@ -1254,7 +1231,8 @@ esp_err_t esp32qjs_runtime_create(const esp32qjs_runtime_config_t *config,
             esp32_mquickjs_mount_littlefs(
                 config->format_littlefs_on_mount_fail,
                 config->littlefs_read_only);
-        if (!runtime->littlefs_mounted && config->require_littlefs) {
+        if (!runtime->littlefs_mounted && config->require_littlefs &&
+            runtime->safe_mode < ESP32_MQUICKJS_SAFE_MODE_HARD) {
             runtime_release_unstarted(runtime);
             return ESP_FAIL;
         }
@@ -1268,15 +1246,15 @@ esp_err_t esp32qjs_runtime_create(const esp32qjs_runtime_config_t *config,
                 false);
         if (!runtime->secondary_littlefs_mounted &&
             config->require_secondary_littlefs) {
-            if (!runtime->safe_mode_active) {
-                runtime_boot_guard_fail(runtime, "secondary-filesystem");
-            }
-            if (!runtime->safe_mode_active) {
+            if (runtime->safe_mode == ESP32_MQUICKJS_SAFE_MODE_NORMAL) {
                 bool restart = runtime->boot_guard_ready &&
                                config->restart_failure_action ==
                                    ESP32_MQUICKJS_RESTART_FAILURE_REBOOT;
 
-                runtime_store_software_reason("secondary-filesystem");
+                if (restart) {
+                    runtime_boot_guard_fail(runtime, "secondary-filesystem");
+                    runtime_store_software_reason("secondary-filesystem");
+                }
                 runtime_release_unstarted(runtime);
                 if (restart) {
                     ESP_LOGE(TAG,

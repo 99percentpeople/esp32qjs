@@ -196,12 +196,11 @@ static uint8_t *display_font_read_file(JSContext *ctx,
     uint8_t *bytes;
     size_t read_len;
 
-    if (!esp32_mquickjs_fs_resolve_path(ESP32_MQUICKJS_LITTLEFS_BASE_PATH,
+    if (!esp32_mquickjs_fs_resolve_path("/",
                                         script_path,
                                         resolved_path,
                                         resolved_path_size)) {
-        JS_ThrowTypeError(ctx, "bitmap.loadFont(path) expects a path under %s",
-                          ESP32_MQUICKJS_LITTLEFS_BASE_PATH);
+        JS_ThrowTypeError(ctx, "bitmap.loadFont(path) expects a path within /");
         return NULL;
     }
 

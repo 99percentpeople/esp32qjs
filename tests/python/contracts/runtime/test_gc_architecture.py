@@ -47,33 +47,24 @@ class GcArchitectureTests(SourceContractTestCase):
                 source,
             )
 
-    def test_fs_future_prepare_uses_its_rooted_receiver(self):
+    def test_fs_future_prepare_captures_paths_before_later_allocations(self):
         source = (
-            MQUICKJS / "src" / "modules" / "fs" / "esp32_mquickjs_fs.c"
+            MQUICKJS / "src/modules/fs/esp32_mquickjs_fs.c"
         ).read_text(encoding="utf-8")
         start = source.index("static bool fs_future_prepare_common(")
         end = source.index("\n#define FS_PREPARE", start)
         prepare = source[start:end]
-
-        self.assertIn("JSGCRef *receiver_ref", prepare)
-        self.assertIn("receiver_ref->val", prepare)
+        self.assertIn("js_value_to_fs_path(ctx, argv[0].val", prepare)
+        self.assertIn("state->resource_key = mount", prepare)
         self.assertNotRegex(prepare, r"\bJSValue receiver\b")
 
-    def test_fs_volume_copies_movable_root_before_object_allocation(self):
+    def test_fs_watch_copies_path_before_allocating_options(self):
         source = (
-            MQUICKJS / "src" / "modules" / "fs" / "esp32_mquickjs_fs.c"
+            MQUICKJS / "src/modules/fs/esp32_mquickjs_fs.c"
         ).read_text(encoding="utf-8")
-        start = source.index("JSValue js_fs_volume(")
-        end = source.index("\nJSValue js_fs_volume_constructor(", start)
-        volume = source[start:end]
-
-        self.assertIn("char root[ESP32_MQUICKJS_FS_ROOT_MAX];", volume)
-        self.assertIn("snprintf(root, sizeof(root), \"%s\", path);", volume)
-        self.assertIn("return fs_make_volume(ctx, root);", volume)
-        self.assertLess(
-            volume.index("snprintf(root, sizeof(root), \"%s\", path);"),
-            volume.index("fs_make_volume(ctx, root)"),
-        )
+        watch = source[source.index("JSValue js_fs_watch("):source.index("JSValue js_framework_load(")]
+        self.assertLess(watch.index("js_value_to_fs_path"), watch.index("fs_parse_watch_options"))
+        self.assertIn('snprintf(source->path, sizeof(source->path), "%s", path);', watch)
 
     def test_rpc_codec_parsers_dereference_rooted_arrays_after_lookup(self):
         source = (

@@ -203,7 +203,7 @@ done:
     return result;
 }
 
-static int checker_check_file(const char *path, const char *output_path)
+static int checker_check_file(const char *path, const char *output_path, const char *source_name)
 {
     char *source;
     size_t source_len = 0;
@@ -213,7 +213,7 @@ static int checker_check_file(const char *path, const char *output_path)
     if (source == NULL) {
         return 2;
     }
-    result = checker_process_source(source, source_len, path, output_path);
+    result = checker_process_source(source, source_len, source_name, output_path);
     free(source);
     return result;
 }
@@ -226,7 +226,7 @@ int main(int argc, char **argv)
     if (argc < 2) {
         fprintf(stderr,
                 "usage: %s FILE.js [FILE.js ...] | --stdin NAME | "
-                "--compile32 INPUT OUTPUT | --engine-version\n",
+                "--compile32 INPUT OUTPUT SOURCE_NAME | --engine-version\n",
                 argv[0]);
         return 2;
     }
@@ -246,11 +246,11 @@ int main(int argc, char **argv)
         free(source);
         return result;
     }
-    if (argc == 4 && strcmp(argv[1], "--compile32") == 0) {
-        return checker_check_file(argv[2], argv[3]);
+    if (argc == 5 && strcmp(argv[1], "--compile32") == 0) {
+        return checker_check_file(argv[2], argv[3], argv[4]);
     }
     for (i = 1; i < argc; ++i) {
-        int file_result = checker_check_file(argv[i], NULL);
+        int file_result = checker_check_file(argv[i], NULL, argv[i]);
 
         if (file_result > result) {
             result = file_result;

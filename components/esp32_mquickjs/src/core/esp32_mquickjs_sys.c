@@ -1488,17 +1488,15 @@ JSValue js_sys_runtime_status_startup(JSContext *ctx,
         JS_PopGCRef(ctx, &object_ref);
         return JS_ThrowInternalError(ctx, "runtime host status is unavailable");
     }
-    phase = status.safe_mode_active ? "safe-mode" :
+    phase = status.safe_mode ? "safe-mode" :
             status.startup_pending && !status.startup_stabilizing ? "armed" :
             status.startup_stabilizing ? "stabilizing" : "healthy";
     *object = JS_NewObject(ctx);
     if (JS_IsException(*object) ||
         !esp32_mquickjs_set_property_ref(ctx, object, "phase",
                                          JS_NewString(ctx, phase)) ||
-        !esp32_mquickjs_set_property_ref(ctx, object, "safeModeActive",
-                                         JS_NewBool(status.safe_mode_active)) ||
-        !esp32_mquickjs_set_property_ref(ctx, object, "safeModeRequested",
-                                         JS_NewBool(status.safe_mode_requested)) ||
+        !esp32_mquickjs_set_property_ref(ctx, object, "safeMode",
+                                         JS_NewUint32(ctx, status.safe_mode)) ||
         !esp32_mquickjs_set_property_ref(ctx, object, "failureCount",
                                          JS_NewUint32(ctx, status.startup_failure_count)) ||
         !esp32_mquickjs_set_property_ref(ctx, object, "failureLimit",
@@ -1529,24 +1527,7 @@ JSValue js_sys_safe_mode_get(JSContext *ctx,
     if (!sys_get_host_status(&status) || !status.safe_mode_available) {
         return JS_ThrowInternalError(ctx, "sys.safeMode is unavailable");
     }
-    return JS_NewBool(status.safe_mode_requested);
-}
-
-JSValue js_sys_safe_mode_set(JSContext *ctx,
-                             JSValue *this_val,
-                             int argc,
-                             JSValue *argv)
-{
-    esp32_mquickjs_runtime_t *runtime = esp32_mquickjs_get_active_runtime();
-
-    (void)this_val;
-    if (argc != 1 || !JS_IsBool(argv[0])) {
-        return JS_ThrowTypeError(ctx, "sys.safeMode expects a boolean");
-    }
-    if (!esp32_mquickjs_set_safe_mode(runtime, argv[0] == JS_TRUE)) {
-        return JS_ThrowInternalError(ctx, "failed to persist sys.safeMode");
-    }
-    return JS_UNDEFINED;
+    return JS_NewUint32(ctx, status.safe_mode);
 }
 
 static bool sys_set_resource_object(JSContext *ctx,

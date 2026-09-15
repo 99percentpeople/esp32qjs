@@ -51,7 +51,7 @@ test("stream/stream", function () {
   streamChange = streamChanges.receive(0);
   test.equal(streamChange.type, "write",
     "stream flush should publish one committed write event");
-  test.equal(streamChange.path, path,
+  test.equal(streamChange.path, "/" + path,
     "stream flush event path");
   test.equal(writeStream.tell(), 6, "tell after write");
   writeStream.seek(0, Stream.SEEK_SET);

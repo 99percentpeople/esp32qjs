@@ -204,9 +204,10 @@ Store timer IDs and clear them during application cleanup.
 - `sys.status.runtime.watchdog` reports the system-task and outer-JavaScript
   watchdogs. `sys.status.runtime.startup` reports startup health and safe-mode
   state.
-- `sys.safeMode` is a persistent operator-only boolean. Writing `false` clears
-  the startup failure latch so the next boot evaluates normal workspace startup
-  policy. Operator lifecycle code owns this setting.
+- `sys.safeMode` is read-only: `0` normal, `1` application-managed soft recovery,
+  `2` hard recovery without the startup script. Every two abnormal resets raise
+  the level, capped at `2`. Operator reboot, RESET, or power-on clears the level
+  and count; healthy execution and JavaScript-only restart preserve them.
 - `sys.millis()` and `sys.micros()` return monotonic uptime counters.
 - `sys.freeHeap()` returns available heap bytes.
 - `sys.randomHex(byteLength)` returns 1-64 random bytes as lowercase

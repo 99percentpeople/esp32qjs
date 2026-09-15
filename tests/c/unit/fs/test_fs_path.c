@@ -24,35 +24,42 @@ static void test_resolve_path(void)
 {
     char path[128];
 
-    expect_true(esp32_mquickjs_fs_resolve_path("/littlefs", ".", path, sizeof(path)),
-                "dot path should resolve");
-    expect_string(path, "/littlefs", "dot path target");
-
-    expect_true(esp32_mquickjs_fs_resolve_path("/littlefs", "dir/file.txt", path, sizeof(path)),
-                "relative path should resolve");
-    expect_string(path, "/littlefs/dir/file.txt", "relative path target");
-
-    expect_true(esp32_mquickjs_fs_resolve_path("/littlefs", "/littlefs/a/../b", path, sizeof(path)),
-                "absolute littlefs path should resolve");
-    expect_string(path, "/littlefs/b", "absolute littlefs normalization");
-
-    expect_true(esp32_mquickjs_fs_resolve_path("/littlefs", "dir//nested/./file", path, sizeof(path)),
-                "redundant separators should resolve");
-    expect_string(path, "/littlefs/dir/nested/file", "redundant separators normalization");
-
-    expect_true(!esp32_mquickjs_fs_resolve_path("/littlefs", "../escape", path, sizeof(path)),
-                "parent escape should fail");
-    expect_true(!esp32_mquickjs_fs_resolve_path("/littlefs", "/tmp/file", path, sizeof(path)),
-                "wrong absolute root should fail");
+    expect_true(esp32_mquickjs_fs_resolve_path("/", "/", path, sizeof(path)), "root resolves");
+    expect_string(path, "/", "root stays a single slash");
+    expect_true(esp32_mquickjs_fs_resolve_path("/", "index.js", path, sizeof(path)), "root-relative file");
+    expect_string(path, "/index.js", "no backing mount prefix");
+    expect_true(esp32_mquickjs_fs_resolve_path("/framework", "_sys/a.js", path, sizeof(path)), "volume-relative file");
+    expect_string(path, "/framework/_sys/a.js", "captured relative base");
+    expect_true(esp32_mquickjs_fs_resolve_path("/framework", "/index.js", path, sizeof(path)), "absolute file");
+    expect_string(path, "/index.js", "absolute paths ignore relative base");
+    expect_true(esp32_mquickjs_fs_resolve_path("/", "//framework//_sys/../x", path, sizeof(path)), "normalize namespace");
+    expect_string(path, "/framework/x", "canonical namespace path");
+    expect_true(esp32_mquickjs_fs_resolve_path("/framework", "../index.js", path, sizeof(path)), "parent of mount");
+    expect_string(path, "/index.js", "parent reaches namespace root");
+    expect_true(!esp32_mquickjs_fs_resolve_path("/", "../escape", path, sizeof(path)), "reject above root");
+    expect_true(!esp32_mquickjs_fs_resolve_path("/framework", "/a/../../escape", path, sizeof(path)), "reject normalized escape");
+    expect_true(!esp32_mquickjs_fs_resolve_path("/", "file", path, 5), "terminator needs space");
+    expect_true(esp32_mquickjs_fs_resolve_path("/", "file", path, 6), "exact bounded result");
+    expect_string(path, "/file", "bounded result");
+    expect_true(esp32_mquickjs_fs_path_contains("/", "/framework/a"), "root contains every mount");
+    expect_true(!esp32_mquickjs_fs_path_contains("/framework", "/framework-other/a"), "match segment boundary");
+    expect_true(esp32_mquickjs_fs_mount_child("/", "/framework", path, sizeof(path)), "direct mount entry");
+    expect_string(path, "/framework", "direct mount path");
+    expect_true(esp32_mquickjs_fs_mount_child("/", "/mnt/data", path, sizeof(path)), "virtual mount parent");
+    expect_string(path, "/mnt", "virtual parent path");
+    expect_true(esp32_mquickjs_fs_mount_child("/mnt", "/mnt/data", path, sizeof(path)), "nested mount entry");
+    expect_string(path, "/mnt/data", "nested mount path");
+    expect_true(!esp32_mquickjs_fs_mount_child("/", "/", path, sizeof(path)), "root is not its own child");
+    expect_true(!esp32_mquickjs_fs_mount_child("/mnt", "/mnt-other/data", path, sizeof(path)), "ignore sibling prefix");
 }
 
 static void test_basename(void)
 {
-    expect_string(esp32_mquickjs_fs_path_basename("/littlefs/file.txt"),
+    expect_string(esp32_mquickjs_fs_path_basename("/framework/file.txt"),
                   "file.txt",
                   "basename for file");
-    expect_string(esp32_mquickjs_fs_path_basename("/littlefs"),
-                  "littlefs",
+    expect_string(esp32_mquickjs_fs_path_basename("/framework"),
+                  "framework",
                   "basename for root path");
     expect_string(esp32_mquickjs_fs_path_basename(""),
                   "",

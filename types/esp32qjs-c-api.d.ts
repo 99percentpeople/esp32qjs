@@ -516,12 +516,21 @@ namespace ESP32QJS {
     path: string;
     isDir: boolean;
     size: number;
+    /** True for an exact mounted filesystem root. */
+    mount: boolean;
+    readOnly: boolean;
   }
 
-  interface FsInfo {
+  interface FsMount {
+    /** Absolute mount point in the shared namespace. */
     root: string;
+    partition: string;
+    type: "littlefs";
     /** True when the underlying mounted filesystem rejects mutations. */
     readOnly: boolean;
+  }
+
+  interface FsInfo extends FsMount {
     totalBytes: number;
     usedBytes: number;
     freeBytes: number;
@@ -541,12 +550,15 @@ namespace ESP32QJS {
     sequence: number;
     timestampUs: number;
     type: "write" | "remove" | "rename" | "mkdir";
+    /** Absolute namespace path, including for watches below /. */
     path: string;
+    /** Absolute destination; rename is reported when either endpoint matches. */
     toPath?: string;
   }
 
   /**
-   * LittleFS helpers restricted to the active mounted root.
+   * Filesystem helpers for the shared namespace.
+   * Both absolute and relative fs paths start at /.
    *
    * @example
    * ```js
@@ -556,11 +568,12 @@ namespace ESP32QJS {
    * fs.remove("notes.txt");
    * ```
    */
-  interface FsVolume {
-    readonly ROOT: string;
-    volume(root: string): FsVolume;
-    info(): FsInfo;
-    watch(options?: FsWatchOptions): EventQueue<FsChangeEvent>;
+  interface FsModule {
+    readonly ROOT: "/";
+    mounts(): FsMount[];
+    info(path?: string): FsInfo;
+    /** Watch a path and its descendants, including paths created later. Defaults to /. */
+    watch(path?: string, options?: FsWatchOptions): EventQueue<FsChangeEvent>;
     open(path: string, mode?: FsOpenMode): Stream;
     list(path?: string): FsEntry[];
     stat(path: string): FsEntry;
@@ -1476,8 +1489,7 @@ namespace ESP32QJS {
 
   interface SysRuntimeStartupStatus {
     phase: "armed" | "stabilizing" | "healthy" | "safe-mode";
-    safeModeActive: boolean;
-    safeModeRequested: boolean;
+    safeMode: 0 | 1 | 2;
     failureCount: number;
     failureLimit: number;
     healthyAfterMs: number;
@@ -1589,8 +1601,8 @@ namespace ESP32QJS {
     readonly info: SysInfo;
     readonly status: SysStatus;
     readonly time: SysTimeModule;
-    /** Persistent boot choice. Assignment affects the next startup only. */
-    safeMode: boolean;
+    /** 0 normal, 1 application soft recovery, 2 no startup script. External reboot clears it. */
+    readonly safeMode: 0 | 1 | 2;
     /** Return a fresh snapshot of every immutable selected hardware-profile value. */
     config(): { [key: string]: string | number | boolean };
     /**
@@ -8203,7 +8215,6 @@ namespace ESP32QJS {
   const _ByteView: { readonly prototype: ESP32QJS.ByteView };
   const _ByteSpanSource: { readonly prototype: ESP32QJS.ByteSpanSource };
   const _BitmapSpanSource: { readonly prototype: ESP32QJS.BitmapSpanSource };
-  const FsVolume: { readonly prototype: ESP32QJS.FsVolume };
   const HttpServer: typeof ESP32QJS.HttpServer;
   const DisplayFont: ESP32QJS.DisplayFontConstructor;
   const Bitmap: typeof ESP32QJS.Bitmap;
@@ -8308,8 +8319,8 @@ namespace ESP32QJS {
   function setInterval(fn: () => void, ms: number): ESP32QJS.TimerHandle;
   function clearInterval(handle: ESP32QJS.TimerHandle): void;
 
-  /** Immutable filesystem volume; initially bound to `/littlefs`. */
-  var fs: ESP32QJS.FsVolume;
+  /** Filesystem namespace rooted at `/`, including mounted volumes such as `/framework`. */
+  var fs: ESP32QJS.FsModule;
   /** Read-only system framework loader rooted below `/_sys`. */
   var framework: ESP32QJS.FrameworkModule;
   /** Bounded strings in the default NVS partition. */
