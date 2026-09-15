@@ -11,9 +11,9 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.esp32qjs_monitor import main
-from scripts.esp32qjs_pcapng import encode_monitor_pcapng
-from scripts.esp32qjs_rx import RxProtocolError
+from capture.monitor import main
+from capture.pcapng import encode_monitor_pcapng
+from capture.rx import RxProtocolError
 from tests.c.integration.wifi.monitor.test_wifi_monitor_protocol import WRITER
 from tests.c.integration.wifi.monitor.test_wifi_monitor_wire import PRELUDE, production_monitor_wire
 
@@ -207,7 +207,7 @@ class WiFiMonitorPcapng(unittest.TestCase):
             with self.assertRaises(RxProtocolError):
                 main(args)
             self.assertEqual(output.read_bytes(), b'previous capture')
-            with patch('scripts.esp32qjs_monitor.os.replace', side_effect=OSError('replace failed')):
+            with patch('capture.monitor.os.replace', side_effect=OSError('replace failed')):
                 with self.assertRaises(OSError):
                     main(args + ['--relative'])
             self.assertEqual(output.read_bytes(), b'previous capture')

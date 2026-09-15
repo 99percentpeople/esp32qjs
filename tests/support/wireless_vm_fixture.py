@@ -6,7 +6,7 @@ import subprocess
 import sys
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'scripts'))
-from check_js_syntax import compiler_command,VENDOR_DIR
+from codegen.js_syntax import compiler_command,VENDOR_DIR
 CORE=ROOT/'components/esp32_mquickjs/src/core'
 INTERNAL=ROOT/'components/esp32_mquickjs/internal'
 
@@ -45,7 +45,7 @@ def build(directory,extra,main,classes_extra="",globals_extra="",declarations=""
     (directory/'esp32_mquickjs_types.h').write_text('#pragma once\n#include "mquickjs.h"\n')
     (directory/'esp32_mquickjs_memory.h').write_text('#pragma once\n')
     (directory/'esp_heap_caps.h').write_text('#pragma once\n#define MALLOC_CAP_8BIT 1\n')
-    prefix=(ROOT/'scripts/mquickjs_syntax_check.c').read_text().split('#define CHECKER_HEAP_SIZE')[0]
+    prefix=(ROOT/'scripts/codegen/mquickjs_syntax_check.c').read_text().split('#define CHECKER_HEAP_SIZE')[0]
     prefix=prefix.replace('#include "mqjs_stdlib.h"',fixture_text('shared/wireless_vm_fixture/build-prefix.inc'))
     helper=extract((CORE/'esp32_mquickjs.c').read_text(),'esp32_mquickjs_set_property_ref')
     prefix=prefix.replace('#include "mqjs_stdlib.h"',declarations+'\n#include "mqjs_stdlib.h"')

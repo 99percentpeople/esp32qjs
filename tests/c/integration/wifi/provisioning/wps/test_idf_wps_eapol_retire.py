@@ -10,8 +10,8 @@ from tests.support.native_compile import compile_run
 
 ROOT = TEST_ROOT
 sys.path.insert(0, str(ROOT / 'scripts'))
-from patch_idf_wps_registrar import patch_source
-from patch_idf_wps_eapol_retire import RETIRE
+from sdk_patches.wpa.wps.registrar import patch_source
+from sdk_patches.wpa.wps.eapol_retire import RETIRE
 
 
 class WpsEapolRetire(unittest.TestCase):

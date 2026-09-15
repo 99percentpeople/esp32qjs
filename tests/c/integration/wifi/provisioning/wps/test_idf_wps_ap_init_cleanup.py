@@ -7,7 +7,7 @@ import unittest
 from tests.c.integration.wifi.provisioning.wps.test_idf_wps_ap_result import WpsAPResult
 ROOT=TEST_ROOT
 sys.path.insert(0,str(ROOT/'scripts'))
-from patch_idf_wps_ap_init_cleanup import FAILURE
+from sdk_patches.wpa.wps.ap_init_cleanup import FAILURE
 
 
 class WpsAPInitCleanup(unittest.TestCase):

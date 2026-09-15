@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 
 ROOT = TEST_ROOT
-CHECKER_PATH = ROOT / "scripts" / "check_js_syntax.py"
+CHECKER_PATH = ROOT / "scripts/codegen/js_syntax.py"
 SPEC = importlib.util.spec_from_file_location("esp32qjs_syntax_test", CHECKER_PATH)
 CHECKER = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None

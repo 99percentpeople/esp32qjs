@@ -14,8 +14,8 @@ from tests.support.native_compile import compile_run
 
 ROOT = TEST_ROOT
 sys.path.insert(0, str(ROOT / 'scripts'))
-from patch_idf_wps_native import NATIVE_HEADER, NATIVE_SOURCE, patch_source
-from patch_idf_wps import function
+from sdk_patches.wpa.wps.native import NATIVE_HEADER, NATIVE_SOURCE, patch_source
+from sdk_patches.wpa.wps.credentials import function
 
 
 def declarations(text):

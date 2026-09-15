@@ -36,13 +36,13 @@ class PairingBinding(unittest.TestCase):
         sdk = Path(os.environ.get('IDF_PATH', '/home/zach/esp/esp-idf')) / 'components'
         if not compiler or not sdk.is_dir():
             self.skipTest('Host compiler and pinned SDK required')
-        spec = importlib.util.spec_from_file_location('nan_pairing_binding_patch', ROOT / 'scripts/patch_idf_nan_pairing.py')
+        spec = importlib.util.spec_from_file_location('nan_pairing_binding_patch', ROOT / 'scripts/sdk_patches/wifi/nan_pairing.py')
         patch = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(patch)
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
             native = patch.prepare(sdk, folder / 'prepared')['nan_pairing.c']
-            spec = importlib.util.spec_from_file_location('nan_cache_patch', ROOT / 'scripts/patch_idf_nan.py')
+            spec = importlib.util.spec_from_file_location('nan_cache_patch', ROOT / 'scripts/sdk_patches/wifi/nan.py')
             cache_patch = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(cache_patch)
             app = cache_patch.patch_source((sdk / 'esp_wifi/wifi_apps/nan_app/src/nan_app.c').read_text())

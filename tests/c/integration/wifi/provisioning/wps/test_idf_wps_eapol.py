@@ -13,7 +13,7 @@ from tests.support.native_compile import compile_run
 
 ROOT = TEST_ROOT
 sys.path.insert(0, str(ROOT / 'scripts'))
-from patch_idf_wps_eapol import TIMERS, PEER_RELEASE
+from sdk_patches.wpa.wps.eapol import TIMERS, PEER_RELEASE
 
 
 class WpsEapolTimers(unittest.TestCase):

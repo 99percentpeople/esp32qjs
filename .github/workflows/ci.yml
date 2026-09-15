@@ -52,6 +52,29 @@ jobs:
       - name: Run native C, SDK, and VM tests
         run: uv run python scripts/remote.py test --scope c
 
+  sdk-checks:
+    name: Reviewed SDK inputs and patch composition
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out recursive repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Verify pinned SDK and execute registered fixtures
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.1
+          target: esp32c5
+          path: .
+          command: |
+            set -e
+            apt-get update
+            apt-get install -y --no-install-recommends qemu-user
+            python3 -m pip install 'pycparser==3.0'
+            python3 scripts/sdk_patch.py check --result build/sdk-checks/inputs.json
+            python3 scripts/run_sdk_tests.py
+
   firmware-build:
     name: Firmware ${{ matrix.target }} / ${{ matrix.profile }}
     runs-on: ubuntu-latest
@@ -99,3 +122,6 @@ jobs:
             python3 scripts/ci_build.py \
             --target ${{ matrix.target }} \
             --profile ${{ matrix.profile }}
+            if [ '${{ matrix.target }}/${{ matrix.profile }}' = 'esp32s3/representative' ]; then
+              python3 -m unittest tests.python.tooling.generators.test_camera_sdk_patch
+            fi

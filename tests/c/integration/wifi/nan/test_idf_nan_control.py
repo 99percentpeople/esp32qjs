@@ -20,7 +20,7 @@ class NanNativeControl(unittest.TestCase):
         path = SDK / 'wifi_apps/nan_app/src/nan_app.c'
         if not path.exists():
             self.skipTest('reviewed SDK unavailable')
-        spec = importlib.util.spec_from_file_location('nan_patch', ROOT / 'scripts/patch_idf_nan.py')
+        spec = importlib.util.spec_from_file_location('nan_patch', ROOT / 'scripts/sdk_patches/wifi/nan.py')
         patch = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(patch)
         original = path.read_text()

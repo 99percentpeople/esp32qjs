@@ -7,7 +7,7 @@ import unittest
 from tests.support.native_compile import compile_run
 ROOT=TEST_ROOT
 sys.path.insert(0,str(ROOT/'scripts'))
-from patch_idf_wps_peer_delays import DELAYS
+from sdk_patches.wpa.wps.peer_delays import DELAYS
 
 class WpsPeerDelays(unittest.TestCase):
     def run_case(self,main):

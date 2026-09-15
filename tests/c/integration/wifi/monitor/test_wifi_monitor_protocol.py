@@ -10,8 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.esp32qjs_monitor import main, parse_batch, summaries
-from scripts.esp32qjs_rx import RxProtocolError
+from capture.monitor import main, parse_batch, summaries
+from capture.rx import RxProtocolError
 from tests.c.integration.wifi.monitor.test_wifi_monitor_wire import PRELUDE, production_monitor_wire
 
 

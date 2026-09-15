@@ -1,5 +1,6 @@
 """Deferred exact SDK archive transformation checks; no fixture execution this wave."""
 from tests.support.paths import ROOT as TEST_ROOT
+from tests.support.idf import require_idf, require_target_tool
 import importlib.util
 from pathlib import Path
 import unittest
@@ -13,7 +14,7 @@ ROOT = TEST_ROOT
 
 
 def load_patch(name):
-    spec = importlib.util.spec_from_file_location(name, ROOT / 'scripts/patch_idf_vendor_ie_context.py')
+    spec = importlib.util.spec_from_file_location(name, ROOT / 'scripts/sdk_patches/wifi/vendor_ie_context.py')
     module = importlib.util.module_from_spec(spec)
     with mock_patch.object(sys, 'path', [str(ROOT / 'scripts'), *sys.path]):
         spec.loader.exec_module(module)
@@ -23,9 +24,9 @@ def load_patch(name):
 class VendorIeContextPatch(unittest.TestCase):
     def test_probe_pm_only_retargets_reviewed_calls(self):
         patch = load_patch('probe_wake_patch')
-        source_path = Path('/home/zach/esp/esp-idf/components/esp_wifi/lib/esp32c5/libnet80211.a')
-        prefix = '/home/zach/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/bin/riscv32-esp-elf-'
-        if not source_path.exists() or not Path(prefix + 'ar').exists():
+        source_path = require_idf() / 'components/esp_wifi/lib/esp32c5/libnet80211.a'
+        tools = {name: require_target_tool('esp32c5', name) for name in ('ar', 'nm', 'objdump')}
+        if not source_path.exists() or not Path(tools['ar']).exists():
             self.skipTest('pinned C5 SDK/toolchain unavailable')
         source = source_path.read_bytes()
         baseline = patch.patch_archive(source, 'esp32c5', ftm_report_null_fix=True, twt_probe_buffer_fix=True)
@@ -49,21 +50,21 @@ class VendorIeContextPatch(unittest.TestCase):
             after = Path(temp) / 'after.a'
             before.write_bytes(baseline)
             after.write_bytes(fixed)
-            members = subprocess.check_output([prefix + 'ar', 't', str(before)])
-            self.assertEqual(members, subprocess.check_output([prefix + 'ar', 't', str(after)]))
-            self.assertEqual(subprocess.check_output([prefix + 'nm', '-s', '--defined-only', str(before)], stderr=subprocess.DEVNULL),
-                             subprocess.check_output([prefix + 'nm', '-s', '--defined-only', str(after)], stderr=subprocess.DEVNULL))
+            members = subprocess.check_output([tools['ar'], 't', str(before)])
+            self.assertEqual(members, subprocess.check_output([tools['ar'], 't', str(after)]))
+            self.assertEqual(subprocess.check_output([tools['nm'], '-s', '--defined-only', str(before)], stderr=subprocess.DEVNULL),
+                             subprocess.check_output([tools['nm'], '-s', '--defined-only', str(after)], stderr=subprocess.DEVNULL))
             for member in members.decode().splitlines():
-                old = subprocess.check_output([prefix + 'ar', 'p', str(before), member])
-                new = subprocess.check_output([prefix + 'ar', 'p', str(after), member])
+                old = subprocess.check_output([tools['ar'], 'p', str(before), member])
+                new = subprocess.check_output([tools['ar'], 'p', str(after), member])
                 if member not in selected:
                     self.assertEqual(old, new)
                     continue
                 obj = Path(temp) / member
                 obj.write_bytes(old)
-                old_dis = subprocess.check_output([prefix + 'objdump', '-dr', str(obj)]).decode()
+                old_dis = subprocess.check_output([tools['objdump'], '-dr', str(obj)]).decode()
                 obj.write_bytes(new)
-                new_dis = subprocess.check_output([prefix + 'objdump', '-dr', str(obj)]).decode()
+                new_dis = subprocess.check_output([tools['objdump'], '-dr', str(obj)]).decode()
                 for function, offset, original, target in sites[member]:
                     start = old_dis.index('Disassembly of section .text.' + function + ':')
                     end = old_dis.find('Disassembly of section ', start + 1)
@@ -92,7 +93,7 @@ class VendorIeContextPatch(unittest.TestCase):
 
     def test_twt_probe_callback_preserves_every_other_archive_byte(self):
         patch = load_patch('twt_probe_patch')
-        path = Path('/home/zach/esp/esp-idf/components/esp_wifi/lib/esp32c5/libnet80211.a')
+        path = require_idf() / 'components/esp_wifi/lib/esp32c5/libnet80211.a'
         if not path.exists():
             self.skipTest('pinned local SDK archive unavailable')
         source = path.read_bytes()
@@ -109,7 +110,7 @@ class VendorIeContextPatch(unittest.TestCase):
 
     def test_exact_inputs_fixed_load_and_no_other_archive_changes(self):
         patch = load_patch('vendor_context_patch')
-        sdk = Path('/home/zach/esp/esp-idf/components/esp_wifi/lib')
+        sdk = require_idf() / 'components/esp_wifi/lib'
         for target in patch.REVIEWED:
             with self.subTest(target=target):
                 path = sdk / target / 'libnet80211.a'
@@ -135,7 +136,7 @@ class VendorIeContextPatch(unittest.TestCase):
 
     def test_ftm_null_discard_preserves_archive_size_and_branch_relocations(self):
         patch = load_patch('ftm_report_patch')
-        sdk = Path('/home/zach/esp/esp-idf/components/esp_wifi/lib')
+        sdk = require_idf() / 'components/esp_wifi/lib'
         for target in patch.REVIEWED:
             with self.subTest(target=target):
                 path = sdk / target / 'libnet80211.a'

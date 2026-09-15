@@ -23,6 +23,7 @@ def main():
     selection.add_argument("--case", action="append", help="Qualified native case, class or module; repeatable")
     parser.add_argument("--list", action="store_true", help="List owned cases without executing them")
     parser.add_argument("--result", type=Path, help="Write the execution summary as JSON")
+    parser.add_argument("--require-all", action="store_true", help="Fail if any selected fixture is skipped")
     args = parser.parse_args()
     try:
         suite, import_errors = (select_native_tests(args.case) if args.case
@@ -48,6 +49,8 @@ def main():
         **summarize_native_result(result, selected_ids),
         "seconds": time.monotonic() - started,
     }
+    if args.require_all and summary["skipped"]:
+        summary["status"] = "failed"
     if args.result:
         args.result.parent.mkdir(parents=True, exist_ok=True)
         args.result.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")

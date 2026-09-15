@@ -16,7 +16,7 @@ from tests.support.native_compile import compile_run
 
 ROOT = TEST_ROOT
 sys.path.insert(0, str(ROOT / 'scripts'))
-from patch_idf_rrm import patch_source
+from sdk_patches.wpa.rrm import patch_source
 
 
 def sdk_function(source, name):

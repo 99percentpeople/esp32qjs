@@ -31,7 +31,7 @@ class NanSecurityDerivation(unittest.TestCase):
         source = SDK / 'wifi_apps/nan_app/src/nan_security.c'
         if not source.exists():
             self.skipTest('reviewed SDK unavailable')
-        spec = importlib.util.spec_from_file_location('nan_security_patch', ROOT / 'scripts/patch_idf_nan.py')
+        spec = importlib.util.spec_from_file_location('nan_security_patch', ROOT / 'scripts/sdk_patches/wifi/nan.py')
         patch = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(patch)
         prepared = patch.patch_security_source(source.read_text())
@@ -42,7 +42,7 @@ class NanSecurityDerivation(unittest.TestCase):
         source = SDK / 'wifi_apps/nan_app/src/nan_security.c'
         if not source.exists():
             self.skipTest('reviewed SDK unavailable')
-        spec = importlib.util.spec_from_file_location('nan_security_patch', ROOT / 'scripts/patch_idf_nan.py')
+        spec = importlib.util.spec_from_file_location('nan_security_patch', ROOT / 'scripts/sdk_patches/wifi/nan.py')
         patch = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(patch)
         original = source.read_text()
@@ -57,7 +57,7 @@ class NanSecurityDerivation(unittest.TestCase):
         source = SDK / 'wifi_apps/nan_app/src/nan_security.c'
         if not source.exists():
             self.skipTest('reviewed SDK unavailable')
-        spec = importlib.util.spec_from_file_location('nan_security_patch', ROOT / 'scripts/patch_idf_nan.py')
+        spec = importlib.util.spec_from_file_location('nan_security_patch', ROOT / 'scripts/sdk_patches/wifi/nan.py')
         patch = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(patch)
         prepared = patch.patch_security_source(source.read_text())
@@ -70,7 +70,7 @@ static struct{bool valid;uint8_t material[80];}s_pending_m1,s_pending_scia;
         source = SDK / 'wifi_apps/nan_app/src/nan_security.c'
         if not source.exists():
             self.skipTest('reviewed SDK unavailable')
-        spec = importlib.util.spec_from_file_location('nan_security_patch', ROOT / 'scripts/patch_idf_nan.py')
+        spec = importlib.util.spec_from_file_location('nan_security_patch', ROOT / 'scripts/sdk_patches/wifi/nan.py')
         patch = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(patch)
         original = source.read_text()

@@ -33,7 +33,7 @@ class NanPairingNative(unittest.TestCase):
         sdk = Path(os.environ.get('IDF_PATH', '/home/zach/esp/esp-idf')) / 'components'
         if not sdk.is_dir():
             self.skipTest('Pinned SDK unavailable')
-        spec = importlib.util.spec_from_file_location('pairing_patch', ROOT / 'scripts/patch_idf_nan_pairing.py')
+        spec = importlib.util.spec_from_file_location('pairing_patch', ROOT / 'scripts/sdk_patches/wifi/nan_pairing.py')
         patch = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(patch)
         with tempfile.TemporaryDirectory() as folder:

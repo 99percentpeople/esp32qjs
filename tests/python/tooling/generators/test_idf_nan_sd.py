@@ -1,5 +1,6 @@
 """Deferred exact pinned NAN archive transformation; does not link or run RF."""
 from tests.support.paths import ROOT as TEST_ROOT
+from tests.support.idf import require_idf
 import importlib.util
 import struct
 import sys
@@ -7,7 +8,6 @@ import unittest
 from pathlib import Path
 
 ROOT = TEST_ROOT
-SDK = Path('/home/zach/esp/esp-idf/components/esp_wifi/lib')
 
 
 def members(archive):
@@ -41,12 +41,12 @@ def allocated_sections(obj):
 
 class NanSDArchive(unittest.TestCase):
     def test_production_patch_keeps_code_and_other_members_and_rejects_other_targets(self):
-        source = SDK / 'esp32c5/libnet80211.a'
+        source = require_idf() / 'components/esp_wifi/lib/esp32c5/libnet80211.a'
         if not source.exists():
             self.skipTest('Reviewed SDK unavailable')
         sys.path.insert(0, str(ROOT / 'scripts'))
         self.addCleanup(lambda: sys.path.remove(str(ROOT / 'scripts')))
-        spec = importlib.util.spec_from_file_location('nan_sd_patch', ROOT / 'scripts/patch_idf_nan_sd.py')
+        spec = importlib.util.spec_from_file_location('nan_sd_patch', ROOT / 'scripts/sdk_patches/wifi/nan_sd.py')
         patch = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(patch)
         original = source.read_bytes()

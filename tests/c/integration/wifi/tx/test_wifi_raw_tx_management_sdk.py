@@ -30,7 +30,7 @@ class WiFiRawTxManagementSdk(unittest.TestCase):
                     self.skipTest('Pinned SDK and compiler required: '+target)
                 root=Path(directory)
                 original=subprocess.check_output([ar,'p',str(archive),'ieee80211_output.o'])
-                import patch_idf_raw_tx_management as patcher
+                from sdk_patches.wifi import raw_tx_management as patcher
                 for extended in variants:
                     with self.subTest(extendedManagement=extended):
                         (root/'sdk.o').write_bytes(patcher.patch_object(original,target) if extended else original)
@@ -49,8 +49,8 @@ class WiFiRawTxManagementSdk(unittest.TestCase):
                         self.assertEqual(result.returncode,0,'Actual SDK assertion '+str(result.returncode)+' '+result.stderr)
 
     def test_three_target_instruction_scope_hash_guards_and_prior_fix_composition(self):
-        import patch_idf_raw_tx_management as patcher
-        import patch_idf_offchan_frame as offchan
+        from sdk_patches.wifi import raw_tx_management as patcher
+        from sdk_patches.wifi import offchan_frame as offchan
         sdk=Path(os.environ.get('IDF_PATH',str(Path.home()/'esp/esp-idf')))
         for target in ('esp32c3','esp32s3','esp32c5'):
             with self.subTest(target=target), tempfile.TemporaryDirectory() as directory:
@@ -64,11 +64,20 @@ class WiFiRawTxManagementSdk(unittest.TestCase):
                     changed=patcher.patch_object(source,target)
                     sections,names,refs=elf(source)
                     index=names.index(patcher.FUNCTION)
-                    offset,expected,replacement=patcher.EDITS[target]
-                    start=sections[index][4]+offset
-                    self.assertEqual(changed[:start],source[:start])
-                    self.assertEqual(changed[start:start+len(expected)],replacement)
-                    self.assertEqual(changed[start+len(expected):],source[start+len(expected):])
+                    edits=patcher.EDITS[target]
+                    if isinstance(edits, tuple) and edits and isinstance(edits[0], int):
+                        edits=(edits,)
+                    for offset,expected,replacement in edits:
+                        start=sections[index][4]+offset
+                        self.assertEqual(changed[start:start+len(expected)],replacement)
+                    # Unchanged outside every edit span.
+                    cursor=0
+                    for offset,expected,replacement in sorted(edits, key=lambda e: e[0]):
+                        start=sections[index][4]+offset
+                        self.assertEqual(changed[cursor:start],source[cursor:start])
+                        cursor=start+len(expected)
+                    end=sections[index][4]+sections[index][5]
+                    self.assertEqual(changed[cursor:end],source[cursor:end])
                     self.assertEqual(elf(changed)[2],refs)
                     with self.assertRaises(ValueError):
                         patcher.patch_object(changed,target)

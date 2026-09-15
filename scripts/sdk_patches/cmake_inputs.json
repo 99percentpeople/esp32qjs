@@ -1,0 +1,139 @@
+{
+  "groups": {
+    "check_idf_offchan_frame.cmake": {
+      "components/esp_coex/esp32c3/esp_coex_adapter.c": "48bccbf6b585ad7e6634d1bba26f9a83eca32371352aeeb9fbe9bef97d28bd12",
+      "components/esp_coex/esp32c5/esp_coex_adapter.c": "8a2a75be1e1721d29ee58b6f40c44747928c37fc81b25d7a434b2d7f03c0fa21",
+      "components/esp_coex/esp32s3/esp_coex_adapter.c": "7fb34f00fb22a158b73252f4be55800b429623153a050998b5e3a1fb015b5c1d",
+      "components/esp_rom/esp32c3/ld/esp32c3.rom.eco3.ld": "da03bcb48016c2c7c4cc776adcf66fb87356787e4c8d4e0ad64d72a2a454696a",
+      "components/esp_rom/esp32c3/ld/esp32c3.rom.eco7.ld": "02a1101d9f34315679b43da70e1cbb8cc175594c21f47a1576e62603678f2063",
+      "components/esp_rom/esp32c3/ld/esp32c3.rom.ld": "62dbb8b247b8f1f55a2637d836e045d301b8c8553a43f5b1e5fcc67acc3001ee",
+      "components/esp_rom/esp32s3/ld/esp32s3.rom.ld": "3abed7ef1f85a810335b8f639ddee19f18fa9f7083253601548c25a17af62dc9",
+      "components/esp_timer/src/esp_timer.c": "5063132e2fa243d69b85b9bc1c93bb19d79110b265da07b5e6a4b779f66c563e",
+      "components/esp_timer/src/ets_timer_legacy.c": "fb28b0f5b2d15950bde406cd327992678c52300cef39e5f9462259f2fd2d083f",
+      "components/esp_wifi/esp32c3/esp_adapter.c": "06973e30a235812f837fe32fd91ee41b32bf889b3813f491746666870e8af45f",
+      "components/esp_wifi/esp32c5/esp_adapter.c": "cd43bb333b2fb7cc38590560b1f1fadf5a1aae1314d740185dc7626d8d1b30cc",
+      "components/esp_wifi/esp32s3/esp_adapter.c": "aedf22d0832963eaf206ef2571c46ed515a91f72f7d017c46ec830ce8efdd3a0",
+      "components/esp_wifi/lib/esp32c3/libpp.a": "756aa3ba9fcd8bef1ee5a8ec36c82406b5ed3a4d43f94ef6b15e05b2cd7a593c",
+      "components/esp_wifi/lib/esp32c5/libpp.a": "a06374436b70eb6b8a2b8d653976218db6e08e7dbe90c8414b07ad9e923d9f99",
+      "components/esp_wifi/lib/esp32s3/libpp.a": "ae7004d00c2c5e1cf106548b22e2ed5bb3a059d65393f4e15791019658191cdb"
+    },
+    "check_idf_twt_tx.cmake": {
+      "components/esp_coex/esp32c5/esp_coex_adapter.c": "8a2a75be1e1721d29ee58b6f40c44747928c37fc81b25d7a434b2d7f03c0fa21",
+      "components/esp_rom/esp32c5/ld/esp32c5.rom.net80211.ld": "c27731095f2c161dbc316c0da81cc02d4d0a3b4bf9a6d046c9dcac7292a789dc",
+      "components/esp_rom/esp32c5/ld/esp32c5.rom.pp.ld": "93b0ac5f5daf8b1b3daeb87b01e1a5a56fea20de3d58a16ff3685c15ce1242c7",
+      "components/esp_timer/src/esp_timer.c": "5063132e2fa243d69b85b9bc1c93bb19d79110b265da07b5e6a4b779f66c563e",
+      "components/esp_timer/src/ets_timer_legacy.c": "fb28b0f5b2d15950bde406cd327992678c52300cef39e5f9462259f2fd2d083f",
+      "components/esp_wifi/esp32c5/esp_adapter.c": "cd43bb333b2fb7cc38590560b1f1fadf5a1aae1314d740185dc7626d8d1b30cc",
+      "components/esp_wifi/lib/esp32c5/libpp.a": "a06374436b70eb6b8a2b8d653976218db6e08e7dbe90c8414b07ad9e923d9f99"
+    },
+    "patch_idf_mesh.cmake": {
+      "components/esp_wifi/include/esp_mesh.h": "fc189e2698791888446427cef41f75f517f33c49e17aad688e32a3d540d24022",
+      "components/esp_wifi/include/esp_mesh_internal.h": "19010cae1359dffcf2eb2f44690a83748f1c1f2d67cccfc1079fbc28992137ef",
+      "components/esp_wifi/lib/esp32c3/libmesh.a": "21c20815dd660e6c0964bf0cf15de48b240b08a702c8f29caf106d0746b6bdaa",
+      "components/esp_wifi/lib/esp32c5/libmesh.a": "fd1864cc95a78e4151288d9ed0a8204e4f1c21f186c90ce15404c5d064c579f1",
+      "components/esp_wifi/lib/esp32s3/libmesh.a": "dbba6dae63d27b95fa85d089d2e0c792f3156cf7b04299a667ea3549593a7173",
+      "components/esp_wifi/src/mesh_event.c": "0938301d1d1a7c102e25eba1cb411e430f3946c69b81802f4ff659da557ae756"
+    },
+    "patch_idf_phy_antenna.cmake": {
+      "components/esp_hw_support/include/esp_private/esp_gpio_reserve.h": "df9443201d24f4007736d22b4aaae3246537c0267621d87ceb35e723fc5c545e",
+      "components/esp_phy/include/esp_phy.h": "fe37b3a34e67a52405f146d358e57f51b91303233ab3676889ec94854daef682"
+    },
+    "patch_idf_wapi.cmake": {
+      "components/esp_wifi/lib/esp32c3/libwapi.a": "72f37d369a015ff7db679710f7d859cea89189800924df9103ab83c9f565e663",
+      "components/esp_wifi/lib/esp32c5/libwapi.a": "72f37d369a015ff7db679710f7d859cea89189800924df9103ab83c9f565e663",
+      "components/esp_wifi/lib/esp32s3/libwapi.a": "47c29d31b915377e2e1298d2baf2f841e8f72f2e8356d9c41f2bf4257367f2f1",
+      "components/wpa_supplicant/esp_supplicant/src/esp_wpa_main.c": "c4c6ff42611816ef389501174bf84906585f1e81e9ef2369bca0b79d02487d17"
+    },
+    "prepare_idf_he_statistics.cmake": {
+      "components/esp_rom/esp32c5/ld/esp32c5.rom.pp.ld": "93b0ac5f5daf8b1b3daeb87b01e1a5a56fea20de3d58a16ff3685c15ce1242c7",
+      "components/esp_wifi/lib/esp32c5/libpp.a": "a06374436b70eb6b8a2b8d653976218db6e08e7dbe90c8414b07ad9e923d9f99"
+    }
+  },
+  "schema": 1,
+  "variables": {
+    "ESP32QJS_SDK_SHA_ESP_COEX_ESP32C3_ESP_COEX_ADAPTER_C": {
+      "path": "components/esp_coex/esp32c3/esp_coex_adapter.c"
+    },
+    "ESP32QJS_SDK_SHA_ESP_COEX_ESP32C5_ESP_COEX_ADAPTER_C": {
+      "path": "components/esp_coex/esp32c5/esp_coex_adapter.c"
+    },
+    "ESP32QJS_SDK_SHA_ESP_COEX_ESP32S3_ESP_COEX_ADAPTER_C": {
+      "path": "components/esp_coex/esp32s3/esp_coex_adapter.c"
+    },
+    "ESP32QJS_SDK_SHA_ESP_HW_SUPPORT_INCLUDE_ESP_PRIVATE_ESP_GPIO_RESERVE_H": {
+      "path": "components/esp_hw_support/include/esp_private/esp_gpio_reserve.h"
+    },
+    "ESP32QJS_SDK_SHA_ESP_PHY_INCLUDE_ESP_PHY_H": {
+      "path": "components/esp_phy/include/esp_phy.h"
+    },
+    "ESP32QJS_SDK_SHA_ESP_ROM_ESP32C3_LD_ESP32C3_ROM_ECO3_LD": {
+      "path": "components/esp_rom/esp32c3/ld/esp32c3.rom.eco3.ld"
+    },
+    "ESP32QJS_SDK_SHA_ESP_ROM_ESP32C3_LD_ESP32C3_ROM_ECO7_LD": {
+      "path": "components/esp_rom/esp32c3/ld/esp32c3.rom.eco7.ld"
+    },
+    "ESP32QJS_SDK_SHA_ESP_ROM_ESP32C3_LD_ESP32C3_ROM_LD": {
+      "path": "components/esp_rom/esp32c3/ld/esp32c3.rom.ld"
+    },
+    "ESP32QJS_SDK_SHA_ESP_ROM_ESP32C5_LD_ESP32C5_ROM_NET80211_LD": {
+      "path": "components/esp_rom/esp32c5/ld/esp32c5.rom.net80211.ld"
+    },
+    "ESP32QJS_SDK_SHA_ESP_ROM_ESP32C5_LD_ESP32C5_ROM_PP_LD": {
+      "path": "components/esp_rom/esp32c5/ld/esp32c5.rom.pp.ld"
+    },
+    "ESP32QJS_SDK_SHA_ESP_ROM_ESP32S3_LD_ESP32S3_ROM_LD": {
+      "path": "components/esp_rom/esp32s3/ld/esp32s3.rom.ld"
+    },
+    "ESP32QJS_SDK_SHA_ESP_TIMER_SRC_ESP_TIMER_C": {
+      "path": "components/esp_timer/src/esp_timer.c"
+    },
+    "ESP32QJS_SDK_SHA_ESP_TIMER_SRC_ETS_TIMER_LEGACY_C": {
+      "path": "components/esp_timer/src/ets_timer_legacy.c"
+    },
+    "ESP32QJS_SDK_SHA_ESP_WIFI_ESP32C3_ESP_ADAPTER_C": {
+      "path": "components/esp_wifi/esp32c3/esp_adapter.c"
+    },
+    "ESP32QJS_SDK_SHA_ESP_WIFI_ESP32C5_ESP_ADAPTER_C": {
+      "path": "components/esp_wifi/esp32c5/esp_adapter.c"
+    },
+    "ESP32QJS_SDK_SHA_ESP_WIFI_ESP32S3_ESP_ADAPTER_C": {
+      "path": "components/esp_wifi/esp32s3/esp_adapter.c"
+    },
+    "ESP32QJS_SDK_SHA_ESP_WIFI_INCLUDE_ESP_MESH_H": {
+      "path": "components/esp_wifi/include/esp_mesh.h"
+    },
+    "ESP32QJS_SDK_SHA_ESP_WIFI_INCLUDE_ESP_MESH_INTERNAL_H": {
+      "path": "components/esp_wifi/include/esp_mesh_internal.h"
+    },
+    "ESP32QJS_SDK_SHA_ESP_WIFI_LIB_ESP32C3_LIBMESH_A": {
+      "path": "components/esp_wifi/lib/esp32c3/libmesh.a"
+    },
+    "ESP32QJS_SDK_SHA_ESP_WIFI_LIB_ESP32C3_LIBPP_A": {
+      "path": "components/esp_wifi/lib/esp32c3/libpp.a"
+    },
+    "ESP32QJS_SDK_SHA_ESP_WIFI_LIB_ESP32C3_LIBWAPI_A": {
+      "path": "components/esp_wifi/lib/esp32c3/libwapi.a"
+    },
+    "ESP32QJS_SDK_SHA_ESP_WIFI_LIB_ESP32C5_LIBMESH_A": {
+      "path": "components/esp_wifi/lib/esp32c5/libmesh.a"
+    },
+    "ESP32QJS_SDK_SHA_ESP_WIFI_LIB_ESP32C5_LIBPP_A": {
+      "path": "components/esp_wifi/lib/esp32c5/libpp.a"
+    },
+    "ESP32QJS_SDK_SHA_ESP_WIFI_LIB_ESP32S3_LIBMESH_A": {
+      "path": "components/esp_wifi/lib/esp32s3/libmesh.a"
+    },
+    "ESP32QJS_SDK_SHA_ESP_WIFI_LIB_ESP32S3_LIBPP_A": {
+      "path": "components/esp_wifi/lib/esp32s3/libpp.a"
+    },
+    "ESP32QJS_SDK_SHA_ESP_WIFI_LIB_ESP32S3_LIBWAPI_A": {
+      "path": "components/esp_wifi/lib/esp32s3/libwapi.a"
+    },
+    "ESP32QJS_SDK_SHA_ESP_WIFI_SRC_MESH_EVENT_C": {
+      "path": "components/esp_wifi/src/mesh_event.c"
+    },
+    "ESP32QJS_SDK_SHA_WPA_SUPPLICANT_ESP_SUPPLICANT_SRC_ESP_WPA_MAIN_C": {
+      "path": "components/wpa_supplicant/esp_supplicant/src/esp_wpa_main.c"
+    }
+  }
+}

@@ -90,7 +90,7 @@
         "components/esp32_mquickjs/src/modules/wifi_driver/esp32_mquickjs_wifi_antenna.c",
         "components/esp32_mquickjs/src/modules/wifi_driver/esp32_mquickjs_wifi_driver.c",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c",
-        "scripts/patch_idf_phy_antenna.py",
+        "scripts/sdk_patches/phy/antenna.py",
         "docs/api/wifi-driver.md",
         "tests/c/integration/wifi/config/test_wifi_antenna_gpio_sdk.py",
         "tests/c/integration/wifi/config/test_wifi_antenna_write.py",
@@ -114,7 +114,7 @@
         "components/esp32_mquickjs/src/modules/wifi_driver/esp32_mquickjs_wifi_antenna.c",
         "components/esp32_mquickjs/src/modules/wifi_driver/esp32_mquickjs_wifi_driver.c",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c",
-        "scripts/patch_idf_phy_antenna.py",
+        "scripts/sdk_patches/phy/antenna.py",
         "docs/api/wifi-driver.md",
         "tests/c/integration/wifi/config/test_wifi_antenna_gpio_sdk.py",
         "tests/c/integration/wifi/config/test_wifi_antenna_write.py",
@@ -2947,7 +2947,7 @@
         "components/esp32_mquickjs/src/modules/wifi_smartconfig/esp32_mquickjs_wifi_smartconfig_events.c",
         "docs/api/wifi-smartconfig.md",
         "docs/investigations/2026-09-08-wifi-api-remaining.md",
-        "scripts/patch_idf_smartconfig_stack.py",
+        "scripts/sdk_patches/wifi/smartconfig_stack.py",
         "tests/c/integration/wifi/provisioning/smartconfig/test_idf_smartconfig_stack.py",
         "docs/investigations/2026-09-13-wifi-c5-short-acceptance.md"
       ],
@@ -3546,7 +3546,7 @@
         "docs/investigations/2026-09-09-w02-config-pmf.md",
         "tests/c/integration/wifi/station/test_wifi_station_phy_security.py",
         "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi_ap_prestart.c",
-        "scripts/prepare_idf_ap_prestart.py",
+        "scripts/sdk_patches/wifi/ap_prestart.py",
         "tests/c/integration/wifi/ap/test_wifi_ap_prestart.py",
         "tests/c/integration/wifi/ap/test_wifi_ap_reopen_admission.py",
         "docs/investigations/2026-09-08-w02-ap-reopen.md",
@@ -3648,8 +3648,8 @@
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c",
         "docs/investigations/2026-09-10-w08-ftm-radio.md",
         "tests/c/integration/wifi/ftm/test_wifi_ftm_radio.py",
-        "scripts/patch_idf_vendor_ie_context.py",
-        "scripts/patch_idf_vendor_ie_context.cmake",
+        "scripts/sdk_patches/wifi/vendor_ie_context.py",
+        "cmake/sdk_patches/patch_idf_vendor_ie_context.cmake",
         "docs/investigations/2026-09-10-w08-ftm-sdk-report.md",
         "components/esp32_mquickjs/internal/esp32_mquickjs_wifi_ftm_session.h",
         "components/esp32_mquickjs/src/modules/wifi_ftm/esp32_mquickjs_wifi_ftm_session.c",
@@ -4353,7 +4353,7 @@
       "evidence": [
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c",
         "components/esp32_mquickjs/src/modules/wifi_driver/esp32_mquickjs_wifi_driver.c",
-        "scripts/patch_idf_vendor_ie_context.py",
+        "scripts/sdk_patches/wifi/vendor_ie_context.py",
         "docs/api/wifi-driver.md"
       ],
       "implementation": "in-progress",
@@ -4546,7 +4546,7 @@
         "tests/c/integration/wifi/config/test_wifi_configuration_executor.py",
         "docs/investigations/2026-09-08-w02-ap-reopen.md",
         "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi_ap_prestart.c",
-        "scripts/prepare_idf_ap_prestart.py",
+        "scripts/sdk_patches/wifi/ap_prestart.py",
         "tests/c/integration/wifi/ap/test_wifi_ap_prestart.py",
         "tests/c/integration/wifi/ap/test_wifi_ap_reopen_admission.py",
         "components/esp32_mquickjs/src/modules/wifi_driver/esp32_mquickjs_wifi_driver.c",
@@ -4759,7 +4759,7 @@
         "docs/investigations/2026-09-09-w07-mode-selection.md",
         "tests/c/integration/wifi/driver/test_wifi_driver_mode.py",
         "components/esp32_mquickjs/src/modules/wifi/esp32_mquickjs_wifi_ap_prestart.c",
-        "scripts/prepare_idf_ap_prestart.py",
+        "scripts/sdk_patches/wifi/ap_prestart.py",
         "tests/c/integration/wifi/ap/test_wifi_ap_prestart.py",
         "tests/c/integration/wifi/ap/test_wifi_ap_reopen_admission.py",
         "docs/investigations/2026-09-13-wifi-c5-short-acceptance.md"
@@ -5011,8 +5011,8 @@
         "docs/api/wifi-vendor-ie.md",
         "docs/investigations/2026-09-09-w08-vendor-watch.md",
         "tests/c/integration/wifi/config/test_wifi_vendor_ie_watch.py",
-        "scripts/patch_idf_vendor_ie_context.py",
-        "scripts/patch_idf_vendor_ie_context.cmake",
+        "scripts/sdk_patches/wifi/vendor_ie_context.py",
+        "cmake/sdk_patches/patch_idf_vendor_ie_context.cmake",
         "tests/python/tooling/generators/test_idf_vendor_ie_context.py",
         "docs/investigations/2026-09-13-wifi-c5-short-acceptance.md"
       ],
@@ -5247,7 +5247,7 @@
         "docs/api/wifi-driver.md",
         "docs/investigations/2026-09-08-wifi-api-remaining.md",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_he_statistics_sdk.c",
-        "scripts/prepare_idf_he_statistics.cmake",
+        "cmake/sdk_patches/prepare_idf_he_statistics.cmake",
         "tests/c/integration/wifi/config/test_wifi_he_statistics_sdk.py",
         "components/esp32_mquickjs/internal/esp32_mquickjs_wifi_he_statistics.h",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c",
@@ -5276,7 +5276,7 @@
         "docs/api/wifi-driver.md",
         "docs/investigations/2026-09-08-wifi-api-remaining.md",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_he_statistics_sdk.c",
-        "scripts/prepare_idf_he_statistics.cmake",
+        "cmake/sdk_patches/prepare_idf_he_statistics.cmake",
         "tests/c/integration/wifi/config/test_wifi_he_statistics_sdk.py",
         "components/esp32_mquickjs/internal/esp32_mquickjs_wifi_he_statistics.h",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c",
@@ -5401,7 +5401,7 @@
         "components/esp32_mquickjs/src/modules/wifi_twt/esp32_mquickjs_wifi_twt_sdk.c",
         "components/esp32_mquickjs/src/modules/wifi_twt/esp32_mquickjs_wifi_twt.c",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c",
-        "scripts/check_idf_twt_tx.cmake",
+        "cmake/sdk_patches/check_idf_twt_tx.cmake",
         "tests/c/integration/wifi/twt/test_wifi_twt_controls.py",
         "docs/investigations/2026-09-13-wifi-c5-short-acceptance.md"
       ],
@@ -5452,7 +5452,7 @@
         "components/esp32_mquickjs/src/modules/wifi_twt/esp32_mquickjs_wifi_twt_sdk.c",
         "components/esp32_mquickjs/src/modules/wifi_twt/esp32_mquickjs_wifi_twt.c",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c",
-        "scripts/check_idf_twt_tx.cmake",
+        "cmake/sdk_patches/check_idf_twt_tx.cmake",
         "tests/c/integration/wifi/twt/test_wifi_twt_controls.py",
         "docs/investigations/2026-09-13-wifi-c5-short-acceptance.md"
       ],
@@ -5517,7 +5517,7 @@
       "evidence": [
         "components/esp32_mquickjs/src/modules/wifi_twt/esp32_mquickjs_wifi_twt_tx.c",
         "components/esp32_mquickjs/src/modules/wifi_twt/esp32_mquickjs_wifi_twt_probe_result.c",
-        "scripts/patch_idf_twt_probe_wake.py",
+        "scripts/sdk_patches/wifi/twt_probe_wake.py",
         "tests/c/integration/wifi/twt/test_wifi_twt_information_submit.py",
         "tests/c/integration/wifi/twt/test_wifi_twt_probe_result.py",
         "docs/investigations/2026-09-10-w08-twt-information-submit.md",
@@ -5559,7 +5559,7 @@
         "docs/investigations/2026-09-10-w08-twt-teardown-submit.md",
         "components/esp32_mquickjs/src/modules/wifi_twt/esp32_mquickjs_wifi_twt_teardown_tx.c",
         "components/esp32_mquickjs/src/modules/wifi_twt/esp32_mquickjs_wifi_twt_tx.c",
-        "scripts/patch_idf_twt_probe_wake.py",
+        "scripts/sdk_patches/wifi/twt_probe_wake.py",
         "tests/c/integration/wifi/twt/test_wifi_twt_teardown_tx.py",
         "docs/investigations/2026-09-10-w08-twt-teardown-tx.md",
         "components/esp32_mquickjs/src/modules/wifi_twt/esp32_mquickjs_wifi_twt_information_timer.c",
@@ -5592,7 +5592,7 @@
         "components/esp32_mquickjs/src/modules/wifi_twt/esp32_mquickjs_wifi_twt_sdk.c",
         "components/esp32_mquickjs/src/modules/wifi_twt/esp32_mquickjs_wifi_twt.c",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c",
-        "scripts/check_idf_twt_tx.cmake",
+        "cmake/sdk_patches/check_idf_twt_tx.cmake",
         "tests/c/integration/wifi/twt/test_wifi_twt_controls.py",
         "docs/investigations/2026-09-13-wifi-c5-short-acceptance.md"
       ],
@@ -8308,7 +8308,7 @@
       "completionContract": "docs/api/wifi-nan.md#waiting-closing-and-gc",
       "contract": "reviewed",
       "evidence": [
-        "scripts/patch_idf_nan.py",
+        "scripts/sdk_patches/wifi/nan.py",
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_discovery.inc",
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_service_public.inc",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_nan_radio.inc",
@@ -8335,7 +8335,7 @@
       "contract": "reviewed",
       "disposition": "mapped",
       "evidence": [
-        "scripts/patch_idf_nan.py",
+        "scripts/sdk_patches/wifi/nan.py",
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_sdk.inc",
         "docs/investigations/2026-09-08-wifi-api-remaining.md",
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_data.inc",
@@ -8356,7 +8356,7 @@
       "contract": "reviewed",
       "disposition": "mapped",
       "evidence": [
-        "scripts/patch_idf_nan.py",
+        "scripts/sdk_patches/wifi/nan.py",
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_sdk.inc",
         "docs/investigations/2026-09-08-wifi-api-remaining.md",
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_data.inc",
@@ -8377,7 +8377,7 @@
       "contract": "reviewed",
       "disposition": "mapped",
       "evidence": [
-        "scripts/patch_idf_nan.py",
+        "scripts/sdk_patches/wifi/nan.py",
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_sdk.inc",
         "docs/investigations/2026-09-08-wifi-api-remaining.md",
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_data.inc",
@@ -8473,7 +8473,7 @@
       "completionContract": "docs/api/wifi-nan.md#waiting-closing-and-gc",
       "contract": "reviewed",
       "evidence": [
-        "scripts/patch_idf_nan.py",
+        "scripts/sdk_patches/wifi/nan.py",
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_discovery.inc",
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_service_public.inc",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_nan_radio.inc",
@@ -8502,7 +8502,7 @@
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_message.inc",
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_message_public.inc",
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_tx.c",
-        "scripts/patch_idf_nan.py",
+        "scripts/sdk_patches/wifi/nan.py",
         "docs/api/wifi-nan.md",
         "tests/c/integration/wifi/nan/test_wifi_nan_tx.py",
         "tests/c/integration/wifi/nan/test_wifi_nan_session.py",
@@ -8523,7 +8523,7 @@
       "completionContract": "docs/api/wifi-nan.md#waiting-closing-and-gc",
       "contract": "reviewed",
       "evidence": [
-        "scripts/patch_idf_nan.py",
+        "scripts/sdk_patches/wifi/nan.py",
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_discovery.inc",
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_service_public.inc",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_nan_radio.inc",
@@ -8549,7 +8549,7 @@
       "completionContract": "ready requires accepted START, SDK default handler/event fencing and netif up. Session startup timeout requests close; ready wait timeout/cancel affects only that wait. Started close keeps cleanup through STOP, reset, netif and observer retirement, then restores stopped mode/storage and releases the exact lease. It does not qualify service TX buffer retirement or datapaths.",
       "contract": "reviewed",
       "evidence": [
-        "scripts/patch_idf_nan.py",
+        "scripts/sdk_patches/wifi/nan.py",
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_sdk.inc",
         "docs/investigations/2026-09-08-wifi-api-remaining.md",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_nan_radio.inc",
@@ -8576,7 +8576,7 @@
       "completionContract": "ready requires accepted START, SDK default handler/event fencing and netif up. Session startup timeout requests close; ready wait timeout/cancel affects only that wait. Started close keeps cleanup through STOP, reset, netif and observer retirement, then restores stopped mode/storage and releases the exact lease. It does not qualify service TX buffer retirement or datapaths.",
       "contract": "reviewed",
       "evidence": [
-        "scripts/patch_idf_nan.py",
+        "scripts/sdk_patches/wifi/nan.py",
         "components/esp32_mquickjs/src/modules/wifi_nan/esp32_mquickjs_wifi_nan_sdk.inc",
         "docs/investigations/2026-09-08-wifi-api-remaining.md",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_nan_radio.inc",
@@ -8836,8 +8836,8 @@
       "disposition": "mapped",
       "evidence": [
         "components/esp32_mquickjs/src/modules/wifi_enterprise/esp32_mquickjs_wifi_eap_install.c",
-        "scripts/patch_idf_eap_secrets.py",
-        "scripts/patch_idf_eap_lifecycle.py",
+        "scripts/sdk_patches/wpa/eap/secrets.py",
+        "scripts/sdk_patches/wpa/eap/lifecycle.py",
         "docs/api/wifi-enterprise.md",
         "docs/investigations/2026-09-08-wifi-api-remaining.md"
       ],
@@ -8858,8 +8858,8 @@
       "disposition": "mapped",
       "evidence": [
         "components/esp32_mquickjs/src/modules/wifi_enterprise/esp32_mquickjs_wifi_eap_install.c",
-        "scripts/patch_idf_eap_secrets.py",
-        "scripts/patch_idf_eap_lifecycle.py",
+        "scripts/sdk_patches/wpa/eap/secrets.py",
+        "scripts/sdk_patches/wpa/eap/lifecycle.py",
         "docs/api/wifi-enterprise.md",
         "docs/investigations/2026-09-08-wifi-api-remaining.md"
       ],
@@ -8880,8 +8880,8 @@
       "disposition": "mapped",
       "evidence": [
         "components/esp32_mquickjs/src/modules/wifi_enterprise/esp32_mquickjs_wifi_eap_install.c",
-        "scripts/patch_idf_eap_secrets.py",
-        "scripts/patch_idf_eap_lifecycle.py",
+        "scripts/sdk_patches/wpa/eap/secrets.py",
+        "scripts/sdk_patches/wpa/eap/lifecycle.py",
         "docs/api/wifi-enterprise.md",
         "docs/investigations/2026-09-08-wifi-api-remaining.md"
       ],
@@ -8902,8 +8902,8 @@
       "disposition": "mapped",
       "evidence": [
         "components/esp32_mquickjs/src/modules/wifi_enterprise/esp32_mquickjs_wifi_eap_install.c",
-        "scripts/patch_idf_eap_secrets.py",
-        "scripts/patch_idf_eap_lifecycle.py",
+        "scripts/sdk_patches/wpa/eap/secrets.py",
+        "scripts/sdk_patches/wpa/eap/lifecycle.py",
         "docs/api/wifi-enterprise.md",
         "docs/investigations/2026-09-08-wifi-api-remaining.md"
       ],
@@ -8924,8 +8924,8 @@
       "disposition": "mapped",
       "evidence": [
         "components/esp32_mquickjs/src/modules/wifi_enterprise/esp32_mquickjs_wifi_eap_install.c",
-        "scripts/patch_idf_eap_secrets.py",
-        "scripts/patch_idf_eap_lifecycle.py",
+        "scripts/sdk_patches/wpa/eap/secrets.py",
+        "scripts/sdk_patches/wpa/eap/lifecycle.py",
         "docs/api/wifi-enterprise.md",
         "docs/investigations/2026-09-08-wifi-api-remaining.md"
       ],
@@ -8946,8 +8946,8 @@
       "disposition": "mapped",
       "evidence": [
         "components/esp32_mquickjs/src/modules/wifi_enterprise/esp32_mquickjs_wifi_eap_install.c",
-        "scripts/patch_idf_eap_secrets.py",
-        "scripts/patch_idf_eap_lifecycle.py",
+        "scripts/sdk_patches/wpa/eap/secrets.py",
+        "scripts/sdk_patches/wpa/eap/lifecycle.py",
         "docs/api/wifi-enterprise.md",
         "docs/investigations/2026-09-08-wifi-api-remaining.md"
       ],
@@ -9322,8 +9322,8 @@
       "disposition": "mapped",
       "evidence": [
         "components/esp32_mquickjs/src/modules/wifi_enterprise/esp32_mquickjs_wifi_eap_install.c",
-        "scripts/patch_idf_eap_secrets.py",
-        "scripts/patch_idf_eap_lifecycle.py",
+        "scripts/sdk_patches/wpa/eap/secrets.py",
+        "scripts/sdk_patches/wpa/eap/lifecycle.py",
         "docs/api/wifi-enterprise.md",
         "docs/investigations/2026-09-08-wifi-api-remaining.md"
       ],
@@ -9423,7 +9423,7 @@
       "completionContract": "Opening confirms SDK submission, receive copies a retained report after native retirement. Started receive cancellation and deadlines request cancellation; queued receive cancellation only drops its waiter. SDK null callback does not distinguish reset from timeout. Shared Neighbor IE decoder rejects malformed input; observer publication waits for native retirement and no pending public waiters, on the runtime poller after Future polling. RF freshness across 8-bit dialog-token wrap/reset is not proved; result explicitly says sdk-dialog-token.",
       "contract": "reviewed",
       "evidence": [
-        "scripts/patch_idf_rrm.py",
+        "scripts/sdk_patches/wpa/rrm.py",
         "components/esp32_mquickjs/src/modules/wifi_roaming/esp32_mquickjs_wifi_rrm_sdk.c",
         "components/esp32_mquickjs/src/modules/wifi_roaming/esp32_mquickjs_wifi_rrm_request.c",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_radio.c",
@@ -9580,7 +9580,7 @@
       "contract": "reviewed",
       "disposition": "mapped",
       "evidence": [
-        "scripts/patch_idf_wps_registrar.py",
+        "scripts/sdk_patches/wpa/wps/registrar.py",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_wps_ap_radio.inc",
         "components/esp32_mquickjs/src/modules/wifi_wps/esp32_mquickjs_wifi_wps_ap_session.c",
         "docs/api/wifi-wps.md",
@@ -9602,7 +9602,7 @@
       "contract": "reviewed",
       "disposition": "mapped",
       "evidence": [
-        "scripts/patch_idf_wps_registrar.py",
+        "scripts/sdk_patches/wpa/wps/registrar.py",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_wps_ap_radio.inc",
         "components/esp32_mquickjs/src/modules/wifi_wps/esp32_mquickjs_wifi_wps_ap_session.c",
         "docs/api/wifi-wps.md",
@@ -9624,7 +9624,7 @@
       "contract": "reviewed",
       "disposition": "mapped",
       "evidence": [
-        "scripts/patch_idf_wps_registrar.py",
+        "scripts/sdk_patches/wpa/wps/registrar.py",
         "components/esp32_mquickjs/src/modules/wifi_radio/esp32_mquickjs_wifi_wps_ap_radio.inc",
         "components/esp32_mquickjs/src/modules/wifi_wps/esp32_mquickjs_wifi_wps_ap_session.c",
         "docs/api/wifi-wps.md",
@@ -9646,8 +9646,8 @@
       "contract": "reviewed",
       "disposition": "mapped",
       "evidence": [
-        "scripts/patch_idf_wps.py",
-        "scripts/patch_idf_wps_native.py",
+        "scripts/sdk_patches/wpa/wps/credentials.py",
+        "scripts/sdk_patches/wpa/wps/native.py",
         "components/esp32_mquickjs/src/modules/wifi_wps/esp32_mquickjs_wifi_wps_sdk.inc",
         "components/esp32_mquickjs/src/modules/wifi_wps/esp32_mquickjs_wifi_wps_worker.c",
         "components/esp32_mquickjs/src/modules/wifi_wps/esp32_mquickjs_wifi_wps.c",
@@ -9669,8 +9669,8 @@
       "contract": "reviewed",
       "disposition": "mapped",
       "evidence": [
-        "scripts/patch_idf_wps.py",
-        "scripts/patch_idf_wps_native.py",
+        "scripts/sdk_patches/wpa/wps/credentials.py",
+        "scripts/sdk_patches/wpa/wps/native.py",
         "components/esp32_mquickjs/src/modules/wifi_wps/esp32_mquickjs_wifi_wps_sdk.inc",
         "components/esp32_mquickjs/src/modules/wifi_wps/esp32_mquickjs_wifi_wps_worker.c",
         "components/esp32_mquickjs/src/modules/wifi_wps/esp32_mquickjs_wifi_wps.c",
@@ -9692,8 +9692,8 @@
       "contract": "reviewed",
       "disposition": "mapped",
       "evidence": [
-        "scripts/patch_idf_wps.py",
-        "scripts/patch_idf_wps_native.py",
+        "scripts/sdk_patches/wpa/wps/credentials.py",
+        "scripts/sdk_patches/wpa/wps/native.py",
         "components/esp32_mquickjs/src/modules/wifi_wps/esp32_mquickjs_wifi_wps_sdk.inc",
         "components/esp32_mquickjs/src/modules/wifi_wps/esp32_mquickjs_wifi_wps_worker.c",
         "components/esp32_mquickjs/src/modules/wifi_wps/esp32_mquickjs_wifi_wps.c",

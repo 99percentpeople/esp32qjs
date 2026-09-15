@@ -12,6 +12,36 @@ from tests.support.wireless_vm_fixture import extract
 
 
 class WiFiRawTxIdentitySdk(unittest.TestCase):
+    def test_identity_composes_with_management_and_optional_offchannel_patch(self):
+        from sdk_patches.wifi import raw_tx_identity as identity
+        from sdk_patches.wifi import raw_tx_management as management
+        from sdk_patches.wifi import offchan_frame as offchannel
+        from tests.support.idf import require_idf
+
+        sdk = require_idf()
+        for target in ('esp32c3', 'esp32s3', 'esp32c5'):
+            ar = tool(target, 'ar')
+            if not ar:
+                self.skipTest('Target archive tool required: ' + target)
+            archive = sdk / 'components/esp_wifi/lib' / target / 'libnet80211.a'
+            original = subprocess.check_output([ar, 'p', str(archive), 'ieee80211_output.o'])
+            for enabled in (False, True):
+                with self.subTest(target=target, offchannel=enabled):
+                    source = offchannel.patch_object(original, target, 'ieee80211_output.o') if enabled else original
+                    source = management.patch_object(source, target)
+                    result = identity.patch_object(source, target, 'ieee80211_output.o')
+                    before, names, _ = elf(source)
+                    after, after_names, _ = elf(result)
+                    for section, name in zip(before, names):
+                        if section[2] & 2:  # Every allocated code/data section is retained.
+                            changed = after[after_names.index(name)]
+                            self.assertEqual(source[section[4]:section[4] + section[5]],
+                                             result[changed[4]:changed[4] + changed[5]])
+                    with self.assertRaises(ValueError):
+                        identity.patch_object(source + b'\0', target, 'ieee80211_output.o')
+                    with self.assertRaises(ValueError):
+                        identity.patch_object(result, target, 'ieee80211_output.o')
+
     def test_reviewed_call_relocations_and_sdk_execution(self):
         self.run_sdk_cases(('esp32c3', 'esp32s3', 'esp32c5'))
 
@@ -22,8 +52,8 @@ class WiFiRawTxIdentitySdk(unittest.TestCase):
         self.run_sdk_cases(('esp32c5',), metadata=True, cache=True)
 
     def run_sdk_cases(self, targets, metadata=False, cache=False):
-        import patch_idf_raw_tx_identity as identity
-        import patch_idf_raw_tx_management as management
+        from sdk_patches.wifi import raw_tx_identity as identity
+        from sdk_patches.wifi import raw_tx_management as management
         sdk = Path(os.environ.get('IDF_PATH', str(Path.home()/'esp/esp-idf')))
         for target in targets:
             with self.subTest(target=target), tempfile.TemporaryDirectory() as directory:
@@ -34,15 +64,15 @@ class WiFiRawTxIdentitySdk(unittest.TestCase):
                     self.skipTest('Pinned SDK and compiler required: '+target)
                 pp = (archive.parent/'libpp.a').read_bytes()
                 identity.verify_pp(pp, target)
-                import patch_idf_twt_probe_wake as archive_tools
+                from sdk_patches.common import archive as archive_tools
                 for member in ('pp.o', 'lmac.o'):
-                    changed_pp = archive_tools.patch_archive(pp, member_patches={member: lambda data: data[:-1]+bytes([data[-1]^1])})
+                    changed_pp = archive_tools.rewrite_archive(pp, member_patches={member: lambda data: data[:-1]+bytes([data[-1]^1])})
                     with self.assertRaises(ValueError): identity.verify_pp(changed_pp, target)
                 for member in identity.HOOKS:
                     source = subprocess.check_output([ar, 'p', str(archive), member])
                     if member == 'ieee80211_output.o': source = management.patch_object(source, target)
                     if member == 'ieee80211_api.o':
-                        import patch_idf_tx_rate as rate
+                        from sdk_patches.wifi import tx_rate as rate
                         # Preserve the predecessor patch used in target builds.
                         source = rate.patch_object(source, target)
                     changed = identity.patch_object(source, target, member)

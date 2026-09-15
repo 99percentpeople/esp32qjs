@@ -230,7 +230,7 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
     def test_public_contract_is_present_in_types_docs_manifest_generator(self):
         types = (ROOT / "types/esp32qjs-c-api.d.ts").read_text(encoding="utf-8")
         docs = (ROOT / "docs/api/wifi-csi.md").read_text(encoding="utf-8")
-        generator = (ROOT / "scripts/generate_api_manifest.py").read_text(
+        generator = (ROOT / "scripts/codegen/api_manifest.py").read_text(
             encoding="utf-8"
         )
         stdlib = (
@@ -271,11 +271,11 @@ class WiFiCsiArchitectureTests(unittest.TestCase):
         source = (MODULE / "esp32_mquickjs_wifi_csi.c").read_text(
             encoding="utf-8"
         )
-        parser = (ROOT / "scripts/esp32qjs_csi.py").read_text(encoding="utf-8")
+        parser = (ROOT / "scripts/capture/csi.py").read_text(encoding="utf-8")
 
         common = (ROOT / "components/esp32_mquickjs/src/modules/wifi_common/esp32_mquickjs_wifi_rx_wire.c").read_text()
         wire_header = (ROOT / "components/esp32_mquickjs/internal/esp32_mquickjs_wifi_rx_wire.h").read_text()
-        decoder = (ROOT / "scripts/esp32qjs_rx.py").read_text()
+        decoder = (ROOT / "scripts/capture/rx.py").read_text()
         self.assertIn("esp32_mquickjs_wifi_rx_wire_write_control", source)
         self.assertIn("esp32_mquickjs_wifi_rx_wire_write_metadata", source)
         self.assertIn('"E32QCSI1"', common)

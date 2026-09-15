@@ -11,7 +11,7 @@ from tests.support.c_source import extract as function
 
 ROOT = TEST_ROOT
 sys.path.insert(0, str(ROOT / 'scripts'))
-from patch_idf_netif_timer import patch_source
+from sdk_patches.netif.timer import patch_source
 
 
 class IDFNetifTimer(unittest.TestCase):

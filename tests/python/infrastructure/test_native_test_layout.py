@@ -108,8 +108,33 @@ class NativeTestLayoutTests(unittest.TestCase):
                          (2, 0, 1, 1))
         self.assertEqual(result["skipReasons"][0]["reason"], "SDK fixture unavailable")
 
+    def test_strict_sdk_runner_rejects_skipped_fixtures(self):
+        spec = importlib.util.spec_from_file_location("native_strict_entry", ROOT / "scripts/run_native_tests.py")
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+
+        class Cases(unittest.TestCase):
+            def test_missing_sdk(self):
+                self.skipTest("SDK fixture unavailable")
+
+        with tempfile.TemporaryDirectory() as directory:
+            result_file = Path(directory) / "result.json"
+            for strict, expected in ((False, 0), (True, 1)):
+                with self.subTest(strict=strict):
+                    suite = unittest.defaultTestLoader.loadTestsFromTestCase(Cases)
+                    argv = ["run_native_tests.py", "--result", str(result_file)]
+                    if strict:
+                        argv.append("--require-all")
+                    with patch.object(runner, "discover_native_tests", return_value=(suite, [])), \
+                            patch("sys.argv", argv), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                        self.assertEqual(runner.main(), expected)
+                    result = json.loads(result_file.read_text())
+                    self.assertEqual(result["status"], "failed" if strict else "passed")
+                    self.assertEqual((result["passed"], result["skipped"]), (0, 1))
+                    self.assertEqual(result["skipReasons"][0]["reason"], "SDK fixture unavailable")
+
     def test_native_stage_passes_resolved_sdk_and_reports_child_counts(self):
-        from scripts.esp32qjs import device_tests
+        from build_tools import device_tests
 
         def complete(command, **kwargs):
             self.assertEqual(kwargs["env"]["IDF_PATH"], "/reviewed/sdk")

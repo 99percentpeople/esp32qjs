@@ -28,7 +28,7 @@ class EspNowArchitectureTests(unittest.TestCase):
         )
 
     def test_kconfig_changes_refresh_generated_sdkconfig(self):
-        build = (ROOT / "scripts/esp32qjs/build.py").read_text(encoding="utf-8")
+        build = (ROOT / "scripts/build_tools/build.py").read_text(encoding="utf-8")
         defaults = build[
             build.index("def config_default_inputs") :
             build.index("def refresh_generated_sdkconfig")

@@ -13,7 +13,7 @@ class NanBootstrapSDK(unittest.TestCase):
     def test_request_status_is_preserved_before_observer_and_no_cookie_is_invented(self):
         if not SDK.exists():
             self.skipTest('reviewed SDK unavailable')
-        spec = importlib.util.spec_from_file_location('bootstrap_patch', ROOT / 'scripts/patch_idf_nan_pairing.py')
+        spec = importlib.util.spec_from_file_location('bootstrap_patch', ROOT / 'scripts/sdk_patches/wifi/nan_pairing.py')
         patch = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(patch)
         original = (SDK / 'wifi_apps/nan_app/src/nan_pairing.c').read_text()

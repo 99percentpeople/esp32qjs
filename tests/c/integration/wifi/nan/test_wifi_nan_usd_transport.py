@@ -36,7 +36,7 @@ class NanUsdTransport(unittest.TestCase):
         sdk = Path('/home/zach/esp/esp-idf/components/wpa_supplicant/src/common/nan_de.c')
         if not sdk.exists():
             self.skipTest('reviewed SDK unavailable')
-        script = BASE.parents[1] / 'scripts/patch_idf_nan_usd.py'
+        script = BASE.parents[1] / 'scripts/sdk_patches/wpa/nan_usd.py'
         spec = importlib.util.spec_from_file_location('usd_patch', script)
         patch = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(patch)

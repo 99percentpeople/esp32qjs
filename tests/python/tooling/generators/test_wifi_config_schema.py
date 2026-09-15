@@ -9,7 +9,7 @@ import unittest
 
 ROOT = TEST_ROOT
 sys.path.insert(0, str(ROOT / "scripts"))
-import generate_wifi_config_schema as schema
+from codegen import wifi_config_schema as schema
 
 
 class WiFiConfigSchema(unittest.TestCase):

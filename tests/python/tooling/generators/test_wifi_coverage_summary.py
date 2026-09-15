@@ -10,7 +10,7 @@ import unittest
 ROOT = TEST_ROOT
 sys.path.insert(0, str(ROOT / "scripts"))
 try:
-    spec = importlib.util.spec_from_file_location("wifi_coverage_generator", ROOT / "scripts/generate_idf_wifi_api_map.py")
+    spec = importlib.util.spec_from_file_location("wifi_coverage_generator", ROOT / "scripts/codegen/idf_wifi_api_map.py")
     generator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(generator)
 finally:

@@ -16,7 +16,7 @@ class DppConnectionNative(unittest.TestCase):
         if not sdk:
             self.skipTest('Set IDF_PATH to the reviewed SDK')
         sys.path.insert(0, str(ROOT / 'scripts'))
-        from patch_idf_dpp import patch_source, function
+        from sdk_patches.wpa.dpp import patch_source, function
         original = Path(sdk) / 'components/wpa_supplicant/esp_supplicant/src/esp_dpp.c'
         source = patch_source('esp_supplicant/src/esp_dpp.c', original.read_bytes()).decode()
         code = BOUNDARIES

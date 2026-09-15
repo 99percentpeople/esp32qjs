@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 ROOT = TEST_ROOT
 sys.path.insert(0, str(ROOT / "scripts"))
-import generate_idf_wifi_api_map as coverage
+from codegen import idf_wifi_api_map as coverage
 
 HEADER = "components/esp_wifi/include/esp_wifi.h"
 PREFIX = f'# 1 "/sdk/{HEADER}"\n'

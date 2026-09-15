@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "component": "espressif/esp32-camera",
+  "version": "2.1.7",
+  "inputs": {
+    "idf_component.yml": "962e09f675e55ec1c463881ed679e84645380fea5d072befc584311caede0da5",
+    "driver/cam_hal.c": "d74ee1f64f28dc61bf64e0a43cf0074011686e5b91c1bc9cd8549e143cd63f80",
+    "driver/esp_camera.c": "0bc8fb0cc5e313f394df19fe3f7827bc2d4a209b6e8e9ee5b8fea4aa1b5e5e8d"
+  },
+  "outputs": {
+    "driver/cam_hal.c": "d06229a9da4d9b11b266535532962c674484745860ed79be56c30251c3394789",
+    "driver/esp_camera.c": "130fcc405b26ad3da5271f9ff3e2aabbb20534f40801472741e9f982050a49a4"
+  }
+}

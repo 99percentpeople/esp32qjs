@@ -25,7 +25,7 @@ class DppConfigTransaction(unittest.TestCase):
         if not sdk_path:
             self.skipTest('Set IDF_PATH to the reviewed SDK')
         sys.path.insert(0, str(ROOT / 'scripts'))
-        from patch_idf_dpp import patch_source, function
+        from sdk_patches.wpa.dpp import patch_source, function
         sdk = Path(sdk_path)
         component = sdk / 'components/wpa_supplicant'
         public = (sdk / 'components/esp_wifi/include/esp_wifi_types_generic.h').read_text()

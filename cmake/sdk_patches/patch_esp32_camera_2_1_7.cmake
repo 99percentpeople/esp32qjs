@@ -1,0 +1,35 @@
+# espressif/esp32-camera#853 and zero-sensor guards, applied to build-local copies.
+if(NOT IDF_TARGET STREQUAL "esp32s3")
+    return()
+endif()
+idf_component_get_property(_camera_dir espressif__esp32-camera COMPONENT_DIR)
+idf_component_get_property(_camera_lib espressif__esp32-camera COMPONENT_LIB)
+idf_build_get_property(_camera_python PYTHON)
+set(_camera_output "${CMAKE_BINARY_DIR}/esp32qjs_sdk_fixes/camera")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${_camera_dir}/idf_component.yml" "${_camera_dir}/driver/cam_hal.c"
+    "${_camera_dir}/driver/esp_camera.c")
+execute_process(COMMAND "${_camera_python}" "${CMAKE_SOURCE_DIR}/scripts/sdk_patch.py"
+    camera --component "${_camera_dir}" --output-dir "${_camera_output}"
+    RESULT_VARIABLE _camera_result ERROR_VARIABLE _camera_error)
+if(NOT _camera_result EQUAL 0)
+    message(FATAL_ERROR "Camera source preparation failed: ${_camera_error}")
+endif()
+get_target_property(_camera_sources ${_camera_lib} SOURCES)
+set(_camera_prepared "")
+set(_camera_count 0)
+foreach(_camera_source IN LISTS _camera_sources)
+    get_filename_component(_camera_absolute "${_camera_source}" ABSOLUTE BASE_DIR "${_camera_dir}")
+    if(_camera_absolute STREQUAL "${_camera_dir}/driver/cam_hal.c" OR
+       _camera_absolute STREQUAL "${_camera_dir}/driver/esp_camera.c")
+        get_filename_component(_camera_name "${_camera_absolute}" NAME)
+        list(APPEND _camera_prepared "${_camera_output}/driver/${_camera_name}")
+        math(EXPR _camera_count "${_camera_count} + 1")
+    else()
+        list(APPEND _camera_prepared "${_camera_source}")
+    endif()
+endforeach()
+if(NOT _camera_count EQUAL 2)
+    message(FATAL_ERROR "Expected exactly two camera source replacements")
+endif()
+set_property(TARGET ${_camera_lib} PROPERTY SOURCES "${_camera_prepared}")

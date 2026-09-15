@@ -297,14 +297,22 @@ tests/c/                    unit/<domain>, integration/<domain>, fixtures/<domai
 tests/js/                   device-backed JavaScript tests
 tests/python/               tooling/{build,generators}, contracts/<domain>, infrastructure
 tests/support/              shared native fixture/compiler and discovery support
-scripts/remote.py           compatibility entrypoint for development commands
-scripts/esp32qjs/           profile, build, flash, serial, test, and CLI modules
+cmake/                     build checks and registered SDK adapter integration
+scripts/remote.py           development command entrypoint
+scripts/build_tools/       profile, build, flash, serial, test, and CLI modules
+scripts/codegen/           generators and MQuickJS syntax/precompile tools
+scripts/capture/           RX, CSI, Monitor and PCAPNG libraries
+scripts/sdk_patches/       reviewed SDK transformations and shared helpers
 ```
 
-The development CLI keeps its implementation under `scripts/esp32qjs/` by
+The development CLI keeps its implementation under `scripts/build_tools/` by
 stable responsibility: `profiles.py`, `build.py`, `flash.py`, `server.py`,
 `device_tests.py`, and `cli.py`. Existing `python scripts/remote.py ...`
 commands remain the supported entrypoint.
+
+Command entrypoints do not re-export implementation helpers. See
+[host tooling](scripts/README.md) and [SDK patch maintenance](docs/sdk-patches.md)
+for module ownership, strict SDK checks and upgrade review.
 
 Generated esptool overrides stay under `build/tooling/esptool.cfg`. The CLI
 passes that path only in the environment of its build, flash, monitor, and

@@ -95,6 +95,7 @@ uv run python scripts/remote.py test --scope c
 uv run python scripts/run_native_tests.py
 uv run python scripts/run_native_tests.py --pattern 'test_wifi_late_station_netif.py'
 uv run python scripts/run_native_tests.py --list
+uv run python scripts/run_sdk_tests.py
 uv run python scripts/run_native_tests.py --case tests.c.integration.wifi.lifecycle.test_wifi_start_events.WiFiStartEvents.test_cached_started_still_checks_exact_radio_owner_and_native_result
 
 # Python tooling and static contract tests only.
@@ -115,6 +116,12 @@ duplicate selections. `--result PATH` records selected and executed counts,
 per-case outcomes, fixture failures, skip reasons, and elapsed time. Class/module
 setup failures account for every affected selected case. Early-stopped cases
 remain not-run and make the run unsuccessful.
+
+`--require-all` also fails a native run if any selected case is skipped. The
+dedicated SDK runner selects the tooling/native modules registered in the SDK
+patch catalog and enforces this rule. Add `--camera` after resolving the locked
+managed camera component. Ordinary host runs may still skip unavailable SDK
+prerequisites; CI's separate SDK job supplies them and requires execution.
 
 The standalone native runner consumes `IDF_PATH` from its environment. The CLI
 C scope passes the resolved SDK from its project configuration when available;

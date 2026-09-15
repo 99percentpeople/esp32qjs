@@ -63,38 +63,7 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 idf_build_set_property(DEPENDENCIES_LOCK "dependencies.lock.${IDF_TARGET}")
 project(esp32qjs)
 
-include("${CMAKE_SOURCE_DIR}/scripts/check_wireless_budget.cmake")
-include("${CMAKE_SOURCE_DIR}/scripts/check_wifi_diagnostics.cmake")
+include("${CMAKE_SOURCE_DIR}/cmake/check_wireless_budget.cmake")
+include("${CMAKE_SOURCE_DIR}/cmake/check_wifi_diagnostics.cmake")
 
-include("${CMAKE_SOURCE_DIR}/scripts/patch_esp32_camera_2_1_7.cmake")
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_netif_timer.cmake")
-
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_vendor_ie_context.cmake")
-include("${CMAKE_SOURCE_DIR}/scripts/check_idf_twt_tx.cmake")
-
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_rrm.cmake")
-
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_eap_secrets.cmake")
-
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_smartconfig.cmake")
-
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_wps.cmake")
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_wapi.cmake")
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_mesh.cmake")
-include("${CMAKE_SOURCE_DIR}/scripts/prepare_idf_ap_prestart.cmake")
-include("${CMAKE_SOURCE_DIR}/scripts/prepare_idf_he_statistics.cmake")
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_phy_antenna.cmake")
-
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_dpp.cmake")
-
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_nan.cmake")
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_nan_usd.cmake")
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_nan_pairing.cmake")
-
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_eloop.cmake")
-# CSI receipts run after original libpp ABI/hash checks above.
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_csi_rx_copy.cmake")
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_tx_rate.cmake")
-
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_raw_tx_management.cmake")
-include("${CMAKE_SOURCE_DIR}/scripts/patch_idf_raw_tx_identity.cmake")
+include("${CMAKE_SOURCE_DIR}/cmake/sdk_patches/apply.cmake")

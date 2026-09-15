@@ -8,8 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.esp32qjs_csi import RxProtocolError, parse_batch
-from scripts.esp32qjs_rx import parse_rx_batch
+from capture.csi import RxProtocolError, parse_batch
+from capture.rx import parse_rx_batch
 
 ROOT = TEST_ROOT
 FIXTURE = ROOT / "tests/fixtures/esp32qjs-csi-v1.hex"

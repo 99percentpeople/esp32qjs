@@ -13,7 +13,7 @@ from tests.support.native_compile import compile_run
 from tests.c.integration.wifi.monitor.test_wifi_rx_target import ROOT, INTERNAL, unit
 from tests.support.wireless_vm_fixture import extract
 sys.path.insert(0, str(ROOT / 'scripts'))
-from patch_idf_eap_control import patch_source
+from sdk_patches.wpa.eap.control import patch_source
 
 
 class IDFEAPLifecycle(unittest.TestCase):

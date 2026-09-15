@@ -44,14 +44,18 @@ class MediaArchitectureTests(SourceContractTestCase):
 
     def test_s3_build_applies_version_checked_ov3660_psram_dma_workaround(self):
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
-        patch = (ROOT / "scripts/patch_esp32_camera_2_1_7.cmake").read_text(
+        patch = (ROOT / "cmake/sdk_patches/patch_esp32_camera_2_1_7.cmake").read_text(
             encoding="utf-8"
         )
 
-        self.assertIn("patch_esp32_camera_2_1_7.cmake", root_cmake)
+        self.assertIn("cmake/sdk_patches/apply.cmake", root_cmake)
+        from sdk_patches.registry import render_cmake
+        from sdk_patches.camera.esp32_camera import INPUTS
+        self.assertIn("patch_esp32_camera_2_1_7.cmake", render_cmake())
+        self.assertEqual(INPUTS["version"], "2.1.7")
         self.assertIn('IDF_TARGET STREQUAL "esp32s3"', patch)
-        self.assertIn("version:[ \\t]+['\\\"]?2\\\\.1\\\\.7", patch)
         self.assertIn("espressif/esp32-camera#853", patch)
+        patch = (ROOT / "scripts/sdk_patches/camera/fragments.py").read_text()
         self.assertIn("cam_drop_psram_cache(dma_buffer->buf, dma_buffer->len);", patch)
         self.assertIn(
             "offset_e = cam_verify_jpeg_eoi(dma_buffer->buf,", patch
@@ -88,11 +92,12 @@ class MediaArchitectureTests(SourceContractTestCase):
         self.assertIn('| "128x128"', types)
 
     def test_s3_build_guards_upstream_camera_probe_when_no_sensor_is_enabled(self):
-        patch = (ROOT / "scripts/patch_esp32_camera_2_1_7.cmake").read_text(
+        patch = (ROOT / "cmake/sdk_patches/patch_esp32_camera_2_1_7.cmake").read_text(
             encoding="utf-8"
         )
 
         self.assertIn("driver/esp_camera.c", patch)
+        patch = (ROOT / "scripts/sdk_patches/camera/fragments.py").read_text()
         self.assertIn("ESP32QJS zero-sensor build guard", patch)
         self.assertIn("ESP32QJS_CAMERA_SENSOR_SUPPORT_ENABLED", patch)
         self.assertIn("#if CONFIG_OV2640_SUPPORT ||", patch)

@@ -18,8 +18,8 @@ ROOT = TEST_ROOT
 NATIVE = ROOT / 'components/esp32_mquickjs/src/modules/wifi_wps/esp32_mquickjs_wifi_wps_ap_sdk.inc'
 NATIVE_HEADER = ROOT / 'components/esp32_mquickjs/internal/esp32_mquickjs_wifi_wps_ap_sdk.h'
 sys.path.insert(0, str(ROOT / 'scripts'))
-from patch_idf_wps import function
-from patch_idf_wps_registrar import patch_source
+from sdk_patches.wpa.wps.credentials import function
+from sdk_patches.wpa.wps.registrar import patch_source
 
 
 class WpsAPNative(unittest.TestCase):

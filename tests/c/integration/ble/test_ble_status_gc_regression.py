@@ -9,7 +9,7 @@ import unittest
 
 ROOT=TEST_ROOT
 sys.path.insert(0,str(ROOT/'scripts'))
-from check_js_syntax import build_checker, compiler_command, VENDOR_DIR
+from codegen.js_syntax import build_checker, compiler_command, VENDOR_DIR
 from tests.support.c_source import extract as function
 
 SDK = fixture_text('ble/test_ble_status_gc_regression/sdk.inc')
@@ -23,7 +23,7 @@ class BleStatusGcRegression(unittest.TestCase):
         directory=pathlib.Path(cls.temporary.name)
         headers=ROOT/'build/js-syntax'
         build_checker(headers)
-        prefix=(ROOT/'scripts/mquickjs_syntax_check.c').read_text().split('#define CHECKER_HEAP_SIZE')[0]
+        prefix=(ROOT/'scripts/codegen/mquickjs_syntax_check.c').read_text().split('#define CHECKER_HEAP_SIZE')[0]
         core=(ROOT/'components/esp32_mquickjs/src/core/esp32_mquickjs.c').read_text()
         helper=''
         for name in ('esp32_mquickjs_set_property','esp32_mquickjs_set_property_ref'):

@@ -8,10 +8,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from build_tools.toolchains import find_target_tool as tool
 
 ROOT = TEST_ROOT
 sys.path.insert(0, str(ROOT / 'scripts'))
-import patch_idf_csi_rx_copy as patcher
+from sdk_patches.wifi import csi_rx_copy as patcher
 
 
 def elf(data):
@@ -40,14 +41,6 @@ def elf(data):
     return sections, section_names, relocations
 
 
-def tool(target, name):
-    prefix = 'xtensa-esp-elf' if target == 'esp32s3' else 'riscv32-esp-elf'
-    executable = ('xtensa-esp32s3-elf' if target == 'esp32s3' else prefix) + '-' + name
-    found = shutil.which(executable)
-    if found:
-        return found
-    matches = sorted((Path.home() / '.espressif/tools' / prefix).glob('*/' + prefix + '/bin/' + executable))
-    return str(matches[-1]) if matches else None
 
 
 class WiFiCsiRxLink(unittest.TestCase):

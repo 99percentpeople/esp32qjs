@@ -13,6 +13,12 @@ file(COPY "${ESP32QJS_BUILD_CONTEXT_DIR}/flash_data/"
 
 set(_esp32qjs_precompile_script
     "${CMAKE_CURRENT_LIST_DIR}/../scripts/precompile_startup.py")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${_esp32qjs_precompile_script}"
+    "${CMAKE_SOURCE_DIR}/scripts/codegen/startup.py"
+    "${CMAKE_SOURCE_DIR}/scripts/codegen/js_syntax.py"
+    "${CMAKE_SOURCE_DIR}/scripts/codegen/mquickjs_syntax_check.c"
+    "${CMAKE_SOURCE_DIR}/scripts/tool_paths.py")
 idf_build_get_property(_esp32qjs_python PYTHON)
 execute_process(
     COMMAND

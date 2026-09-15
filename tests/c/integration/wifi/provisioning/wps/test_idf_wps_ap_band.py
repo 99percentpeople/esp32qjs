@@ -14,8 +14,8 @@ from tests.support.native_compile import compile_run
 
 ROOT = TEST_ROOT
 sys.path.insert(0, str(ROOT / 'scripts'))
-from patch_idf_wps import function, patch_source as patch_station
-from patch_idf_wps_registrar import patch_source
+from sdk_patches.wpa.wps.credentials import function, patch_source as patch_station
+from sdk_patches.wpa.wps.registrar import patch_source
 
 
 class WpsAPBand(unittest.TestCase):

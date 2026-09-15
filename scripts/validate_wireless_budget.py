@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import sys
 
-from esp32qjs.wireless_budget import validate_wireless_budget
+from build_tools.wireless_budget import validate_wireless_budget
 
 
 def main() -> int:

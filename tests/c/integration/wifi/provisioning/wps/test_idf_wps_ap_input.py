@@ -7,7 +7,7 @@ import unittest
 from tests.support.native_compile import compile_run
 ROOT=TEST_ROOT
 sys.path.insert(0,str(ROOT/'scripts'))
-from patch_idf_wps_ap_input import ACQUIRE,RX,ASSOC
+from sdk_patches.wpa.wps.ap_input import ACQUIRE,RX,ASSOC
 
 
 class WpsAPInput(unittest.TestCase):

@@ -8,7 +8,7 @@ from tests.support.wireless_vm_fixture import ROOT
 
 
 def source():
-    path = ROOT / 'scripts/patch_idf_phy_antenna.py'
+    path = ROOT / 'scripts/sdk_patches/phy/antenna.py'
     spec = importlib.util.spec_from_file_location('antenna_gpio_patch', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

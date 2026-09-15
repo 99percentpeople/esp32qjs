@@ -16,7 +16,7 @@ from tests.c.integration.wifi.monitor.test_wifi_rx_target import unit
 
 ROOT = TEST_ROOT
 sys.path.insert(0, str(ROOT / 'scripts'))
-from patch_idf_eap_secrets import function, patch_source
+from sdk_patches.wpa.eap.secrets import function, patch_source
 
 
 class IDFEAPSecrets(unittest.TestCase):

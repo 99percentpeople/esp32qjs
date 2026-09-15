@@ -13,7 +13,7 @@ class BleValueGcRegression(unittest.TestCase):
     def setUpClass(cls):
         cls.temp=tempfile.TemporaryDirectory();cls.addClassCleanup(cls.temp.cleanup)
         directory=pathlib.Path(cls.temp.name);headers=ROOT/'build/js-syntax';build_checker(headers)
-        prefix=(ROOT/'scripts/mquickjs_syntax_check.c').read_text().split('#define CHECKER_HEAP_SIZE')[0]
+        prefix=(ROOT/'scripts/codegen/mquickjs_syntax_check.c').read_text().split('#define CHECKER_HEAP_SIZE')[0]
         core=(ROOT/'components/esp32_mquickjs/src/core/esp32_mquickjs.c').read_text()
         start=core.index('bool esp32_mquickjs_set_property_ref(')
         helper=core[start:core.index('\n}\n',start)+3]

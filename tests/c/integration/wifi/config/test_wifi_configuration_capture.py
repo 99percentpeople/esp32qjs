@@ -21,10 +21,15 @@ class WiFiConfigurationCapture(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         radio_header = (ROOT / 'components/esp32_mquickjs/internal/esp32_mquickjs_wifi_radio.h').read_text()
         wifi_header = (ROOT / 'components/esp32_mquickjs/internal/esp32_mquickjs_wifi.h').read_text()
+        types_header = (ROOT / 'components/esp32_mquickjs/internal/esp32_mquickjs_types.h').read_text()
+        defaults_start = types_header.index('#if CONFIG_ESP32_MQUICKJS_FEATURE_WIFI\n')
+        defaults_end = types_header.index('#endif', defaults_start) + len('#endif')
+        wifi_defaults = types_header[defaults_start:defaults_end] + '\n'
         structures = '\n'.join(structure(radio_header, n) for n in (
             'esp32_mquickjs_wifi_radio_config_controls_t', 'esp32_mquickjs_wifi_radio_start_controls_t',
             'esp32_mquickjs_wifi_radio_configuration_selection_t'))
         structures += structure(wifi_header, 'esp32_mquickjs_wifi_configuration_t')
+        structures += wifi_defaults
         options = (CORE / 'esp32_mquickjs_options.c').read_text().replace(
             '#include "esp32_mquickjs_options.h"',
             (ROOT / 'components/esp32_mquickjs/internal/esp32_mquickjs_options.h').read_text().replace(
@@ -44,7 +49,8 @@ class WiFiConfigurationCapture(unittest.TestCase):
         cls.binaries = {}
         for profile, target, ap, he, five in [('all', 'esp32c5', 1, 1, 1), ('c3', 'esp32c3', 1, 0, 0),
                                             ('no-ap', 'esp32c3', 0, 0, 0)]:
-            defines = (f'#define CONFIG_ESP32_MQUICKJS_FEATURE_WIFI 1\n#define CONFIG_ESP_WIFI_SOFTAP_SUPPORT {ap}\n'
+            defines = ('#define CONFIG_ESP32_MQUICKJS_WIFI_DEFAULT_TIMEOUT_MS 15000\n'
+                       f'#define CONFIG_ESP32_MQUICKJS_FEATURE_WIFI 1\n#define CONFIG_ESP_WIFI_SOFTAP_SUPPORT {ap}\n'
                        f'#define CONFIG_SOC_WIFI_HE_SUPPORT {he}\n#define CONFIG_SOC_WIFI_SUPPORT_5G {five}\n'
                        '#define ESP32_MQUICKJS_WIFI_AP_BEACON_QUANTUM_TU 100\n#define ESP32_MQUICKJS_WIFI_AP_BEACON_MAX_TU 60000\n')
             body = '#include "cutils.h"\n' + PRELUDE + defines + sdk_types(target + '/representative') + structures

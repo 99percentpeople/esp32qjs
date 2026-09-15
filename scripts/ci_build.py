@@ -15,8 +15,8 @@ from prepare_ci_build_context import (
     SUPPORTED_TARGETS,
     generate_context,
 )
-from esp32qjs.build import esptool_environment
-from generate_idf_wifi_api_map import INVENTORY, check_generated, check_headers, collect
+from build_tools.build import esptool_environment
+from codegen.idf_wifi_api_map import INVENTORY, check_generated, check_headers, collect
 
 
 def main() -> int:

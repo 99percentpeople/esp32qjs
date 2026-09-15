@@ -76,7 +76,7 @@ class WiFiAntennaWrite(unittest.TestCase):
         compile_run(self, body)
 
     def test_sdk_idle_callback_uses_real_phy_access_lock(self):
-        path = ROOT / 'scripts/patch_idf_phy_antenna.py'
+        path = ROOT / 'scripts/sdk_patches/phy/antenna.py'
         spec = importlib.util.spec_from_file_location('antenna_patch_idle', path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)

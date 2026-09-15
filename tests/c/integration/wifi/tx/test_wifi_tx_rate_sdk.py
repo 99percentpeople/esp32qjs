@@ -20,7 +20,7 @@ FIXTURE = fixture_text('wifi/tx/test_wifi_tx_rate_sdk/fixture.inc')
 
 class WiFiTxRateSdk(unittest.TestCase):
     def test_patch_scope_hash_guard_and_three_target_link(self):
-        import patch_idf_tx_rate as patcher
+        from sdk_patches.wifi import tx_rate as patcher
         sdk = Path(os.environ.get('IDF_PATH', str(Path.home() / 'esp/esp-idf')))
         for target in ('esp32c3', 'esp32s3', 'esp32c5'):
             with self.subTest(target=target), tempfile.TemporaryDirectory() as directory:
@@ -75,7 +75,7 @@ class WiFiTxRateSdk(unittest.TestCase):
                     self.skipTest('Pinned SDK and compiler required: '+target)
                 root = Path(directory)
                 original = subprocess.check_output([ar, 'p', str(archive), 'ieee80211_api.o'])
-                import patch_idf_tx_rate
+                from sdk_patches.wifi import tx_rate as patch_idf_tx_rate
                 original = patch_idf_tx_rate.patch_object(original, target)
                 (root/'sdk.o').write_bytes(original)
                 # Reuse inventory-derived SDK typedefs, before the production

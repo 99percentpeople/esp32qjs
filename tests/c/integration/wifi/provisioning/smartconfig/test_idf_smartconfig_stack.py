@@ -16,8 +16,8 @@ import unittest
 
 ROOT = TEST_ROOT
 sys.path.insert(0, str(ROOT / 'scripts'))
-from patch_idf_smartconfig import patch_decoder_null_stores
-from patch_idf_smartconfig_stack import REVIEWED, MEMBERS, _riscv_clear, _xtensa_clear, patch_archive
+from sdk_patches.wifi.smartconfig import patch_decoder_null_stores
+from sdk_patches.wifi.smartconfig_stack import REVIEWED, MEMBERS, _riscv_clear, _xtensa_clear, patch_archive
 
 
 def signed(value, bits):
@@ -175,7 +175,7 @@ class SmartConfigDecoderStack(unittest.TestCase):
             with self.assertRaises(ValueError):
                 patch_archive(patched, target)
             # Drift in an actual credential-bearing section is rejected.
-            from patch_idf_twt_probe_wake import patch_archive as rewrite_archive
+            from sdk_patches.common.archive import rewrite_archive
             def corrupt(data):
                 shoff = struct.unpack_from('<I', data, 32)[0]
                 width, count, names_index = struct.unpack_from('<HHH', data, 46)

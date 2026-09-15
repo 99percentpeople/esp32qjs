@@ -15,7 +15,7 @@ from tests.support.native_compile import compile_run
 
 ROOT = TEST_ROOT
 sys.path.insert(0, str(ROOT / 'scripts'))
-from patch_idf_smartconfig import patch_source, patch_adapter, patch_decoder_null_stores, function
+from sdk_patches.wifi.smartconfig import patch_source, patch_adapter, patch_decoder_null_stores, function
 
 
 class SmartConfigNative(unittest.TestCase):

@@ -14,8 +14,8 @@ from tests.support.native_compile import compile_run
 
 ROOT = TEST_ROOT
 sys.path.insert(0, str(ROOT / 'scripts'))
-from patch_idf_wps import function
-from patch_idf_wps_registrar import patch_source
+from sdk_patches.wpa.wps.credentials import function
+from sdk_patches.wpa.wps.registrar import patch_source
 
 
 class WpsRegistrarTimers(unittest.TestCase):

@@ -70,7 +70,10 @@ int main(void) {
         allocation_failure=0;
         for(int subtype=0;subtype<16;subtype++) {
             bytes[0]=(u8)(subtype<<4);bytes[1]=0x40;
-            CHECK(ieee80211_raw_frame_sanity_check(iface,bytes,24,1)!=0,34);
+            /* Protected-bit admission bypass: laboratory extension admits the
+             * frame past this gate; type allowlist still applies below. */
+            /* Bypass is compiled only into the extended laboratory SDK. */
+            CHECK((ieee80211_raw_frame_sanity_check(iface,bytes,24,1)==0)==(EXPECT_EXTENDED?1:0),34);
             bytes[1]=0;bytes[0]=(u8)((subtype<<4)|4);
             CHECK(ieee80211_raw_frame_sanity_check(iface,bytes,24,1)!=0,35);
             bytes[0]=(u8)((subtype<<4)|12);

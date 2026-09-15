@@ -1,0 +1,367 @@
+{
+  "schema": 1,
+  "baseline": {
+    "idfVersion": "v6.1",
+    "idfCommit": "fff9895c82d744c7237be8847347bdd1b07c6643",
+    "targets": [
+      "esp32c3",
+      "esp32s3",
+      "esp32c5"
+    ]
+  },
+  "patches": [
+    {
+      "id": "camera",
+      "module": "sdk_patches.camera.esp32_camera",
+      "cmake": "patch_esp32_camera_2_1_7.cmake",
+      "after": [],
+      "purpose": "OV3660 JPEG EOI and zero-sensor builds for esp32-camera 2.1.7",
+      "apply": true,
+      "tests": [
+        "tests.python.tooling.generators.test_camera_sdk_patch"
+      ],
+      "kind": "source",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "netif_timer",
+      "module": "sdk_patches.netif.timer",
+      "cmake": "patch_idf_netif_timer.cmake",
+      "after": [],
+      "purpose": "Cancel lost-IP timers before netif stop/destruction",
+      "apply": true,
+      "tests": [
+        "tests.c.integration.wifi.station.test_idf_netif_timer"
+      ],
+      "kind": "source",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "vendor_ie_context",
+      "module": "sdk_patches.wifi.vendor_ie_context",
+      "cmake": "patch_idf_vendor_ie_context.cmake",
+      "after": [],
+      "purpose": "Vendor IE context plus FTM, TWT and off-channel archive composition",
+      "apply": true,
+      "tests": [
+        "tests.c.integration.wifi.tx.test_wifi_raw_tx_identity_sdk",
+        "tests.c.integration.wifi.tx.test_wifi_raw_tx_management_sdk",
+        "tests.python.tooling.generators.test_idf_nan_sd",
+        "tests.python.tooling.generators.test_idf_vendor_ie_context",
+        "tests.python.tooling.generators.test_sdk_patch_registry"
+      ],
+      "kind": "binary",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "twt_tx",
+      "module": null,
+      "cmake": "check_idf_twt_tx.cmake",
+      "after": [
+        "vendor_ie_context"
+      ],
+      "purpose": "TWT TX/recycle, timer and C5 ROM ABI validation",
+      "apply": true,
+      "tests": [],
+      "kind": "abi-gate-and-link-hook",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "rrm",
+      "module": "sdk_patches.wpa.rrm",
+      "cmake": "patch_idf_rrm.cmake",
+      "after": [],
+      "purpose": "RRM result ownership and cleanup",
+      "apply": true,
+      "tests": [
+        "tests.c.integration.wifi.station.test_idf_rrm"
+      ],
+      "kind": "source",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "eap_control",
+      "module": "sdk_patches.wpa.eap.control",
+      "cmake": "patch_idf_eap_secrets.cmake",
+      "after": [],
+      "purpose": "Enterprise credentials, lifecycle and serialized control",
+      "apply": true,
+      "tests": [
+        "tests.c.integration.wifi.security.test_idf_eap_control",
+        "tests.c.integration.wifi.security.test_idf_eap_lifecycle",
+        "tests.c.integration.wifi.security.test_idf_eap_secrets"
+      ],
+      "kind": "source",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "smartconfig",
+      "module": "sdk_patches.wifi.smartconfig",
+      "cmake": "patch_idf_smartconfig.cmake",
+      "after": [],
+      "purpose": "SmartConfig worker, decoder and stack corrections",
+      "apply": true,
+      "tests": [
+        "tests.c.integration.wifi.provisioning.smartconfig.test_idf_smartconfig",
+        "tests.c.integration.wifi.provisioning.smartconfig.test_idf_smartconfig_stack"
+      ],
+      "kind": "source",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "wps_native",
+      "module": "sdk_patches.wpa.wps.native",
+      "cmake": "patch_idf_wps.cmake",
+      "after": [
+        "eap_control"
+      ],
+      "purpose": "WPS enrollee/registrar ownership, timers and results",
+      "apply": true,
+      "tests": [
+        "tests.c.integration.wifi.provisioning.wps.test_idf_wps_ap_band",
+        "tests.c.integration.wifi.provisioning.wps.test_idf_wps_ap_close",
+        "tests.c.integration.wifi.provisioning.wps.test_idf_wps_ap_init_cleanup",
+        "tests.c.integration.wifi.provisioning.wps.test_idf_wps_ap_input",
+        "tests.c.integration.wifi.provisioning.wps.test_idf_wps_ap_native",
+        "tests.c.integration.wifi.provisioning.wps.test_idf_wps_credentials",
+        "tests.c.integration.wifi.provisioning.wps.test_idf_wps_eapol",
+        "tests.c.integration.wifi.provisioning.wps.test_idf_wps_eapol_retire",
+        "tests.c.integration.wifi.provisioning.wps.test_idf_wps_errors",
+        "tests.c.integration.wifi.provisioning.wps.test_idf_wps_native",
+        "tests.c.integration.wifi.provisioning.wps.test_idf_wps_peer_delays",
+        "tests.c.integration.wifi.provisioning.wps.test_idf_wps_registrar_init",
+        "tests.c.integration.wifi.provisioning.wps.test_idf_wps_registrar_peers",
+        "tests.c.integration.wifi.provisioning.wps.test_idf_wps_registrar_timers",
+        "tests.c.integration.wifi.security.test_idf_eap_control",
+        "tests.c.integration.wifi.security.test_idf_eap_lifecycle",
+        "tests.c.integration.wifi.security.test_idf_eap_secrets"
+      ],
+      "kind": "source",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "wapi",
+      "module": null,
+      "cmake": "patch_idf_wapi.cmake",
+      "after": [],
+      "purpose": "WAPI supplicant lifecycle wrappers",
+      "apply": true,
+      "tests": [],
+      "kind": "abi-gate-and-link-hook",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "mesh",
+      "module": null,
+      "cmake": "patch_idf_mesh.cmake",
+      "after": [],
+      "purpose": "Mesh event observation before nonblocking SDK delivery",
+      "apply": true,
+      "tests": [],
+      "kind": "abi-gate-and-link-hook",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "ap_prestart",
+      "module": "sdk_patches.wifi.ap_prestart",
+      "cmake": "prepare_idf_ap_prestart.cmake",
+      "after": [],
+      "purpose": "Build-local private AP setter origin",
+      "apply": true,
+      "tests": [],
+      "kind": "binary",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "he_statistics",
+      "module": null,
+      "cmake": "prepare_idf_he_statistics.cmake",
+      "after": [],
+      "purpose": "HE statistics allocation/error and ROM layout wrappers",
+      "apply": true,
+      "tests": [],
+      "kind": "abi-gate-and-link-hook",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "phy_antenna",
+      "module": "sdk_patches.phy.antenna",
+      "cmake": "patch_idf_phy_antenna.cmake",
+      "after": [],
+      "purpose": "PHY GPIO reservation, errors and idle transaction",
+      "apply": true,
+      "tests": [
+        "tests.c.integration.wifi.config.test_wifi_antenna_gpio_sdk",
+        "tests.c.integration.wifi.config.test_wifi_antenna_write"
+      ],
+      "kind": "source",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "dpp",
+      "module": "sdk_patches.wpa.dpp",
+      "cmake": "patch_idf_dpp.cmake",
+      "after": [],
+      "purpose": "DPP operation ownership and retained results",
+      "apply": true,
+      "tests": [
+        "tests.c.integration.wifi.provisioning.dpp.test_dpp_config_transaction",
+        "tests.c.integration.wifi.provisioning.dpp.test_dpp_connection_native",
+        "tests.c.integration.wifi.provisioning.dpp.test_dpp_retained_results"
+      ],
+      "kind": "source",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "nan",
+      "module": "sdk_patches.wifi.nan",
+      "cmake": "patch_idf_nan.cmake",
+      "after": [],
+      "purpose": "NAN service and datapath lifecycle",
+      "apply": true,
+      "tests": [
+        "tests.c.integration.wifi.nan.test_idf_nan_control",
+        "tests.c.integration.wifi.nan.test_wifi_nan_pairing_binding",
+        "tests.c.integration.wifi.nan.test_wifi_nan_service_extensions"
+      ],
+      "kind": "source",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "nan_usd",
+      "module": "sdk_patches.wpa.nan_usd",
+      "cmake": "patch_idf_nan_usd.cmake",
+      "after": [],
+      "purpose": "NAN USD engine and timer lifetime",
+      "apply": true,
+      "tests": [
+        "tests.c.integration.wifi.nan.test_wifi_nan_usd_transport"
+      ],
+      "kind": "source",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "nan_pairing",
+      "module": "sdk_patches.wifi.nan_pairing",
+      "cmake": "patch_idf_nan_pairing.cmake",
+      "after": [],
+      "purpose": "NAN pairing/PASN explicit admission and lifetime",
+      "apply": true,
+      "tests": [
+        "tests.c.integration.wifi.nan.test_wifi_nan_bootstrap_sdk",
+        "tests.c.integration.wifi.nan.test_wifi_nan_pairing_binding",
+        "tests.c.integration.wifi.nan.test_wifi_nan_pairing_sdk"
+      ],
+      "kind": "source",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "eloop",
+      "module": "sdk_patches.wpa.eloop",
+      "cmake": "patch_idf_eloop.cmake",
+      "after": [
+        "wps_native",
+        "dpp",
+        "nan_usd"
+      ],
+      "purpose": "Wake eloop after cancellation",
+      "apply": true,
+      "tests": [
+        "tests.c.integration.wifi.lifecycle.test_wifi_eloop_wake"
+      ],
+      "kind": "source",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "csi_rx_copy",
+      "module": "sdk_patches.wifi.csi_rx_copy",
+      "cmake": "patch_idf_csi_rx_copy.cmake",
+      "after": [
+        "twt_tx",
+        "he_statistics"
+      ],
+      "purpose": "Preserve CSI RX origins across ROM linker assignments",
+      "apply": true,
+      "tests": [
+        "tests.c.integration.wifi.csi.test_wifi_csi_rx_link",
+        "tests.python.tooling.generators.test_sdk_patch_registry"
+      ],
+      "kind": "binary",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "tx_rate",
+      "module": "sdk_patches.wifi.tx_rate",
+      "cmake": "patch_idf_tx_rate.cmake",
+      "after": [
+        "vendor_ie_context"
+      ],
+      "purpose": "Correct TX-rate validation before initialization",
+      "apply": true,
+      "tests": [
+        "tests.c.integration.wifi.tx.test_wifi_raw_tx_identity_sdk",
+        "tests.c.integration.wifi.tx.test_wifi_tx_rate_sdk",
+        "tests.python.tooling.generators.test_sdk_patch_registry"
+      ],
+      "kind": "binary",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "raw_tx_management",
+      "module": "sdk_patches.wifi.raw_tx_management",
+      "cmake": "patch_idf_raw_tx_management.cmake",
+      "after": [
+        "vendor_ie_context",
+        "tx_rate"
+      ],
+      "purpose": "Reviewed experimental Raw TX admission",
+      "apply": true,
+      "tests": [
+        "tests.c.integration.wifi.tx.test_wifi_raw_tx_identity_sdk",
+        "tests.c.integration.wifi.tx.test_wifi_raw_tx_management_sdk",
+        "tests.python.tooling.generators.test_sdk_patch_registry",
+        "tests.python.tooling.generators.test_sdk_patch_registry"
+      ],
+      "kind": "binary",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "raw_tx_identity",
+      "module": "sdk_patches.wifi.raw_tx_identity",
+      "cmake": "patch_idf_raw_tx_identity.cmake",
+      "after": [
+        "raw_tx_management",
+        "csi_rx_copy"
+      ],
+      "purpose": "Raw TX allocation, cache transfer and completion identities",
+      "apply": true,
+      "tests": [
+        "tests.c.integration.wifi.tx.test_wifi_raw_tx_identity_sdk",
+        "tests.python.tooling.generators.test_sdk_patch_registry",
+        "tests.python.tooling.generators.test_sdk_patch_registry"
+      ],
+      "kind": "binary",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    },
+    {
+      "id": "offchan_frame",
+      "module": "sdk_patches.wifi.offchan_frame",
+      "cmake": "check_idf_offchan_frame.cmake",
+      "after": [],
+      "purpose": "Off-channel PP recycle, ROM and timer ABI validation",
+      "apply": false,
+      "tests": [
+        "tests.c.integration.wifi.tx.test_wifi_raw_tx_identity_sdk",
+        "tests.c.integration.wifi.tx.test_wifi_raw_tx_management_sdk"
+      ],
+      "kind": "abi-gate-and-link-hook",
+      "retireWhen": "Upstream provides the complete correction and any framework observation/lifecycle boundary described by this adapter; retain its behavior regression."
+    }
+  ],
+  "helpers": {
+    "raw_tx_protected": "sdk_patches.wifi.raw_tx_protected",
+    "eap_lifecycle": "sdk_patches.wpa.eap.lifecycle",
+    "eap_secrets": "sdk_patches.wpa.eap.secrets",
+    "wps": "sdk_patches.wpa.wps.credentials"
+  }
+}

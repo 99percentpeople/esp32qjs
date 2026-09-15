@@ -26,7 +26,7 @@ class DppRetainedResults(unittest.TestCase):
         if not sdk_path:
             self.skipTest('Set IDF_PATH to the reviewed SDK')
         sys.path.insert(0, str(ROOT / 'scripts'))
-        from patch_idf_dpp import function
+        from sdk_patches.wpa.dpp import function
         from tests.c.integration.wifi.provisioning.dpp.test_dpp_config_transaction import sdk_struct
         public = (Path(sdk_path) / 'components/esp_wifi/include/esp_wifi_types_generic.h').read_text()
         header = without_includes((ROOT / 'components/esp32_mquickjs/internal/esp32_mquickjs_wifi_dpp_result.h').read_text())
