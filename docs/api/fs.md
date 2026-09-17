@@ -1,10 +1,10 @@
 # `fs` Module
 
 The default global `fs` uses the unified namespace rooted at `/`. Filesystems
-are mounted into this tree: the system partition is at `/framework`, and an
-application profile can mount its writable partition at `/`. Mount selection
-uses the longest matching path prefix, so `/framework/file` reaches the system
-partition while `/file` reaches the root partition.
+are mounted into this tree: the system partition is at `/framework`, and the
+runtime can mount an optional writable secondary partition at `/`. Mount
+selection uses the longest matching path prefix, so `/framework/file` reaches
+the system partition while `/file` reaches the root partition.
 
 Absolute and relative `fs` paths start at `/`. Paths are normalized before I/O,
 and traversal above `/` is rejected. Pending Futures and open Streams retain

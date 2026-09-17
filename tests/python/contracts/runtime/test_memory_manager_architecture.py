@@ -100,11 +100,14 @@ class MemoryManagerArchitectureTests(unittest.TestCase):
             "esp32_mquickjs_memory_payload_free(source);", load_from_fs
         )
         self.assertNotIn("heap_caps_free(source);", load_from_fs)
+        # Text startup frees on load-context rejection and after evaluation;
+        # bytecode frees on relocate/load failure. Successful bytecode transfers
+        # source ownership to runtime->startup_bytecode instead.
         self.assertEqual(
             load_startup.count(
                 "esp32_mquickjs_memory_payload_free(source);"
             ),
-            3,
+            4,
         )
         self.assertNotIn("heap_caps_free(source);", load_startup)
         self.assertIn(

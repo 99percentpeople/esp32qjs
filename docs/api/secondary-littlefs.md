@@ -1,7 +1,7 @@
 # Filesystem mounts
 
-Profiles may enable `CONFIG_ESP32QJS_SECONDARY_LITTLEFS` and configure its
-partition label and mount path. The runtime uses the same generic LittleFS
+A Build Context may enable `CONFIG_ESP32QJS_SECONDARY_LITTLEFS` and configure
+its partition label and mount path. The runtime uses the same generic LittleFS
 mount API for both partitions. The primary `storage` partition is mounted at
 `/framework`. A secondary partition can mount at `/`, `/data`, or another
 configured path.

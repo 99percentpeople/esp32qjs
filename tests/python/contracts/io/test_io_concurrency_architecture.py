@@ -525,7 +525,7 @@ class IoConcurrencyArchitectureTests(SourceContractTestCase):
             encoding="utf-8"
         )
 
-        self.assertIn('JS_CFUNC_DEF("watch", 1, js_fs_watch)', stdlib)
+        self.assertIn('JS_CFUNC_DEF("watch", 2, js_fs_watch)', stdlib)
         self.assertIn("esp32_mquickjs_event_queue_new", filesystem)
         self.assertIn("ESP32_MQUICKJS_EVENT_QUEUE_DROP_OLDEST", filesystem)
         self.assertIn("esp32_mquickjs_fs_notify_change", filesystem)
